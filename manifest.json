@@ -1,0 +1,25 @@
+{
+  "name": "Baseball GM",
+  "short_name": "Baseball GM",
+  "description": "Front office baseball management simulation",
+  "start_url": "/baseball-gm/Baseball_GM.html",
+  "scope": "/baseball-gm/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1a1a2e",
+  "background_color": "#1a1a2e",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
