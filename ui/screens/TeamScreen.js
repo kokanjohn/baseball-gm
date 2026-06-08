@@ -27,7 +27,7 @@ import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
-import { PLAYER_GROUP } from '../../data/constants.js';
+import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -53,6 +53,108 @@ const _farmOpen = {
   hitters:  true,
   pitchers: true,
 };
+
+// ─────────────────────────────────────────────────────────────
+// ROSTER OPTIMIZATION
+// ─────────────────────────────────────────────────────────────
+
+function _eligibleSlots(player) {
+  const nat = player.nativePos || player.pos;
+  if (nat === 'C')      return ['C','DH'];
+  if (nat === '1B')     return ['1B','DH'];
+  if (nat === '2B')     return ['2B','DH'];
+  if (nat === '3B')     return ['3B','DH'];
+  if (nat === 'SS')     return ['SS','DH'];
+  if (nat === 'OF')     return ['OF','DH'];
+  if (nat === 'DH/OF')  return ['OF','DH'];
+  if (nat === '2B/SS')  return ['2B','SS','DH'];
+  if (nat === '1B/3B')  return ['1B','3B','DH'];
+  if (nat === 'SS/OF')  return ['SS','OF','DH'];
+  if (nat === '1B/OF')  return ['1B','OF','DH'];
+  if (nat && nat.includes('/')) return [...new Set([...nat.split('/'),'DH'])];
+  return [nat, 'DH'];
+}
+
+/**
+ * _calcRopt(state)
+ * Returns { score: 0–100, moves: String[], teamOvr: Number }
+ * score  — percentage of optimal lineup in use
+ * moves  — up to 5 suggested swap descriptions
+ * teamOvr — average OVR of all 19 active starters
+ */
+function _calcRopt(state) {
+  const players   = state.players || {};
+  const rosterIds = state.userTeam?.rosterIds || [];
+
+  const starters  = rosterIds.map(id => players[id]).filter(p =>
+    p && p.group === PLAYER_GROUP.STARTING_HITTERS);
+  const benchH    = rosterIds.map(id => players[id]).filter(p =>
+    p && p.group === PLAYER_GROUP.BENCH_HITTERS && !p.isInjured && !p.isSuspended);
+  const rotation  = rosterIds.map(id => players[id]).filter(p =>
+    p && p.group === PLAYER_GROUP.STARTING_PITCHERS);
+  const bullpen   = rosterIds.map(id => players[id]).filter(p =>
+    p && p.group === PLAYER_GROUP.BULLPEN);
+  const benchP    = rosterIds.map(id => players[id]).filter(p =>
+    p && p.group === PLAYER_GROUP.PITCHER_BENCH && !p.isInjured && !p.isSuspended);
+  const benchSP   = benchP.filter(p => p.pos === 'SP');
+  const benchRP   = benchP.filter(p => p.pos === 'RP');
+
+  let activeSum = 0, bestSum = 0;
+  const moves   = [];
+  const seen    = new Set();
+
+  // Hitters — slot-by-slot
+  for (const active of starters) {
+    const eligible = benchH.filter(b => _eligibleSlots(b).includes(active.pos));
+    const best     = eligible.sort((a,b) => b.ovr - a.ovr)[0];
+    activeSum += active.ovr;
+    if (best && best.ovr > active.ovr && !seen.has(best.id)) {
+      seen.add(best.id);
+      bestSum += best.ovr;
+      moves.push(`Start ${best.name} (${best.ovr}) over ${active.name} (${active.ovr}) at ${active.pos}`);
+    } else {
+      bestSum += active.ovr;
+    }
+  }
+
+  // SP rotation — weakest active vs best bench SP
+  const activeSPsorted = [...rotation].sort((a,b) => a.ovr - b.ovr);
+  const benchSPpool    = [...benchSP].sort((a,b) => b.ovr - a.ovr);
+  for (const active of activeSPsorted) {
+    const better = benchSPpool.find(b => b.ovr > active.ovr && !seen.has(b.id));
+    activeSum += active.ovr;
+    if (better) {
+      seen.add(better.id);
+      bestSum += better.ovr;
+      moves.push(`Move SP ${better.name} (${better.ovr}) into rotation over ${active.name} (${active.ovr})`);
+    } else {
+      bestSum += active.ovr;
+    }
+  }
+
+  // RP bullpen — weakest active vs best bench RP
+  const activeBPsorted = [...bullpen].sort((a,b) => a.ovr - b.ovr);
+  const benchRPpool    = [...benchRP].sort((a,b) => b.ovr - a.ovr);
+  for (const active of activeBPsorted) {
+    const better = benchRPpool.find(b => b.ovr > active.ovr && !seen.has(b.id));
+    activeSum += active.ovr;
+    if (better) {
+      seen.add(better.id);
+      bestSum += better.ovr;
+      moves.push(`Move RP ${better.name} (${better.ovr}) into bullpen over ${active.name} (${active.ovr})`);
+    } else {
+      bestSum += active.ovr;
+    }
+  }
+
+  const score    = bestSum > 0 ? Math.floor(activeSum / bestSum * 100) : 100;
+  const allActive = [...starters, ...rotation, ...bullpen];
+  const teamOvr  = allActive.length
+    ? Math.round(allActive.reduce((s,p) => s + p.ovr, 0) / allActive.length)
+    : 0;
+
+  return { score, moves: moves.slice(0, 5), teamOvr };
+}
 
 // ─────────────────────────────────────────────────────────────
 // MOUNT / UNMOUNT
@@ -100,6 +202,10 @@ export function refresh() {
   const capPct    = Math.min(100, Math.round((payroll / cap) * 100));
   const capColor  = capPct > 90 ? 'pf-red' : capPct > 75 ? '' : 'pf-green';
 
+  const ropt      = _calcRopt(state);
+  const roptColor = ropt.score >= 90 ? '#22C55E' : ropt.score >= 60 ? '#4A9EE0' : 'var(--danger)';
+  const ovrColor  = ropt.teamOvr >= 75 ? '#22C55E' : ropt.teamOvr >= 65 ? '#4A9EE0' : 'var(--muted)';
+
   container.innerHTML = `
     <div class="section-pad" style="padding-bottom:0;">
       <div class="roster-title-row">
@@ -110,11 +216,24 @@ export function refresh() {
             <div class="rrc-value" style="font-size:15px;margin-top:2px;">${formatMoney(payroll)}</div>
             <div class="rrc-sub">${formatMoney(cap)} cap</div>
           </div>
+          <div class="roster-rating-card">
+            <div class="rrc-label">Team OVR</div>
+            <div class="rrc-value" style="font-size:22px;color:${ovrColor};">${ropt.teamOvr}</div>
+          </div>
         </div>
       </div>
       <!-- Payroll bar -->
-      <div class="progress-bar" style="margin-bottom:10px;">
+      <div class="progress-bar" style="margin-bottom:6px;">
         <div class="progress-fill ${capColor}" style="width:${capPct}%"></div>
+      </div>
+      <!-- Ropt bar -->
+      <div class="ropt-row">
+        <span class="ropt-label">Lineup OPT</span>
+        <div class="ropt-bar-wrap">
+          <div class="ropt-bar-fill" style="width:${ropt.score}%;background:${roptColor};"></div>
+        </div>
+        <span class="ropt-val" style="color:${roptColor};">${ropt.score}%</span>
+        <button class="ropt-hint-btn" id="ropt-hint-btn" title="What needs to change?">?</button>
       </div>
 
       <!-- Internal tabs -->
@@ -143,6 +262,12 @@ function _renderPlayers(state) {
   const players   = state.players  || {};
   const impScores = state.impScores || {};
   const gameIdx   = state.currentGameIndex || 0;
+  const isSpring  = state.phase === PHASE.SPRING_TRAINING;
+
+  // Keeper count — only meaningful during spring
+  const keeperCount = isSpring
+    ? rosterIds.filter(id => players[id]?._isKeeper).length
+    : 0;
 
   // Partition by group
   const hitters      = rosterIds.map(id => players[id]).filter(p => p && [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS].includes(p.group));
@@ -151,10 +276,20 @@ function _renderPlayers(state) {
   const farmPlayers  = farmIds.map(id => players[id]).filter(Boolean);
   const pending      = team._pendingAcquisitions || [];
 
+  const keeperBanner = isSpring ? `
+    <div class="keeper-banner">
+      <span>Spring Camp</span>
+      <span class="keeper-count ${keeperCount >= ROSTER_LIMITS.ACTIVE_TOTAL ? 'keeper-count-full' : ''}">
+        Keepers: ${keeperCount}/${ROSTER_LIMITS.ACTIVE_TOTAL}
+      </span>
+    </div>
+  ` : '';
+
   return `
     <div style="padding:0 0 16px;">
-      ${_renderGroup('hitters',  'Hitters',              hitters.length,  _renderHitterGroup(hitters, impScores, gameIdx))}
-      ${_renderGroup('pitchers', 'Pitchers',             pitchers.length, _renderPitcherGroup(pitchers, impScores, gameIdx))}
+      ${keeperBanner}
+      ${_renderGroup('hitters',  'Hitters',              hitters.length,  _renderHitterGroup(hitters, impScores, gameIdx, isSpring, players, rosterIds))}
+      ${_renderGroup('pitchers', 'Pitchers',             pitchers.length, _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring, players, rosterIds))}
       ${_renderGroup('il',       'Injured List',         ilPlayers.length, _renderILGroup(ilPlayers, state, gameIdx))}
       ${_renderGroup('pending',  'Pending Transactions', pending.length,   _renderPendingGroup(pending, players))}
       ${_renderGroup('farm',     'Farm System',          farmPlayers.length, _renderFarmGroup(farmPlayers, state, gameIdx), true)}
@@ -189,7 +324,7 @@ function _renderGroup(key, label, count, bodyHtml, isFarm = false) {
 // HITTER GROUP
 // ─────────────────────────────────────────────────────────────
 
-function _renderHitterGroup(hitters, impScores, gameIdx) {
+function _renderHitterGroup(hitters, impScores, gameIdx, isSpring = false, allPlayers = {}, rosterIds = []) {
   if (hitters.length === 0) return '<div style="padding:10px 14px;font-size:13px;color:var(--muted);">No hitters on roster</div>';
 
   const starters = hitters.filter(p => p.group === PLAYER_GROUP.STARTING_HITTERS)
@@ -198,48 +333,61 @@ function _renderHitterGroup(hitters, impScores, gameIdx) {
     .sort((a, b) => b.ovr - a.ovr);
 
   return `
-    <div class="roster-col-labels" style="grid-template-columns:var(--rcols-pos);">
-      <span>Player</span><span class="rcl-pos">Pos</span>
-      <span class="rcl-rtg">OVR</span><span></span><span class="rcl-status">Status</span>
+    <div class="roster-col-labels">
+      <span>Player</span>
+      <span class="rcl-pos">Pos</span>
+      <span class="rcl-rtg">OVR</span>
+      <span></span>
     </div>
-    ${starters.map(p => _renderHitterRow(p, impScores[p.id], 'starter', gameIdx)).join('')}
+    ${starters.map(p => _renderHitterRow(p, impScores[p.id], 'starter', gameIdx, isSpring, allPlayers, rosterIds)).join('')}
     ${bench.length > 0 ? `<div class="roster-sub-head">Bench</div>` : ''}
-    ${bench.map(p => _renderHitterRow(p, impScores[p.id], 'bench', gameIdx)).join('')}
+    ${bench.map(p => _renderHitterRow(p, impScores[p.id], 'bench', gameIdx, isSpring, allPlayers, rosterIds)).join('')}
   `;
 }
 
-function _renderHitterRow(player, imp, role, gameIdx) {
+function _renderHitterRow(player, imp, role, gameIdx, isSpring = false, allPlayers = [], rosterIds = []) {
   if (!player) return '';
   const ovrColor  = _ovrColor(player.ovr);
   const indicator = getHotColdIndicator(imp);
   const statusEl  = _playerStatusEl(player);
   const nativePos = player.nativePos || player.pos;
 
+  const stBadge     = isSpring && player._isSpringInvitee
+    ? `<span class="st-badge">ST</span>` : '';
+  const keeperBadge = isSpring
+    ? `<span class="keeper-badge ${player._isKeeper ? 'keeper-on' : 'keeper-off'}" data-keeper="${player.id}">${player._isKeeper ? '♦' : '◇'}</span>`
+    : '';
+
   let swapBtn = '';
-  if (player.isInjured || player.isSuspended) {
-    swapBtn = ''; // no swap for injured/suspended
-  } else if (role === 'starter') {
-    swapBtn = `<button class="swap-btn demote" data-swap="${player.id}" data-role="starter">Bench</button>`;
-  } else if (role === 'bench') {
-    swapBtn = `<button class="swap-btn promote" data-swap="${player.id}" data-role="bench">▲ Start</button>`;
+  if (!player.isInjured && !player.isSuspended) {
+    if (role === 'starter') {
+      // Bench button disabled if no eligible bench player can cover this slot
+      const bench = rosterIds.map(id => allPlayers[id])
+        .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS && !p.isInjured && !p.isSuspended);
+      const hasReplacement = bench.some(b => _eligibleSlots(b).includes(player.pos));
+      swapBtn = `<button class="swap-btn demote" data-swap="${player.id}" data-role="starter"${hasReplacement ? '' : ' disabled title="No eligible bench player"'}>Bench</button>`;
+    } else if (role === 'bench') {
+      swapBtn = `<button class="swap-btn promote" data-swap="${player.id}" data-role="bench">▲</button>`;
+    }
   }
 
   return `
-    <div class="player-row-item" style="grid-template-columns:var(--rcols-pos);" id="pr-${player.id}">
+    <div class="player-row-item" id="pr-${player.id}">
       <div class="player-info">
         <div class="player-name">
           ${_escape(player.name)}
-          ${indicator ? `<span class="imp-indicator" style="margin-left:4px;">${indicator}</span>` : ''}
+          ${stBadge}
+          ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
           ${_dotIndicator(player)}
         </div>
-        <div style="font-size:11px;color:var(--muted);">${formatAge(player.dob)}y · ${formatSalary(player.contractSalary)}</div>
+        <div class="player-sub">${formatAge(player.dob)}y · ${formatSalary(player.contractSalary)}</div>
       </div>
       <div class="player-pos-badge">${nativePos}</div>
       <div class="rating-cell">
         <div class="rating-num ${ovrColor}">${formatOVR(player.ovr)}</div>
+        ${keeperBadge}
       </div>
-      <div>${swapBtn}</div>
-      <div>${statusEl}</div>
+      <div class="row-actions">${swapBtn}${statusEl}</div>
     </div>
   `;
 }
@@ -248,43 +396,55 @@ function _renderHitterRow(player, imp, role, gameIdx) {
 // PITCHER GROUP
 // ─────────────────────────────────────────────────────────────
 
-function _renderPitcherGroup(pitchers, impScores, gameIdx) {
+function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, allPlayers = {}, rosterIds = []) {
   if (pitchers.length === 0) return '<div style="padding:10px 14px;font-size:13px;color:var(--muted);">No pitchers on roster</div>';
 
   const rotation = pitchers.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS)
-    .sort((a, b) => {
-      const ri = (a.rotationIndex ?? 99) - (b.rotationIndex ?? 99);
-      return ri !== 0 ? ri : b.ovr - a.ovr;
-    });
+    .sort((a, b) => b.ovr - a.ovr);
   const bullpen  = pitchers.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort((a, b) => b.ovr - a.ovr);
   const pbench   = pitchers.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort((a, b) => b.ovr - a.ovr);
 
   return `
     <div class="roster-col-labels">
-      <span>Player</span><span class="rcl-rtg">OVR</span><span></span><span class="rcl-status">Status</span>
+      <span>Player</span>
+      <span class="rcl-rtg">OVR</span>
+      <span></span>
     </div>
-    <div class="roster-sub-head starter-label">Rotation</div>
-    ${rotation.map((p,i) => _renderPitcherRow(p, impScores[p.id], i+1, 'rotation')).join('')}
-    ${bullpen.length > 0 ? '<div class="roster-sub-head">Bullpen</div>' : ''}
-    ${bullpen.map(p => _renderPitcherRow(p, impScores[p.id], null, 'bullpen')).join('')}
-    ${pbench.length > 0 ? '<div class="roster-sub-head">P Bench</div>' : ''}
-    ${pbench.map(p => _renderPitcherRow(p, impScores[p.id], null, 'pbench')).join('')}
+    <div class="roster-sub-head">Rotation (SP)</div>
+    ${rotation.map(p => _renderPitcherRow(p, impScores[p.id], 'rotation', isSpring, allPlayers, rosterIds)).join('')}
+    ${bullpen.length > 0 ? '<div class="roster-sub-head">Bullpen (RP)</div>' : ''}
+    ${bullpen.map(p => _renderPitcherRow(p, impScores[p.id], 'bullpen', isSpring, allPlayers, rosterIds)).join('')}
+    ${pbench.length > 0 ? '<div class="roster-sub-head">Pitcher Bench</div>' : ''}
+    ${pbench.map(p => _renderPitcherRow(p, impScores[p.id], 'pbench', isSpring, allPlayers, rosterIds)).join('')}
   `;
 }
 
-function _renderPitcherRow(player, imp, slotNum, role) {
+function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [], rosterIds = []) {
   if (!player) return '';
   const ovrColor  = _ovrColor(player.ovr);
   const indicator = getHotColdIndicator(imp);
   const statusEl  = _playerStatusEl(player);
-  const handTag   = player.hand === 'L' ? '<span style="font-size:10px;color:var(--muted);margin-left:3px;">(L)</span>' : '';
+
+  const posHand   = `<span class="pitcher-pos-hand">${player.pos} · ${player.hand === 'L' ? 'LHP' : 'RHP'}</span>`;
+
+  const stBadge     = isSpring && player._isSpringInvitee
+    ? `<span class="st-badge">ST</span>` : '';
+  const keeperBadge = isSpring
+    ? `<span class="keeper-badge ${player._isKeeper ? 'keeper-on' : 'keeper-off'}" data-keeper="${player.id}">${player._isKeeper ? '♦' : '◇'}</span>`
+    : '';
 
   let swapBtn = '';
   if (!player.isInjured && !player.isSuspended) {
     if (role === 'rotation' || role === 'bullpen') {
-      swapBtn = `<button class="swap-btn demote" data-swap="${player.id}" data-role="${role}">Bench</button>`;
+      // Bench button disabled if no pitcher bench player of same type exists
+      const sameType = role === 'rotation' ? 'SP' : 'RP';
+      const benchPool = rosterIds.map(id => allPlayers[id])
+        .filter(p => p && p.group === PLAYER_GROUP.PITCHER_BENCH
+          && p.pos === sameType && !p.isInjured && !p.isSuspended);
+      const disabled = benchPool.length === 0 ? ' disabled title="No bench pitcher available"' : '';
+      swapBtn = `<button class="swap-btn demote" data-swap="${player.id}" data-role="${role}"${disabled}>Bench</button>`;
     } else if (role === 'pbench') {
-      swapBtn = `<button class="swap-btn promote" data-swap="${player.id}" data-role="pbench">▲ Active</button>`;
+      swapBtn = `<button class="swap-btn promote" data-swap="${player.id}" data-role="pbench">▲</button>`;
     }
   }
 
@@ -292,18 +452,18 @@ function _renderPitcherRow(player, imp, slotNum, role) {
     <div class="player-row-item" id="pr-${player.id}">
       <div class="player-info">
         <div class="player-name">
-          ${slotNum ? `<span style="font-size:10px;color:var(--muted);margin-right:4px;">#${slotNum}</span>` : ''}
-          ${_escape(player.name)}${handTag}
-          ${indicator ? `<span class="imp-indicator" style="margin-left:4px;">${indicator}</span>` : ''}
+          ${_escape(player.name)}
+          ${stBadge}
+          ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
           ${_dotIndicator(player)}
         </div>
-        <div style="font-size:11px;color:var(--muted);">${formatAge(player.dob)}y · ${formatSalary(player.contractSalary)}</div>
+        <div class="player-sub">${posHand} · ${formatAge(player.dob)}y · ${formatSalary(player.contractSalary)}</div>
       </div>
       <div class="rating-cell">
         <div class="rating-num ${ovrColor}">${formatOVR(player.ovr)}</div>
+        ${keeperBadge}
       </div>
-      <div>${swapBtn}</div>
-      <div>${statusEl}</div>
+      <div class="row-actions">${swapBtn}${statusEl}</div>
     </div>
   `;
 }
@@ -517,6 +677,23 @@ function _attachListeners(state) {
   if (pBtn) pBtn.addEventListener('click', () => { _activeTab = 'players'; refresh(); });
   if (sBtn) sBtn.addEventListener('click', () => { _activeTab = 'staff';   refresh(); });
 
+  // Ropt hint button — toast with up to 3 suggested moves, matching v1 format
+  document.getElementById('ropt-hint-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const ropt = _calcRopt(state);
+    if (ropt.moves.length === 0) {
+      App.showToast(
+        'Best available players are already active — optimization is maxed out.',
+        'positive', 4000
+      );
+    } else {
+      App.showToast(
+        'To improve: ' + ropt.moves.slice(0, 3).join(' · '),
+        'neutral', 5500
+      );
+    }
+  });
+
   // Collapsible group headers
   document.querySelectorAll('[data-group]').forEach(el => {
     el.addEventListener('click', () => {
@@ -547,18 +724,38 @@ function _attachListeners(state) {
     });
   });
 
-  // Swap buttons — bench↔starter / bench↔rotation/bullpen
-  document.querySelectorAll('.swap-btn[data-swap]').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
+  // Keeper toggle — fires during spring training only
+  document.querySelectorAll('.keeper-badge[data-keeper]').forEach(badge => {
+    badge.addEventListener('click', async e => {
       e.stopPropagation();
-      await _handleSwap(btn.dataset.swap, btn.dataset.role, state);
+      const playerId = badge.dataset.keeper;
+      const { toggleKeeperTag } = await import('../../engine/RosterEngine.js');
+      const result = toggleKeeperTag(StateManager.get(), playerId);
+      if (result.error) {
+        App.showToast(result.error, 'negative');
+        return;
+      }
+      StateManager.mutate(s => {
+        if (result.players?.[playerId]) {
+          Object.assign(s.players[playerId], result.players[playerId]);
+        }
+      });
+      refresh();
     });
   });
 
-  // Player row tap → PlayerCard modal
+  // Swap buttons — now opens swap modal instead of auto-swapping
+  document.querySelectorAll('.swap-btn[data-swap]:not([disabled])').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await _handleSwap(btn.dataset.swap, btn.dataset.role, StateManager.get());
+    });
+  });
+
+  // Player row tap → PlayerCard — guard against swap btn, keeper badge
   document.querySelectorAll('.player-row-item[id^="pr-"]').forEach(el => {
     el.addEventListener('click', (e) => {
-      if (e.target.closest('.swap-btn')) return;
+      if (e.target.closest('.swap-btn') || e.target.closest('.keeper-badge')) return;
       const playerId = el.id.replace('pr-', '');
       openPlayerCard(playerId, StateManager.get());
     });
@@ -597,14 +794,9 @@ async function _handleCallUp(playerId, state) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// UTILITIES
+// SWAP — modal-driven 1-for-1 exchange
 // ─────────────────────────────────────────────────────────────
 
-/**
- * _handleSwap(playerId, role, state)
- * Moves a player between active/bench slots.
- * Hitters: starter↔bench. Pitchers: rotation/bullpen↔pitcher bench.
- */
 async function _handleSwap(playerId, role, state) {
   const player = state.players[playerId];
   if (!player) return;
@@ -613,47 +805,218 @@ async function _handleSwap(playerId, role, state) {
     return;
   }
 
-  const { PLAYER_GROUP } = await import('../../data/constants.js');
+  const players   = state.players;
+  const rosterIds = state.userTeam.rosterIds;
 
-  StateManager.mutate(s => {
-    const p = s.players[playerId];
-    if (!p) return;
+  // ── HITTER: bench → starter ──────────────────────────────────
+  if (role === 'bench') {
+    const eligibleSlots = _eligibleSlots(player);
+    const starters = rosterIds.map(id => players[id])
+      .filter(p => p && p.group === PLAYER_GROUP.STARTING_HITTERS);
+    const emptySlots = eligibleSlots.filter(slot =>
+      !starters.some(s => s.pos === slot));
 
-    if (role === 'starter') {
-      // Move hitter starter → bench
-      p.group = PLAYER_GROUP.BENCH_HITTERS;
-    } else if (role === 'bench') {
-      // Move bench hitter → starter (only if starter slots not full at pos)
-      const starters = s.userTeam.rosterIds.map(id => s.players[id])
-        .filter(x => x && x.group === PLAYER_GROUP.STARTING_HITTERS);
-      if (starters.length >= 9) {
-        // find someone at the same pos to swap with
-        const target = starters.find(x => x.pos === p.pos || x.nativePos === p.nativePos);
-        if (target) {
-          target.group = PLAYER_GROUP.BENCH_HITTERS;
-          p.group      = PLAYER_GROUP.STARTING_HITTERS;
-        } else {
-          // Just promote anyway — let the sim handle it
-          p.group = PLAYER_GROUP.STARTING_HITTERS;
-        }
-      } else {
-        p.group = PLAYER_GROUP.STARTING_HITTERS;
-      }
-    } else if (role === 'rotation') {
-      p.group = PLAYER_GROUP.PITCHER_BENCH;
-    } else if (role === 'bullpen') {
-      p.group = PLAYER_GROUP.PITCHER_BENCH;
-    } else if (role === 'pbench') {
-      // Promote pitcher bench → bullpen (default) or rotation if SP
-      const isSP = p.pos === 'SP' || p.nativePos === 'SP';
-      p.group = isSP ? PLAYER_GROUP.STARTING_PITCHERS : PLAYER_GROUP.BULLPEN;
+    if (emptySlots.length > 0) {
+      _execHitterSwap(player, emptySlots[0], null);
+      return;
     }
-  });
 
-  EventBus.emit('roster:changed', { type: 'swap', playerId });
-  App.showToast(`${player.name} moved.`, 'positive');
+    _openSlotPicker(player, eligibleSlots, starters, (chosenSlot) => {
+      const target = starters.find(s => s.pos === chosenSlot);
+      if (!target) { _execHitterSwap(player, chosenSlot, null); return; }
+      _execHitterSwap(player, chosenSlot, target);
+    });
+    return;
+  }
+
+  // ── HITTER: starter → bench ──────────────────────────────────
+  if (role === 'starter') {
+    const bench = rosterIds.map(id => players[id])
+      .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS
+        && !p.isInjured && !p.isSuspended
+        && _eligibleSlots(p).includes(player.pos));
+
+    if (bench.length === 0) {
+      App.showToast('No eligible bench player for this slot.', 'negative');
+      return;
+    }
+
+    _openReplacementPicker(
+      `Who replaces ${player.name} (${player.pos})?`,
+      bench,
+      (replacement) => { _execHitterSwap(replacement, player.pos, player); }
+    );
+    return;
+  }
+
+  // ── PITCHER: pbench → rotation/bullpen ───────────────────────
+  if (role === 'pbench') {
+    const isSP      = player.pos === 'SP';
+    const activeGrp = isSP ? PLAYER_GROUP.STARTING_PITCHERS : PLAYER_GROUP.BULLPEN;
+    const active    = rosterIds.map(id => players[id]).filter(p => p && p.group === activeGrp);
+    const cap       = isSP ? ROSTER_LIMITS.STARTING_PITCHERS : ROSTER_LIMITS.BULLPEN;
+
+    if (active.length < cap) {
+      _execPitcherSwap(player, null, isSP);
+      return;
+    }
+
+    _openReplacementPicker(
+      `Move ${player.name} into ${isSP ? 'rotation' : 'bullpen'} — who comes out?`,
+      active,
+      (target) => { _execPitcherSwap(player, target, isSP); }
+    );
+    return;
+  }
+
+  // ── PITCHER: rotation/bullpen → bench ────────────────────────
+  if (role === 'rotation' || role === 'bullpen') {
+    const isSP   = player.pos === 'SP';
+    const benchP = rosterIds.map(id => players[id])
+      .filter(p => p && p.group === PLAYER_GROUP.PITCHER_BENCH
+        && p.pos === player.pos && !p.isInjured && !p.isSuspended);
+
+    if (benchP.length === 0) {
+      App.showToast('No bench pitcher available.', 'negative');
+      return;
+    }
+
+    _openReplacementPicker(
+      `Who replaces ${player.name} in the ${isSP ? 'rotation' : 'bullpen'}?`,
+      benchP,
+      (replacement) => { _execPitcherSwap(replacement, player, isSP); }
+    );
+    return;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// SWAP EXECUTION
+// ─────────────────────────────────────────────────────────────
+
+function _execHitterSwap(incoming, slot, outgoing) {
+  StateManager.mutate(s => {
+    s.players[incoming.id].group = PLAYER_GROUP.STARTING_HITTERS;
+    if (outgoing) s.players[outgoing.id].group = PLAYER_GROUP.BENCH_HITTERS;
+  });
+  EventBus.emit('roster:changed', { type: 'swap' });
+  App.showToast(
+    outgoing
+      ? `${incoming.name} in at ${slot}, ${outgoing.name} to bench.`
+      : `${incoming.name} added to lineup at ${slot}.`,
+    'positive'
+  );
   refresh();
 }
+
+function _execPitcherSwap(incoming, outgoing, isSP) {
+  const activeGrp = isSP ? PLAYER_GROUP.STARTING_PITCHERS : PLAYER_GROUP.BULLPEN;
+  StateManager.mutate(s => {
+    s.players[incoming.id].group = activeGrp;
+    if (outgoing) s.players[outgoing.id].group = PLAYER_GROUP.PITCHER_BENCH;
+  });
+  EventBus.emit('roster:changed', { type: 'swap' });
+  App.showToast(
+    outgoing
+      ? `${incoming.name} active, ${outgoing.name} to bench.`
+      : `${incoming.name} added to ${isSP ? 'rotation' : 'bullpen'}.`,
+    'positive'
+  );
+  refresh();
+}
+
+// ─────────────────────────────────────────────────────────────
+// SWAP MODALS
+// ─────────────────────────────────────────────────────────────
+
+function _openSlotPicker(player, slots, starters, onSlotChosen) {
+  document.getElementById('ts-swap-modal')?.remove();
+
+  const slotRows = slots.map(slot => {
+    const current = starters.find(s => s.pos === slot);
+    const sub = current
+      ? `<span class="sm-current">${_escape(current.name)} <span style="color:var(--muted)">(${current.ovr})</span></span>`
+      : `<span class="sm-empty">Empty — promote directly</span>`;
+    return `
+      <div class="sm-row" data-slot="${slot}">
+        <div class="sm-slot-label">${slot}</div>
+        <div class="sm-slot-sub">${sub}</div>
+        <span class="sm-arrow">›</span>
+      </div>`;
+  }).join('');
+
+  _showSwapSheet(
+    `Where does ${_escape(player.name)} play?`,
+    `${player.nativePos || player.pos} · OVR ${player.ovr}`,
+    slotRows,
+    (overlay) => {
+      overlay.querySelectorAll('.sm-row[data-slot]').forEach(row => {
+        row.addEventListener('click', () => {
+          App.playClick();
+          overlay.remove();
+          onSlotChosen(row.dataset.slot);
+        });
+      });
+    }
+  );
+}
+
+function _openReplacementPicker(title, candidates, onChosen) {
+  document.getElementById('ts-swap-modal')?.remove();
+
+  const rows = candidates.map(p => {
+    const posTag = ['SP','RP'].includes(p.pos)
+      ? `${p.pos} · ${p.hand === 'L' ? 'LHP' : 'RHP'}`
+      : (p.nativePos || p.pos);
+    return `
+      <div class="sm-row" data-pick="${p.id}">
+        <div class="sm-pick-info">
+          <span class="sm-pick-name">${_escape(p.name)}</span>
+          <span class="sm-pick-sub">${posTag}</span>
+        </div>
+        <span class="rating-num ${_ovrColor(p.ovr)} sm-pick-ovr">${p.ovr}</span>
+        <span class="sm-arrow">›</span>
+      </div>`;
+  }).join('');
+
+  _showSwapSheet(title, null, rows, (overlay) => {
+    overlay.querySelectorAll('.sm-row[data-pick]').forEach(row => {
+      row.addEventListener('click', () => {
+        App.playClick();
+        const candidate = StateManager.get().players[row.dataset.pick];
+        if (candidate) { overlay.remove(); onChosen(candidate); }
+      });
+    });
+  });
+}
+
+function _showSwapSheet(title, subtitle, rowsHtml, wireRows) {
+  document.getElementById('ts-swap-modal')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ts-swap-modal';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-sheet" style="max-height:80dvh;">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">${title}</div>
+          ${subtitle ? `<div style="font-size:12px;color:var(--muted);margin-top:2px;">${subtitle}</div>` : ''}
+        </div>
+        <button class="modal-close" id="ts-swap-close">×</button>
+      </div>
+      <div class="modal-divider"></div>
+      <div style="overflow-y:auto;padding-bottom:max(16px,env(safe-area-inset-bottom));">
+        ${rowsHtml}
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('open'));
+  overlay.querySelector('#ts-swap-close')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  wireRows(overlay);
+}
+
 
 function _playerStatusEl(player) {
   if (player.isInjured)   return '<div class="player-status status-il">IL</div>';
@@ -699,10 +1062,70 @@ function _injectCSS() {
   _cssInjected = true;
   const style = document.createElement('style');
   style.textContent = `
+    /* Farm rows */
     .farm-row{cursor:pointer;}
     .farm-row:active{opacity:.8;}
     .farm-arc-icon{font-size:12px;margin-left:4px;font-weight:700;}
-    .imp-indicator{font-size:11px;}
+    .imp-indicator{font-size:11px;margin-left:3px;}
+
+    /* Ropt bar */
+    .ropt-row{display:flex;align-items:center;gap:7px;margin-bottom:6px;}
+    .ropt-label{font-size:10px;font-weight:700;letter-spacing:.5px;
+      text-transform:uppercase;color:var(--muted);white-space:nowrap;flex-shrink:0;}
+    .ropt-bar-wrap{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden;}
+    .ropt-bar-fill{height:100%;border-radius:3px;transition:width .6s cubic-bezier(.4,0,.2,1);}
+    .ropt-val{font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0;min-width:32px;text-align:right;}
+    .ropt-hint-btn{flex-shrink:0;width:22px;height:22px;border-radius:50%;
+      border:1px solid var(--border);background:transparent;color:var(--muted);
+      font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;
+      justify-content:center;font-family:'DM Sans',sans-serif;padding:0;}
+    .ropt-hint-btn:active{opacity:.6;}
+
+    /* Keeper badge — shown during spring training */
+    .keeper-badge{font-size:13px;cursor:pointer;margin-left:4px;line-height:1;
+      transition:color .15s;}
+    .keeper-on{color:var(--accent2);}
+    .keeper-off{color:var(--border);}
+    .keeper-badge:active{opacity:.6;}
+
+    /* Spring training invitee badge */
+    .st-badge{font-size:9px;font-weight:800;letter-spacing:.5px;
+      color:var(--accent);background:var(--chip-accent-bg);
+      border:1px solid var(--accent);border-radius:4px;
+      padding:1px 4px;margin-left:5px;vertical-align:middle;}
+
+    /* Keeper banner at top of players tab */
+    .keeper-banner{display:flex;align-items:center;justify-content:space-between;
+      padding:7px 14px;background:var(--chip-accent-bg);
+      border-bottom:1px solid var(--accent);font-size:11px;font-weight:700;
+      letter-spacing:.5px;text-transform:uppercase;color:var(--accent);}
+    .keeper-count{font-size:12px;font-weight:800;}
+    .keeper-count-full{color:var(--accent2);}
+
+    /* Pitcher pos/hand subtitle */
+    .pitcher-pos-hand{font-size:11px;font-weight:700;color:var(--soft);}
+
+    /* Player sub line */
+    .player-sub{font-size:11px;color:var(--muted);margin-top:1px;}
+
+    /* Row actions — swap button + status stacked */
+    .row-actions{display:flex;flex-direction:column;align-items:flex-end;gap:3px;}
+    .swap-btn:disabled{opacity:.3;cursor:not-allowed;}
+
+    /* Swap modal rows */
+    .sm-row{display:flex;align-items:center;gap:10px;padding:12px 20px;
+      border-bottom:1px solid var(--border);cursor:pointer;}
+    .sm-row:active{background:var(--surface2);}
+    .sm-slot-label{font-size:14px;font-weight:800;color:var(--accent);
+      width:36px;flex-shrink:0;text-align:center;}
+    .sm-slot-sub{flex:1;font-size:12px;}
+    .sm-current{color:var(--text);font-weight:600;}
+    .sm-empty{color:var(--accent2);font-weight:600;}
+    .sm-pick-info{flex:1;min-width:0;}
+    .sm-pick-name{font-size:13px;font-weight:600;color:var(--text);display:block;}
+    .sm-pick-sub{font-size:11px;color:var(--muted);}
+    .sm-pick-ovr{font-size:16px !important;flex-shrink:0;}
+    .sm-arrow{font-size:16px;color:var(--border);flex-shrink:0;}
   `;
   document.head.appendChild(style);
 }
