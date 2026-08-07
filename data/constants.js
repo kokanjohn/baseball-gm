@@ -25,7 +25,7 @@ export const SCHEMA_VERSION = '1.0.0';
 // SEASON SCHEDULE ANCHORS
 // ─────────────────────────────────────────────────────────────
 
-export const SPRING_TRAINING_GAME_COUNT      = 20;
+export const SPRING_TRAINING_GAME_COUNT      = 10;  // matches the schedule generator; off-day pattern [2,5,8] is tuned for 10
 export const REGULAR_SEASON_GAME_COUNT       = 132;
 export const ALL_STAR_BREAK_AFTER_GAME       = 66;
 export const TRADE_DEADLINE_OPEN             = 88;  // game index (0-based) deadline window opens
