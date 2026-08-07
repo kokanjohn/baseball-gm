@@ -102,10 +102,20 @@ export function generateUserSchedule(seasonNum, leagueTeams, startDateOverride) 
 
   const schedule = [];
 
-  // Spring training (20 games)
+  // Spring training (SPRING_TRAINING_GAME_COUNT games)
   const springGames = _generateSpringGames(
     realStart, canonicalSpringStart, leagueTeams, year
   );
+
+  // Gate: the generated spring count and the constant must never disagree.
+  // They previously drifted (constant 20, generator 10), which corrupted the
+  // regular-season index math (phase transitions, IL return timing).
+  if (springGames.length !== SPRING_TRAINING_GAME_COUNT) {
+    throw new Error(
+      `SeasonEngine: generated ${springGames.length} spring games but ` +
+      `SPRING_TRAINING_GAME_COUNT is ${SPRING_TRAINING_GAME_COUNT} — these must match.`
+    );
+  }
   schedule.push(...springGames);
 
   // Regular season (132 games)
@@ -136,7 +146,7 @@ function _generateSpringGames(realStartDate, displayStartDate, leagueTeams, year
   // This gives every 3rd day off — realistic spring training schedule.
   const OFF_DAYS = new Set([2, 5, 8]); // 0-based day offsets that are rest days
 
-  while (gameNum < 10) { // 10 spring training games
+  while (gameNum < SPRING_TRAINING_GAME_COUNT) { // spring training games (single source: constants)
     // Skip off days
     if (OFF_DAYS.has(dayOffset)) {
       realDate    = _addDays(realDate, 1);
@@ -317,9 +327,9 @@ export function generateCPUSchedules(seasonNum, leagueTeams) {
   let springDate    = new Date(springStart);
   let springGameNum = 0;
   let springDayOff  = 0;
-  const SPRING_CPU_GAME_COUNT = 10;
 
-  while (springGameNum < SPRING_CPU_GAME_COUNT) {
+  // CPU spring matches the user's spring length — single source: constants.
+  while (springGameNum < SPRING_TRAINING_GAME_COUNT) {
     if (!OFF_DAYS.has(springDayOff)) {
       const dateStr     = _isoDate(springDate);
       const todayPairs  = _pairsForDay(pairs, springGameNum, teams.length);
