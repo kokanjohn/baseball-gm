@@ -170,6 +170,13 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   const userLineup = _buildLineup(userTeam, players, false);
   const oppLineup  = _buildLineup(effectiveOppTeam, players, true);
 
+  // Snapshot the STARTING batting orders (away/home) before simulation mutates
+  // slots via pinch-hits. Seeds the box score's full 9-man hitter lineup and is
+  // stored on the game as liveLineups for the live box.
+  const _userIsHome = !!game.isHome;
+  const _awayOrder = (_userIsHome ? oppLineup : userLineup).slots.map(s => s.id);
+  const _homeOrder = (_userIsHome ? userLineup : oppLineup).slots.map(s => s.id);
+
   // Select starting pitchers from rotation
   const userSP  = _getRotationSP(userTeam, players);
   const oppSP   = _getRotationSP(effectiveOppTeam, players) || _findHealthySP(effectiveOppTeam.rosterIds || [], players);
@@ -238,10 +245,11 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     gameEndPlay._statDeltas = decisionDeltas;
   }
 
-  // Build box score
-  const boxScore = _buildBoxScore(plays, userLineup, oppLineup, players);
+  // Build box score via the shared accumulator (single source of truth).
+  const boxScore    = accumulateBox(plays, players, { awayOrder: _awayOrder, homeOrder: _homeOrder, userIsHome: _userIsHome });
+  const liveLineups = { away: _awayOrder, home: _homeOrder };
 
-  return { plays, boxScore };
+  return { plays, boxScore, liveLineups };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1027,6 +1035,121 @@ export function accumulateStats(plays, userTeam, opponentTeam, players, isSpring
 }
 
 // ─────────────────────────────────────────────────────────────
+// SHARED BOX-SCORE ACCUMULATOR
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * accumulateBox(plays, players, opts)
+ * The SINGLE source of truth for box scores. Consumes each play's `_statDeltas`
+ * — the same data season stats use (accumulateStats) — so the live box, the
+ * committed box, and season totals can never drift.
+ *
+ * Team-agnostic: produces away/home boxes (TOP = away batting). The caller maps
+ * user<->home via opts.userIsHome. Runs are read from the runners' `r` deltas
+ * (correct even when no RBI is credited) and pitcher innings are counted as
+ * integer outs (no 0.333 float drift). Output is self-contained (names/pos
+ * snapshotted) so it survives play-stripping at commit.
+ *
+ * @param {Object[]} plays                          revealed subset (live) or full array (commit)
+ * @param {Object}   players                        state.players
+ * @param {Object}   opts  { awayOrder:[id], homeOrder:[id], userIsHome:bool }
+ *                         awayOrder/homeOrder seed the full 9-man hitter order (0/0 until they bat)
+ * @returns {Object} { linescore, away, home, userIsHome }
+ */
+export function accumulateBox(plays, players, opts = {}) {
+  const { awayOrder = [], homeOrder = [], userIsHome = false } = opts;
+
+  const HIT0 = () => ({ ab:0, r:0, h:0, doubles:0, hr:0, tb:0, rbi:0, bb:0, hbp:0, k:0, sb:0, cs:0, sf:0, sac:0 });
+  const PIT0 = () => ({ outs:0, h:0, hr:0, bb:0, k:0, er:0, w:0, l:0, sv:0, hld:0 });
+  const mkSide = () => ({ hit:{}, pit:{}, hitSeen:[], pitSeen:[] });
+
+  const away = mkSide();
+  const home = mkSide();
+  const linescore = {};
+
+  const ensureHit = (side, id) => { if (!side.hit[id]) { side.hit[id] = HIT0(); side.hitSeen.push(id); } return side.hit[id]; };
+  const ensurePit = (side, id) => { if (!side.pit[id]) { side.pit[id] = PIT0(); side.pitSeen.push(id); } return side.pit[id]; };
+
+  for (const play of (plays || [])) {
+    if (!play._statDeltas) continue;
+    const isTop        = play.half === 'TOP';
+    const battingSide  = isTop ? away : home;   // TOP = away bats
+    const fieldingSide = isTop ? home : away;
+
+    for (const [pid, statList] of Object.entries(play._statDeltas)) {
+      const isPitcher = (play.pitcherId && pid === play.pitcherId) || play.type === 'game_end';
+
+      if (isPitcher) {
+        // game_end decision deltas belong to a pitcher who already appeared —
+        // route to whichever side already holds them (fall back to teamId).
+        let side = fieldingSide;
+        if (play.type === 'game_end') {
+          side = away.pit[pid] ? away
+               : home.pit[pid] ? home
+               : ((players[pid]?.teamId === 'user') === userIsHome ? home : away);
+        }
+        const line = ensurePit(side, pid);
+        for (const { stat, delta } of statList) {
+          if      (stat === 'ip')          line.outs += Math.max(1, Math.round((delta || 0) / 0.333));
+          else if (stat === 'h_allowed')   line.h   += delta;
+          else if (stat === 'hr_allowed')  line.hr  += delta;
+          else if (stat === 'er')          line.er  += delta;
+          else if (stat === 'bb')          line.bb  += delta;
+          else if (stat === 'k')           line.k   += delta;
+          else if (stat === 'w')           line.w   += delta;
+          else if (stat === 'l')           line.l   += delta;
+          else if (stat === 'sv')          line.sv  += delta;
+          else if (stat === 'hld')         line.hld += delta;
+        }
+      } else {
+        const line = ensureHit(battingSide, pid);
+        for (const { stat, delta } of statList) {
+          if (stat in line) line[stat] += delta;
+          if (stat === 'r' && play.inning) {
+            if (!linescore[play.inning]) linescore[play.inning] = { top:0, bot:0 };
+            linescore[play.inning][isTop ? 'top' : 'bot'] += delta;
+          }
+        }
+      }
+    }
+  }
+
+  const ipFromOuts = (o) => `${Math.floor(o / 3)}.${o % 3}`;
+
+  const finalizeSide = (side, seedOrder) => {
+    const seen = new Set();
+    const order = [];
+    for (const id of seedOrder) { if (!seen.has(id)) { order.push(id); seen.add(id); } }        // full 9, even at 0/0
+    for (const id of side.hitSeen) { if (!seen.has(id)) { order.push(id); seen.add(id); } }      // pinch hitters appended
+    const hitters = order.map(id => {
+      const s = side.hit[id] || HIT0();
+      const p = players[id] || {};
+      return { id, name: p.name || '—', pos: p.pos || p.nativePos || '', ...s };
+    });
+    const pitchers = side.pitSeen.map(id => {
+      const s = side.pit[id];
+      const p = players[id] || {};
+      const dec = s.w ? 'W' : s.l ? 'L' : s.sv ? 'S' : s.hld ? 'H' : null;
+      return { id, name: p.name || '—', ip: ipFromOuts(s.outs), ipOuts: s.outs, h: s.h, er: s.er, bb: s.bb, k: s.k, hr: s.hr, dec };
+    });
+    return {
+      runs:   hitters.reduce((a, h) => a + h.r, 0),
+      hits:   hitters.reduce((a, h) => a + h.h, 0),
+      errors: 0,
+      hitters,
+      pitchers,
+    };
+  };
+
+  return {
+    linescore,
+    away: finalizeSide(away, awayOrder),
+    home: finalizeSide(home, homeOrder),
+    userIsHome,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // BOX SCORE BUILDER
 // ─────────────────────────────────────────────────────────────
 
@@ -1482,7 +1605,7 @@ function _assignPitcherDecisions(plays, userScore, oppScore, isHome) {
     if (dec.w)  result[pitcherId].push({ stat: 'w',  delta: 1 });
     if (dec.l)  result[pitcherId].push({ stat: 'l',  delta: 1 });
     if (dec.sv) result[pitcherId].push({ stat: 'sv', delta: 1 });
-    if (dec.hd) result[pitcherId].push({ stat: 'hd', delta: 1 });
+    if (dec.hd) result[pitcherId].push({ stat: 'hld', delta: 1 });
   }
   return result;
 }

@@ -628,7 +628,7 @@ function _activateGame(game) {
 
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
 
-  const { plays, boxScore } = generatePlays(
+  const { plays, boxScore, liveLineups } = generatePlays(
     game,
     userTeam,
     opponentTeam,
@@ -643,8 +643,9 @@ function _activateGame(game) {
     g.plays         = plays;
     g.livePlayIndex = 0;
     g.status        = GAME_STATUS.LIVE;
-    // Store the pre-computed box score for reference after commit
+    // Pre-computed full-game box (promoted to g.boxScore at commit) + seed lineups.
     g._precomputedBoxScore = boxScore;
+    g.liveLineups          = liveLineups;
   });
 }
 
@@ -678,7 +679,7 @@ function _silentlyCommitGame(game) {
   );
 
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
-  const { plays, boxScore } = generatePlays(
+  const { plays, boxScore, liveLineups } = generatePlays(
     game, userTeam, opponentTeam, players,
     { phase: state.phase, isSpring, winProb }
   );
@@ -702,6 +703,7 @@ function _silentlyCommitGame(game) {
     g.result             = won ? 'win' : 'loss';
     g.score              = { us: ourScore, them: theirScore };
     g._precomputedBoxScore = boxScore;
+    g.liveLineups          = liveLineups;
   });
 
   // Commit asynchronously — fire and forget from tick context
@@ -754,6 +756,11 @@ export async function commitGame(gameIndex) {
 
   StateManager.mutate(s => {
     const g = s.schedule[gameIndex];
+
+    // ── Step 0: Promote the precomputed box to the committed box ──
+    // Single source of truth (SimEngine.accumulateBox). Kept after commit;
+    // plays are stripped in Phase 2 once all readers use g.boxScore.
+    if (g._precomputedBoxScore) g.boxScore = g._precomputedBoxScore;
 
     // ── Step 1: Write final game result fields ─────────────
     // Skip if already written by _silentlyCommitGame.
