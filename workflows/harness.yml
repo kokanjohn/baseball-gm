@@ -1,0 +1,24 @@
+name: Season Harness
+
+# Runs the headless season simulator on every push and pull request, and
+# on demand via the "Run workflow" button in the Actions tab.
+# The harness exits non-zero if any invariant fails, which turns the check red.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  sim-season:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run full-season harness (142 games)
+        run: node tools/harness/sim-season.js 142
