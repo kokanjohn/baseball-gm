@@ -1239,9 +1239,12 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;
           </button>
         </div>
 
-        <!-- ── Version ───────────────────────────────────── -->
-        <div data-debug-trigger style="text-align:center;padding:20px 0 8px;font-size:11px;color:var(--muted);">
-          The Front Office — v2
+        <!-- ── Version + developer access ─────────────────── -->
+        <div style="text-align:center;padding:16px 20px 10px;">
+          <div id="app-version-label" style="font-size:11px;color:var(--muted);letter-spacing:.5px;">The Front Office — v2</div>
+          <div id="app-update-status" style="font-size:11px;margin-top:5px;min-height:14px;color:var(--muted);"></div>
+          <button id="settings-check-update" type="button" style="margin-top:10px;width:100%;padding:11px;border:2px solid var(--border);background:var(--surface);color:var(--text);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">↻ Check for updates &amp; refresh</button>
+          <button id="settings-open-debug" type="button" style="margin-top:8px;width:100%;padding:11px;border:2px solid var(--border);background:none;color:var(--muted);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🛠 Developer Menu</button>
         </div>
 
       </div>
