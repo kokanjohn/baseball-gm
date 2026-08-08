@@ -912,7 +912,10 @@ export async function commitGame(gameIndex) {
 
   // ── Phase transition check ────────────────────────────────
   const state2      = StateManager.get();
-  const regularIdx  = (gameIndex - SPRING_TRAINING_GAME_COUNT);
+  // getNextPhase takes the RAW schedule index and derives the regular-relative
+  // index internally. (Previously the caller pre-subtracted the spring count and
+  // getNextPhase subtracted again — a double-subtraction that fired spring→regular
+  // ~10 games late and never reached the playoffs.)
   // All teams always qualify — userInPlayoffs always true (Section 26)
   const currentPhase = state2.phase;
   let newPhase = null;
@@ -920,10 +923,10 @@ export async function commitGame(gameIndex) {
   // For playoff phases, only advance when the current round is fully resolved
   if (_isPlayoffPhase(currentPhase)) {
     if (_isPlayoffRoundComplete(state2)) {
-      newPhase = getNextPhase(currentPhase, regularIdx, state2.standings, true);
+      newPhase = getNextPhase(currentPhase, gameIndex, state2.standings, true);
     }
   } else {
-    newPhase = getNextPhase(currentPhase, regularIdx, state2.standings, true);
+    newPhase = getNextPhase(currentPhase, gameIndex, state2.standings, true);
   }
 
   if (newPhase) {

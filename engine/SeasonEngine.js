@@ -577,31 +577,39 @@ export function buildPlayoffBracket(standings) {
  * GameEngine calls this after each game commit.
  *
  * @param {String}  currentPhase
- * @param {Number}  gameIndex       — 0-based within regular season
+ * @param {Number}  scheduleIndex   — RAW schedule index of the just-committed game
+ *                                     (spring occupies 0..SPRING_TRAINING_GAME_COUNT-1)
  * @param {Object}  standings       — from computeFullStandings()
  * @param {Boolean} userInPlayoffs  — whether user team qualified
  * @returns {String|null}  new phase, or null if no transition
  */
-export function getNextPhase(currentPhase, gameIndex, standings, userInPlayoffs) {
+export function getNextPhase(currentPhase, scheduleIndex, standings, userInPlayoffs) {
+  // Regular-season-relative index of the just-committed game. Negative during spring.
+  // All the regular-season milestones below are expressed in this base; the spring
+  // and playoff boundaries are expressed against the raw schedule index / counts.
+  const reg = scheduleIndex - SPRING_TRAINING_GAME_COUNT;
+
   switch (currentPhase) {
     case PHASE.SETUP:
       return PHASE.SPRING_TRAINING;
 
     case PHASE.SPRING_TRAINING:
-      if (gameIndex >= SPRING_TRAINING_GAME_COUNT) return PHASE.REGULAR_SEASON;
+      // Spring ends once the next game to play is the first regular-season game.
+      if (scheduleIndex + 1 >= SPRING_TRAINING_GAME_COUNT) return PHASE.REGULAR_SEASON;
       return null;
 
     case PHASE.REGULAR_SEASON:
-      if (gameIndex === ALL_STAR_BREAK_AFTER_GAME)  return PHASE.ALL_STAR_BREAK;
-      if (gameIndex === TRADE_DEADLINE_OPEN)         return PHASE.TRADE_DEADLINE;
-      if (gameIndex >= REGULAR_SEASON_GAME_COUNT)   return PHASE.PLAYOFF_BRACKET_BUILD;
+      if (reg === ALL_STAR_BREAK_AFTER_GAME)          return PHASE.ALL_STAR_BREAK;
+      if (reg === TRADE_DEADLINE_OPEN)                return PHASE.TRADE_DEADLINE;
+      // Playoffs begin once the final regular-season game has been committed.
+      if (reg + 1 >= REGULAR_SEASON_GAME_COUNT)        return PHASE.PLAYOFF_BRACKET_BUILD;
       return null;
 
     case PHASE.ALL_STAR_BREAK:
       return PHASE.REGULAR_SEASON;
 
     case PHASE.TRADE_DEADLINE:
-      if (gameIndex > TRADE_DEADLINE_CLOSE) return PHASE.REGULAR_SEASON;
+      if (reg > TRADE_DEADLINE_CLOSE) return PHASE.REGULAR_SEASON;
       return null;
 
     case PHASE.PLAYOFF_BRACKET_BUILD:
