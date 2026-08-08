@@ -152,6 +152,13 @@ async function main() {
           `phase=${phaseAtCross}`);
   }
 
+  // If we simulated the entire regular season, the playoffs must have started
+  // (guards the getNextPhase playoff-trigger off-by-one).
+  if (target >= SM.get().schedule.length) {
+    check('playoffs triggered after final regular game',
+          SM.get().phase === PHASE.PLAYOFF_BRACKET_BUILD, `phase=${SM.get().phase}`);
+  }
+
   const ok = summarize();
   console.log(`\nseed=${SEED} games=${target}`);
   process.exit(ok ? 0 : 1);
