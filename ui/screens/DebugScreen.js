@@ -328,6 +328,12 @@ function _renderActions(s) {
       ${btn('dbg-card-prompt',  '📨', 'Deliver card by ID…',        '#f97316')}
       ${btn('dbg-flag-prompt',  '🚩', 'Force-fire narrative flag…', '#f97316')}
 
+      <div class="debug-actions-subhead">Live Speed (Dev) — accelerates the live tick for watching games</div>
+      ${btn('dbg-speed-1',   '🐢', 'Normal speed (1×)',   '#94a3b8')}
+      ${btn('dbg-speed-10',  '⏩', 'Fast (10×)',           '#22d3ee')}
+      ${btn('dbg-speed-60',  '⏩', 'Very fast (60×)',      '#22d3ee')}
+      ${btn('dbg-speed-300', '⚡', 'Max (300×)',           '#f5d253')}
+
       <div class="debug-actions-subhead">Sim Tools</div>
       ${btn('dbg-sim-5',        '⏩', 'Simulate 5 games',           '#22d3ee')}
       ${btn('dbg-sim-10',       '⏩', 'Simulate 10 games',          '#22d3ee')}
@@ -344,6 +350,26 @@ function _renderActions(s) {
 
 function _wireActions(overlay, state) {
   const on = (id, fn) => document.getElementById(id)?.addEventListener('click', fn);
+
+  // ── Version banner + live-speed (dev) ────────────────────
+  import('../App.js').then(App => {
+    const vb = overlay.querySelector('.debug-version-label');
+    if (vb) vb.textContent = `The Front Office — ${App.APP_VERSION}`;
+    const cur = overlay.querySelector('#debug-current-speed');
+    if (cur && App.getDevTimeScale) cur.textContent = `${App.getDevTimeScale()}×`;
+  }).catch(() => {});
+
+  const setSpeed = async (n) => {
+    try {
+      const App = await import('../App.js');
+      App.setDevTimeScale(n);
+      alert(`Live speed set to ${n}×. Open a live game to watch it play out faster. (1× = normal shipping speed.)`);
+    } catch (e) { alert(`Could not set speed: ${e.message}`); }
+  };
+  on('dbg-speed-1',   () => setSpeed(1));
+  on('dbg-speed-10',  () => setSpeed(10));
+  on('dbg-speed-60',  () => setSpeed(60));
+  on('dbg-speed-300', () => setSpeed(300));
 
   // ── Phase jumps ──────────────────────────────────────────
   on('dbg-jump-spring', async () => {
