@@ -118,6 +118,25 @@ async function main() {
     const g = post.schedule[idx];
     check(`game ${idx} committed (result+score)`,
           g._committed && g.result && g.score && Number.isFinite(g.score.us) && Number.isFinite(g.score.them));
+
+    // ── Box score (Phase 1: shared accumulator) ──
+    const box = g.boxScore;
+    check(`game ${idx}: boxScore written (away+home)`, !!(box && box.away && box.home));
+    if (box && box.away && box.home) {
+      const userRuns = box.userIsHome ? box.home.runs : box.away.runs;
+      const oppRuns  = box.userIsHome ? box.away.runs : box.home.runs;
+      check(`game ${idx}: box runs == final score`,
+            userRuns === g.score.us && oppRuns === g.score.them,
+            `box ${userRuns}-${oppRuns} vs score ${g.score.us}-${g.score.them}`);
+      let top = 0, bot = 0;
+      for (const inn of Object.values(box.linescore)) { top += inn.top; bot += inn.bot; }
+      check(`game ${idx}: linescore sums == box runs`,
+            top === box.away.runs && bot === box.home.runs,
+            `LS ${top}/${bot} vs box ${box.away.runs}/${box.home.runs}`);
+      check(`game ${idx}: both lineups seeded (>=9 hitters each)`,
+            box.away.hitters.length >= 9 && box.home.hitters.length >= 9,
+            `${box.away.hitters.length}/${box.home.hitters.length}`);
+    }
     check(`game ${idx} advanced currentGameIndex`, post.currentGameIndex === idx + 1, `now ${post.currentGameIndex}`);
 
     // roster-integrity canary — phase-aware:
