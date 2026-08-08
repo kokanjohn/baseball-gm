@@ -32,9 +32,17 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // TAB STATE
 // ─────────────────────────────────────────────────────────────
 
+// Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
+export const APP_VERSION = 'tfo-v2-r41';
+
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
 let _tickInterval    = null;   // Section 8.4 — App.js owns the tick interval
+
+// DEV-ONLY live speed multiplier. Always 1 for shipping players (live-only at
+// TICK_INTERVAL_MS); only the Developer Menu changes it. Persisted per-device.
+let _devTimeScale    = Math.max(1, Number(localStorage.getItem('bgm_devTimeScale')) || 1);
+let _pendingUpdate   = false;  // a newer service worker is installed and waiting
 
 // Tab → inner reset functions registered by each screen on mount
 const _tabResetFns = {};
@@ -375,24 +383,38 @@ export async function init() {
   // Wire settings pickers (listeners only — swatches populated on open)
   _initSettingsPickers();
 
-  // Wire debug panel — long-press (700ms) on the version string in settings
-  // Hidden from users; no visible affordance.
-  let _debugPressTimer = null;
-  const versionEl = settingsModal?.querySelector('[data-debug-trigger]')
-    || Array.from(settingsModal?.querySelectorAll('div') || [])
-         .find(el => el.textContent.includes('The Front Office — v2'));
+  // ── Version display + developer menu + update controls ────
+  // (Replaces the old hidden 700ms long-press with explicit buttons.)
+  const versionLabel = document.getElementById('app-version-label');
+  if (versionLabel) versionLabel.textContent = `The Front Office — v2 · ${APP_VERSION}`;
+  _refreshUpdateStatus();
 
-  if (versionEl) {
-    versionEl.addEventListener('pointerdown', () => {
-      _debugPressTimer = setTimeout(async () => {
-        settingsModal?.classList.remove('open');
-        const { openDebug } = await import('./screens/DebugScreen.js');
-        openDebug();
-      }, 700);
-    });
-    versionEl.addEventListener('pointerup',    () => clearTimeout(_debugPressTimer));
-    versionEl.addEventListener('pointerleave', () => clearTimeout(_debugPressTimer));
-  }
+  document.getElementById('settings-open-debug')?.addEventListener('click', async () => {
+    settingsModal?.classList.remove('open');
+    const { openDebug } = await import('./screens/DebugScreen.js');
+    openDebug();
+  });
+
+  document.getElementById('settings-check-update')?.addEventListener('click', async () => {
+    const statusEl = document.getElementById('app-update-status');
+    const set = (msg, danger) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = danger ? 'var(--danger, #f87171)' : 'var(--muted)'; } };
+    set('Checking…');
+    try {
+      if (!('serviceWorker' in navigator)) { set('Reloading…'); setTimeout(() => location.reload(), 300); return; }
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) await reg.update();
+      if (reg?.waiting) {
+        // A newer build is downloaded and waiting — activate it; controllerchange reloads.
+        set('Updating to latest…');
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      } else {
+        set('Up to date — reloading…');
+        setTimeout(() => location.reload(), 300);
+      }
+    } catch {
+      set('Update check failed', true);
+    }
+  });
 
   // ── Mount all screens ──────────────────────────────────────────────────
   // Each screen module registers itself with registerTabReset on mount.
@@ -556,6 +578,10 @@ let _lastActiveTime = Date.now();
 export function startTick() {
   if (_tickInterval) return;
 
+  // Shipping players always run at TICK_INTERVAL_MS (_devTimeScale === 1).
+  // The Developer Menu can raise _devTimeScale to watch games play out faster.
+  const intervalMs = Math.max(50, Math.round(TICK_INTERVAL_MS / _devTimeScale));
+
   _tickInterval = setInterval(async () => {
     _lastActiveTime = Date.now();
 
@@ -586,8 +612,22 @@ export function startTick() {
         console.error('App.startTick: auto-commit error:', err);
       }
     }
-  }, TICK_INTERVAL_MS);
+  }, intervalMs);
 }
+
+/**
+ * setDevTimeScale(n) — DEV ONLY (Developer Menu).
+ * Speeds up the live tick loop for testing. 1 = normal shipping speed.
+ * Restarts the interval so the change takes effect immediately.
+ */
+export function setDevTimeScale(n) {
+  _devTimeScale = Math.max(1, Number(n) || 1);
+  localStorage.setItem('bgm_devTimeScale', String(_devTimeScale));
+  if (_tickInterval) { clearInterval(_tickInterval); _tickInterval = null; }
+  startTick();
+}
+
+export function getDevTimeScale() { return _devTimeScale; }
 
 // ─────────────────────────────────────────────────────────────
 // BACKGROUND / RESUME HANDLER
@@ -1512,15 +1552,48 @@ document.addEventListener('DOMContentLoaded', init);
 // SERVICE WORKER REGISTRATION (Phase 14 — PWA)
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * _refreshUpdateStatus()
+ * Shows "new version ready" in Settings when a newer service worker is waiting.
+ * Non-destructive — the user applies the update via the refresh button.
+ */
+async function _refreshUpdateStatus() {
+  const statusEl = document.getElementById('app-update-status');
+  if (!statusEl) return;
+  try {
+    let waiting = _pendingUpdate;
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg?.waiting) waiting = true;
+    }
+    if (waiting) {
+      statusEl.textContent = '🔄 New version ready — tap “Check for updates & refresh”';
+      statusEl.style.color = 'var(--accent, #F5D253)';
+    } else {
+      statusEl.textContent = '';
+    }
+  } catch { /* ignore */ }
+}
+
 if ('serviceWorker' in navigator) {
+  // Reload exactly once when a new service worker takes control (after the user
+  // applies an update via the refresh button → SKIP_WAITING → controllerchange).
+  let _reloadedForUpdate = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (_reloadedForUpdate) return;
+    _reloadedForUpdate = true;
+    location.reload();
+  });
+
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/baseball-gm/sw.js', { scope: '/baseball-gm/' })
       .then(registration => {
         console.log('[App] Service worker registered — scope:', registration.scope);
 
-        // If a new service worker is waiting, activate it immediately
-        if (registration.waiting) {
-          registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        // A newer build already waiting from a previous visit — surface it (don't force a mid-game reload).
+        if (registration.waiting && navigator.serviceWorker.controller) {
+          _pendingUpdate = true;
+          _refreshUpdateStatus();
         }
 
         registration.addEventListener('updatefound', () => {
@@ -1528,8 +1601,9 @@ if ('serviceWorker' in navigator) {
           if (!newWorker) return;
           newWorker.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // New version available — activate immediately on next navigation
-              newWorker.postMessage({ type: 'SKIP_WAITING' });
+              // New version downloaded — surface it; the user applies it when ready.
+              _pendingUpdate = true;
+              _refreshUpdateStatus();
             }
           });
         });
