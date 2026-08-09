@@ -45,7 +45,7 @@ import {
 } from '../data/constants.js';
 
 import { injurePlayer } from './InjuryEngine.js';
-import { activateFromIL, placeOnWaivers, sendToFarm } from './RosterEngine.js';
+import { activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation } from './RosterEngine.js';
 import { evaluateTrade, executeTrade, recordDeclinedOffer } from './TradeEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 
@@ -1195,6 +1195,17 @@ function _applyRosterAction(instance, choice, state) {
 
     default:
       break;
+  }
+
+  // After any IL-return action the active roster changed (a player left the IL
+  // to the bench/bullpen, was waived, or was optioned to the farm). Reconcile so
+  // lineup slots and the rotation are restored to healthy, rostered players.
+  // Activating from the IL can push the roster over 28 — that's a GM decision, so
+  // reconcile reports the surplus (a later batch presents the "who comes off?"
+  // card); it does not silently waive a user player.
+  if (action === 'il_return_activate' || action === 'il_return_waive' || action === 'il_return_farm') {
+    const rec = reconcileRoster(StateManager.get(), 'user');
+    StateManager.mutate(s => applyRosterMutation(s, rec));
   }
 }
 

@@ -52,12 +52,13 @@ import {
 import {
   drainPendingTrades,
   checkDepth,
-  autoResolveDepth,
   autoResolveSpringCuts,
   applySpringCuts,
   toggleKeeperTag,
   computePayroll,
   returnFromIL,
+  reconcileRoster,
+  applyRosterMutation,
 } from './RosterEngine.js';
 
 import { computeOVR, computeAge } from './PlayerFactory.js';
@@ -873,9 +874,15 @@ export async function commitGame(gameIndex) {
       }
     }
 
-    // ── Step 5: Depth check — auto-resolve CRITICAL ────────
-    const depthMutations = autoResolveDepth(s);
-    _applyMutations(s, depthMutations);
+    // ── Step 5: Reconcile roster invariants ────────────────
+    // After trades/IL returns, restore lineup + rotation integrity: pull any
+    // injured/departed player out of a lineup slot or the rotation and backfill
+    // from the active roster (bench → slot, pitcher-bench → rotation). Call-ups
+    // and waivers are GM decisions, so for the user reconcile only REPORTS the
+    // need (pendingCallups/pendingSurplus) — it does not auto-move farm players.
+    // (CPU teams are reconciled with autoManage inside processCPURosterDecisions.)
+    const reconcileMut = reconcileRoster(s, 'user');
+    applyRosterMutation(s, reconcileMut);
 
     // ── Step 6: Payroll recalculation ──────────────────────
     s.userTeam.finances.payroll = computePayroll(s);

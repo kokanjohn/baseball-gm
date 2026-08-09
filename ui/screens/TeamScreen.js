@@ -28,6 +28,8 @@ import * as StateManager from '../../store/StateManager.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
+import { eligibleSlotsFor, reconcileRoster, applyRosterMutation }
+  from '../../engine/RosterEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -69,24 +71,10 @@ const _farmOpen = {
 // Slot labels match lineupSlots entries: 'C','1B','2B','3B','SS','OF','DH'.
 // 'OF' covers all three OF positions — no LF/CF/RF distinction.
 // Every hitter is eligible for 'DH'.
+// Eligibility is defined once in RosterEngine (eligibleSlotsFor) so the swap UI
+// and reconcileRoster can never disagree about which slots a player can fill.
 function _eligibleSlots(player) {
-  const nat = player.nativePos || player.pos;
-  if (nat === 'C')      return ['C','DH'];
-  if (nat === '1B')     return ['1B','DH'];
-  if (nat === '2B')     return ['2B','DH'];
-  if (nat === '3B')     return ['3B','DH'];
-  if (nat === 'SS')     return ['SS','DH'];
-  if (nat === 'OF')     return ['OF','DH'];
-  if (nat === 'DH')     return ['DH'];          // pure DH — only DH slot
-  if (nat === 'DH/OF')  return ['OF','DH'];
-  if (nat === '2B/SS')  return ['2B','SS','DH'];
-  if (nat === '1B/3B')  return ['1B','3B','DH'];
-  if (nat === 'SS/OF')  return ['SS','OF','DH'];
-  if (nat === '1B/OF')  return ['1B','OF','DH'];
-  if (nat && nat.includes('/')) {
-    return [...new Set([...nat.split('/').map(p => p === 'OF' ? 'OF' : p), 'DH'])];
-  }
-  return [nat,'DH'];
+  return eligibleSlotsFor(player);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -856,8 +844,21 @@ async function _handleCallUp(playerId, state) {
       if (mutations.userTeam) Object.assign(s.userTeam, mutations.userTeam);
     });
 
+    // Reconcile lineup/rotation integrity. A manual call-up can push the active
+    // roster over 28 — that's a GM decision (option B), so reconcile reports the
+    // surplus rather than auto-dropping, and we prompt the user to make room.
+    const rec = reconcileRoster(StateManager.get(), 'user');
+    StateManager.mutate(s => applyRosterMutation(s, rec));
+
     EventBus.emit('roster:changed', { type: 'callup', playerId });
-    App.showToast(`${player.name} called up.`, 'positive');
+    if (rec.pendingSurplus && rec.pendingSurplus.length) {
+      App.showToast(
+        `${player.name} called up — roster is over 28. Send someone down or waive to get legal.`,
+        'negative'
+      );
+    } else {
+      App.showToast(`${player.name} called up.`, 'positive');
+    }
     refresh();
 
   } catch (err) {
@@ -1005,6 +1006,9 @@ function _execHitterSwap(incoming, slotIdx, outgoing) {
     // outgoing goes to bench — nothing to write to lineupSlots
     // (they're already removed from the slot by setting incoming)
   });
+  // Reconcile lineup integrity (dedupe, valid occupants) after the edit.
+  const rec = reconcileRoster(StateManager.get(), 'user');
+  StateManager.mutate(s => applyRosterMutation(s, rec));
   EventBus.emit('roster:changed', { type: 'swap' });
   const slotLabel = StateManager.get().userTeam.lineupSlots[slotIdx]?.slot || '';
   const ropt      = _calcRopt(StateManager.get());
@@ -1024,6 +1028,11 @@ function _execPitcherSwap(incoming, outgoing, isSP) {
     s.players[incoming.id].group = activeGrp;
     if (outgoing) s.players[outgoing.id].group = PLAYER_GROUP.PITCHER_BENCH;
   });
+  // Reconcile so rotation.order reflects the swap. The sim reads rotation.order,
+  // NOT group — before this, a rotation swap changed only the group and had zero
+  // effect on which pitcher actually started.
+  const rec = reconcileRoster(StateManager.get(), 'user');
+  StateManager.mutate(s => applyRosterMutation(s, rec));
   EventBus.emit('roster:changed', { type: 'swap' });
   // Play success sound only when pitcher optimization reaches 100%
   const ropt = _calcRopt(StateManager.get());

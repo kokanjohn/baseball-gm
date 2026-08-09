@@ -31,6 +31,7 @@ import {
   callUpFromFarm,
   checkDepth,
   autoResolveDepth,
+  reconcileRoster,
 } from './RosterEngine.js';
 
 import { computeOVR } from './PlayerFactory.js';
@@ -193,7 +194,7 @@ export function processCPURosterDecisions(state, dateStr) {
       };
     }
 
-    // Depth check — auto-resolve CRITICAL gaps
+    // Depth check — auto-resolve CRITICAL gaps (emergency callups).
     const depthIssues = checkDepth(state, team.id);
     const criticalIssues = depthIssues.filter(i => i.type === 'CRITICAL');
     if (criticalIssues.length > 0) {
@@ -209,6 +210,25 @@ export function processCPURosterDecisions(state, dateStr) {
         ));
       }
     }
+
+    // Reconcile: restore lineup + rotation integrity and hold the active roster
+    // at a legal 28 (CPU auto-manages — farm call-ups + waiving surplus). Runs on
+    // a patched view so it sees this team's IL-return / depth changes above and
+    // every earlier team's changes in this pass.
+    const patchedPlayers = { ...state.players };
+    for (const [id, upd] of Object.entries(mutations.players)) {
+      patchedPlayers[id] = { ...patchedPlayers[id], ...upd };
+    }
+    const patched = {
+      ...state,
+      players:     patchedPlayers,
+      leagueTeams: mutations.leagueTeams,
+      waiverPool:  mutations.waiverPool,
+    };
+    const rec = reconcileRoster(patched, team.id, { autoManage: true });
+    if (rec.players)     Object.assign(mutations.players, rec.players);
+    if (rec.leagueTeams) mutations.leagueTeams = rec.leagueTeams;
+    if (rec.waiverPool)  mutations.waiverPool  = rec.waiverPool;
   }
 
   mutations.activityFeed = pruneActivityFeed(mutations.activityFeed);

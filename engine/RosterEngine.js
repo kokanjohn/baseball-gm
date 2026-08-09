@@ -23,6 +23,8 @@
 import {
   PLAYER_GROUP,
   ROSTER_LIMITS,
+  LINEUP_SLOTS,
+  PHASE,
   FARM_HITTER_MIN_POSITIONS,
   FARM_PITCHER_MIN_SP,
   FARM_PITCHER_MIN_RP,
@@ -53,6 +55,43 @@ const POSITION_COVERAGE = Object.freeze({
 const REQUIRED_STARTER_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH'];
 const REQUIRED_SP_COUNT = ROSTER_LIMITS.STARTING_PITCHERS;
 const REQUIRED_RP_COUNT = 2; // minimum relievers to function
+
+// ─────────────────────────────────────────────────────────────
+// LINEUP-SLOT ELIGIBILITY (single source of truth)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * eligibleSlotsFor(player)
+ * Returns the set of lineupSlots labels this player may fill, based on
+ * nativePos. This is the authoritative eligibility map used by both
+ * reconcileRoster (lineup backfill) and TeamScreen (swap UI) so the two
+ * can never drift. Every non-DH position can also fill the DH slot.
+ *
+ * @param {Object} player
+ * @returns {String[]} slot labels (subset of LINEUP_SLOTS)
+ */
+export function eligibleSlotsFor(player) {
+  const nat = (player && (player.nativePos || player.pos)) || '';
+  switch (nat) {
+    case 'C':     return ['C', 'DH'];
+    case '1B':    return ['1B', 'DH'];
+    case '2B':    return ['2B', 'DH'];
+    case '3B':    return ['3B', 'DH'];
+    case 'SS':    return ['SS', 'DH'];
+    case 'OF':    return ['OF', 'DH'];
+    case 'DH':    return ['DH'];            // pure DH — only DH slot
+    case 'DH/OF': return ['OF', 'DH'];
+    case '2B/SS': return ['2B', 'SS', 'DH'];
+    case '1B/3B': return ['1B', '3B', 'DH'];
+    case 'SS/OF': return ['SS', 'OF', 'DH'];
+    case '1B/OF': return ['1B', 'OF', 'DH'];
+    default:
+      if (nat.includes('/')) {
+        return [...new Set([...nat.split('/'), 'DH'])];
+      }
+      return nat ? [nat, 'DH'] : ['DH'];
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // PLACE PLAYER
@@ -510,6 +549,10 @@ export function checkDepth(state, teamId) {
     ? state.userTeam.rosterIds
     : _getLeagueTeamRosterIds(state, teamId);
 
+  // Every player who is healthy, rostered, and available to play.
+  // Injured players carry group IL and are therefore excluded here — this is
+  // the fix for the injured-incumbent bug (an injured starter must NOT count
+  // as coverage, otherwise a CRITICAL gap is masked and auto-backfill never fires).
   const activePlayers = rosterIds
     .map(id => state.players[id])
     .filter(p => p && !p.isInjured && !p.isSuspended && !p._pendingDeparture
@@ -518,25 +561,17 @@ export function checkDepth(state, teamId) {
 
   const issues = [];
 
-  // Check each required hitter position
-  // Active starters come from lineupSlots (new model).
-  // Falls back to BENCH_HITTERS group for any team missing lineupSlots.
-  const team         = isUserTeam ? state.userTeam : state.leagueTeams?.find(t => t.id === teamId);
-  const lineupSlots  = team?.lineupSlots || [];
-  const activeHitterIds = lineupSlots.length === 9
-    ? lineupSlots.map(s => s.playerId).filter(Boolean)
-    : rosterIds.filter(id => state.players[id]?.group === PLAYER_GROUP.BENCH_HITTERS);
+  // Coverage per required hitter position = the number of healthy, active
+  // hitters (starters AND bench all carry BENCH_HITTERS under the lineupSlots
+  // model) whose nativePos can play that position. A clean body-count — no
+  // "+1 if any lineup slot matches" collapse, no double counting.
+  const healthyHitters = activePlayers.filter(p => p.group === PLAYER_GROUP.BENCH_HITTERS);
 
   for (const pos of REQUIRED_STARTER_POSITIONS) {
     const compatible = POSITION_COVERAGE[pos] || [pos];
-    // Count players who can fill this position from lineup + bench
-    const available = activePlayers.filter(p =>
-      compatible.includes(p.nativePos || p.pos) &&
-      p.group === PLAYER_GROUP.BENCH_HITTERS
-    ).length + (activeHitterIds.some(id => {
-      const p = state.players[id];
-      return p && compatible.includes(p.nativePos || p.pos);
-    }) ? 1 : 0);
+    const available  = healthyHitters.filter(p =>
+      compatible.includes(p.nativePos || p.pos)
+    ).length;
 
     if (available === 0) issues.push({ type: 'CRITICAL', position: pos, available });
     else if (available === 1) issues.push({ type: 'WARNING', position: pos, available });
@@ -607,6 +642,357 @@ export function autoResolveDepth(state, teamId) {
   }
 
   return mutations;
+}
+
+// ─────────────────────────────────────────────────────────────
+// ROSTER RECONCILIATION (the single post-mutation invariant)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * reconcileRoster(state, teamId, options)
+ *
+ * The one invariant that must hold after ANY roster mutation (injury, IL
+ * return/activation, trade, waiver, call-up, or a lineup/rotation edit). It is
+ * pure: it reads `state`, works on local copies, and returns a mutation object
+ * in the same shape the rest of RosterEngine returns. The caller applies it.
+ *
+ * Guarantees, for the given team:
+ *   1. lineupSlots is exactly the 9 canonical slots in order; every non-null
+ *      occupant is a healthy, rostered BENCH_HITTERS hitter eligible for that slot.
+ *   2. Vacant slots are backfilled from eligible healthy bench hitters (manager
+ *      domain — always automatic). If bench can't cover, the slot stays vacant
+ *      and the need is reported (user) or filled from farm (CPU, autoManage).
+ *   3. rotation.order = the rostered, healthy STARTING_PITCHERS (de-duped, no
+ *      injured/departed ids); a short rotation is topped up from PITCHER_BENCH
+ *      (manager domain — always automatic), then from farm (CPU only).
+ *   4. Active-count invariant is GM domain: for CPU (autoManage) reconcile calls
+ *      up from farm to reach ACTIVE_TOTAL and waives the lowest-OVR droppable
+ *      surplus back down to it. For the USER, reconcile does NOT auto-call-up or
+ *      auto-waive — it reports `pendingCallups` (open positions + how many bodies
+ *      short of the cap) and `pendingSurplus` (drop candidates) so the card/UI
+ *      layer can let the GM choose. (The window timer, "didn't act" penalty, and
+ *      suboptimal auto-fallback call-up are the IL card flow — a later batch.)
+ *      Spring: no cap enforcement.
+ *   5. No id appears in both rosterIds and farmIds.
+ *
+ * The split follows the plan's manager-vs-GM ownership: lineup and rotation are
+ * manager-owned (auto-arranged from the active roster for all teams); call-ups
+ * and waivers are GM-owned (auto for CPU, gated for the user).
+ *
+ * @param {Object}  state
+ * @param {String}  [teamId='user']
+ * @param {Object}  [options]
+ * @param {Boolean} [options.autoManage=false] — CPU teams pass true (full auto)
+ * @returns {Object} mutation object: { players, userTeam|leagueTeams, waiverPool?,
+ *                    pendingCallups?, pendingSurplus?, surplusCount? }
+ */
+export function reconcileRoster(state, teamId = 'user', options = {}) {
+  const autoManage = !!options.autoManage;
+  const isUserTeam = !teamId || teamId === 'user';
+  const team = isUserTeam
+    ? state.userTeam
+    : (state.leagueTeams || []).find(t => t.id === teamId);
+  if (!team) return {};
+
+  const players   = state.players || {};
+  const inSpring  = state.phase === PHASE.SPRING_TRAINING;
+  const activeCap = ROSTER_LIMITS.ACTIVE_TOTAL;
+
+  // ── Working copies (never mutate state) ───────────────────────────────
+  let rosterIds = [...(team.rosterIds || [])];
+  let farmIds   = [...(team.farmIds   || [])];
+  const patch   = {};                 // playerId -> partial player update
+  const waived  = [];                 // playerIds moved to waivers this pass
+
+  // Effective (post-patch) group / availability helpers.
+  const groupOf = (id) => (patch[id] && patch[id].group !== undefined)
+    ? patch[id].group
+    : players[id]?.group;
+  const isHealthy = (id) => {
+    const p = players[id];
+    return !!p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave && !p._pendingDeparture;
+  };
+  const setPatch = (id, upd) => { patch[id] = { ...(patch[id] || {}), ...upd }; };
+
+  // ── Normalize lineupSlots to the 9 canonical slots in fixed order ─────
+  // Carry over existing occupants slot-for-slot when the array is already the
+  // canonical shape; otherwise re-seat surviving occupants by eligibility.
+  const existing = team.lineupSlots || [];
+  const canonical = existing.length === LINEUP_SLOTS.length
+    && existing.every((e, i) => e && e.slot === LINEUP_SLOTS[i]);
+
+  let slots = LINEUP_SLOTS.map((label, i) => ({
+    slot: label,
+    playerId: canonical ? (existing[i].playerId || null) : null,
+  }));
+
+  if (!canonical) {
+    // Re-seat any valid occupants from the old (possibly malformed) array.
+    const survivors = existing
+      .map(e => e && e.playerId)
+      .filter(id => id && rosterIds.includes(id) && isHealthy(id)
+                 && groupOf(id) === PLAYER_GROUP.BENCH_HITTERS);
+    _seatByEligibility(slots, survivors, players);
+  }
+
+  // ── Vacate invalid occupants (injured/departed/wrong-group/dup/ineligible) ──
+  const seen = new Set();
+  for (const s of slots) {
+    const id = s.playerId;
+    if (!id) continue;
+    const ok = rosterIds.includes(id)
+      && isHealthy(id)
+      && groupOf(id) === PLAYER_GROUP.BENCH_HITTERS
+      && !seen.has(id)
+      && eligibleSlotsFor(players[id]).includes(s.slot);
+    if (ok) { seen.add(id); } else { s.playerId = null; }
+  }
+
+  // ── Fill vacant slots: bench first, then a farm call-up ───────────────
+  const seatedIds = () => new Set(slots.map(s => s.playerId).filter(Boolean));
+  const benchPool = () => rosterIds
+    .filter(id => isHealthy(id)
+              && groupOf(id) === PLAYER_GROUP.BENCH_HITTERS
+              && !seatedIds().has(id))
+    .map(id => players[id])
+    .filter(Boolean)
+    .sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
+
+  for (const slot of slots) {
+    if (slot.playerId) continue;
+
+    // Manager domain: seat the best eligible healthy bench hitter (already active).
+    const benchPick = benchPool().find(p => eligibleSlotsFor(p).includes(slot.slot));
+    if (benchPick) { slot.playerId = benchPick.id; continue; }
+
+    // GM domain: no bench cover. CPU calls up the best eligible farm hitter to
+    // keep fielding a full lineup; the user's need is reported (pendingCallups).
+    if (autoManage) {
+      const farmPick = farmIds
+        .map(id => players[id])
+        .filter(p => p && isHealthy(p.id)
+                  && !['SP', 'RP'].includes(p.pos)
+                  && eligibleSlotsFor(p).includes(slot.slot))
+        .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+      if (farmPick) {
+        farmIds = farmIds.filter(id => id !== farmPick.id);
+        rosterIds.push(farmPick.id);
+        setPatch(farmPick.id, {
+          group: PLAYER_GROUP.BENCH_HITTERS, tier: 'active', teamId,
+          _farmArc: null, _farmArcStart: null,
+        });
+        slot.playerId = farmPick.id;
+      }
+    }
+    // If still unfilled, leave vacant — reported for the user, rare for CPU.
+  }
+
+  // ── Rebuild rotation.order from healthy, rostered STARTING_PITCHERS ────
+  const oldRotation = team.rotation || { order: [], currentIndex: 0 };
+  const validSP = (id) => rosterIds.includes(id) && isHealthy(id)
+    && groupOf(id) === PLAYER_GROUP.STARTING_PITCHERS;
+
+  let order = [];
+  const inOrder = new Set();
+  for (const id of (oldRotation.order || [])) {
+    if (validSP(id) && !inOrder.has(id)) { order.push(id); inOrder.add(id); }
+  }
+  // Append any healthy rostered SP not already in the order (e.g. after a swap).
+  for (const id of rosterIds) {
+    if (validSP(id) && !inOrder.has(id)) { order.push(id); inOrder.add(id); }
+  }
+  // Manager domain: a short rotation is topped up from healthy PITCHER_BENCH
+  // starters already on the active roster (non-destructive — no size change).
+  while (order.length < REQUIRED_SP_COUNT) {
+    const pbSP = rosterIds
+      .map(id => players[id])
+      .filter(p => p && isHealthy(p.id) && p.pos === 'SP'
+                && groupOf(p.id) === PLAYER_GROUP.PITCHER_BENCH
+                && !inOrder.has(p.id))
+      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+    if (!pbSP) break;
+    setPatch(pbSP.id, { group: PLAYER_GROUP.STARTING_PITCHERS });
+    order.push(pbSP.id);
+    inOrder.add(pbSP.id);
+  }
+  // GM domain (CPU only): still short → call up the best farm SP.
+  while (autoManage && order.length < REQUIRED_SP_COUNT) {
+    const farmSP = farmIds
+      .map(id => players[id])
+      .filter(p => p && isHealthy(p.id) && p.pos === 'SP')
+      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+    if (!farmSP) break;
+    farmIds = farmIds.filter(id => id !== farmSP.id);
+    rosterIds.push(farmSP.id);
+    setPatch(farmSP.id, {
+      group: PLAYER_GROUP.STARTING_PITCHERS, tier: 'active', teamId,
+      _farmArc: null, _farmArcStart: null,
+    });
+    order.push(farmSP.id);
+    inOrder.add(farmSP.id);
+  }
+  const currentIndex = order.length ? (oldRotation.currentIndex || 0) % order.length : 0;
+
+  // ── Active-count invariant (GM domain; regular season only) ───────────
+  let pendingSurplus = null;
+  let pendingCallups = null;
+  let surplusCount   = 0;
+
+  if (!inSpring) {
+    let nonIL = _nonILCount(rosterIds, groupOf);
+
+    if (autoManage) {
+      // CPU: top up from farm to reach the cap (best available body).
+      while (nonIL < activeCap) {
+        const filler = farmIds
+          .map(id => players[id])
+          .filter(p => p && isHealthy(p.id))
+          .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+        if (!filler) break;
+        farmIds = farmIds.filter(id => id !== filler.id);
+        rosterIds.push(filler.id);
+        const isP = ['SP', 'RP'].includes(filler.pos);
+        setPatch(filler.id, {
+          group: isP ? PLAYER_GROUP.BULLPEN : PLAYER_GROUP.BENCH_HITTERS,
+          tier: 'active', teamId, _farmArc: null, _farmArcStart: null,
+        });
+        nonIL++;
+      }
+      // CPU: waive the lowest-OVR droppable surplus back down to the cap.
+      if (nonIL > activeCap) {
+        surplusCount = nonIL - activeCap;
+        const droppable = _droppable(rosterIds, order, slots, groupOf, isHealthy, players);
+        for (let i = 0; i < surplusCount && i < droppable.length; i++) {
+          const id = droppable[i];
+          rosterIds = rosterIds.filter(x => x !== id);
+          waived.push(id);
+          setPatch(id, {
+            group: 'waivers', tier: 'waivers', onWaivers: true,
+            waiverStartTime: Date.now(), _pendingILReturn: false,
+            _pendingDeparture: false, teamId: null,
+          });
+        }
+      }
+    } else {
+      // USER: don't auto-call-up or auto-waive. Report the needs so the card/UI
+      // layer can let the GM choose (and a later batch can time-box + penalize).
+      const vacant = slots.filter(s => !s.playerId).map(s => s.slot);
+      const shortBy = Math.max(0, activeCap - nonIL);
+      if (vacant.length || shortBy > 0) {
+        pendingCallups = { slots: vacant, count: shortBy };
+      }
+      if (nonIL > activeCap) {
+        surplusCount = nonIL - activeCap;
+        pendingSurplus = _droppable(rosterIds, order, slots, groupOf, isHealthy, players);
+      }
+    }
+  }
+
+  // ── Assemble the mutation object ──────────────────────────────────────
+  const teamPatch = {
+    rosterIds,
+    farmIds,
+    lineupSlots: slots,
+    rotation: { order, currentIndex },
+  };
+
+  const mutation = { players: patch };
+  if (isUserTeam) {
+    mutation.userTeam = teamPatch;
+  } else {
+    const updatedTeams = (state.leagueTeams || []).map(t =>
+      t.id === teamId ? { ...t, ...teamPatch } : t
+    );
+    mutation.leagueTeams = updatedTeams;
+  }
+  if (waived.length) {
+    mutation.waiverPool = [...(state.waiverPool || []), ...waived];
+  }
+  if (pendingCallups) {
+    mutation.pendingCallups = pendingCallups;
+  }
+  if (pendingSurplus && pendingSurplus.length) {
+    mutation.pendingSurplus = pendingSurplus;
+    mutation.surplusCount   = surplusCount;
+  }
+  return mutation;
+}
+
+/**
+ * applyRosterMutation(state, mutation)
+ * Applies a mutation object (from reconcileRoster or any RosterEngine function)
+ * onto a live state object, in place. Mirrors GameEngine._applyMutations so the
+ * non-GameEngine callers (CardEngine, TeamScreen) share one merge implementation
+ * instead of hand-rolling Object.assign each time. Pure w.r.t. StateManager
+ * (takes state as input; the caller runs it inside its own mutate()).
+ *
+ * Ignores the advisory keys pendingSurplus/surplusCount — those are read by the
+ * caller before applying, not written into state.
+ *
+ * @param {Object} state
+ * @param {Object} mutation
+ */
+export function applyRosterMutation(state, mutation) {
+  if (!mutation) return;
+  for (const [key, value] of Object.entries(mutation)) {
+    if (key === 'pendingSurplus' || key === 'surplusCount' || key === 'pendingCallups') continue;
+    if (key === 'players' && value && typeof value === 'object') {
+      for (const [id, upd] of Object.entries(value)) {
+        if (state.players[id]) Object.assign(state.players[id], upd);
+        else state.players[id] = { ...upd };
+      }
+    } else if (key === 'userTeam' && value && typeof value === 'object') {
+      Object.assign(state.userTeam, value);
+      if (value.finances) Object.assign(state.userTeam.finances, value.finances);
+    } else {
+      state[key] = value;
+    }
+  }
+}
+
+// ── reconcile internals ──────────────────────────────────────────────
+
+/** Count rostered players not currently on the IL (matches harness activeCount). */
+function _nonILCount(rosterIds, groupOf) {
+  let n = 0;
+  for (const id of rosterIds) if (groupOf(id) !== PLAYER_GROUP.IL) n++;
+  return n;
+}
+
+/**
+ * Droppable surplus candidates: healthy, non-IL players who are NOT seated in
+ * the lineup and NOT in the rotation — i.e. bench hitters and surplus pitchers —
+ * lowest OVR first. Locked starters are never offered as drop candidates.
+ */
+function _droppable(rosterIds, order, slots, groupOf, isHealthy, players) {
+  const locked = new Set([
+    ...slots.map(s => s.playerId).filter(Boolean),
+    ...order,
+  ]);
+  return rosterIds
+    .filter(id => groupOf(id) !== PLAYER_GROUP.IL && isHealthy(id) && !locked.has(id))
+    .map(id => players[id])
+    .filter(Boolean)
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))
+    .map(p => p.id);
+}
+
+/** Seat a list of player ids into the canonical slot array by eligibility. */
+function _seatByEligibility(slots, ids, players) {
+  const used = new Set();
+  // Pass 1: exact/eligible seat, scarcer positions first (C before DH).
+  for (const s of slots) {
+    if (s.playerId) continue;
+    const pick = ids.find(id => !used.has(id) && players[id]
+      && eligibleSlotsFor(players[id]).includes(s.slot));
+    if (pick) { s.playerId = pick; used.add(pick); }
+  }
+  // Pass 2: drop any leftovers into remaining empty slots.
+  for (const s of slots) {
+    if (s.playerId) continue;
+    const pick = ids.find(id => !used.has(id));
+    if (pick) { s.playerId = pick; used.add(pick); }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

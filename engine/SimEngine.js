@@ -1583,16 +1583,41 @@ function _buildSyntheticCPUTeam(players) {
     p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave
   );
 
-  // Pick 9 starters and 1 SP from the available pool by OVR
-  const hitters  = allPlayers.filter(p => p.group === PLAYER_GROUP.STARTING_HITTERS)
-    .sort((a,b) => b.ovr - a.ovr).slice(0, 9);
+  // Active hitters carry BENCH_HITTERS under the lineupSlots model (STARTING_HITTERS
+  // is no longer assigned), so pull hitters from that group — filtering by
+  // STARTING_HITTERS here is what produced 0 hitters and 0-0 fallback games.
+  const hitters  = allPlayers.filter(p => p.group === PLAYER_GROUP.BENCH_HITTERS)
+    .sort((a,b) => b.ovr - a.ovr);
   const pitchers = allPlayers.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS)
     .sort((a,b) => b.ovr - a.ovr).slice(0, 5);
   const bullpen  = allPlayers.filter(p => p.group === PLAYER_GROUP.BULLPEN)
     .sort((a,b) => b.ovr - a.ovr).slice(0, 5);
 
+  // Seat 9 hitters into the canonical lineupSlots by position eligibility so the
+  // synthetic team has the length-9 lineupSlots that _buildLineup requires.
+  const SLOTS = ['C','1B','2B','3B','SS','OF','OF','OF','DH'];
+  const eligible = (p, label) => {
+    if (label === 'DH') return true;               // anyone can DH
+    const nat = p.nativePos || p.pos;
+    return nat === label || (nat.includes('/') && nat.split('/').includes(label));
+  };
+  const used = new Set();
+  const lineupSlots = SLOTS.map(label => {
+    const pick = hitters.find(p => !used.has(p.id) && eligible(p, label));
+    if (pick) { used.add(pick.id); return { slot: label, playerId: pick.id }; }
+    return { slot: label, playerId: null };
+  });
+  // Fill any remaining vacancy with the best leftover hitter.
+  for (const s of lineupSlots) {
+    if (s.playerId) continue;
+    const pick = hitters.find(p => !used.has(p.id));
+    if (pick) { used.add(pick.id); s.playerId = pick.id; }
+  }
+  const starterIds = lineupSlots.map(s => s.playerId).filter(Boolean);
+
   return {
-    rosterIds: [...hitters.map(p => p.id), ...pitchers.map(p => p.id), ...bullpen.map(p => p.id)],
+    rosterIds: [...starterIds, ...pitchers.map(p => p.id), ...bullpen.map(p => p.id)],
+    lineupSlots,
     rotation:  {
       order:        pitchers.map(p => p.id),
       currentIndex: 0,
