@@ -122,6 +122,7 @@ async function main() {
     // ── Box score (Phase 1: shared accumulator) ──
     const box = g.boxScore;
     check(`game ${idx}: boxScore written (away+home)`, !!(box && box.away && box.home));
+    check(`game ${idx}: plays stripped after commit`, g.plays === undefined, g.plays ? `still ${g.plays.length}` : 'stripped');
     if (box && box.away && box.home) {
       const userRuns = box.userIsHome ? box.home.runs : box.away.runs;
       const oppRuns  = box.userIsHome ? box.away.runs : box.home.runs;
