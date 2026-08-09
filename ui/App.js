@@ -607,6 +607,11 @@ export function startTick() {
       try {
         const result = await commitGame(gameIdx);
         EventBus.emit('game:committed', { result, gameIndex: gameIdx });
+        // Auto phase transitions (Opening Day, All-Star, deadline, playoffs) fire
+        // inside commitGame — notify the screens waiting on them (#5).
+        if (result?.phaseChanged && result.newPhase) {
+          EventBus.emit('game:phaseChanged', { to: result.newPhase });
+        }
         if (result?.milestone) showMilestone(result.milestone);
       } catch (err) {
         console.error('App.startTick: auto-commit error:', err);
