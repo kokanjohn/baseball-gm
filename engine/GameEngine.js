@@ -892,6 +892,17 @@ export async function commitGame(gameIndex) {
       wins:   s.userTeam.wins,
       losses: s.userTeam.losses,
     });
+
+    // ── Step 8: Strip per-game play data (§8.1) ────────────
+    // All play-dependent processing is done; game.boxScore holds the
+    // self-contained committed box. Drop the heavy fields so state does
+    // not grow across the season.
+    const gCommitted = s.schedule[gameIndex];
+    if (gCommitted && gCommitted.boxScore) {
+      delete gCommitted.plays;
+      delete gCommitted._precomputedBoxScore;
+      delete gCommitted.liveLineups;
+    }
   });
 
   // ── CPU processing (outside main mutate for clarity) ────
