@@ -97,8 +97,15 @@ function _calcRopt(state) {
     .map(s => s.playerId ? players[s.playerId] : null)
     .filter(Boolean);
 
+  // True bench = BENCH_HITTERS NOT seated in a lineup slot. All active hitters
+  // (starters + bench) share the BENCH_HITTERS group under the lineupSlots model,
+  // so without excluding the seated starters the bench pool would contain other
+  // starters — producing bogus "start X over Y" moves between two players who are
+  // both already starting.
+  const starterIdSet = new Set(lineupSlots.map(s => s.playerId).filter(Boolean));
   const benchH     = rosterIds.map(id => players[id]).filter(p =>
-    p && p.group === PLAYER_GROUP.BENCH_HITTERS && !p.isInjured && !p.isSuspended);
+    p && p.group === PLAYER_GROUP.BENCH_HITTERS && !p.isInjured && !p.isSuspended
+    && !starterIdSet.has(p.id));
   const rotation   = rosterIds.map(id => players[id]).filter(p =>
     p && p.group === PLAYER_GROUP.STARTING_PITCHERS);
   const bullpen    = rosterIds.map(id => players[id]).filter(p =>
