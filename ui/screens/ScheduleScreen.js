@@ -25,6 +25,8 @@ import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { GAME_STATUS, GAME_TIMES_BY_DOW }   from '../../data/constants.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
+import { renderBoxScore } from '../components/BoxScore.js';
+import { accumulateBox } from '../../engine/SimEngine.js';
 import {
   formatDate, formatRecord, formatGameLabel,
   formatGameStatus, formatPhaseLabel,
@@ -275,7 +277,7 @@ function _renderGameRow(game, idx, currentIdx, state, isPlayoff) {
   const moStr     = MONTHS[parseInt(mo)] || '';
   const dyStr     = parseInt(dy) || '';
 
-  const hasBoxScore = isCommitted && game.plays?.length > 0;
+  const hasBoxScore = isCommitted && (!!game.boxScore || game.plays?.length > 0);
   const oppLabel    = _gameLabel(game, state);
   const locLabel    = game.isHome ? 'Home' : 'Away';
 
@@ -534,87 +536,20 @@ function _openResultSheet(game, idx, state) {
   const resCls  = won ? 'win' : 'loss';
   const resLbl  = won ? 'W' : 'L';
 
-  // Build box score from plays if available
+  // Box score — read the stored box (game.boxScore). Old saves committed before
+  // the shared accumulator existed have plays but no boxScore; rebuild on the fly.
   let boxHtml = '';
-  if (game.plays?.length > 0) {
-    const players   = state.players || {};
-    const userIds   = new Set(state.userTeam?.rosterIds || []);
-    const batStats  = {};
-    const pitStats  = {};
-
-    for (const p of game.plays) {
-      if (!p.batterId || ['inning_end','game_end','pitching_change','pinch_hit','game_start'].includes(p.type)) continue;
-      if (p.batterId && userIds.has(p.batterId)) {
-        const b = batStats[p.batterId] || (batStats[p.batterId] = { ab:0, h:0, rbi:0, hr:0, bb:0, k:0 });
-        if (!['walk','hbp'].includes(p.type)) b.ab++;
-        if (['single','double','triple','hr'].includes(p.type)) b.h++;
-        if (p.type === 'hr') b.hr++;
-        if (['walk','hbp'].includes(p.type)) b.bb++;
-        if (p.type === 'strikeout') b.k++;
-        b.rbi += (p.rbi || 0);
-      }
-      if (p.pitcherId && userIds.has(p.pitcherId)) {
-        const pt = pitStats[p.pitcherId] || (pitStats[p.pitcherId] = { outs:0, h:0, er:0, k:0 });
-        if (['groundout','flyout','strikeout'].includes(p.type)) pt.outs++;
-        if (['single','double','triple','hr'].includes(p.type)) pt.h++;
-        if (p.type === 'strikeout') pt.k++;
-        pt.er += (p.rbi || 0);
-      }
-    }
-
-    const _ln  = id => players[id]?.name?.split(' ').pop() || '?';
-    const _avg = (h,ab) => ab > 0 ? (h/ab).toFixed(3).replace('0.','.') : '—';
-    const _ip  = outs => `${Math.floor(outs/3)}.${outs%3}`;
-
-    const batRows = Object.entries(batStats)
-      .sort(([,a],[,b]) => (b.h - a.h) || (b.rbi - a.rbi))
-      .slice(0, 9)
-      .map(([id, s]) => `<tr>
-        <td style="text-align:left;padding:3px 4px;font-size:12px;font-weight:500;color:var(--text);">${_escape(_ln(id))}</td>
-        <td style="text-align:center;padding:3px 4px;font-size:12px;color:var(--soft);">${s.h}/${s.ab}</td>
-        <td style="text-align:center;padding:3px 4px;font-size:12px;color:var(--soft);">${s.rbi}</td>
-        <td style="text-align:center;padding:3px 4px;font-size:12px;color:var(--soft);">${s.hr||0}</td>
-        <td style="text-align:center;padding:3px 4px;font-size:12px;color:${s.h > 0 ? '#60a5fa' : 'var(--muted)'};">${_avg(s.h,s.ab)}</td>
-      </tr>`).join('');
-
-    const pitRows = Object.entries(pitStats)
-      .sort(([,a],[,b]) => b.outs - a.outs)
-      .map(([id, s]) => `<tr>
-        <td style="text-align:left;padding:3px 4px;font-size:12px;font-weight:500;color:var(--text);">${_escape(_ln(id))}</td>
-        <td style="text-align:center;padding:3px 4px;font-size:12px;color:var(--soft);">${_ip(s.outs)}</td>
-        <td style="text-align:center;padding:3px 4px;font-size:12px;color:var(--soft);">${s.h}</td>
-        <td style="text-align:center;padding:3px 4px;font-size:12px;color:var(--soft);">${s.er}</td>
-        <td style="text-align:center;padding:3px 4px;font-size:12px;color:var(--soft);">${s.k}</td>
-      </tr>`).join('');
-
-    if (batRows || pitRows) {
-      boxHtml = `
-        <div style="padding:0 20px 8px;">
-          <div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;">Batting</div>
-          <table style="width:100%;border-collapse:collapse;">
-            <tr style="border-bottom:1px solid var(--border);">
-              <th style="text-align:left;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">Player</th>
-              <th style="text-align:center;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">H/AB</th>
-              <th style="text-align:center;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">RBI</th>
-              <th style="text-align:center;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">HR</th>
-              <th style="text-align:center;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">AVG</th>
-            </tr>
-            ${batRows || '<tr><td colspan="5" style="padding:8px 4px;color:var(--muted);font-size:11px;">No data</td></tr>'}
-          </table>
-          ${pitRows ? `
-            <div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:12px 0 6px;">Pitching</div>
-            <table style="width:100%;border-collapse:collapse;">
-              <tr style="border-bottom:1px solid var(--border);">
-                <th style="text-align:left;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">Pitcher</th>
-                <th style="text-align:center;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">IP</th>
-                <th style="text-align:center;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">H</th>
-                <th style="text-align:center;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">ER</th>
-                <th style="text-align:center;padding:3px 4px;font-size:10px;color:var(--muted);font-weight:600;">K</th>
-              </tr>
-              ${pitRows}
-            </table>` : ''}
-        </div>`;
-    }
+  let box = game.boxScore;
+  if (!box && game.plays?.length > 0) {
+    box = accumulateBox(game.plays, state.players || {}, { userIsHome: !!game.isHome });
+  }
+  if (box) {
+    const userName = state.userTeam?.abbr || state.userTeam?.name || 'You';
+    const oppName  = game.opponent || game.opp || 'Opp';
+    boxHtml = renderBoxScore(box, {
+      awayName: game.isHome ? oppName : userName,
+      homeName: game.isHome ? userName : oppName,
+    });
   }
 
   const overlay = document.createElement('div');

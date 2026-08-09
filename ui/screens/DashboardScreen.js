@@ -27,6 +27,8 @@ import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
+import { accumulateBox } from '../../engine/SimEngine.js';
+import { renderBoxScore } from '../components/BoxScore.js';
 import { GAME_STATUS, PLAYER_GROUP } from '../../data/constants.js';
 import {
   formatRecord, formatStreak, formatDate,
@@ -453,54 +455,8 @@ function _deriveGameState(game) {
     .slice()
     .reverse();
 
-  // ── Box score: accumulated from revealed plays only ───────────
-  const battersBox     = {};
-  const pitchersBox    = {};
-  const batterFirstIdx  = {};  // playIndex of first appearance — for batting order sort
-  const pitcherFirstIdx = {};
-  for (const p of revealedPlays) {
-    if (p.type === 'inning_end' || p.type === 'pitching_change'
-        || p.type === 'pinch_hit' || p.type === 'game_start') continue;
-
-    // game_end carries W/L/SV/HD decision deltas — apply them to pitcher box
-    if (p.type === 'game_end') {
-      if (p._statDeltas) {
-        for (const [pid, deltas] of Object.entries(p._statDeltas)) {
-          if (!userIds.has(pid)) continue;
-          const pb = pitchersBox[pid] || (pitchersBox[pid] = { outs:0, h:0, er:0, bb:0, k:0, hr:0, w:0, sv:0, hd:0 });
-          for (const { stat, delta } of deltas) {
-            pb[stat] = (pb[stat] || 0) + delta;
-          }
-        }
-      }
-      continue;
-    }
-    if (p.batterId) {
-      if (batterFirstIdx[p.batterId] === undefined) batterFirstIdx[p.batterId] = p.playIndex ?? 999;
-      const hb = battersBox[p.batterId] || (battersBox[p.batterId] = { ab:0, h:0, hr:0, rbi:0, r:0, bb:0, k:0, sb:0 });
-      // AB: not charged on walk, HBP, sac fly, sac bunt
-      if (!['walk','hbp','sac_fly','sac_bunt'].includes(p.type)) hb.ab++;
-      if (['single','double','triple','hr'].includes(p.type)) hb.h++;
-      if (p.type === 'hr') hb.hr++;
-      if (p.type === 'walk' || p.type === 'hbp') hb.bb++;
-      if (p.type === 'strikeout') hb.k++;
-      if (p.type === 'stolen_base') hb.sb++;
-      hb.rbi += (p.rbi || 0);
-    }
-    if (p.pitcherId) {
-      if (pitcherFirstIdx[p.pitcherId] === undefined) pitcherFirstIdx[p.pitcherId] = p.playIndex ?? 999;
-      const pb = pitchersBox[p.pitcherId] || (pitchersBox[p.pitcherId] = { outs:0, h:0, er:0, bb:0, k:0, hr:0, w:0, sv:0, hd:0 });
-      // Count outs: include sac_bunt and double_play (which adds 2 total via extraOuts)
-      // Use outsAfter on the play for accuracy — avoids double-counting
-      if (['groundout','flyout','strikeout','sac_bunt','double_play'].includes(p.type)) pb.outs++;
-      if (p.type === 'double_play') pb.outs++; // DP = 2 outs
-      if (['single','double','triple','hr'].includes(p.type)) pb.h++;
-      if (p.type === 'hr') pb.hr++;
-      if (p.type === 'walk' || p.type === 'hbp') pb.bb++;
-      if (p.type === 'strikeout') pb.k++;
-      pb.er += (p.rbi || 0);
-    }
-  }
+  // ── Box score is built in _renderBoxScore via the shared accumulator
+  //    (SimEngine.accumulateBox over revealed plays) — single source of truth. ──
 
   return {
     ourScore, theirScore, awayScore, homeScore,
@@ -511,8 +467,6 @@ function _deriveGameState(game) {
     awayRunsByInn, homeRunsByInn, maxInning,
     completedHalves, runsByHalf,
     pbpPlays,
-    battersBox, pitchersBox,
-    batterFirstIdx, pitcherFirstIdx,
     revealedCount: revealedPlays.length,
     isHome,
     awayHits:   isHome ? totalAwayHits   : totalHomeHits,
@@ -905,141 +859,35 @@ function _prependPBPInningHeader(play) {
 // ─────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────
-// BATTING ORDER
-// ─────────────────────────────────────────────────────────────
-
-function _deriveBattingOrder(starters) {
-  if (!starters || !starters.length) return [];
-  const pool = starters.slice(0, 9);
-
-  const leadoffScore = p => {
-    const sr = p.subRatings || {};
-    return ((sr.contact || p.ovr) * 0.55) + ((sr.speed || 50) * 0.45);
-  };
-  const powerScore  = p => (p.subRatings?.power || p.ovr);
-  const overallScore = p => p.ovr;
-
-  const byLeadoff = [...pool].sort((a,b) => leadoffScore(b) - leadoffScore(a));
-  const byPower   = [...pool].sort((a,b) => powerScore(b)   - powerScore(a));
-  const byOverall = [...pool].sort((a,b) => overallScore(b) - overallScore(a));
-
-  const used = new Set();
-  const pick = arr => { const p = arr.find(x => !used.has(x.id)); if (p) used.add(p.id); return p; };
-
-  const slot1 = pick(byLeadoff); // leadoff: best contact+speed
-  const slot2 = pick(byLeadoff); // #2: second contact
-  const slot3 = pick(byOverall); // #3: best overall remaining
-  const slot4 = pick(byPower);   // #4: cleanup — best power
-  const slot5 = pick(byPower);   // #5: second power
-  const rest  = byOverall.filter(p => !used.has(p.id));
-
-  return [slot1, slot2, slot3, slot4, slot5, ...rest].filter(Boolean);
-}
-
-// ─────────────────────────────────────────────────────────────
 // BOX SCORE RENDERER
 // ─────────────────────────────────────────────────────────────
 
 function _renderBoxScore(ds, game, state) {
   if (!state) state = StateManager.get();
   const players = state?.players || {};
-  const userIds = new Set(state?.userTeam?.rosterIds || []);
 
-  const _ip  = outs => `${Math.floor(outs/3)}.${outs%3}`;
-  const _avg = (h,ab) => ab > 0 ? (h/ab).toFixed(3).replace('0.','.') : '—';
-  const _era = (er,outs) => outs > 0 ? ((er/(outs/3))*9).toFixed(2) : '—';
-  const _ln  = p => p?.name?.split(' ').pop() || '?';
-
-  // Build starting lineup for box score display.
-  // lineupSlots is the source of truth — read in slot order (C→DH).
-  // Falls back to STARTING_HITTERS group for old saves that haven't migrated.
-  const lineupSlots = state?.userTeam?.lineupSlots || [];
-  let starterIds;
-  if (lineupSlots.length === 9) {
-    starterIds = _deriveBattingOrder(
-      lineupSlots
-        .map(s => s.playerId ? players[s.playerId] : null)
-        .filter(p => p && !p.isInjured)
-    ).map(p => p.id);
-  } else {
-    const starterPool = (state?.userTeam?.rosterIds || [])
-      .map(id => players[id])
-      .filter(p => p && p.group === PLAYER_GROUP.STARTING_HITTERS && !p.isInjured);
-    starterIds = _deriveBattingOrder(starterPool).map(p => p.id);
+  // Live box from the SAME accumulator as the committed box + season stats
+  // (revealed plays only). Both teams, full 9-man lineup seeded from first pitch,
+  // runs and steals included. Falls back to the stored box once plays are gone.
+  const revealed = (game.plays || []).slice(0, game.livePlayIndex || 0);
+  let box = game.boxScore;
+  if (revealed.length) {
+    box = accumulateBox(revealed, players, {
+      awayOrder:  game.liveLineups?.away || [],
+      homeOrder:  game.liveLineups?.home || [],
+      userIsHome: !!game.isHome,
+    });
   }
-
-  // Merge starters with any batters who've actually appeared (bench/PH)
-  // batterFirstIdx tracks appearance order
-  const allBatterIds = [
-    ...starterIds,
-    ...Object.keys(ds.battersBox).filter(id =>
-      userIds.has(id) && !starterIds.includes(id)
-    )
-  ];
-
-  const batEntries = allBatterIds
-    .filter(id => userIds.has(id) && players[id])
-    .map(id => ({
-      id,
-      p: players[id],
-      s: ds.battersBox[id] || { ab:0, h:0, hr:0, rbi:0, r:0, bb:0, k:0 },
-      firstIdx: ds.batterFirstIdx?.[id] ?? (starterIds.includes(id) ? starterIds.indexOf(id) : 999),
-    }))
-    .sort((a,b) => a.firstIdx - b.firstIdx);
-
-  const pitEntries = Object.entries(ds.pitchersBox)
-    .filter(([id]) => userIds.has(id))
-    .map(([id,s]) => ({ id, p: players[id], s, firstIdx: ds.pitcherFirstIdx?.[id] ?? 999 }))
-    .filter(e => e.p)
-    .sort((a,b) => a.firstIdx - b.firstIdx);
-
-  if (!batEntries.length && !pitEntries.length) {
+  if (!box || !box.away || !box.home) {
     return '<div style="padding:16px;color:var(--muted);font-size:12px;">Stats appear as plays are revealed.</div>';
   }
 
-  const batRows = batEntries.map(({p,s}) => {
-    const isBench = p.group === PLAYER_GROUP.BENCH_HITTERS;
-    const nameLabel = isBench
-      ? `${_escape(_ln(p))} <span style="color:var(--muted);font-size:9px;font-weight:600;">PH</span>`
-      : _escape(_ln(p));
-    return `<tr>
-      <td class="bs-name">${nameLabel}</td>
-      <td>${s.h}/${s.ab}</td>
-      <td>${s.r}</td>
-      <td>${s.rbi}</td>
-      <td>${s.bb}</td>
-      <td>${s.k}</td>
-      <td class="${s.h > 0 ? 'bs-hi' : ''}">${_avg(s.h,s.ab)}</td>
-    </tr>`;
-  }).join('');
-
-  const pitRows = pitEntries.map(({p,s}) => `
-    <tr>
-      <td class="bs-name">${_escape(_ln(p))}</td>
-      <td>${_ip(s.outs)}</td>
-      <td>${s.h}</td>
-      <td>${s.er}</td>
-      <td>${s.k}</td>
-      <td class="${parseFloat(_era(s.er,s.outs)) < 3.5 ? 'bs-avg' : ''}">${_era(s.er,s.outs)}</td>
-    </tr>`).join('');
-
-  return `
-    <div class="live-box-wrap">
-      <div class="bs-section-label">Batting</div>
-      <div class="bs-table-wrap">
-        <table class="bs-table">
-          <tr><th>Player</th><th>H/AB</th><th>R</th><th>RBI</th><th>BB</th><th>K</th><th>AVG</th></tr>
-          ${batRows || '<tr><td colspan="7" style="color:var(--muted)">In progress…</td></tr>'}
-        </table>
-      </div>
-      <div class="bs-section-label" style="margin-top:10px">Pitching</div>
-      <div class="bs-table-wrap">
-        <table class="bs-table">
-          <tr><th>Pitcher</th><th>IP</th><th>H</th><th>ER</th><th>K</th><th>ERA</th></tr>
-          ${pitRows || '<tr><td colspan="6" style="color:var(--muted)">In progress…</td></tr>'}
-        </table>
-      </div>
-    </div>`;
+  const userName = state?.userTeam?.abbr || state?.userTeam?.name || 'You';
+  const oppName  = game.opponent || game.opp || 'Opp';
+  return renderBoxScore(box, {
+    awayName: game.isHome ? oppName : userName,
+    homeName: game.isHome ? userName : oppName,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
