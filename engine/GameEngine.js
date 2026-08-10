@@ -125,6 +125,28 @@ import {
 } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
+// DEV LIVE-SPEED (Developer Menu only)
+// ─────────────────────────────────────────────────────────────
+// Compresses the wall-clock game clock so a live game plays out faster for
+// testing. Play timestamps span a real 3-hour window from game.gameTime; tick()
+// scales the elapsed time since gameTime by this factor, so the whole game plays
+// in (3 hours / _liveTimeScale). Defaults to 1 (bit-identical to real time) and
+// is only ever raised by the Developer Menu — the harness and shipping players
+// never touch it, so their behavior is unchanged.
+let _liveTimeScale = 1;
+
+/** DEV ONLY — set the live-speed multiplier (>= 1). Called by App.setDevTimeScale. */
+export function setLiveTimeScale(n) {
+  _liveTimeScale = Math.max(1, Number(n) || 1);
+}
+
+/** DEV ONLY — current live-speed multiplier. */
+export function getLiveTimeScale() {
+  return _liveTimeScale;
+}
+
+
+// ─────────────────────────────────────────────────────────────
 // GAME INITIALIZATION
 // ─────────────────────────────────────────────────────────────
 
@@ -552,9 +574,14 @@ export function tick() {
     return null;
   }
 
-  // Reveal play if its adjusted timestamp has passed
+  // Reveal play if its adjusted timestamp has passed.
+  // Dev live-speed: compress the wall-clock game clock by _liveTimeScale so the
+  // 3-hour play schedule plays out in (3h / scale). At scale 1 this equals `now`,
+  // so real-time behavior (and the harness) is unchanged.
+  const base              = game.gameTime || 0;
+  const scaledNow         = base + (now - base) * _liveTimeScale;
   const adjustedTimestamp = (nextPlay._timestamp || 0) + offset;
-  if (now < adjustedTimestamp) return null;
+  if (scaledNow < adjustedTimestamp) return null;
 
   // Advance the play index
   StateManager.mutate(s => {

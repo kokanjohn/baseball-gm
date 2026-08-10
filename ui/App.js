@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r46';
+export const APP_VERSION = 'tfo-v2-r47';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -442,6 +442,12 @@ export async function init() {
   // Navigate to dashboard by default
   switchTab('dashboard');
 
+  // Restore the dev live-speed multiplier into GameEngine's reveal clock (it
+  // starts at 1 and only App knows the persisted value). No-op at 1×.
+  if (_devTimeScale !== 1) {
+    import('../engine/GameEngine.js').then(GE => GE.setLiveTimeScale(_devTimeScale));
+  }
+
   // Start the tick loop (Section 8.4 — owns the game tick interval)
   startTick();
 
@@ -622,12 +628,16 @@ export function startTick() {
 
 /**
  * setDevTimeScale(n) — DEV ONLY (Developer Menu).
- * Speeds up the live tick loop for testing. 1 = normal shipping speed.
- * Restarts the interval so the change takes effect immediately.
+ * Speeds up the live game for testing. 1 = normal shipping speed.
+ * Two parts must move together: the tick INTERVAL (how often plays are polled)
+ * and the reveal CLOCK in GameEngine (how fast the 3-hour play schedule elapses).
+ * Scaling only the interval does nothing on its own — the reveal is wall-clock
+ * gated — so we propagate the scale to GameEngine.setLiveTimeScale as well.
  */
 export function setDevTimeScale(n) {
   _devTimeScale = Math.max(1, Number(n) || 1);
   localStorage.setItem('bgm_devTimeScale', String(_devTimeScale));
+  import('../engine/GameEngine.js').then(GE => GE.setLiveTimeScale(_devTimeScale));
   if (_tickInterval) { clearInterval(_tickInterval); _tickInterval = null; }
   startTick();
 }

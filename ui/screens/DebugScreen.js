@@ -328,11 +328,16 @@ function _renderActions(s) {
       ${btn('dbg-card-prompt',  '📨', 'Deliver card by ID…',        '#f97316')}
       ${btn('dbg-flag-prompt',  '🚩', 'Force-fire narrative flag…', '#f97316')}
 
-      <div class="debug-actions-subhead">Live Speed (Dev) — accelerates the live tick for watching games</div>
-      ${btn('dbg-speed-1',   '🐢', 'Normal speed (1×)',   '#94a3b8')}
-      ${btn('dbg-speed-10',  '⏩', 'Fast (10×)',           '#22d3ee')}
-      ${btn('dbg-speed-60',  '⏩', 'Very fast (60×)',      '#22d3ee')}
-      ${btn('dbg-speed-300', '⚡', 'Max (300×)',           '#f5d253')}
+      <div class="debug-actions-subhead">Watch a Game (Dev)</div>
+      ${btn('dbg-start-now', '▶️', 'Start next game now',  '#34d399')}
+
+      <div class="debug-actions-subhead">Live Speed (Dev) — sets how fast a live game plays out (independent of the button above)</div>
+      ${btn('dbg-speed-1',   '🐢', 'Live (real time, ~3 hr)', '#94a3b8')}
+      ${btn('dbg-speed-25',  '⏩', '25× (~48s / inning)',     '#22d3ee')}
+      ${btn('dbg-speed-40',  '⏱️', '40× (~30s / inning)',     '#34d399')}
+      ${btn('dbg-speed-50',  '⏩', '50× (~24s / inning)',     '#22d3ee')}
+      ${btn('dbg-speed-75',  '⏩', '75× (~16s / inning)',     '#22d3ee')}
+      ${btn('dbg-speed-300', '⚡', 'Max (300× — flies by)',   '#f5d253')}
 
       <div class="debug-actions-subhead">Sim Tools</div>
       ${btn('dbg-sim-5',        '⏩', 'Simulate 5 games',           '#22d3ee')}
@@ -367,9 +372,26 @@ function _wireActions(overlay, state) {
     } catch (e) { alert(`Could not set speed: ${e.message}`); }
   };
   on('dbg-speed-1',   () => setSpeed(1));
-  on('dbg-speed-10',  () => setSpeed(10));
-  on('dbg-speed-60',  () => setSpeed(60));
+  on('dbg-speed-25',  () => setSpeed(25));
+  on('dbg-speed-40',  () => setSpeed(40));
+  on('dbg-speed-50',  () => setSpeed(50));
+  on('dbg-speed-75',  () => setSpeed(75));
   on('dbg-speed-300', () => setSpeed(300));
+
+  // Start next game now — set the current scheduled game's first-pitch time to
+  // now so it goes live on the next tick. Leaves the speed setting untouched.
+  on('dbg-start-now', () => {
+    const s  = StateManager.get();
+    const gi = s?.currentGameIndex ?? 0;
+    const g  = s?.schedule?.[gi];
+    if (!g) { alert('No scheduled game found.'); return; }
+    if (g._committed) { alert('The current game is already final — advance to the next game first.'); return; }
+    StateManager.mutate(st => {
+      const gg = st.schedule[gi];
+      if (gg) { gg.gameTime = Date.now(); gg._tickOffset = 0; }
+    });
+    alert('First pitch set to now — the game goes live within a few seconds. Set Live Speed to pick the pace.');
+  });
 
   // ── Phase jumps ──────────────────────────────────────────
   on('dbg-jump-spring', async () => {
