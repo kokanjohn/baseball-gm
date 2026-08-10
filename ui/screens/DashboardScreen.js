@@ -43,6 +43,7 @@ import { renderRadarWidget } from '../components/RadarWidget.js';
 let _mounted      = false;
 let _listeners    = [];       // { event, handler } pairs for cleanup
 let _liveTab      = 'pbp';
+let _pbpRenderedIdx = 0;   // count of plays already placed in the live PBP feed
 let _firstPitchSounded  = false;
 let _countdownInterval  = null; // 1-second interval for fp countdown display
 let _visibilityHandler  = null; // document visibilitychange handler
@@ -221,6 +222,9 @@ export function refresh() {
 
   // Start 1-second countdown if pre-game and gameTime is set
   const game = _getNextGame(state);
+  // The feed was just rebuilt with all currently-revealed plays; subsequent
+  // ticks only append plays beyond this index.
+  _pbpRenderedIdx = game?.livePlayIndex || 0;
   if (game && !game._committed && game.gameTime && Date.now() < game.gameTime
       && !(game.plays && game.plays.length > 0 && (game.livePlayIndex || 0) > 0)) {
     _startCountdown(game.gameTime);
@@ -276,13 +280,12 @@ function _onTick({ play, game } = {}) {
   }
 
   // Linescore — full replace (small table, cheap)
-  // Must pass abbrs — without them _renderLinescore falls back to 'OPP'/'US'
+  // Linescore team abbrs via shared helpers (never a placeholder)
   const lsEl = document.getElementById('lgv-linescore');
   if (lsEl) {
     const st       = StateManager.get();
-    const userAbbr = (st?.userTeam?.abbr || 'US').toUpperCase();
-    const oppTeam  = st?.leagueTeams?.find(t => t.name === game.opponent);
-    const oppAbbr  = (oppTeam?.abbr || game.opponent?.split(' ').pop()?.substring(0,3) || 'OPP').toUpperCase();
+    const userAbbr = _userAbbr(st);
+    const oppAbbr  = _oppAbbr(st, game);
     const awayAbbr = game.isHome ? oppAbbr  : userAbbr;
     const homeAbbr = game.isHome ? userAbbr : oppAbbr;
     lsEl.innerHTML = _renderLinescore(ds, awayAbbr, homeAbbr);
@@ -296,10 +299,20 @@ function _onTick({ play, game } = {}) {
   const outsRow = document.getElementById('lgv-outs-row');
   if (outsRow) outsRow.innerHTML = _renderOutDots(ds.outs);
 
-  // PBP — prepend new play (don't rebuild the whole feed)
-  if (play && play.description && play.type !== 'inning_end' && play.type !== 'game_end') {
-    _prependPBPPlay(play);
+  // PBP — append every play revealed since the last render, oldest→newest so the
+  // newest ends on top. Handles batches (multiple plays revealed in one tick at
+  // high speed) instead of assuming exactly one new play per tick.
+  const liveIdx = game.livePlayIndex || 0;
+  if (liveIdx < _pbpRenderedIdx) _pbpRenderedIdx = 0; // new game / feed rebuilt
+  for (let i = _pbpRenderedIdx; i < liveIdx; i++) {
+    const p = game.plays?.[i];
+    if (p && p.description
+        && p.type !== 'inning_end' && p.type !== 'game_end'
+        && p.inning && p.half && p.half !== 'END') {
+      _prependPBPPlay(p);
+    }
   }
+  _pbpRenderedIdx = liveIdx;
 
   // Box score — only rebuild if tab is active
   if (_liveTab === 'box') {
@@ -368,20 +381,20 @@ function _deriveGameState(game) {
     }
   }
 
-  // ── Linescore: runs per half, H and E totals ────────────────
-  // A cell is only shown as a number once its inning_end is revealed.
-  const completedHalves = new Set();
-  const runsByHalf = {};
+  // ── Linescore accumulation: runs per half, H/E totals, halves seen ──
+  const runsByHalf   = {};
+  const halvesSeen   = new Set();   // any half that has had a revealed play
   let totalAwayHits   = 0, totalHomeHits   = 0;
   let totalAwayErrors = 0, totalHomeErrors = 0;
 
   for (const p of revealedPlays) {
     const key = `${p.half}_${p.inning}`;
-    if (p.type === 'inning_end') {
-      completedHalves.add(key);
-    } else if (p.type !== 'game_end' && p.type !== 'pitching_change'
-               && p.type !== 'game_start' && p.type !== 'stolen_base'
-               && p.type !== 'caught_stealing') {
+    if (p.type === 'game_end') continue;
+    if (p.inning && (p.half === 'TOP' || p.half === 'BOT')) halvesSeen.add(key);
+
+    if (p.type !== 'inning_end' && p.type !== 'pitching_change'
+        && p.type !== 'game_start' && p.type !== 'stolen_base'
+        && p.type !== 'caught_stealing') {
       if ((p.rbi || 0) > 0) runsByHalf[key] = (runsByHalf[key] || 0) + p.rbi;
 
       // Hits — batter batting for our team vs their team
@@ -392,36 +405,22 @@ function _deriveGameState(game) {
         if (isOurBatter) totalHomeHits++;
         else             totalAwayHits++;
       }
-      // Errors
+      // Errors — error charged to the fielding team = not the batting team
       if (p.type === 'error') {
-        // Error on the fielding team = not the batting team
         if (isOurBatter) totalAwayErrors++;
         else             totalHomeErrors++;
       }
     }
-  }
-  const maxInning = Math.max(9, curInning);
-  const awayRunsByInn = [];
-  const homeRunsByInn = [];
-  for (let inn = 1; inn <= maxInning; inn++) {
-    const topKey = `TOP_${inn}`;
-    const botKey = `BOT_${inn}`;
-    awayRunsByInn.push(completedHalves.has(topKey) ? (runsByHalf[topKey] || 0) : null);
-    homeRunsByInn.push(completedHalves.has(botKey)  ? (runsByHalf[botKey]  || 0) : null);
   }
 
   // ── Status ────────────────────────────────────────────────────
   const isFinal = game.status === GAME_STATUS.FINAL || game._committed
     || revealedPlays.some(p => p.type === 'game_end');
 
-  // When outs = 3 we've advanced curHalf to the next half — show 0 outs.
-  // Also mark the just-completed half as done in completedHalves so the
-  // linescore shows 0 immediately (in sync with PBP), not 1 tick later.
+  // When outs = 3 the half is over — advance the current half/inning so the
+  // highlight and the score post together (this is the fix for the linescore
+  // highlighting the next inning before the previous half's runs appeared).
   if (outs >= 3 && !isFinal) {
-    const completedKey = `${curHalf}_${curInning}`;
-    completedHalves.add(completedKey);
-    // Ensure run total for this half is populated (0 if no runs scored)
-    if (!(completedKey in runsByHalf)) runsByHalf[completedKey] = 0;
     if (curHalf === 'TOP') {
       curHalf = 'BOT';
     } else {
@@ -430,6 +429,26 @@ function _deriveGameState(game) {
     }
     outs = 0;
   }
+
+  // ── Linescore cells by PROGRESSION, not inning_end plays ─────────────
+  // A half's runs post once we've moved past it (its ordinal is before the
+  // current position), or at game end for any half that was played. This keeps
+  // the posted score in lockstep with the current-inning highlight.
+  const ord     = (half, inn) => (inn - 1) * 2 + (half === 'TOP' ? 0 : 1);
+  const curOrd  = ord(curHalf, curInning);
+  const done    = (half, inn) => {
+    const key = `${half}_${inn}`;
+    return ord(half, inn) < curOrd || (isFinal && halvesSeen.has(key));
+  };
+
+  const maxInning = Math.max(9, curInning);
+  const awayRunsByInn = [];
+  const homeRunsByInn = [];
+  for (let inn = 1; inn <= maxInning; inn++) {
+    awayRunsByInn.push(done('TOP', inn) ? (runsByHalf[`TOP_${inn}`] || 0) : null);
+    homeRunsByInn.push(done('BOT', inn) ? (runsByHalf[`BOT_${inn}`] || 0) : null);
+  }
+  const completedHalves = halvesSeen; // retained in return for compatibility
 
   const innSuffix = _innSuffix(curInning);
   const halfSym   = curHalf === 'TOP' ? '▲' : '▼';
@@ -602,22 +621,36 @@ function _renderGameArea(game, state) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// TEAM LABELS — one source of truth, never a placeholder
+// ─────────────────────────────────────────────────────────────
+function _userAbbr(state) {
+  const t = state?.userTeam || {};
+  return String(t.abbr || t.nickname || t.city || t.name || 'HOME').toUpperCase().slice(0, 4);
+}
+function _userFull(state) {
+  const t = state?.userTeam || {};
+  return `${t.city || ''} ${t.nickname || ''}`.trim() || t.name || t.abbr || 'Your Team';
+}
+function _oppAbbr(state, game) {
+  const opp = game?.opponent || '';
+  const oppTeam = state?.leagueTeams?.find(t => t.name === opp);
+  return String(oppTeam?.abbr || opp.split(' ').pop() || 'AWAY').toUpperCase().slice(0, 4);
+}
+function _oppFull(game) {
+  return game?.opponent || 'Opponent';
+}
+
+// ─────────────────────────────────────────────────────────────
 // LIVE GAME CARD
 // ─────────────────────────────────────────────────────────────
 
 function _renderLiveGameCard(game, state) {
   const ds       = _deriveGameState(game);
-  const userAbbr = (state.userTeam?.abbr || 'US').toUpperCase();
-  const userCity = state.userTeam?.city     || '';
-  const userNick = state.userTeam?.nickname || '';
-  const userFull = `${userCity} ${userNick}`.trim() || userAbbr;
+  const userAbbr = _userAbbr(state);
+  const userFull = _userFull(state);
 
-  const opp      = game.opponent || '';
-  // oppAbbr: last word of team name up to 3 chars (e.g. "New York Empire" → "EMP")
-  // or read from leagueTeams if available
-  const oppTeam  = state.leagueTeams?.find(t => t.name === opp);
-  const oppAbbr  = (oppTeam?.abbr || opp.split(' ').pop().substring(0,3)).toUpperCase() || 'OPP';
-  const oppFull  = opp || oppAbbr;
+  const oppAbbr  = _oppAbbr(state, game);
+  const oppFull  = _oppFull(game);
 
   // Away always top, home always bottom
   const awayFull  = game.isHome ? oppFull  : userFull;
@@ -681,8 +714,8 @@ function _renderLinescore(ds, awayAbbr, homeAbbr) {
     awayHits = 0, homeHits = 0, awayErrors = 0, homeErrors = 0 } = ds;
 
   // Fall back to US/OPP if abbrs not passed
-  const awayLabel = awayAbbr || (isHome ? 'OPP' : 'US');
-  const homeLabel = homeAbbr || (isHome ? 'US'  : 'OPP');
+  const awayLabel = awayAbbr || 'AWAY';
+  const homeLabel = homeAbbr || 'HOME';
 
   const inns    = Array.from({ length: maxInning }, (_, i) => i + 1);
   const headers = inns.map(inn => {
@@ -882,8 +915,8 @@ function _renderBoxScore(ds, game, state) {
     return '<div style="padding:16px;color:var(--muted);font-size:12px;">Stats appear as plays are revealed.</div>';
   }
 
-  const userName = state?.userTeam?.abbr || state?.userTeam?.name || 'You';
-  const oppName  = game.opponent || game.opp || 'Opp';
+  const userName = _userFull(state);
+  const oppName  = _oppFull(game);
   return renderBoxScore(box, {
     awayName: game.isHome ? oppName : userName,
     homeName: game.isHome ? userName : oppName,

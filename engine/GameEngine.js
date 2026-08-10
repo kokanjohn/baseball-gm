@@ -415,13 +415,16 @@ export async function startNewGame(config) {
     s.userTeam.lineupSlots = league.lineupSlots;
     s.userTeam.finances.payroll = league.payroll;
 
-    // Populate SP rotation order from the generated roster.
-    // _getRotationSP uses this to pick the correct starter each game.
-    // Without this, every game uses the highest-OVR SP and rotation never advances.
-    const spIds = league.rosterIds.filter(id => {
-      const p = s.players[id];
-      return p && p.group === PLAYER_GROUP.STARTING_PITCHERS;
-    });
+    // Populate SP rotation order from the generated roster, sorted by OVR so the
+    // rotation opens with the ace (order[0] starts game 1; currentIndex advances
+    // +1 per game). The Team screen shows this same order, so what you see as the
+    // top of the rotation is what the sim actually starts.
+    const spIds = league.rosterIds
+      .filter(id => {
+        const p = s.players[id];
+        return p && p.group === PLAYER_GROUP.STARTING_PITCHERS;
+      })
+      .sort((a, b) => (s.players[b].ovr || 0) - (s.players[a].ovr || 0));
     s.userTeam.rotation = {
       order:        spIds,
       currentIndex: 0,
@@ -574,33 +577,49 @@ export function tick() {
     return null;
   }
 
-  // Reveal play if its adjusted timestamp has passed.
-  // Dev live-speed: compress the wall-clock game clock by _liveTimeScale so the
-  // 3-hour play schedule plays out in (3h / scale). At scale 1 this equals `now`,
-  // so real-time behavior (and the harness) is unchanged.
-  const base              = game.gameTime || 0;
-  const scaledNow         = base + (now - base) * _liveTimeScale;
-  const adjustedTimestamp = (nextPlay._timestamp || 0) + offset;
-  if (scaledNow < adjustedTimestamp) return null;
+  // Reveal ALL plays whose (scaled) timestamp has passed — not just one. The
+  // scaled clock compresses the 3-hour schedule by _liveTimeScale (dev speed);
+  // at scale 1 this equals real time. Revealing every due play in a single tick
+  // keeps the live view from lagging one play per interval at high speed (the
+  // cause of the inning-batching). At scale 1 the caller's clock only advances to
+  // the next play, so exactly one play reveals per call — identical to before,
+  // and the harness is unaffected.
+  const base      = game.gameTime || 0;
+  const scaledNow = base + (now - base) * _liveTimeScale;
 
-  // Advance the play index
+  let idx = game.livePlayIndex || 0;
+  const startIdx = idx;
+  let last = null;
+  while (idx < game.plays.length) {
+    const p = game.plays[idx];
+    if (scaledNow < ((p._timestamp || 0) + offset)) break;
+    last = p;
+    idx++;
+  }
+  if (idx === startIdx) return null; // nothing newly due
+
   StateManager.mutate(s => {
     const g = s.schedule[game.index];
     if (!g) return;
-    g.livePlayIndex = nextPlayIdx + 1;
+    g.livePlayIndex = idx;
 
-    // Update live score from play's cumulative score fields
-    // (cumOurScore/cumTheirScore are set by SimEngine on every play)
-    if (nextPlay.cumOurScore   !== undefined) g.ourScore   = nextPlay.cumOurScore;
-    if (nextPlay.cumTheirScore !== undefined) g.theirScore = nextPlay.cumTheirScore;
+    // Live score from the most recent revealed play carrying cumulative score.
+    for (let i = idx - 1; i >= startIdx; i--) {
+      const p = game.plays[i];
+      if (p.cumOurScore !== undefined && p.cumOurScore !== null) {
+        g.ourScore   = p.cumOurScore;
+        g.theirScore = p.cumTheirScore;
+        break;
+      }
+    }
 
-    // Mark complete if last play
-    if (nextPlayIdx + 1 >= game.plays.length) {
+    // Mark complete once the last play is revealed.
+    if (idx >= game.plays.length) {
       g.status = GAME_STATUS.FINAL;
     }
   });
 
-  return StateManager.get().schedule[game.index];
+  return last;
 }
 
 // ─────────────────────────────────────────────────────────────

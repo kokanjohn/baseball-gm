@@ -314,7 +314,7 @@ function _renderPlayers(state) {
     <div style="padding:0 0 16px;">
       ${keeperBanner}
       ${_renderGroup('hitters',  'Hitters',              hitterCount,       _renderHitterGroup(hitterStarters, hitterBench, players, impScores, gameIdx, isSpring, rosterIds))}
-      ${_renderGroup('pitchers', 'Pitchers',             pitchers.length,   _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring, players, rosterIds))}
+      ${_renderGroup('pitchers', 'Pitchers',             pitchers.length,   _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring, players, rosterIds, team.rotation))}
       ${_renderGroup('il',       'Injured List',         ilPlayers.length,  _renderILGroup(ilPlayers, state, gameIdx))}
       ${_renderGroup('pending',  'Pending Transactions', pending.length,    _renderPendingGroup(pending, players))}
       ${_renderGroup('farm',     'Farm System',          farmPlayers.length, _renderFarmGroup(farmPlayers, state, gameIdx), true)}
@@ -440,11 +440,25 @@ function _renderHitterRow(player, imp, role, slot, gameIdx, isSpring = false, al
 // PITCHER GROUP
 // ─────────────────────────────────────────────────────────────
 
-function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, allPlayers = {}, rosterIds = []) {
+function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, allPlayers = {}, rosterIds = [], rotationMeta = null) {
   if (pitchers.length === 0) return '<div style="padding:10px 14px;font-size:13px;color:var(--muted);">No pitchers on roster</div>';
 
-  const rotation = pitchers.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS)
+  // Rotation is shown in its true pitching order (rotation.order), NOT sorted by
+  // OVR — the sim starts rotation.order[currentIndex], so the display must match
+  // or it looks like the wrong pitcher started. The upcoming starter gets a NEXT
+  // badge. Any STARTING_PITCHERS somehow missing from order are appended.
+  const orderIds   = (rotationMeta && Array.isArray(rotationMeta.order)) ? rotationMeta.order : [];
+  const nextSPId   = orderIds.length
+    ? orderIds[(rotationMeta.currentIndex || 0) % orderIds.length]
+    : null;
+  const inOrder    = orderIds.map(id => allPlayers[id])
+    .filter(p => p && p.group === PLAYER_GROUP.STARTING_PITCHERS);
+  const inOrderSet = new Set(inOrder.map(p => p.id));
+  const strays     = pitchers
+    .filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS && !inOrderSet.has(p.id))
     .sort((a, b) => b.ovr - a.ovr);
+  const rotation   = [...inOrder, ...strays];
+
   const bullpen  = pitchers.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort((a, b) => b.ovr - a.ovr);
   const pbench   = pitchers.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort((a, b) => b.ovr - a.ovr);
 
@@ -454,8 +468,8 @@ function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, all
       <span class="rcl-rtg">OVR</span>
       <span></span>
     </div>
-    <div class="roster-sub-head">Rotation (SP)</div>
-    ${rotation.map(p => _renderPitcherRow(p, impScores[p.id], 'rotation', isSpring, allPlayers, rosterIds)).join('')}
+    <div class="roster-sub-head">Rotation (SP) — in start order</div>
+    ${rotation.map(p => _renderPitcherRow(p, impScores[p.id], 'rotation', isSpring, allPlayers, rosterIds, p.id === nextSPId)).join('')}
     ${bullpen.length > 0 ? '<div class="roster-sub-head">Bullpen (RP)</div>' : ''}
     ${bullpen.map(p => _renderPitcherRow(p, impScores[p.id], 'bullpen', isSpring, allPlayers, rosterIds)).join('')}
     ${pbench.length > 0 ? '<div class="roster-sub-head">Pitcher Bench</div>' : ''}
@@ -463,11 +477,13 @@ function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, all
   `;
 }
 
-function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [], rosterIds = []) {
+function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [], rosterIds = [], isNext = false) {
   if (!player) return '';
   const ovrColor  = _ovrColor(player.ovr);
   const indicator = getHotColdIndicator(imp);
   const statusEl  = _playerStatusEl(player);
+
+  const nextBadge = isNext ? `<span class="sp-next-badge" title="Starts the next game">NEXT</span>` : '';
 
   const posHand   = `<span class="pitcher-pos-hand">${player.pos} · ${player.hand === 'L' ? 'LHP' : 'RHP'}</span>`;
 
@@ -497,6 +513,7 @@ function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [],
       <div class="player-info">
         <div class="player-name">
           ${_escape(player.name)}
+          ${nextBadge}
           ${stBadge}
           ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
           ${_dotIndicator(player)}
@@ -1222,6 +1239,11 @@ function _injectCSS() {
     .st-badge{font-size:9px;font-weight:800;letter-spacing:.5px;
       color:var(--accent);background:var(--chip-accent-bg);
       border:1px solid var(--accent);border-radius:4px;
+      padding:1px 4px;margin-left:5px;vertical-align:middle;}
+
+    .sp-next-badge{font-size:9px;font-weight:800;letter-spacing:.5px;
+      color:#052e1a;background:#34d399;
+      border:1px solid #34d399;border-radius:4px;
       padding:1px 4px;margin-left:5px;vertical-align:middle;}
 
     /* Keeper banner at top of players tab */
