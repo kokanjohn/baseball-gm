@@ -260,6 +260,21 @@ function _onTick({ play, game } = {}) {
 
   const ds = _deriveGameState(game);
 
+  // PBP first — append every play revealed since the last render (oldest→newest
+  // so the newest ends on top), so the play appears together with the score it
+  // produced rather than a beat behind it. Handles batches at high speed.
+  const liveIdx = game.livePlayIndex || 0;
+  if (liveIdx < _pbpRenderedIdx) _pbpRenderedIdx = 0; // new game / feed rebuilt
+  for (let i = _pbpRenderedIdx; i < liveIdx; i++) {
+    const p = game.plays?.[i];
+    if (p && p.description
+        && p.type !== 'inning_end' && p.type !== 'game_end'
+        && p.inning && p.half && p.half !== 'END') {
+      _prependPBPPlay(p);
+    }
+  }
+  _pbpRenderedIdx = liveIdx;
+
   // Score
   const awayScoreEl = document.getElementById('lgv-away-score');
   const homeScoreEl = document.getElementById('lgv-home-score');
@@ -279,7 +294,6 @@ function _onTick({ play, game } = {}) {
     pillEl.className   = `lgv-status-pill ${ds.statusCls}`;
   }
 
-  // Linescore — full replace (small table, cheap)
   // Linescore team abbrs via shared helpers (never a placeholder)
   const lsEl = document.getElementById('lgv-linescore');
   if (lsEl) {
@@ -298,21 +312,6 @@ function _onTick({ play, game } = {}) {
   // Outs dots
   const outsRow = document.getElementById('lgv-outs-row');
   if (outsRow) outsRow.innerHTML = _renderOutDots(ds.outs);
-
-  // PBP — append every play revealed since the last render, oldest→newest so the
-  // newest ends on top. Handles batches (multiple plays revealed in one tick at
-  // high speed) instead of assuming exactly one new play per tick.
-  const liveIdx = game.livePlayIndex || 0;
-  if (liveIdx < _pbpRenderedIdx) _pbpRenderedIdx = 0; // new game / feed rebuilt
-  for (let i = _pbpRenderedIdx; i < liveIdx; i++) {
-    const p = game.plays?.[i];
-    if (p && p.description
-        && p.type !== 'inning_end' && p.type !== 'game_end'
-        && p.inning && p.half && p.half !== 'END') {
-      _prependPBPPlay(p);
-    }
-  }
-  _pbpRenderedIdx = liveIdx;
 
   // Box score — only rebuild if tab is active
   if (_liveTab === 'box') {
@@ -418,9 +417,11 @@ function _deriveGameState(game) {
     || revealedPlays.some(p => p.type === 'game_end');
 
   // When outs = 3 the half is over — advance the current half/inning so the
-  // highlight and the score post together (this is the fix for the linescore
-  // highlighting the next inning before the previous half's runs appeared).
-  if (outs >= 3 && !isFinal) {
+  // highlight and the score post together. BUT if the very next (unrevealed) play
+  // is game_end, the game is over after this half: don't advance, so we never
+  // flash "TOP 10th" (or the next inning) before the FINAL label appears.
+  const endingNext = plays[liveIdx]?.type === 'game_end';
+  if (outs >= 3 && !isFinal && !endingNext) {
     if (curHalf === 'TOP') {
       curHalf = 'BOT';
     } else {
