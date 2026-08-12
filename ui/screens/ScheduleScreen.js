@@ -331,12 +331,11 @@ function _renderResult(game, isCurrentGame, isCommitted, idx, hasBoxScore) {
     return '<div class="game-result ppd">PPD</div>';
   }
 
-  const won   = game.result === 'win';
   const us    = game.score?.us   ?? game.score?.user     ?? '';
   const them  = game.score?.them ?? game.score?.opponent ?? '';
   const score = (us !== '' && them !== '') ? `${us}–${them}` : '';
-  const cls   = won ? 'win' : 'loss';
-  const label = won ? 'W' : 'L';
+  const cls   = game.result === 'win' ? 'win' : game.result === 'tie' ? 'tie' : 'loss';
+  const label = game.result === 'win' ? 'W'   : game.result === 'tie' ? 'T'   : 'L';
 
   return `<div class="gri-wrap">
     <div class="game-result ${cls}">${label}${score ? ' ' + score : ''}</div>

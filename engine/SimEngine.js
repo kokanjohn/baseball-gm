@@ -52,7 +52,6 @@ import {
   SIM_P_CONTROL_WALK_DIVISOR,
   SIM_P_CONTROL_HBP_THRESHOLD,
   SIM_P_STAMINA_INNINGS_DIVISOR,
-  SIM_P_FATIGUE_MULTIPLIER,
   SIM_P_FATIGUE_HIT_QUALITY_BONUS,
   SIM_P_FATIGUE_K_PENALTY,
   SIM_P_FATIGUE_WALK_BONUS,
@@ -265,6 +264,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
   const gs = {
     inning:       1,
     maxInnings:   9,
+    isSpring:     !!isSpring,
     userScore:    0,
     oppScore:     0,
     userLineupIdx:  0,  // batting order position (cycles through slots)
@@ -273,6 +273,8 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     oppPitcher:   oppSP,
     userPitchCount: 0,
     oppPitchCount:  0,
+    userPitcherInnings: 0, // innings by the user's CURRENT pitcher (reset on change)
+    oppPitcherInnings:  0,
     userFatigued: false,
     oppFatigued:  false,
     userBullpenIdx: 0,
@@ -303,7 +305,8 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
 
     _updateCumulativeScores(topPlays, gs.userScore, gs.oppScore, isHome);
 
-    _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.slots, oppLineup.slots, plays, gs.inning);
+    _accrueInningAndFatigue(gs, players, userBatsBottom ? 'user' : 'opp');
+    _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning);
 
     if (gs.inning >= 9 && !userBatsBottom && gs.userScore > gs.oppScore) break;
 
@@ -329,16 +332,20 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
 
     if (gs.inning >= 9 && userBatsBottom && gs.userScore > gs.oppScore) break;
 
-    _checkPitcherChange(gs, players, userBatsBottom ? 'opp' : 'user', userLineup.slots, oppLineup.slots, plays, gs.inning);
+    _accrueInningAndFatigue(gs, players, userBatsBottom ? 'opp' : 'user');
+    _checkPitcherChange(gs, players, userBatsBottom ? 'opp' : 'user', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning);
 
     gs.inning++;
 
     // Spring training: end after 9 innings regardless of score (ties allowed).
-    // Regular season: continue until scores differ, hard cap at 14 innings.
-    if (isSpring && gs.inning > 9) break;
-    const maxInning = 14;
-    if (gs.inning > maxInning) break;
-    if (!isSpring && gs.inning > 9 && gs.userScore !== gs.oppScore) break;
+    // Regular season: play extra innings until someone wins — no ties. A high
+    // safety cap only guards against a pathological non-scoring loop.
+    if (isSpring) {
+      if (gs.inning > 9) break;
+    } else {
+      if (gs.inning > 9 && gs.userScore !== gs.oppScore) break;
+      if (gs.inning > 30) break; // safety valve — effectively never reached
+    }
   }
 
   if (scoringMod !== 1.0) {
@@ -346,10 +353,16 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     gs.oppScore  = Math.max(0, Math.round(gs.oppScore  * scoringMod));
   }
 
+  // Record the true last inning played. The loop increments gs.inning before the
+  // end check, so on a non-walk-off finish gs.inning is one ahead; derive the
+  // real final inning from the plays so game_end never claims a phantom 10th.
+  const lastPlayedInning = plays.reduce(
+    (m, p) => (p.type !== 'game_end' && (p.inning || 0) > m ? p.inning : m), 1);
+
   plays.push({
     playIndex:    plays.length,
     _halfInning:  `END`,
-    inning:       gs.inning,
+    inning:       lastPlayedInning,
     half:         'END',
     batterId:     null,
     pitcherId:    null,
@@ -527,7 +540,10 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
 
     const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
       { inning, isSpring });
-    gs[isUserBatting ? 'userPitchCount' : 'oppPitchCount']++;
+    // Increment the THROWING pitcher's batters-faced count. When the user is
+    // batting the opponent is pitching (and vice-versa) — this must match the
+    // fatigue check below, which reads the same throwing-pitcher counter.
+    gs[isUserBatting ? 'oppPitchCount' : 'userPitchCount']++;
 
     const { newBases, runsScored, runnerIds, extraOuts, playMod } =
       _advanceBases(bases, atBat, activeBatter, players, outs);
@@ -572,11 +588,9 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       _statDeltas:  deltas,
     });
 
-    const maxBatters = Math.round((pitcher.subRatings?.stamina || 60) * SIM_P_FATIGUE_MULTIPLIER);
-    if (gs[isUserBatting ? 'oppPitchCount' : 'userPitchCount'] >= maxBatters) {
-      if (isUserBatting) gs.oppFatigued  = true;
-      else               gs.userFatigued = true;
-    }
+    // (Pitcher fatigue is evaluated per-inning in _simulateFullGame, keyed to
+    // innings pitched rather than batters faced so the hook is independent of
+    // how much offense a given game produces.)
   }
 
   // Inning end play
@@ -1268,29 +1282,56 @@ function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
 // PITCHER CHANGE LOGIC
 // ─────────────────────────────────────────────────────────────
 
-function _checkPitcherChange(gs, players, team, userSlots, oppSlots, plays, inning) {
+// Target innings for the current pitcher, by role + stamina. Starters ~5–8 IP,
+// relievers ~1–2 IP. Keyed to innings (not batters) so the hook doesn't drift
+// with how much offense a game happens to produce.
+function _pitcherTargetInnings(pitcher) {
+  const stam = pitcher?.subRatings?.stamina ?? 60;
+  const isRP = pitcher?.group === PLAYER_GROUP.BULLPEN
+            || pitcher?.group === PLAYER_GROUP.PITCHER_BENCH;
+  if (isRP) return Math.max(1, Math.round(1 + (stam - 40) / 25)); // ~1–2 IP
+  return Math.max(4, Math.round(5 + (stam - 50) / 12));           // ~5–8 IP
+}
+
+// Credit the current pitcher with a completed inning and flag fatigue once they
+// reach their target workload. Called after each half-inning, before the change.
+function _accrueInningAndFatigue(gs, players, team) {
+  const isUser = team === 'user';
+  const pObj   = isUser ? gs.userPitcher : gs.oppPitcher;
+  const p      = pObj ? players[pObj.id] : null;
+  if (isUser) gs.userPitcherInnings++; else gs.oppPitcherInnings++;
+  const innings = isUser ? gs.userPitcherInnings : gs.oppPitcherInnings;
+  if (innings >= _pitcherTargetInnings(p)) {
+    if (isUser) gs.userFatigued = true; else gs.oppFatigued = true;
+  }
+}
+
+function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, inning) {
   const isUser   = team === 'user';
   const fatigued = isUser ? gs.userFatigued : gs.oppFatigued;
   if (!fatigued) return;
 
-  const slots  = isUser ? userSlots : oppSlots;
-  const bullpen = slots.filter(s => {
-    const pl = players[s.id];
-    return pl && [PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(pl.group);
-  });
+  // Relievers come from the team's actual bullpen (BULLPEN + PITCHER_BENCH),
+  // supplied by _buildLineup — NOT the batting lineup, which never contains
+  // pitchers (that was the bug: bullpen was always empty, so no one ever subbed).
+  const bullpen = (isUser ? userBullpen : oppBullpen) || [];
 
   const bpIdx    = isUser ? gs.userBullpenIdx : gs.oppBullpenIdx;
   const reliever = bullpen[bpIdx % bullpen.length];
-  if (!reliever) return;
+  if (!reliever) return; // no relievers available — leave the starter in
 
   if (isUser) {
     gs.userPitcher    = reliever;
     gs.userFatigued   = false;
     gs.userBullpenIdx++;
+    gs.userPitchCount = 0; // fresh arm — reset workload so it doesn't instantly re-tire
+    gs.userPitcherInnings = 0;
   } else {
     gs.oppPitcher   = reliever;
     gs.oppFatigued  = false;
     gs.oppBullpenIdx++;
+    gs.oppPitchCount = 0;
+    gs.oppPitcherInnings = 0;
   }
 
   const prev = plays[plays.length - 1];
@@ -1674,9 +1715,24 @@ function _buildLineup(team, players, isCPU) {
     )
     .sort((a, b) => b.ovr - a.ovr);
 
+  // Bullpen — healthy rostered relievers (BULLPEN + PITCHER_BENCH), sorted
+  // weakest→best so lower-leverage arms enter first and the best arm (closer)
+  // finishes. Used by _checkPitcherChange when the current pitcher tires.
+  const bullpen = rosterIds
+    .map(id => players[id])
+    .filter(p =>
+      p &&
+      !p.isInjured &&
+      !p.isSuspended &&
+      !p.onPersonalLeave &&
+      (p.group === PLAYER_GROUP.BULLPEN || p.group === PLAYER_GROUP.PITCHER_BENCH)
+    )
+    .sort((a, b) => a.ovr - b.ovr);
+
   return {
-    slots: orderedStarters.map(p => ({ id: p.id, subbed: false })),
-    bench: bench.map(p => ({ id: p.id, used: false })),
+    slots:   orderedStarters.map(p => ({ id: p.id, subbed: false })),
+    bench:   bench.map(p => ({ id: p.id, used: false })),
+    bullpen: bullpen.map(p => ({ id: p.id })),
   };
 }
 
@@ -1948,12 +2004,13 @@ function _effectiveSR(player, subRatingKey, baseValue) {
 // ─────────────────────────────────────────────────────────────
 
 function _gameOver(gs) {
-  // Spring training ends after exactly 9 innings (handled by break in loop above).
-  // Regular season: ends when scores differ after 9, or at inning 14 cap.
-  // This function is a safety guard — the loop breaks handle primary termination.
+  // Primary termination is handled by the loop breaks; this is the while-guard.
+  // Spring: done after 9 innings (ties allowed). Regular: play until scores
+  // differ — no ties — with a high safety cap that is effectively never reached.
   if (gs.inning < 9) return false;
+  if (gs.isSpring) return true;
   if (gs.userScore !== gs.oppScore) return true;
-  return gs.inning >= 14;
+  return gs.inning >= 30;
 }
 
 // ─────────────────────────────────────────────────────────────

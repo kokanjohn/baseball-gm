@@ -882,12 +882,36 @@ export const MILESTONE_SCREENS = Object.freeze({
     triggerPhase: 'WORLD_SERIES',
     triggerGame:   null,
   },
+  // Series-result screens fire at the END of a multi-game series via custom
+  // logic in checkMilestone (_checkSeriesMilestone), NOT the generic
+  // phase/game trigger. isSeries flags them so the generic loop skips them.
   SERIES_WON: {
     id:           'SERIES_WON',
     title:        'Series Won',
-    subtitle:     'On to the next.',
+    subtitle:     'Took the series. On to the next.',
     palette:      'triumph',
     icon:         '✅',
+    isSeries:     true,
+    triggerPhase: null,
+    triggerGame:   null,
+  },
+  SERIES_LOST: {
+    id:           'SERIES_LOST',
+    title:        'Series Lost',
+    subtitle:     'Dropped this one. Bounce back.',
+    palette:      'respectful',
+    icon:         '📉',
+    isSeries:     true,
+    triggerPhase: null,
+    triggerGame:   null,
+  },
+  SERIES_SPLIT: {
+    id:           'SERIES_SPLIT',
+    title:        'Series Split',
+    subtitle:     'Even this time. Take the next one.',
+    palette:      'neutral',
+    icon:         '➗',
+    isSeries:     true,
     triggerPhase: null,
     triggerGame:   null,
   },

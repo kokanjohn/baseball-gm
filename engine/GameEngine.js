@@ -735,7 +735,7 @@ function _silentlyCommitGame(game) {
   const lastPlay   = plays[plays.length - 1];
   const ourScore   = lastPlay?.cumOurScore   ?? 0;
   const theirScore = lastPlay?.cumTheirScore ?? 0;
-  const won        = ourScore > theirScore;
+  const outcome    = ourScore > theirScore ? 'win' : ourScore < theirScore ? 'loss' : 'tie';
 
   StateManager.mutate(s => {
     const g = s.schedule[game.index];
@@ -747,7 +747,7 @@ function _silentlyCommitGame(game) {
     g.status             = GAME_STATUS.FINAL;
     g._committed         = true;
     g._silentlyCommitted = true;
-    g.result             = won ? 'win' : 'loss';
+    g.result             = outcome;
     g.score              = { us: ourScore, them: theirScore };
     g._precomputedBoxScore = boxScore;
     g.liveLineups          = liveLineups;
@@ -814,23 +814,51 @@ export async function commitGame(gameIndex) {
     if (!alreadyCommitted) {
       const finalOurScore   = g.ourScore   ?? 0;
       const finalTheirScore = g.theirScore ?? 0;
-      const won = finalOurScore > finalTheirScore;
 
       g._committed = true;
-      g.result     = won ? 'win' : 'loss';
+      g.result     = finalOurScore > finalTheirScore ? 'win'
+                   : finalOurScore < finalTheirScore ? 'loss'
+                   : 'tie';
       g.score      = { us: finalOurScore, them: finalTheirScore };
     }
 
-    // ── Step 1b: Win/loss record ───────────────────────────
-    if (!alreadyCommitted && (g.status === GAME_STATUS.FINAL || g.status === GAME_STATUS.MAKEUP)) {
-      const won = (g.ourScore ?? 0) > (g.theirScore ?? 0);
-      if (won) {
+    // ── Step 1b: Win/loss record (user + opponent) ─────────
+    // Gated on _recordApplied (not alreadyCommitted) so it runs exactly once for
+    // BOTH watched and silently-committed games. Silent commits set _committed
+    // before commitGame runs, which previously skipped this block entirely —
+    // leaving both the user's and the opponent's records short a game.
+    if (!g._recordApplied && (g.status === GAME_STATUS.FINAL || g.status === GAME_STATUS.MAKEUP)) {
+      const us = g.ourScore ?? 0, them = g.theirScore ?? 0;
+      const outcome = us > them ? 'win' : us < them ? 'loss' : 'tie'; // ties only in spring
+
+      if (outcome === 'win') {
         s.userTeam.wins++;
         s.userTeam.streak = Math.max(0, s.userTeam.streak) + 1;
-      } else {
+      } else if (outcome === 'loss') {
         s.userTeam.losses++;
         s.userTeam.streak = Math.min(0, s.userTeam.streak) - 1;
+      } else {
+        s.userTeam.ties = (s.userTeam.ties || 0) + 1; // tie: streak unchanged
       }
+
+      // Credit the opponent's league record with the mirror result. The user's
+      // game IS the opponent's game for this date (their CPU slate game was
+      // dropped in processCPUDay), so without this their standings would omit
+      // every game they played against the user.
+      const oppRecordTeam = s.leagueTeams.find(t => t.name === g.opponent) || null;
+      if (oppRecordTeam) {
+        if (outcome === 'win') {
+          oppRecordTeam.losses++;
+          oppRecordTeam.streak = Math.min(0, oppRecordTeam.streak || 0) - 1;
+        } else if (outcome === 'loss') {
+          oppRecordTeam.wins++;
+          oppRecordTeam.streak = Math.max(0, oppRecordTeam.streak || 0) + 1;
+        } else {
+          oppRecordTeam.ties = (oppRecordTeam.ties || 0) + 1;
+        }
+      }
+
+      g._recordApplied = true;
     }
 
     // ── Step 1c: Stat accumulation from plays ──────────────
@@ -1429,6 +1457,55 @@ export async function advancePhase(newPhase) {
  *
  * @returns {Object|null} milestone definition from MILESTONE_SCREENS
  */
+/**
+ * _checkSeriesMilestone(state)
+ * Returns a SERIES_WON / SERIES_LOST / SERIES_SPLIT milestone when the most
+ * recently committed game is the FINAL game of a multi-game series, with the
+ * outcome derived from the user's record across that series. Otherwise null.
+ * Fires once per series (guarded by _seriesMilestoneFired on the last game).
+ */
+function _checkSeriesMilestone(state) {
+  const schedule = state.schedule || [];
+  const idx = (state.currentGameIndex || 0) - 1; // the game that just committed
+  const g   = schedule[idx];
+  if (!g || !g._committed || g._seriesMilestoneFired) return null;
+
+  const opp = g.opponent;
+  if (!opp) return null;
+
+  // Last game of the series? (next scheduled game is a different opponent, or
+  // the schedule ends / crosses the spring↔regular boundary).
+  const next = schedule[idx + 1];
+  if (next && next.opponent === opp && !!next.isSpring === !!g.isSpring) return null;
+
+  // Walk back over the consecutive same-opponent block to tally the series.
+  let wins = 0, losses = 0, count = 0;
+  for (let j = idx; j >= 0; j--) {
+    const gj = schedule[j];
+    if (!gj || !gj._committed || gj.opponent !== opp || !!gj.isSpring !== !!g.isSpring) break;
+    count++;
+    if (gj.result === 'win')  wins++;
+    else if (gj.result === 'loss') losses++;
+  }
+  if (count < 2) return null; // a single game isn't a series
+
+  const id = wins > losses ? 'SERIES_WON'
+           : wins < losses ? 'SERIES_LOST'
+           : 'SERIES_SPLIT';
+
+  // Fire once for this series.
+  StateManager.mutate(s => {
+    const sg = s.schedule[idx];
+    if (sg) sg._seriesMilestoneFired = true;
+  });
+
+  const base = MILESTONE_SCREENS[id];
+  return {
+    ...base,
+    subtitle: `${wins}–${losses} vs ${opp}. ${base.subtitle}`,
+  };
+}
+
 export function checkMilestone() {
   const state       = StateManager.get();
   const phase       = state.phase;
@@ -1436,7 +1513,14 @@ export function checkMilestone() {
   const seasonNum   = state.seasonNum;
   const seenSet     = new Set(state.seenMilestones || []);
 
+  // Series-result screens fire at the end of each series (recurring — NOT
+  // seen-gated), with the correct Won/Lost/Split outcome. Handled before the
+  // generic loop, which skips them (isSeries).
+  const seriesMilestone = _checkSeriesMilestone(state);
+  if (seriesMilestone) return seriesMilestone;
+
   for (const milestone of Object.values(MILESTONE_SCREENS)) {
+    if (milestone.isSeries) continue; // handled above, not seen-gated
     if (seenSet.has(milestone.id)) continue;
     if (milestone.triggerPhase && milestone.triggerPhase !== phase) continue;
     if (milestone.triggerGame !== null && milestone.triggerGame !== undefined

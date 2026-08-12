@@ -88,18 +88,34 @@ export function processCPUDay(state, dateStr) {
   const dayGames = state.leagueSchedule?.dayMap?.[dateStr] || [];
   if (dayGames.length === 0) return {};
 
-  const leagueTeams   = state.leagueTeams.map(t => ({ ...t })); // working copy
+  // The user's opponent on this date is playing the USER (a live game), not a
+  // CPU game. Exclude any CPU-slate game involving that team so no team is
+  // booked for two games on the same day. The user's result credits that team's
+  // record in GameEngine.commitGame (Step 1b), so its standings stay correct.
+  const userGame    = (state.schedule || []).find(g => g.date === dateStr);
+  const userOppName = userGame?.opponent || null;
+  const userOppTeam = userOppName
+    ? (state.leagueTeams || []).find(t => t.name === userOppName)
+    : null;
+  const userOppId   = userOppTeam?.id || null;
+
+  const leagueTeams    = state.leagueTeams.map(t => ({ ...t })); // working copy
   const newFeedEntries = [];
   const updatedDayMap  = { ...state.leagueSchedule.dayMap };
-  const updatedGames   = [...dayGames];
+  const updatedGames   = [];
 
-  for (let i = 0; i < updatedGames.length; i++) {
-    const game = { ...updatedGames[i] };
-    if (game.played) continue;
+  for (let i = 0; i < dayGames.length; i++) {
+    const game = { ...dayGames[i] };
+
+    // Drop the slate game that would double-book the user's opponent.
+    if (userOppId && (game.homeId === userOppId || game.awayId === userOppId)) {
+      continue;
+    }
+    if (game.played) { updatedGames.push(game); continue; }
 
     const homeTeam = leagueTeams.find(t => t.id === game.homeId);
     const awayTeam = leagueTeams.find(t => t.id === game.awayId);
-    if (!homeTeam || !awayTeam) continue;
+    if (!homeTeam || !awayTeam) { updatedGames.push(game); continue; }
 
     const result = simulateCPUGame(homeTeam, awayTeam, state.players);
 
@@ -119,7 +135,7 @@ export function processCPUDay(state, dateStr) {
     game.homeScore = result.homeScore;
     game.awayScore = result.awayScore;
     game.played    = true;
-    updatedGames[i] = game;
+    updatedGames.push(game);
 
     // Activity feed entry
     const winner = result.homeWon ? homeTeam : awayTeam;

@@ -210,6 +210,7 @@ async function main() {
   // ── Play through GAMES games ──────────────────────────────────
   const target = Math.min(GAMES, s0.schedule.length);
   let committed = 0, crossedToRegular = false, phaseAtCross = null, faultDone = false;
+  let gamesWithRelief = 0; // r51: games where at least one side used >1 pitcher
 
   for (let i = 0; i < target; i++) {
     const idx = SM.get().currentGameIndex;
@@ -233,6 +234,17 @@ async function main() {
     check(`game ${idx} committed (result+score)`,
           g._committed && g.result && g.score && Number.isFinite(g.score.us) && Number.isFinite(g.score.them));
 
+    // ── Batch r50: no double-booking — the user's opponent must not appear in
+    // the CPU slate for the same date (they were playing the user). ──
+    if (g.date && g.opponent) {
+      const oppTeam = (post.leagueTeams || []).find(t => t.name === g.opponent);
+      const slate   = post.leagueSchedule?.dayMap?.[g.date] || [];
+      const doubleBooked = oppTeam
+        && slate.some(cg => cg.homeId === oppTeam.id || cg.awayId === oppTeam.id);
+      check(`game ${idx}: opponent not double-booked on ${g.date}`, !doubleBooked,
+            oppTeam ? `${oppTeam.abbr} also in CPU slate` : 'opp not found');
+    }
+
     // ── Box score (Phase 1: shared accumulator) ──
     const box = g.boxScore;
     check(`game ${idx}: boxScore written (away+home)`, !!(box && box.away && box.home));
@@ -251,6 +263,10 @@ async function main() {
       check(`game ${idx}: both lineups seeded (>=9 hitters each)`,
             box.away.hitters.length >= 9 && box.home.hitters.length >= 9,
             `${box.away.hitters.length}/${box.home.hitters.length}`);
+      // r51: bullpen usage — a full game should hook the starter for relief.
+      const awayP = (box.away.pitchers || []).length;
+      const homeP = (box.home.pitchers || []).length;
+      if (awayP >= 2 || homeP >= 2) gamesWithRelief++;
     }
     check(`game ${idx} advanced currentGameIndex`, post.currentGameIndex === idx + 1, `now ${post.currentGameIndex}`);
 
@@ -287,6 +303,10 @@ async function main() {
   }
 
   check(`committed ${committed} game(s)`, committed > 0, `${committed}`);
+  // r51: relievers must actually enter — most full games hook the starter.
+  check(`bullpen used in most games (${gamesWithRelief}/${committed})`,
+        committed === 0 || gamesWithRelief >= committed * 0.7,
+        `${gamesWithRelief}/${committed}`);
   if (crossedToRegular) {
     // The game at index SPRING_TRAINING_GAME_COUNT must be a real regular-season game.
     const firstReg = SM.get().schedule[SPRING_TRAINING_GAME_COUNT];

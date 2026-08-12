@@ -504,6 +504,7 @@ function _renderDashboard(state) {
   const team       = state.userTeam;
   const wins       = team.wins       || 0;
   const losses     = team.losses     || 0;
+  const ties       = team.ties       || 0;
   const morale     = team.morale     || 50;
   const atmosphere = team.atmosphere || 50;
   const ownerTrust = team.ownerTrust || 60;
@@ -525,7 +526,7 @@ function _renderDashboard(state) {
     bannerRecord = springPlayed === 0 ? 'First game coming up' : `${springPlayed} of ${springTotal}`;
   } else {
     bannerGame   = gamesPlayed === 0 ? 'OPENING DAY' : `GAME ${gamesPlayed}`;
-    bannerRecord = `${wins}–${losses} · Season record`;
+    bannerRecord = `${wins}–${losses}${ties ? `–${ties}` : ''} · Season record`;
   }
 
   const ovrClass = rosterOvr >= 70 ? 'c-green' : rosterOvr >= 55 ? 'c-accent' : 'c-red';
@@ -939,7 +940,7 @@ function _renderNextGameCard(game, state) {
     : null;
   const lastBadge = lastGame?.score && !lastGame?._silentlyCommitted
     ? `<div class="ngc-last ${lastGame.result || ''}">
-        ${lastGame.result === 'win' ? 'W' : 'L'}
+        ${lastGame.result === 'win' ? 'W' : lastGame.result === 'tie' ? 'T' : 'L'}
         ${lastGame.score.us ?? lastGame.score.user ?? 0}–${lastGame.score.them ?? lastGame.score.opp ?? 0}
         <span style="font-weight:500;opacity:.7">vs ${_escape(lastGame.opponent || lastGame.opp || '')}</span>
        </div>`
@@ -1018,10 +1019,11 @@ function _renderFirstPitchCountdown(game) {
 function _renderSeasonDoneCard(state) {
   const wins   = state.userTeam?.wins   || 0;
   const losses = state.userTeam?.losses || 0;
+  const ties   = state.userTeam?.ties   || 0;
   return `<div class="next-game-card">
     <div class="ngc-info">
       <div class="ngc-opp" style="font-size:16px;font-weight:700;">Season Complete</div>
-      <div class="ngc-loc">${wins}–${losses} final record</div>
+      <div class="ngc-loc">${wins}–${losses}${ties ? `–${ties}` : ''} final record</div>
     </div>
   </div>`;
 }

@@ -34,21 +34,70 @@ import {
 // LEAGUE TEAM DEFINITIONS
 // ─────────────────────────────────────────────────────────────
 
-export const LEAGUE_TEAMS = [
-  // Division A
-  { id: 'NYE', name: 'New York Empire',   abbr: 'NYE', str: 0.56, divisionId: 'A' },
-  { id: 'LAP', name: 'LA Palms',          abbr: 'LAP', str: 0.54, divisionId: 'A' },
-  { id: 'HOU', name: 'Houston Pilots',    abbr: 'HOU', str: 0.52, divisionId: 'A' },
-  { id: 'CHI', name: 'Chicago Rivermen',  abbr: 'CHI', str: 0.50, divisionId: 'A' },
-  // Division B
-  { id: 'BOS', name: 'Boston Navigators', abbr: 'BOS', str: 0.57, divisionId: 'B' },
-  { id: 'ATL', name: 'Atlanta Pines',     abbr: 'ATL', str: 0.53, divisionId: 'B' },
-  { id: 'SEA', name: 'Seattle Tide',      abbr: 'SEA', str: 0.51, divisionId: 'B' },
-  { id: 'MIA', name: 'Miami Waves',       abbr: 'MIA', str: 0.48, divisionId: 'B' },
-  { id: 'TAM', name: 'Tampa Admirals',    abbr: 'TAM', str: 0.45, divisionId: 'B' },
-];
+// ─────────────────────────────────────────────────────────────
+// LEAGUE TEAMS — REGION-SPECIFIC SETS
+// Each region has 9 teams. All city and team names are completely
+// fictional — no real MLB, MiLB, or other professional names.
+// ─────────────────────────────────────────────────────────────
 
-// Roster slot definitions per group
+export const LEAGUE_TEAMS_BY_REGION = Object.freeze({
+
+  north: [
+    { id: 'IRF', name: 'Ironfield Bears',    abbr: 'IRF', str: 0.56, divisionId: 'A' },
+    { id: 'GRS', name: 'Greystone Foxes',    abbr: 'GRS', str: 0.54, divisionId: 'A' },
+    { id: 'NHV', name: 'Northhaven Pines',   abbr: 'NHV', str: 0.52, divisionId: 'A' },
+    { id: 'RDC', name: 'Ridgecrest Owls',    abbr: 'RDC', str: 0.50, divisionId: 'A' },
+    { id: 'HLB', name: 'Hollowbrook Herons', abbr: 'HLB', str: 0.57, divisionId: 'B' },
+    { id: 'CLW', name: 'Coldwater Elk',      abbr: 'CLW', str: 0.53, divisionId: 'B' },
+    { id: 'FBG', name: 'Frostburg Lynx',     abbr: 'FBG', str: 0.51, divisionId: 'B' },
+    { id: 'ASH', name: 'Ashmont Ravens',     abbr: 'ASH', str: 0.48, divisionId: 'B' },
+    { id: 'CLF', name: 'Clearfield Bucks',   abbr: 'CLF', str: 0.45, divisionId: 'B' },
+  ],
+
+  south: [
+    { id: 'BSY', name: 'Bayside Pelicans',   abbr: 'BSY', str: 0.56, divisionId: 'A' },
+    { id: 'PLM', name: 'Palmetto Kings',     abbr: 'PLM', str: 0.54, divisionId: 'A' },
+    { id: 'SRG', name: 'Sunridge Hawks',     abbr: 'SRG', str: 0.52, divisionId: 'A' },
+    { id: 'CPF', name: 'Copperfield Bulls',  abbr: 'CPF', str: 0.50, divisionId: 'A' },
+    { id: 'BYO', name: 'Bayou Herons',       abbr: 'BYO', str: 0.57, divisionId: 'B' },
+    { id: 'CRV', name: 'Crestview Gators',   abbr: 'CRV', str: 0.53, divisionId: 'B' },
+    { id: 'SCT', name: 'Suncoast Tarpon',    abbr: 'SCT', str: 0.51, divisionId: 'B' },
+    { id: 'DLT', name: 'Delta Cranes',       abbr: 'DLT', str: 0.48, divisionId: 'B' },
+    { id: 'MSG', name: 'Mossglen Foxes',     abbr: 'MSG', str: 0.45, divisionId: 'B' },
+  ],
+
+  east: [
+    { id: 'HBR', name: 'Harborview Gulls',    abbr: 'HBR', str: 0.56, divisionId: 'A' },
+    { id: 'TDL', name: 'Tideland Anchors',    abbr: 'TDL', str: 0.54, divisionId: 'A' },
+    { id: 'SVL', name: 'Seagrove Osprey',     abbr: 'SVL', str: 0.52, divisionId: 'A' },
+    { id: 'LSH', name: 'Lightshore Breakers', abbr: 'LSH', str: 0.50, divisionId: 'A' },
+    { id: 'MBY', name: 'Millbay Sails',       abbr: 'MBY', str: 0.57, divisionId: 'B' },
+    { id: 'CLP', name: 'Cliffport Herons',    abbr: 'CLP', str: 0.53, divisionId: 'B' },
+    { id: 'CHP', name: 'Cheswick Skippers',   abbr: 'CHP', str: 0.51, divisionId: 'B' },
+    { id: 'RMD', name: 'Reedmont Cranes',     abbr: 'RMD', str: 0.48, divisionId: 'B' },
+    { id: 'GLP', name: 'Gulfport Mullets',    abbr: 'GLP', str: 0.45, divisionId: 'B' },
+  ],
+
+  west: [
+    { id: 'MSV', name: 'Mesaview Condors',   abbr: 'MSV', str: 0.56, divisionId: 'A' },
+    { id: 'PKS', name: 'Peakstone Pumas',    abbr: 'PKS', str: 0.54, divisionId: 'A' },
+    { id: 'CYN', name: 'Canyon Rams',        abbr: 'CYN', str: 0.52, divisionId: 'A' },
+    { id: 'DRT', name: 'Dryrock Hawks',      abbr: 'DRT', str: 0.50, divisionId: 'A' },
+    { id: 'HGS', name: 'Highgrass Coyotes',  abbr: 'HGS', str: 0.57, divisionId: 'B' },
+    { id: 'ARD', name: 'Arroyo Dust Devils', abbr: 'ARD', str: 0.53, divisionId: 'B' },
+    { id: 'RDW', name: 'Ridgeway Eagles',    abbr: 'RDW', str: 0.51, divisionId: 'B' },
+    { id: 'SDT', name: 'Sundusted Vipers',   abbr: 'SDT', str: 0.48, divisionId: 'B' },
+    { id: 'SLF', name: 'Saltflat Scorpions', abbr: 'SLF', str: 0.45, divisionId: 'B' },
+  ],
+
+});
+
+// Backward compat — LEAGUE_TEAMS points to north set
+export const LEAGUE_TEAMS = LEAGUE_TEAMS_BY_REGION.north;
+
+// ─────────────────────────────────────────────────────────────
+// ROSTER SLOT DEFINITIONS
+// ─────────────────────────────────────────────────────────────
 const ACTIVE_HITTER_POSITIONS  = ['C','1B','2B','3B','SS','OF','OF','OF','DH'];
 const BENCH_HITTER_POSITIONS   = ['C','1B','OF','2B/SS','1B/3B'];
 const SP_COUNT                 = 5;
@@ -106,14 +155,15 @@ export function initNameRegistry() {
  * @param {Function} uuidFn      — () => String UUID
  * @returns {{ players: Object, leagueTeams: Object[] }}
  */
-export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn) {
+export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamDefs) {
+  const teamsToUse = teamDefs || LEAGUE_TEAMS;
   const players    = {};
   const leagueTeams = [];
 
   let cpuNameIdx  = 0;
   let farmNameIdx = 0;
 
-  for (const teamDef of LEAGUE_TEAMS) {
+  for (const teamDef of teamsToUse) {
     const teamNames = cpuNames.slice(cpuNameIdx, cpuNameIdx + 28);
     cpuNameIdx += 28;
 
@@ -138,6 +188,7 @@ export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn) {
       divisionId: teamDef.divisionId,
       wins:       0,
       losses:     0,
+      ties:       0,
       streak:     0,
       rosterIds,
       farmIds,
@@ -481,16 +532,19 @@ export function applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams) {
  *   payroll:    Number,
  * }}
  */
-export function buildFullLeague({ archetypeId, seasonNum, uuidFn, userTeam }) {
+export function buildFullLeague({ archetypeId, seasonNum, uuidFn, userTeam, region }) {
   const { userNames, cpuNames, farmNames } = initNameRegistry();
 
   // Split farmNames: first 180 for CPU teams (9×20), next 20 for user team
   const cpuFarmNames  = farmNames.slice(0, 180);
   const userFarmNames = farmNames.slice(180, 200);
 
-  // Build CPU rosters
+  // Select team set for this region — falls back to north if unknown
+  const regionTeams = LEAGUE_TEAMS_BY_REGION[region] || LEAGUE_TEAMS_BY_REGION.north;
+
+  // Build CPU rosters using region-specific team definitions
   const { players: cpuPlayers, leagueTeams } = buildLeagueRosters(
-    cpuNames, cpuFarmNames, seasonNum, uuidFn
+    cpuNames, cpuFarmNames, seasonNum, uuidFn, regionTeams
   );
 
   // Build user roster

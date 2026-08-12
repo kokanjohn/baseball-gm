@@ -430,6 +430,7 @@ export function computeFullStandings(leagueTeams, userTeamRecord) {
       divisionId: t.divisionId,
       wins:       t.wins,
       losses:     t.losses,
+      ties:       t.ties || 0,
     })),
     {
       id:         'user',
@@ -438,6 +439,7 @@ export function computeFullStandings(leagueTeams, userTeamRecord) {
       divisionId: userTeamRecord.divisionId || 'A',
       wins:       userTeamRecord.wins,
       losses:     userTeamRecord.losses,
+      ties:       userTeamRecord.ties || 0,
     },
   ];
 
