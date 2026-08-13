@@ -543,7 +543,7 @@ function _openResultSheet(game, idx, state) {
     box = accumulateBox(game.plays, state.players || {}, { userIsHome: !!game.isHome });
   }
   if (box) {
-    const userName = state.userTeam?.abbr || state.userTeam?.name || 'You';
+    const userName = state.userTeam?.abbr || state.userTeam?.nickname || state.userTeam?.city || state.userTeam?.name || 'Home';
     const oppName  = game.opponent || game.opp || 'Opp';
     boxHtml = renderBoxScore(box, {
       awayName: game.isHome ? oppName : userName,
@@ -773,7 +773,7 @@ function _renderScoresModal(state) {
       && userGame.status !== GAME_STATUS.SCHEDULED
       && userGame.status !== GAME_STATUS.PRE_GAME_WATCH;
 
-    const userAbbr = (state.userTeam?.abbr || 'US').toUpperCase();
+    const userAbbr = (state.userTeam?.abbr || state.userTeam?.nickname || state.userTeam?.city || 'HOME').toUpperCase().slice(0,4);
     const oppTeam  = leagueTeams.find(t => t.name === userGame.opponent);
     const oppAbbr  = (oppTeam?.abbr || userGame.opponent?.split(' ').pop()?.substring(0,3) || 'OPP').toUpperCase();
     const awayAbbr = userGame.isHome ? oppAbbr  : userAbbr;

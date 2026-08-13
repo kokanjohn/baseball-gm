@@ -377,6 +377,32 @@ export function generateCPUSchedules(seasonNum, leagueTeams) {
   return { dayMap };
 }
 
+/**
+ * reconcileScheduleConflicts(userSchedule, leagueSchedule, leagueTeams)
+ * The user's series schedule and the CPU day-map are generated independently, so
+ * a team the user plays on a given date can also be booked in the CPU slate that
+ * day. This strips those conflicts from the STORED day-map at generation time —
+ * so the schedule is correct the moment it's created, before any game is played
+ * (the Scores screen reads the stored day-map directly). Pure.
+ *
+ * @returns {Object} a new leagueSchedule with a de-conflicted dayMap
+ */
+export function reconcileScheduleConflicts(userSchedule, leagueSchedule, leagueTeams) {
+  if (!leagueSchedule || !leagueSchedule.dayMap) return leagueSchedule;
+
+  const nameToId = new Map((leagueTeams || []).map(t => [t.name, t.id]));
+  const dayMap   = { ...leagueSchedule.dayMap };
+
+  for (const g of (userSchedule || [])) {
+    const oppId = nameToId.get(g.opponent);
+    if (!oppId || !g.date || !dayMap[g.date]) continue;
+    dayMap[g.date] = dayMap[g.date].filter(
+      cg => cg.homeId !== oppId && cg.awayId !== oppId
+    );
+  }
+
+  return { ...leagueSchedule, dayMap };
+}
 function _generateRoundRobinPairs(teams) {
   const pairs = [];
   for (let i = 0; i < teams.length; i++) {

@@ -198,14 +198,14 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   // (if user is home). Clean single-line announcement.
   const userSPPlayer = userSP ? players[userSP.id] : null;
   const oppSPPlayer  = oppSP  ? players[oppSP.id]  : null;
-  const awaySPPlayer = game.isHome ? oppSPPlayer : userSPPlayer;
   const homeSPPlayer = game.isHome ? userSPPlayer : oppSPPlayer;
 
-  // Only announce the away team's SP — they take the mound first regardless of
-  // which team is home. Home team SP pitches in the bottom half.
-  const awaySP     = game.isHome ? oppSPPlayer : userSPPlayer;
-  const awayName   = awaySP?.name || 'SP';
-  const announcement = `${awayName} takes the mound.`;
+  // The HOME team pitches the top of the 1st (the away team bats first), so the
+  // first pitcher to take the mound is the home starter. When the user is away
+  // this is correctly the opponent's starter.
+  const moundSP    = homeSPPlayer;
+  const moundName  = moundSP?.name || 'SP';
+  const announcement = `${moundName} takes the mound.`;
 
   const announcementPlay = {
     playIndex:     0,
@@ -213,7 +213,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     inning:        1,
     half:          'TOP',
     batterId:      null,
-    pitcherId:     awaySP?.id || null,
+    pitcherId:     moundSP?.id || null,
     type:          'game_start',
     description:   announcement,
     rbi:           0,
@@ -351,6 +351,13 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
   if (scoringMod !== 1.0) {
     gs.userScore = Math.max(0, Math.round(gs.userScore * scoringMod));
     gs.oppScore  = Math.max(0, Math.round(gs.oppScore  * scoringMod));
+  }
+
+  // Regular season must never tie. If the safety cap was reached still level
+  // (pathological — effectively never with real offense), award the home team a
+  // walk-off run so the game always has a winner.
+  if (!isSpring && gs.userScore === gs.oppScore) {
+    if (userBatsBottom) gs.userScore += 1; else gs.oppScore += 1;
   }
 
   // Record the true last inning played. The loop increments gs.inning before the
@@ -1085,6 +1092,15 @@ export function accumulateBox(plays, players, opts = {}) {
   const ensurePit = (side, id) => { if (!side.pit[id]) { side.pit[id] = PIT0(); side.pitSeen.push(id); } return side.pit[id]; };
 
   for (const play of (plays || [])) {
+    // A pitching change carries the incoming pitcher but no stat deltas — register
+    // them on their side immediately so they appear in the box the instant they
+    // enter (previously they surfaced only when they faced their first batter).
+    if (play.type === 'pitching_change' && play.pitcherId) {
+      const pid  = play.pitcherId;
+      const side = ((players[pid]?.teamId === 'user') === userIsHome) ? home : away;
+      ensurePit(side, pid);
+      continue;
+    }
     if (!play._statDeltas) continue;
     const isTop        = play.half === 'TOP';
     const battingSide  = isTop ? away : home;   // TOP = away bats

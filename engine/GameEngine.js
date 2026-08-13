@@ -34,6 +34,7 @@ import {
 import {
   generateUserSchedule,
   generateCPUSchedules,
+  reconcileScheduleConflicts,
   getNextPhase,
   buildPlayoffBracket,
   scheduleMakeupGame,
@@ -402,7 +403,8 @@ export async function startNewGame(config) {
   // _parseGameTime will set the time to 1:05 PM on today.
 
   const schedule        = generateUserSchedule(1, league.leagueTeams, scheduleAnchor);
-  const leagueSchedule  = generateCPUSchedules(1, league.leagueTeams);
+  const leagueScheduleRaw = generateCPUSchedules(1, league.leagueTeams);
+  const leagueSchedule  = reconcileScheduleConflicts(schedule, leagueScheduleRaw, league.leagueTeams);
 
   // Apply everything to state in one batch
   StateManager.mutate(s => {
@@ -1520,7 +1522,12 @@ export function checkMilestone() {
   if (seriesMilestone) return seriesMilestone;
 
   for (const milestone of Object.values(MILESTONE_SCREENS)) {
-    if (milestone.isSeries) continue; // handled above, not seen-gated
+    if (milestone.isSeries) continue; // series screens handled above, not seen-gated
+    // A milestone with neither a phase nor a game trigger has no defined "when",
+    // so it must be fired explicitly by game logic — never by this generic scan.
+    // (Previously these fired on game 1: SERIES_WON, then SEASON_OVER, etc.)
+    if ((milestone.triggerPhase === null || milestone.triggerPhase === undefined)
+        && (milestone.triggerGame === null || milestone.triggerGame === undefined)) continue;
     if (seenSet.has(milestone.id)) continue;
     if (milestone.triggerPhase && milestone.triggerPhase !== phase) continue;
     if (milestone.triggerGame !== null && milestone.triggerGame !== undefined
@@ -1645,7 +1652,8 @@ export async function resumeOffseasonAfterOwnership() {
   // Generate schedules for new season
   StateManager.mutate(s => {
     const schedule       = generateUserSchedule(s.seasonNum, s.leagueTeams);
-    const leagueSchedule = generateCPUSchedules(s.seasonNum, s.leagueTeams);
+    const leagueScheduleRaw = generateCPUSchedules(s.seasonNum, s.leagueTeams);
+    const leagueSchedule = reconcileScheduleConflicts(schedule, leagueScheduleRaw, s.leagueTeams);
     s.schedule           = schedule;
     s.leagueSchedule     = leagueSchedule;
   });

@@ -289,13 +289,20 @@ export function createGameState(config = {}) {
  * by GameEngine during game creation — not here.
  */
 export function createUserTeamObject(config = {}) {
+  // Setup collects city + nickname but no abbreviation, so derive one when it's
+  // missing. Every screen reads userTeam.abbr, so populating it here is the
+  // single source fix for the "Us"/"US" placeholder.
+  const _deriveAbbr = (nick, city) => {
+    const src = String(nick || city || '').replace(/[^A-Za-z]/g, '');
+    return (src.slice(0, 3) || 'TM').toUpperCase();
+  };
   return {
     id: 'user',
 
     // Identity
     city:        config.city        || '',
     nickname:    config.nickname    || '',
-    abbr:        config.abbr        || '',
+    abbr:        config.abbr        || _deriveAbbr(config.nickname, config.city),
     icon:        config.icon        || '⚾',
     bannerColor: config.bannerColor || '#1a3a5c',
     gmName:      config.gmName      || '',
