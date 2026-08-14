@@ -28,6 +28,7 @@ import {
   formatERA, formatAVG, formatStreak,
 } from '../formatters.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
+import { PHASE } from '../../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -180,30 +181,35 @@ function _renderStatLeaders(state) {
     ...(state.leagueTeams || []).flatMap(t => t.rosterIds || []),
   ];
 
-  const hitters  = allPlayerIds.map(id => players[id]).filter(p => p && !['SP','RP'].includes(p.pos) && (p.stats?.ab || 0) >= 1);
-  const pitchers = allPlayerIds.map(id => players[id]).filter(p => p && ['SP','RP'].includes(p.pos) && (p.stats?.ip || 0) >= 0.1);
+  // During spring training the season stat line is empty — everything lives in
+  // springStats. Read the phase-appropriate source so leaders show in spring too.
+  const inSpring = state.phase === PHASE.SPRING_TRAINING;
+  const SK = inSpring ? 'springStats' : 'stats';
+
+  const hitters  = allPlayerIds.map(id => players[id]).filter(p => p && !['SP','RP'].includes(p.pos) && (p[SK]?.ab || 0) >= 1);
+  const pitchers = allPlayerIds.map(id => players[id]).filter(p => p && ['SP','RP'].includes(p.pos) && (p[SK]?.ip || 0) >= 0.1);
 
   const top5 = (arr, sortFn) => arr.sort(sortFn).slice(0, 5);
 
   // Batting categories
   const avgLeaders = top5([...hitters], (a,b) => {
-    const aAvg = a.stats.ab ? a.stats.h / a.stats.ab : 0;
-    const bAvg = b.stats.ab ? b.stats.h / b.stats.ab : 0;
+    const aAvg = a[SK].ab ? a[SK].h / a[SK].ab : 0;
+    const bAvg = b[SK].ab ? b[SK].h / b[SK].ab : 0;
     return bAvg - aAvg;
   });
-  const hrLeaders  = top5([...hitters], (a,b) => (b.stats.hr||0)  - (a.stats.hr||0));
-  const rbiLeaders = top5([...hitters], (a,b) => (b.stats.rbi||0) - (a.stats.rbi||0));
-  const sbLeaders  = top5([...hitters], (a,b) => (b.stats.sb||0)  - (a.stats.sb||0));
+  const hrLeaders  = top5([...hitters], (a,b) => (b[SK].hr||0)  - (a[SK].hr||0));
+  const rbiLeaders = top5([...hitters], (a,b) => (b[SK].rbi||0) - (a[SK].rbi||0));
+  const sbLeaders  = top5([...hitters], (a,b) => (b[SK].sb||0)  - (a[SK].sb||0));
 
   // Pitching categories
   const eraLeaders = top5([...pitchers], (a,b) => {
-    const aEra = a.stats.ip ? (a.stats.er / a.stats.ip) * 9 : 99;
-    const bEra = b.stats.ip ? (b.stats.er / b.stats.ip) * 9 : 99;
+    const aEra = a[SK].ip ? (a[SK].er / a[SK].ip) * 9 : 99;
+    const bEra = b[SK].ip ? (b[SK].er / b[SK].ip) * 9 : 99;
     return aEra - bEra; // lower is better
   });
-  const wLeaders   = top5([...pitchers], (a,b) => (b.stats.w||0)  - (a.stats.w||0));
-  const kLeaders   = top5([...pitchers], (a,b) => (b.stats.k||0)  - (a.stats.k||0));
-  const svLeaders  = top5([...pitchers], (a,b) => (b.stats.sv||0) - (a.stats.sv||0));
+  const wLeaders   = top5([...pitchers], (a,b) => (b[SK].w||0)  - (a[SK].w||0));
+  const kLeaders   = top5([...pitchers], (a,b) => (b[SK].k||0)  - (a[SK].k||0));
+  const svLeaders  = top5([...pitchers], (a,b) => (b[SK].sv||0) - (a[SK].sv||0));
 
   const renderCategory = (label, players, statFn) => {
     if (players.length === 0) return '';
@@ -231,19 +237,24 @@ function _renderStatLeaders(state) {
       <div style="font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;">
         Stat Leaders
       </div>
+      ${inSpring ? `
+      <div style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:6px 10px;border-radius:8px;background:rgba(245,165,36,0.12);border:1px solid rgba(245,165,36,0.4);">
+        <span style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#F5A524;">⚾ SPRING TRAINING</span>
+        <span style="font-size:10px;color:var(--muted);">Preseason stats — reset for opening day</span>
+      </div>` : ''}
       <div style="font-size:10px;color:var(--muted);margin-bottom:8px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Batting</div>
       <div class="stat-leaders-grid">
-        ${renderCategory('AVG', avgLeaders,  p => formatAVG(p.stats.h||0, p.stats.ab||0))}
-        ${renderCategory('HR',  hrLeaders,   p => String(p.stats.hr||0))}
-        ${renderCategory('RBI', rbiLeaders,  p => String(p.stats.rbi||0))}
-        ${renderCategory('SB',  sbLeaders,   p => String(p.stats.sb||0))}
+        ${renderCategory('AVG', avgLeaders,  p => formatAVG(p[SK].h||0, p[SK].ab||0))}
+        ${renderCategory('HR',  hrLeaders,   p => String(p[SK].hr||0))}
+        ${renderCategory('RBI', rbiLeaders,  p => String(p[SK].rbi||0))}
+        ${renderCategory('SB',  sbLeaders,   p => String(p[SK].sb||0))}
       </div>
       <div style="font-size:10px;color:var(--muted);margin:10px 0 8px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Pitching</div>
       <div class="stat-leaders-grid">
-        ${renderCategory('ERA', eraLeaders, p => p.stats.ip ? ((p.stats.er/p.stats.ip)*9).toFixed(2) : '—')}
-        ${renderCategory('W',   wLeaders,   p => String(p.stats.w||0))}
-        ${renderCategory('K',   kLeaders,   p => String(p.stats.k||0))}
-        ${renderCategory('SV',  svLeaders,  p => String(p.stats.sv||0))}
+        ${renderCategory('ERA', eraLeaders, p => p[SK].ip ? ((p[SK].er/p[SK].ip)*9).toFixed(2) : '—')}
+        ${renderCategory('W',   wLeaders,   p => String(p[SK].w||0))}
+        ${renderCategory('K',   kLeaders,   p => String(p[SK].k||0))}
+        ${renderCategory('SV',  svLeaders,  p => String(p[SK].sv||0))}
       </div>
     </div>
   `;

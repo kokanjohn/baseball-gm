@@ -26,6 +26,7 @@
 
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
 import { getHotColdIndicator, getImpLabel } from '../../engine/IMPEngine.js';
+import { PHASE } from '../../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
 // OPEN / CLOSE
@@ -133,7 +134,7 @@ function _renderCard(player, playerId, state) {
     ${_renderSubRatings(player, isPitcher)}
 
     <!-- Season stats -->
-    ${_renderStats(player, isPitcher)}
+    ${_renderStats(player, isPitcher, state)}
 
     <!-- IMP trend -->
     ${_renderImpTrend(impScores, impLabel)}
@@ -181,8 +182,15 @@ function _renderSubRatings(player, isPitcher) {
   `;
 }
 
-function _renderStats(player, isPitcher) {
-  const s = player.stats || {};
+function _renderStats(player, isPitcher, state) {
+  // During spring training the season line is empty — read springStats instead,
+  // and label the block clearly so it's never mistaken for regular-season stats.
+  const inSpring = state?.phase === PHASE.SPRING_TRAINING;
+  const s = (inSpring ? player.springStats : player.stats) || {};
+  const label = inSpring ? 'Spring Training Stats' : 'Season Stats';
+  const springBadge = inSpring
+    ? `<span style="display:inline-block;margin-left:8px;padding:2px 7px;border-radius:5px;background:#F5A524;color:#1a1a1a;font-size:9px;font-weight:800;letter-spacing:1px;vertical-align:middle;">SPRING TRAINING</span>`
+    : '';
 
   if (isPitcher) {
     const era  = s.ip ? ((s.er||0) / s.ip * 9).toFixed(2) : '—';
@@ -190,7 +198,7 @@ function _renderStats(player, isPitcher) {
     const ip   = s.ip ? `${Math.floor(s.ip)}.${Math.round((s.ip % 1) * 3)}` : '—';
     return `
       <div class="pc-section">
-        <div class="pc-section-label">Season Stats</div>
+        <div class="pc-section-label">${label}${springBadge}</div>
         <div class="pc-stats-grid">
           ${_statCell('ERA', era)}
           ${_statCell('WHIP', whip)}
@@ -207,7 +215,7 @@ function _renderStats(player, isPitcher) {
   const ops = s.ab ? _calcOPS(s) : '---';
   return `
     <div class="pc-section">
-      <div class="pc-section-label">Season Stats</div>
+      <div class="pc-section-label">${label}${springBadge}</div>
       <div class="pc-stats-grid">
         ${_statCell('AVG', avg)}
         ${_statCell('OPS', ops)}
