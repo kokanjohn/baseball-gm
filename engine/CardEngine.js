@@ -33,11 +33,6 @@ import {
   PHASE,
   PLAYER_GROUP,
   PITCHER_HAND_DISPLAY,
-  CARD_COST_XS,
-  CARD_COST_SM,
-  CARD_COST_CAPPED,
-  CARD_COST_LG,
-  CARD_COST_EXT,
   ARCHETYPE_CARD_WEIGHTS,
   TRADE_DEADLINE_OPEN,
   TRADE_DEADLINE_CLOSE,
@@ -48,6 +43,7 @@ import { injurePlayer } from './InjuryEngine.js';
 import { activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation } from './RosterEngine.js';
 import { evaluateTrade, executeTrade, recordDeclinedOffer, generateCPUTradeOffer } from './TradeEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
+import { buildTokenMap, applyTokens, hasUnresolvedTokens } from './CardTokens.js';
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -189,11 +185,15 @@ export function resolve(instanceId, choice) {
     // Apply soft metric effects
     _applySoftEffects(s, effects, choice, instance);
 
-    // Apply budget cost (yes decisions only)
-    if (choice === 'yes' && instance._budgetCost) {
-      const cost = _resolveBudgetCost(instance._budgetCost, s);
-      s.userTeam.finances.operatingSpent =
-        (s.userTeam.finances.operatingSpent || 0) + cost;
+    // Apply budget cost / revenue — the exact amounts the card text showed.
+    const costK = choice === 'yes' ? _resolveBudgetCost(instance._budgetCost)
+                : choice === 'no'  ? _resolveBudgetCost(instance._budgetCostNo)
+                : 0;
+    if (costK) {
+      s.userTeam.finances.operatingSpent = (s.userTeam.finances.operatingSpent || 0) + costK;
+    }
+    if (choice === 'yes' && instance._revenueK) {
+      s.userTeam.finances.revenue = (s.userTeam.finances.revenue || 0) + instance._revenueK;
     }
 
     // Apply player relationship effects
@@ -712,33 +712,14 @@ export function deliverCardById(cardId) {
     return;
   }
 
-  const state   = StateManager.get();
-  const context = {};
-  const body    = resolveTokens(selectCardVariant(cardDef, state), context, state);
-  const subject = resolveTokens(cardDef.subject || '', context, state);
+  // Same instance builder as normal delivery (real tokens, expiry, costs),
+  // just bypassing eligibility gates. Tagged so it is identifiable as injected.
+  const state    = StateManager.get();
+  const instance = _createInstance(cardDef, {}, state);
+  if (!instance) return;
 
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), {
-      instanceId:  _uuid(),
-      cardId:      cardDef.id,
-      type:        cardDef.type    || 'normal',
-      tag:         cardDef.tag     || 'DEBUG',
-      sender:      resolveTokens(cardDef.sender || 'Debug', context, state),
-      avatar:      cardDef.avatar  || '🔍',
-      subject,
-      preview:     cardDef.preview || subject,
-      body,
-      _resolved:   false,
-      deliveredAt: Date.now(),
-      gameIdx:     s.currentGameIndex || 0,
-      yesLabel:    cardDef.yesLabel || 'Accept',
-      noLabel:     cardDef.noLabel  || 'Decline',
-      yesEffect:   cardDef.yesEffect || {},
-      noEffect:    cardDef.noEffect  || {},
-      autoResolve: cardDef.autoResolve,
-      _raw:        cardDef,
-      _debugInjected: true,
-    }];
+    s.inbox = [...(s.inbox || []), { ...instance, _debugInjected: true }];
     _sortInbox(s.inbox);
   });
 }
@@ -784,15 +765,16 @@ export function deliverComposeCard(topicId, channelId) {
   const context  = _buildContextForCompose(state, channelId);
   // Select region-aware / narrative-aware variant before token resolution
   const chosenBody = _selectComposeVariant(cardDef, state);
-  const body       = resolveTokens(chosenBody,           context, state);
-  const subject    = resolveTokens(cardDef.subject || '', context, state);
+  const { values } = buildTokenMap(cardDef, context, state);
+  const body       = applyTokens(chosenBody,           values);
+  const subject    = applyTokens(cardDef.subject || '', values);
 
   const instance = {
     instanceId:   _uuid(),
     cardId:       cardDef.id,
     type:         cardDef.type   || 'normal',
     tag:          cardDef.tag    || 'OPERATIONS',
-    sender:       resolveTokens(cardDef.sender  || 'Staff', context, state),
+    sender:       applyTokens(cardDef.sender  || 'Staff', values),
     avatar:       cardDef.avatar || '📋',
     subject,
     preview:      subject,
@@ -922,8 +904,9 @@ export function processFollowupQueue() {
 
 /**
  * resolveTokens(text, context, state)
- * Replaces all {token} placeholders in card text with real values.
- * PITCHER HANDEDNESS RULE: all pitcher name tokens automatically append (R)/(L).
+ * Single-string convenience wrapper over CardTokens. Builds a fresh token map,
+ * so it must NOT be used field-by-field for one card — build one map with
+ * buildTokenMap() and applyTokens() each field (see _createInstance).
  *
  * @param {String} text
  * @param {Object} context
@@ -932,88 +915,7 @@ export function processFollowupQueue() {
  */
 export function resolveTokens(text, context, state) {
   if (!text) return '';
-
-  const userTeam  = state.userTeam;
-  const staff     = userTeam.coachingStaff || {};
-
-  // Build token map
-  const tokens = {
-    // Staff names
-    manager_name:        staff.manager?.name        || 'The Manager',
-    pitching_coach_name: staff.pitchingCoach?.name  || 'Pitching Coach',
-    hitting_coach_name:  staff.hittingCoach?.name   || 'Hitting Coach',
-    bench_coach_name:    staff.benchCoach?.name     || 'Bench Coach',
-    bullpen_coach_name:  staff.bullpenCoach?.name   || 'Bullpen Coach',
-    physician_name:      'Team Physician',
-    cfo_name:            'The CFO',
-
-    // Schedule context
-    next_opponent:       context.nextGame?.opponent    || 'the next opponent',
-    road_trip_length:    String(context.consecutiveRoadGames || 3),
-
-    // Budget cost tokens (resolve to display strings)
-    misc_cost_xs:        _formatCostToken(CARD_COST_XS),
-    misc_cost_sm:        _formatCostToken(CARD_COST_SM),
-    misc_cost_capped:    _formatCostToken(CARD_COST_CAPPED),
-    misc_cost_lg:        _formatCostToken(CARD_COST_LG),
-    ext_cost:            _formatCostToken(CARD_COST_EXT),
-    grounds_crew_cost:   _formatCostToken(CARD_COST_SM),
-    nri_cost:            _formatCostToken(CARD_COST_XS),
-
-    // Streak context
-    streak_context_clause: _streakClause(userTeam.streak || 0),
-  };
-
-  // Pitcher name tokens — handedness automatically appended
-  const activeSP = _pickActivePitcher(state, 'SP');
-  const activeBP = _pickActivePitcher(state, 'RP');
-  const farmPitcher = _pickFarmPitcher(state);
-
-  if (activeSP) {
-    const hand = PITCHER_HAND_DISPLAY[activeSP.hand] || '(R)';
-    tokens['active_sp_name'] = `${activeSP.name} ${hand}`;
-    tokens['active_sp_pos']  = activeSP.pos;
-  }
-  if (activeBP) {
-    const hand = PITCHER_HAND_DISPLAY[activeBP.hand] || '(R)';
-    tokens['active_bp_name'] = `${activeBP.name} ${hand}`;
-  }
-  if (farmPitcher) {
-    const hand = PITCHER_HAND_DISPLAY[farmPitcher.hand] || '(R)';
-    tokens['farm_pitcher_name'] = `${farmPitcher.name} ${hand}`;
-    tokens['farm_pitcher_pos']  = farmPitcher.pos;
-  }
-
-  // Hitter name tokens — no handedness
-  const activeHitter = _pickActiveHitter(state);
-  const farmHitter   = _pickFarmHitter(state);
-  const activeCatcher = _pickActivePlayerByPos(state, 'C');
-
-  if (activeHitter) {
-    tokens['active_hitter_name'] = activeHitter.name;
-    tokens['active_hitter_pos']  = activeHitter.pos;
-    tokens['act_hi']             = activeHitter.name;
-  }
-  if (farmHitter) {
-    tokens['farm_hitter_name'] = farmHitter.name;
-    tokens['farm_hitter_pos']  = farmHitter.nativePos || farmHitter.pos;
-  }
-  if (activeCatcher) {
-    tokens['active_catcher_name'] = activeCatcher.name;
-  }
-
-  // Trait notes
-  if (activeHitter?.trait) {
-    tokens['active_hitter_trait_note'] = _traitNote(activeHitter.trait);
-  }
-  if (activeSP?.trait) {
-    tokens['active_sp_trait_note'] = _traitNote(activeSP.trait);
-  }
-
-  // Replace all tokens
-  return text.replace(/\{([a-z_]+)\}/g, (match, key) => {
-    return tokens[key] !== undefined ? tokens[key] : match;
-  });
+  return applyTokens(text, buildTokenMap(null, context || {}, state).values);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1037,6 +939,9 @@ function _filterEligible(pool, context, state) {
   return pool.filter(card => {
     // Retired content (kept in the pool for reference, never delivered)
     if (card._retired) return false;
+
+    // Never promise a roster action the engine cannot perform
+    if (!_cardActionsHandled(card)) return false;
 
     // Phase gates
     if (card._requiresSpring  && !isSpring)  return false;
@@ -1139,17 +1044,42 @@ function _createInstance(cardDef, context, state) {
   const ttl       = cardDef._ttl ?? 3;
   const expiresAt = ttl > 0 ? gameIdx + ttl : null;
 
-  const subject = resolveTokens(cardDef.subject || '', context, state);
-  const preview = resolveTokens(cardDef.preview || '', context, state);
+  // ONE token map for every field of this card (§60): same player, same
+  // sponsor, same dollar amounts in subject, body, labels and outcome messages.
+  const { values, amountsK } = buildTokenMap(cardDef, context, state);
+  const t = (text) => applyTokens(text || '', values);
+
   // Select variant body first (Section 34 — LOCKED), then resolve tokens in it.
   // selectCardVariant() returns the default body if no variant condition matches.
-  const chosenBody = selectCardVariant(cardDef, state);
-  const body       = resolveTokens(chosenBody, context, state);
+  const text = {
+    subject:  t(cardDef.subject),
+    preview:  t(cardDef.preview),
+    body:     t(selectCardVariant(cardDef, state)),
+    sender:   t(cardDef.sender),
+    yesLabel: t(cardDef.yesLabel || 'Yes'),
+    noLabel:  t(cardDef.noLabel  || 'No'),
+    yesMsg:   t(cardDef.yesMsg),
+    noMsg:    t(cardDef.noMsg),
+    expireMsg: t(cardDef._expireMsg),
+  };
 
-  // Resolve budget cost to a $K number
-  const budgetCostK = cardDef._budgetCost
-    ? _resolveBudgetCostK(cardDef._budgetCost)
-    : null;
+  // Delivery guard: a card that would show a raw {token} is never delivered.
+  const unresolved = Object.entries(text).filter(([, v]) => hasUnresolvedTokens(v));
+  if (unresolved.length) {
+    console.warn(`[CardEngine] '${cardDef.id}' not delivered — unresolved tokens in`,
+                 unresolved.map(([k, v]) => `${k}: ${v.match(/\{[a-z0-9_]+\}/gi).join(' ')}`).join('; '));
+    return null;
+  }
+
+  // Money — the SAME draw the text shows. _budgetCost may be a token (charged on
+  // yes), a { yes, no } object, or a number; _rawBudgetCostNo is a flat no-cost.
+  const costOf = (tok) => (typeof tok === 'number' ? tok : (amountsK[tok] ?? 0));
+  const bc = cardDef._budgetCost;
+  const budgetCostK   = bc == null ? null
+                      : (typeof bc === 'object' ? (bc.yes != null ? costOf(bc.yes) : null) : costOf(bc));
+  const budgetCostNoK = (bc && typeof bc === 'object' && bc.no != null) ? costOf(bc.no)
+                      : (typeof cardDef._rawBudgetCostNo === 'number' ? cardDef._rawBudgetCostNo : null);
+  const revenueK      = cardDef._revenueToken ? (amountsK[cardDef._revenueToken] ?? null) : null;
 
   return {
     instanceId:       _uuid(),
@@ -1162,19 +1092,24 @@ function _createInstance(cardDef, context, state) {
     choice:           null,
     type:             cardDef.type       || 'normal',
     tag:              cardDef.tag        || 'GENERAL',
-    sender:           resolveTokens(cardDef.sender || '', context, state),
+    sender:           text.sender,
     avatar:           cardDef.avatar     || '📋',
-    subject,
-    preview,
-    body,
-    yesLabel:         cardDef.yesLabel   || 'Yes',
-    noLabel:          cardDef.noLabel    || 'No',
+    subject:          text.subject,
+    preview:          text.preview,
+    body:             text.body,
+    yesLabel:         text.yesLabel,
+    noLabel:          text.noLabel,
+    yesMsg:           text.yesMsg || null,
+    noMsg:            text.noMsg  || null,
+    expireMsg:        text.expireMsg || null,
     yesEffect:        cardDef.yesEffect  || {},
     noEffect:         cardDef.noEffect   || {},
     autoResolve:      cardDef.autoResolve   || null,
     autoResolveTax:   cardDef.autoResolveTax || null,
     _playerRelationshipEffect: cardDef._playerRelationshipEffect || null,
     _budgetCost:      budgetCostK,
+    _budgetCostNo:    budgetCostNoK,
+    _revenueK:        revenueK,
     _expiredSeason:   state.seasonNum,
     _raw:             cardDef,
   };
@@ -1226,6 +1161,26 @@ function _applyPlayerRelationshipEffect(state, effect, choice) {
   if (player) {
     player.gmRelationship = Math.max(0, Math.min(100, (player.gmRelationship || 50) + amount));
   }
+}
+
+/**
+ * Card actions (onYes / onNo) that have a real handler — in _applyRosterAction
+ * or _fireFollowup. A pool card that declares any other action is NEVER
+ * delivered (_filterEligible): it would promise a roster move ("sign him",
+ * "call him up", "bench him") that the engine cannot perform. Add the action
+ * name here in the same change that adds its handler (§60).
+ */
+export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
+  'il_return_activate',
+  'il_return_waive',
+  'il_return_farm',
+  'trade_execute',
+  'trade_decline',
+  'injury_act2',
+]));
+
+function _cardActionsHandled(card) {
+  return [card.onYes, card.onNo].every(a => !a || HANDLED_CARD_ACTIONS.has(a));
 }
 
 function _applyRosterAction(instance, choice, state) {
@@ -1394,48 +1349,10 @@ function _fireFollowup(followup) {
 // ROSTER HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _pickActivePitcher(state, role) {
-  const rosterIds = state.userTeam?.rosterIds || [];
-  const pitchers  = rosterIds
-    .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended && p.pos === role
-              && [PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN,
-                  PLAYER_GROUP.PITCHER_BENCH].includes(p.group));
-  return pitchers[Math.floor(Math.random() * pitchers.length)] || null;
-}
 
-function _pickActiveHitter(state) {
-  const rosterIds = state.userTeam?.rosterIds || [];
-  const hitters   = rosterIds
-    .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended
-              && [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS].includes(p.group));
-  return hitters[Math.floor(Math.random() * hitters.length)] || null;
-}
 
-function _pickActivePlayerByPos(state, pos) {
-  const rosterIds = state.userTeam?.rosterIds || [];
-  const players   = rosterIds
-    .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && (p.nativePos || p.pos) === pos);
-  return players[0] || null;
-}
 
-function _pickFarmPitcher(state) {
-  const farmIds = state.userTeam?.farmIds || [];
-  const pitchers = farmIds
-    .map(id => state.players[id])
-    .filter(p => p && ['SP','RP'].includes(p.pos));
-  return pitchers[Math.floor(Math.random() * pitchers.length)] || null;
-}
 
-function _pickFarmHitter(state) {
-  const farmIds = state.userTeam?.farmIds || [];
-  const hitters = farmIds
-    .map(id => state.players[id])
-    .filter(p => p && !['SP','RP'].includes(p.pos));
-  return hitters[Math.floor(Math.random() * hitters.length)] || null;
-}
 
 function _findCallupCandidate(injuredPlayer, state) {
   const farmIds = state.userTeam?.farmIds || [];
@@ -1486,55 +1403,19 @@ function _resolveSubject(template, instance) {
 // BUDGET COST HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _resolveBudgetCostK(costToken) {
-  const ranges = {
-    misc_cost_xs:   CARD_COST_XS,
-    misc_cost_sm:   CARD_COST_SM,
-    misc_cost_capped: CARD_COST_CAPPED,
-    misc_cost_lg:   CARD_COST_LG,
-    ext_cost:       CARD_COST_EXT,
-    grounds_crew_cost: CARD_COST_SM,
-    nri_cost:       CARD_COST_XS,
-  };
-  const range = ranges[costToken];
-  if (!range) return 0;
-  return range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+
+function _resolveBudgetCost(costK) {
+  // Amounts are resolved to $K at delivery (_createInstance), from the same
+  // draw the card text shows. Anything else is treated as no cost.
+  return typeof costK === 'number' && Number.isFinite(costK) ? costK : 0;
 }
 
-function _resolveBudgetCost(costTokenOrNumber, state) {
-  if (typeof costTokenOrNumber === 'number') return costTokenOrNumber;
-  return _resolveBudgetCostK(costTokenOrNumber);
-}
-
-function _formatCostToken(range) {
-  const amount = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
-  return amount >= 1000
-    ? `$${(amount / 1000).toFixed(amount % 1000 === 0 ? 0 : 1)}M`
-    : `$${amount}K`;
-}
 
 // ─────────────────────────────────────────────────────────────
 // TEXT HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _streakClause(streak) {
-  if (streak >= 5)  return ` — riding a ${streak}-game win streak`;
-  if (streak >= 3)  return ` — off a ${streak}-game win streak`;
-  if (streak <= -5) return ` — in the middle of a ${Math.abs(streak)}-game losing skid`;
-  if (streak <= -3) return ` — after dropping ${Math.abs(streak)} straight`;
-  return '';
-}
 
-function _traitNote(trait) {
-  const notes = {
-    veteran:          ' The veteran has seen this before.',
-    youngGun:         ' Young player — this kind of clarity matters early.',
-    clubhouseLeader:  ' As a clubhouse leader, the message carries weight.',
-    volatile:         ' Worth noting: this player can be unpredictable.',
-    consistent:       ' Reliable player — should handle it professionally.',
-  };
-  return notes[trait] || '';
-}
 
 // ─────────────────────────────────────────────────────────────
 // UTILITIES

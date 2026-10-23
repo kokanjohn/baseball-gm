@@ -15,7 +15,10 @@
 
 import { clock, seedRandom } from './shims.js';           // MUST be first (installs globals)
 import * as SM from '../../store/StateManager.js';
-import { startNewGame, tick, commitGame } from '../../engine/GameEngine.js';
+import { startNewGame, tick, commitGame, buildCardContext } from '../../engine/GameEngine.js';
+import { HANDLED_CARD_ACTIONS } from '../../engine/CardEngine.js';
+import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
+import * as CardPools from '../../data/cards-pool.js';
 import {
   GAME_STATUS, PHASE, ROSTER_LIMITS,
   SPRING_TRAINING_GAME_COUNT, REGULAR_SEASON_GAME_COUNT,
@@ -357,6 +360,33 @@ async function main() {
 
   check(`committed ${committed} game(s)`, committed > 0, `${committed}`);
 
+  // ── §60: EVERY deliverable pool card resolves fully (not just those drawn) ──
+  {
+    const st = SM.get();
+    const ctx = buildCardContext();
+    const bad = [];
+    let checked = 0;
+    for (const [poolName, pool] of Object.entries(CardPools)) {
+      const entries = Array.isArray(pool) ? pool.map(e => e?.card || e)
+                    : (pool && typeof pool === 'object')
+                      ? Object.entries(pool).map(([id, c]) => ({ id, ...c })) : [];
+      for (const def of entries) {
+        if (!def || !(def.body || def.subject) || def._retired) continue;
+        if ([def.onYes, def.onNo].some(a => a && !HANDLED_CARD_ACTIONS.has(a))) continue;
+        checked++;
+        const { values } = buildTokenMap(def, ctx, st);
+        const bodies = [def.body, ...((def.variants || def._variants || []).map(v => v?.body))];
+        const fields = [def.subject, def.preview, def.sender, def.yesLabel, def.noLabel,
+                        def.yesMsg, def.noMsg, def._expireMsg, ...bodies];
+        const left = fields.filter(Boolean).flatMap(f =>
+          (applyTokens(f, values).match(/\{[a-z0-9_]+\}/gi) || []));
+        if (left.length) bad.push(`${poolName}:${def.id} ${[...new Set(left)].join(' ')}`);
+      }
+    }
+    check(`cards: every deliverable card resolves all tokens (${checked} cards)`,
+          bad.length === 0, bad.slice(0, 12).join(' | '));
+  }
+
   // ── §60: realistic run environment (MLB ≈ 4.6 R, 8.4 H per team per game) ──
   if (seasonGames >= 20) {
     const rpg = seasonRuns / seasonGames / 2, hpg = seasonHits / seasonGames / 2;
@@ -374,6 +404,20 @@ async function main() {
     check(`inbox: no delivered card shows a raw {token} (${inbox.length} delivered)`,
           raw.length === 0,
           `${rawIds.length} card types: ${rawIds.slice(0, 25).join(',')}${rawIds.length > 25 ? '…' : ''}`);
+    // Money shown == money applied: when a card's text contains its cost or
+    // revenue token, the instance's numeric amount must render to that text.
+    const moneyBad = inbox.filter(c => {
+      const raw = c._raw || {};
+      const txt = `${c.preview} ${c.body}`;
+      if (typeof raw._budgetCost === 'string' && /\{/.test(`${raw.preview}${raw.body}`)
+          && `${raw.preview}${raw.body}`.includes(`{${raw._budgetCost}}`)
+          && !txt.includes(formatK(c._budgetCost))) return true;
+      if (raw._revenueToken && `${raw.preview}${raw.body}`.includes(`{${raw._revenueToken}}`)
+          && !txt.includes(formatK(c._revenueK))) return true;
+      return false;
+    });
+    check('inbox: cost/revenue in card text == amount applied on resolve',
+          moneyBad.length === 0, moneyBad.map(c => c.cardId).join(','));
     check('inbox: no retired card delivered',
           !inbox.some(c => c._raw?._retired),
           inbox.filter(c => c._raw?._retired).map(c => c.cardId).join(','));

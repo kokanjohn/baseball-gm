@@ -485,6 +485,9 @@ export async function startNewGame(config) {
       },
     };
 
+    // Owner — named so ownership cards read "{owner_name} wants…" (§60).
+    s.userTeam.ownerName = pickStaffName();
+
     // Schedule
     s.schedule       = schedule;
     s.leagueSchedule = leagueSchedule;

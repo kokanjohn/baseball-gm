@@ -334,6 +334,7 @@ export function createUserTeamObject(config = {}) {
     morale:           50,
     atmosphere:       50,
     ownerTrust:       60,
+    ownerName:        '',   // set at team creation from the staff name pool (§60)
     managerConfidence:60,
 
     // Department relationships (0–100)
