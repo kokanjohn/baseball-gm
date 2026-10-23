@@ -187,8 +187,23 @@ function runFaultInjection(base) {
   }
 }
 
+// ── §60: every app module is in the service-worker precache (offline install) ──
+async function checkPrecache() {
+  const fs   = await import('node:fs');
+  const path = await import('node:path');
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
+  const sw   = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+  const walk = (dir) => fs.readdirSync(path.join(root, dir), { withFileTypes: true })
+    .flatMap(e => e.isDirectory() ? walk(`${dir}/${e.name}`)
+                : e.name.endsWith('.js') ? [`${dir}/${e.name}`] : []);
+  const missing = ['data', 'engine', 'store', 'ui'].flatMap(walk)
+    .filter(f => !sw.includes(`'/baseball-gm/${f}'`));
+  check('sw.js precaches every app module', missing.length === 0, missing.join(', '));
+}
+
 async function main() {
   seedRandom(SEED);
+  await checkPrecache();
 
   await startNewGame({
     archetypeId: 'contender',
