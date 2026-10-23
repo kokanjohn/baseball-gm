@@ -123,6 +123,7 @@ import {
   SUB_RATING_MIN,
   SUB_RATING_MAX,
   ACTIVITY_FEED_RETENTION_HOURS,
+  NEW_TEAM_SEED_CARDS,
 } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -500,22 +501,22 @@ export async function startNewGame(config) {
     s.standings = computeFullStandings(s);
   });
 
-  await StateManager.save();
-
-  // ── Seed initial inbox cards (v1 parity — sp1, sp2, one trade card) ──────
-  // Delivered after save so they're immediately visible on first dashboard load.
+  // ── Seed the new-franchise inbox (§60) ────────────────────────────────────
+  // Real card instances via the normal delivery builder (proper expiry, budget
+  // cost, token context) — not the debug injector. Seeds never push-notify.
   try {
-    const { deliverCardById } = await import('./CardEngine.js');
-    // Spring training openers
-    deliverCardById('sp1');
-    deliverCardById('sp2');
-    // Seed one random trade card so the GM has a real decision on day 1
-    const tradeIds = ['t1','t2','t3','t4','t5'];
-    const randomTrade = tradeIds[Math.floor(Math.random() * tradeIds.length)];
-    deliverCardById(randomTrade);
+    const ctx = buildCardContext();
+    CardEngine.deliverSeedCards(NEW_TEAM_SEED_CARDS, ctx);
+    // One real, engine-generated trade proposal (actual players from both rosters).
+    CardEngine.deliverSeedTradeOffer(ctx);
   } catch (err) {
-    console.warn('[GameEngine.startNewGame] Card seeding failed silently:', err.message);
+    console.warn('[GameEngine.startNewGame] Card seeding failed:', err.message);
   }
+
+  // Persist immediately (after seeding) so the caller's App.init reload sees the
+  // seeded inbox. StateManager.load also flushes pending saves, but the new team
+  // should never depend on a debounce to exist on disk.
+  await StateManager.save();
 
   return slotId;
 }

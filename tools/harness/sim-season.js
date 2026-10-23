@@ -19,6 +19,7 @@ import { startNewGame, tick, commitGame } from '../../engine/GameEngine.js';
 import {
   GAME_STATUS, PHASE, ROSTER_LIMITS,
   SPRING_TRAINING_GAME_COUNT, REGULAR_SEASON_GAME_COUNT,
+  NEW_TEAM_SEED_CARDS,
 } from '../../data/constants.js';
 import {
   reconcileRoster, applyRosterMutation, eligibleSlotsFor,
@@ -192,6 +193,40 @@ async function main() {
     abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: 'north',
   });
 
+  // ── §60: new-franchise inbox seed survives the App.init reload ─────────────
+  // SetupScreen calls App.init() right after startNewGame, which reloads the
+  // active slot from IndexedDB. Reproduce that exactly and assert the seeds
+  // are still there and are real (not debug-shaped) instances.
+  await SM.init();
+  {
+    const inbox = SM.get().inbox || [];
+    const seeds = inbox.filter(c => c._seed);
+    check('new team: seed cards survive the App.init reload',
+          seeds.length === NEW_TEAM_SEED_CARDS.length + 1,
+          `got ${seeds.length} (inbox ${inbox.length})`);
+    check('new team: every spring seed card delivered',
+          NEW_TEAM_SEED_CARDS.every(id => seeds.some(c => c.cardId === id)),
+          seeds.map(c => c.cardId).join(','));
+    // The seeded trade is a REAL engine offer: user sends one of their own
+    // players and receives one of the proposing CPU team's players.
+    const st0   = SM.get();
+    const trade = seeds.filter(c => c._tradeOffer);
+    const o     = trade[0]?._tradeOffer;
+    const prop  = (st0.leagueTeams || []).find(t => t.id === trade[0]?._proposingTeamId);
+    check('new team: exactly one seeded (real) trade offer', trade.length === 1, `got ${trade.length}`);
+    check('new team: seeded trade direction — user sends own player, receives CPU player',
+          !!o && o.outgoingIds.every(id => st0.userTeam.rosterIds.includes(id))
+              && !!prop && o.incomingIds.every(id => prop.rosterIds.includes(id)),
+          o ? JSON.stringify(o) : 'no offer');
+    check('new team: seeds are real instances (unresolved, game-index expiry, no debug shape)',
+          seeds.every(c => c.resolved === false && Number.isFinite(c.expiresAt)
+                          && !c._debugInjected && c.instanceId),
+          JSON.stringify(seeds.map(c => ({ id: c.cardId, r: c.resolved, e: c.expiresAt }))));
+    check('new team: no unresolved {tokens} in seed text',
+          seeds.every(c => !/\{[a-z0-9_]+\}/i.test(`${c.subject} ${c.body} ${c.sender}`)),
+          seeds.filter(c => /\{[a-z0-9_]+\}/i.test(`${c.subject} ${c.body}`)).map(c => c.cardId).join(','));
+  }
+
   const s0 = SM.get();
 
   // ── Schedule structure (Batch 0) ──────────────────────────────
@@ -211,6 +246,7 @@ async function main() {
   const target = Math.min(GAMES, s0.schedule.length);
   let committed = 0, crossedToRegular = false, phaseAtCross = null, faultDone = false;
   let gamesWithRelief = 0; // r51: games where at least one side used >1 pitcher
+  let seasonRuns = 0, seasonHits = 0, seasonGames = 0; // §60 run environment
 
   for (let i = 0; i < target; i++) {
     const idx = SM.get().currentGameIndex;
@@ -226,6 +262,23 @@ async function main() {
       check(`game ${idx} score = last play cumulative`,
             pre.ourScore === last.cumOurScore && pre.theirScore === last.cumTheirScore,
             `card ${pre.ourScore}-${pre.theirScore} vs play ${last.cumOurScore}-${last.cumTheirScore}`);
+
+      // §60 real-baseball structure (pre-commit, plays still present)
+      const ps      = pre.plays;
+      const runs    = ps.reduce((s, p) => s + (p.rbi || 0), 0);
+      const maxInn  = Math.max(...ps.map(p => (p.type === 'game_end' ? 0 : (p.inning || 0))));
+      const halves  = new Set(ps.filter(p => p.half === 'TOP' || p.half === 'BOT').map(p => `${p.half}${p.inning}`));
+      const homeR   = pre.isHome ? pre.ourScore : pre.theirScore;
+      const awayR   = pre.isHome ? pre.theirScore : pre.ourScore;
+      check(`game ${idx}: runs in plays == final score`, runs === pre.ourScore + pre.theirScore,
+            `plays ${runs} vs score ${pre.ourScore + pre.theirScore}`);
+      check(`game ${idx}: at least 9 innings played`, maxInn >= 9, `last inning ${maxInn}`);
+      // Bottom of the last inning is skipped only when the home team leads.
+      check(`game ${idx}: bottom half skipped only when home leads`,
+            halves.has(`BOT${maxInn}`) || homeR > awayR, `home ${homeR} away ${awayR}`);
+      if (!pre.isSpring) check(`game ${idx}: regular season never ties`, homeR !== awayR, `${homeR}-${awayR}`);
+      seasonRuns += runs; seasonHits += ps.filter(p => ['single','double','triple','hr'].includes(p.type)).length;
+      seasonGames++;
     }
 
     await commitGame(idx);
@@ -303,6 +356,41 @@ async function main() {
   }
 
   check(`committed ${committed} game(s)`, committed > 0, `${committed}`);
+
+  // ── §60: realistic run environment (MLB ≈ 4.6 R, 8.4 H per team per game) ──
+  if (seasonGames >= 20) {
+    const rpg = seasonRuns / seasonGames / 2, hpg = seasonHits / seasonGames / 2;
+    check(`run environment realistic: ${rpg.toFixed(2)} R / team / game (3.5–6.0)`, rpg >= 3.5 && rpg <= 6.0);
+    check(`hit environment realistic: ${hpg.toFixed(2)} H / team / game (6.5–10.5)`, hpg >= 6.5 && hpg <= 10.5);
+  }
+
+  // ── §60: inbox content integrity over the whole run ─────────────────────────
+  {
+    const inbox = SM.get().inbox || [];
+    const TOKEN = /\{[a-z0-9_]+\}/i;
+    const raw = inbox.filter(c =>
+      TOKEN.test(`${c.subject} ${c.preview} ${c.body} ${c.sender} ${c.yesLabel} ${c.noLabel}`));
+    const rawIds = [...new Set(raw.map(c => c.cardId))];
+    check(`inbox: no delivered card shows a raw {token} (${inbox.length} delivered)`,
+          raw.length === 0,
+          `${rawIds.length} card types: ${rawIds.slice(0, 25).join(',')}${rawIds.length > 25 ? '…' : ''}`);
+    check('inbox: no retired card delivered',
+          !inbox.some(c => c._raw?._retired),
+          inbox.filter(c => c._raw?._retired).map(c => c.cardId).join(','));
+    if (committed >= 20) {
+      const offers = inbox.filter(c => c._tradeOffer && !c._seed);
+      check(`inbox: real CPU trade offers arrive during play (${offers.length})`, offers.length > 0);
+      const st = SM.get();
+      const badDir = offers.filter(c => {
+        const prop = (st.leagueTeams || []).find(t => t.id === c._proposingTeamId);
+        const snap = c._tradeEval;
+        return !snap || !snap.outgoingPlayers?.every(p => p.teamId === 'user' || p._previouslyWithOrg)
+            || !snap.incomingPlayers?.every(p => p.teamId === c._proposingTeamId);
+      });
+      check('inbox: every CPU offer sends a user player and receives a CPU player',
+            badDir.length === 0, badDir.map(c => c.cardId).join(','));
+    }
+  }
   // r51: relievers must actually enter — most full games hook the starter.
   check(`bullpen used in most games (${gamesWithRelief}/${committed})`,
         committed === 0 || gamesWithRelief >= committed * 0.7,

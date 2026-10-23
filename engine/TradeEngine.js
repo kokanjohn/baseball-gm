@@ -277,7 +277,9 @@ export function generateCPUTradeOffer(teamId, state, context = {}) {
   const baseProbability  = isDeadlineWindow ? 0.08 : 0.02;
   const relModifier      = (gmRel - 50) * 0.001; // ±0.05 at extremes
 
-  if (Math.random() > baseProbability + relModifier) return null;
+  // context.force skips the per-game probability roll (used for the
+  // new-franchise seed offer); every quality gate below still applies.
+  if (!context.force && Math.random() > baseProbability + relModifier) return null;
 
   // Find what the CPU team needs most
   const cpuNeed = _identifyCPUNeed(team, state);
@@ -291,11 +293,16 @@ export function generateCPUTradeOffer(teamId, state, context = {}) {
   const offering = _assembleCPUOffer(team, target, state, gmRel, isDeadlineWindow);
   if (!offering) return null;
 
+  // Direction is from the USER's perspective (see evaluateTrade / executeTrade):
+  //   incomingIds = players the user RECEIVES (the CPU's offered player)
+  //   outgoingIds = players the user SENDS    (the user player the CPU targets)
+  // This was previously inverted, so accepting would have "acquired" the user's
+  // own player and shipped the CPU's player away.
   const offer = {
-    incomingIds:     [target.id],
-    outgoingIds:     [offering.id],
+    incomingIds:     [offering.id],
+    outgoingIds:     [target.id],
     proposingTeamId: teamId,
-    isRental:        _isRentalPlayer(target, state),
+    isRental:        _isRentalPlayer(offering, state),
   };
 
   // Evaluate the offer — if it's too unfair for the user, the CPU adjusts

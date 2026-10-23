@@ -280,7 +280,7 @@ export const DECISIONS_POOL = [
   },
 
 
-  {id:'t1',autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t1',_retired:true,autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'Trade offer: upgrade our {acq_pitcher_pos}',
    preview:'Rival club offering a proven arm — costs vary…',
    body:"{trade_set_drop_pi}The {rival_team} GM just called. They want {drop_pitcher_desc} and are offering {acq_pitcher_name} ({acq_pitcher_pos}, {acq_pitcher_hand}) . {t1_acq_note}",
@@ -288,7 +288,7 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:5},noEffect:{morale:-3},
    yesMsg:'Pitcher acquired! Staff getting stronger.',noMsg:'Trade declined. Sticking with what we have.',
    onYes:'trade_acquire_pitcher',_usesTradeToken:true,_ttl:2,_expireMsg:'Trade deadline passed — rival filled the need elsewhere. Deal is dead.',_expireFx:{morale:-4},_tradeRivalChance:0.10,_weight:0.6,_rosterContract:'roster:acquire:pitcher'},
-  {id:'t2',autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t2',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'Trade offer: {acq_hitter_pos} available — rival club',
    preview:'Versatile backup available — window is short…',
    body:"{trade_set_drop_hi}{rival_team} is making {acq_hitter_name} ({acq_hitter_pos}) available for {trade_cost}. {t2_acq_note} To make room, {drop_hitter_desc} would be moved off the bench.",
@@ -814,7 +814,7 @@ export const DECISIONS_POOL = [
    yesLabel:'Accept the Deal',noLabel:'Protect the Vendor',
    yesEffect:{morale:2,atmo:3},noEffect:{atmo:1},
    yesMsg:'Dugout deal done. Local fans love the partnership — food vendor is annoyed.',noMsg:'Passed. Existing vendor relationship stays intact.',_revenueToken:'rev_amount'},
-  {id:'t3',autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t3',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'Trade offer: {acq_hitter_name} ({acq_hitter_pos}) for a bench hitter',
    preview:'Contender offers {acq_hitter_name} ({acq_hitter_pos}) for {drop_hitter_desc} — positional swap…',
    body:"{trade_set_drop_hi}{rival_team} wants {drop_hitter_desc} and is offering {acq_hitter_name} ({acq_hitter_pos}) . {t3_swap_note}",
@@ -822,7 +822,7 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:3},noEffect:{},
    yesMsg:'{acq_hitter_name} acquired. Bench upgraded.',noMsg:'Trade declined. Bench stays as-is.',
    onYes:'trade_acquire_hitter',_usesTradeToken:true,_ttl:2,_expireMsg:'Trade window closed — other club moved on.',_expireFx:{morale:-3},_tradeRivalChance:0.10,_weight:0.6,_rosterContract:'roster:acquire:hitter'},
-  {id:'t4',autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t4',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'{trade_want_rental}{acq_pitcher_name} ({acq_pitcher_pos}) available — trade offer',
    preview:'Contender offering {acq_pitcher_name} ({acq_pitcher_pos}) — pitching help available…',
    body:"{trade_set_drop_pi}{rival_team} wants {drop_pitcher_desc} and is offering {acq_pitcher_name} ({acq_pitcher_pos}, {acq_pitcher_hand}) . {acq_pitcher_name} is {t4_acq_note}.{t4_contract_note}",
@@ -832,7 +832,7 @@ export const DECISIONS_POOL = [
    onYes:'trade_acquire_pitcher',_usesTradeToken:true,_ttl:2,_expireMsg:'Rental deadline passed — contender traded pitcher elsewhere.',_expireFx:{morale:-5},_tradeRivalChance:0.10,_weight:0.6,_rosterContract:'roster:acquire:pitcher'},
   // ── INBOUND TRADE OFFERS (rival clubs call us) ──────────────────────────────
   // t5: Contender wants our active pitcher — sends weaker arm + cash back
-  {id:'t5',autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t5',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'Inbound offer — rival wants {active_pitcher_name} ({active_pitcher_pos})',
    preview:'Contender calling about {active_pitcher_name} — rival offering cash and a return arm…',
    body:'{trade_set_send_pi}{rival_team} wants {active_pitcher_name} ({active_pitcher_pos}) and is offering {acq_pitcher_name} ({acq_pitcher_pos}, {acq_pitcher_hand}) . {t5_value_note}.',
@@ -844,7 +844,7 @@ export const DECISIONS_POOL = [
    _rosterContract:'roster:send:pitcher'},
 
   // t6: Rebuilding club wants our veteran hitter — sends young hitter + cash
-  {id:'t6',autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t6',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'Inbound offer — {active_hitter_name} ({active_hitter_pos}) requested',
    preview:'Rebuilding club offering cash and a young bat for {active_hitter_name}…',
    body:'{trade_set_send_hi}{rival_team} wants {active_hitter_name} ({active_hitter_pos}) and is offering {acq_hitter_name} ({acq_hitter_pos}) . {t6_value_note}.',
@@ -856,7 +856,7 @@ export const DECISIONS_POOL = [
    _rosterContract:'roster:send:hitter'},
 
   // t7: Pure salary dump — rival wants our pitcher, cash only, no player back
-  {id:'t7',autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t7',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'Cash offer — rival wants {active_pitcher_name} outright',
    preview:'Rival club offering straight cash for {active_pitcher_name} — no player back…',
    body:'{trade_set_send_pi}{rival_team} wants {active_pitcher_name} ({active_pitcher_pos}) and is offering {trade_cost} in straight cash — no player back. Roster spot opens up and the budget gets a boost. Whether that trade-off works depends on how replaceable this arm is.',
@@ -868,7 +868,7 @@ export const DECISIONS_POOL = [
    _rosterContract:'roster:send:pitcher'},
 
   // t8: Swap with cash sweetener — rival wants our hitter, offers weaker hitter + cash
-  {id:'t8',autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t8',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'Swap offer — {active_hitter_name} for {acq_hitter_name} + cash',
    preview:'Club offering {acq_hitter_name} ({acq_hitter_pos}) plus cash — they want {active_hitter_name}…',
    body:'{trade_set_send_hi}{rival_team} wants {active_hitter_name} ({active_hitter_pos}) and is offering {acq_hitter_name} ({acq_hitter_pos}) . {t8_value_note}.',
@@ -880,7 +880,7 @@ export const DECISIONS_POOL = [
    _rosterContract:'roster:send:hitter'},
 
   // t9: Prospect package — rival wants our veteran, sends two prospects, no cash
-  {id:'t9',autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t9',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
    subject:'Prospect haul — rival wants {active_hitter_name} ({active_hitter_pos})',
    preview:'Club offering two prospects for {active_hitter_name} — youth for experience…',
    body:'{trade_set_send_hi}{rival_team} wants {active_hitter_name} ({active_hitter_pos}). They\'re offering two prospects — {acq_hitter_name} ({acq_hitter_pos}) and {farm_hitter_name} ({farm_hitter_pos}) — no cash. {t9_value_note}.',

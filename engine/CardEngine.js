@@ -46,7 +46,7 @@ import {
 
 import { injurePlayer } from './InjuryEngine.js';
 import { activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation } from './RosterEngine.js';
-import { evaluateTrade, executeTrade, recordDeclinedOffer } from './TradeEngine.js';
+import { evaluateTrade, executeTrade, recordDeclinedOffer, generateCPUTradeOffer } from './TradeEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -114,10 +114,16 @@ export function checkAndDeliver(context) {
   const currentInbox = (state.inbox || []).filter(c => !c.resolved);
   if (currentInbox.length >= MAX_INBOX_SIZE) return;
 
+  // 3b. Real CPU trade proposals (TradeEngine). At most one per check; it
+  // occupies one of this check's delivery slots. Replaces the retired v1 pool
+  // trade cards (t1–t9), whose actions were never wired to real trades.
+  const tradeDelivered = _maybeDeliverCPUTradeOffer(state, context) ? 1 : 0;
+
   const slotsAvailable = Math.min(
     MAX_CARDS_PER_CHECK,
     MAX_INBOX_SIZE - currentInbox.length
-  );
+  ) - tradeDelivered;
+  if (slotsAvailable <= 0) return;
 
   // 4. Select eligible cards from active pools
   const phase     = state.phase;
@@ -496,7 +502,7 @@ export function deliverInjuryAct2(playerId, act2Variance) {
  * @param {Object} evaluation  — from TradeEngine.evaluateTrade()
  * @param {String} proposingTeamId
  */
-export function deliverTradeOffer(offer, evaluation, proposingTeamId) {
+export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = false } = {}) {
   const state    = StateManager.get();
   const team     = (state.leagueTeams || []).find(t => t.id === proposingTeamId);
   const teamName = team?.name || 'Another team';
@@ -553,7 +559,9 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId) {
     _tradeOffer:     offer,
     _tradeEval:      evaluation,
     _proposingTeamId: proposingTeamId,
+    _expiredSeason:  state.seasonNum,
     _raw:            { onYes: 'trade_execute', onNo: 'trade_decline' },
+    ...(seed ? { _seed: true } : {}),
   };
 
   StateManager.mutate(s => {
@@ -565,6 +573,106 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId) {
 // ─────────────────────────────────────────────────────────────
 // COMPOSE CARD DELIVERY (Phase 15 — Section 8.12)
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * _tradeWindowOpen(state, context)
+ * Trades are allowed in spring, and in the regular season up to the deadline.
+ */
+function _tradeWindowOpen(state, context) {
+  const phase = state.phase;
+  if (phase === PHASE.SPRING_TRAINING) return true;
+  if (phase !== PHASE.REGULAR_SEASON && phase !== PHASE.TRADE_DEADLINE) return false;
+  return (context.regularSeasonIndex || 0) <= TRADE_DEADLINE_CLOSE;
+}
+
+/**
+ * _maybeDeliverCPUTradeOffer(state, context, { force, seed })
+ * Asks CPU teams (in random order) whether they want to propose a trade; the
+ * first real offer is delivered. Teams with an unresolved offer already in the
+ * inbox are skipped. TradeEngine owns the probability roll and offer quality;
+ * `force` skips only the roll (seed offer).
+ * @returns {Boolean} true if an offer was delivered
+ */
+function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = false } = {}) {
+  if (!force && !_tradeWindowOpen(state, context)) return false;
+
+  const pendingFrom = new Set(
+    (state.inbox || [])
+      .filter(c => !c.resolved && c._proposingTeamId)
+      .map(c => c._proposingTeamId));
+
+  const teams = (state.leagueTeams || [])
+    .filter(t => !pendingFrom.has(t.id))
+    .map(t => ({ t, r: Math.random() }))
+    .sort((a, b) => a.r - b.r)
+    .map(x => x.t);
+
+  for (const team of teams) {
+    const result = generateCPUTradeOffer(team.id, state, {
+      regularSeasonIndex: context.regularSeasonIndex || 0,
+      phase: state.phase,
+      force,
+    });
+    if (result) {
+      deliverTradeOffer(result.offer, result.evaluation, team.id, { seed });
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * deliverSeedTradeOffer(context)
+ * New-franchise seed: one real, engine-generated trade proposal (no push).
+ * @returns {Boolean}
+ */
+export function deliverSeedTradeOffer(context) {
+  return _maybeDeliverCPUTradeOffer(StateManager.get(), context || {}, { force: true, seed: true });
+}
+
+/**
+ * deliverSeedCards(cardIds, context)
+ * Delivers the new-franchise welcome set to the inbox.
+ *
+ * Unlike deliverCardById (a debug injector that builds a partial instance with
+ * an empty token context), seeds go through the SAME _createInstance path as
+ * normal delivery: real token context, real expiry (game-index TTL), resolved
+ * budget cost, the canonical `resolved` flag. Eligibility gates are bypassed on
+ * purpose — the seed set is a hand-picked opening slate, not a pool draw.
+ *
+ * Seeds are flagged `_seed: true` and never scheduled for a push notification:
+ * the GM is looking at the app when they create the team.
+ *
+ * @param {String[]} cardIds
+ * @param {Object}   context — from GameEngine.buildCardContext()
+ * @returns {Number} count delivered
+ */
+export function deliverSeedCards(cardIds, context) {
+  const state = StateManager.get();
+  const instances = [];
+
+  for (const cardId of cardIds || []) {
+    let cardDef = null;
+    for (const pool of Object.values(ALL_POOLS)) {
+      const found = pool.find(entry => (entry?.card || entry)?.id === cardId);
+      if (found) { cardDef = found.card || found; break; }
+    }
+    if (!cardDef) {
+      console.warn(`[CardEngine.deliverSeedCards] Card '${cardId}' not found in any pool.`);
+      continue;
+    }
+    const instance = _createInstance(cardDef, context || {}, state);
+    if (instance) instances.push({ ...instance, _seed: true });
+  }
+
+  if (instances.length === 0) return 0;
+
+  StateManager.mutate(s => {
+    s.inbox = [...(s.inbox || []), ...instances];
+    _sortInbox(s.inbox);
+  });
+  return instances.length;
+}
 
 /**
  * deliverCardById(cardId)
@@ -927,6 +1035,9 @@ function _filterEligible(pool, context, state) {
   );
 
   return pool.filter(card => {
+    // Retired content (kept in the pool for reference, never delivered)
+    if (card._retired) return false;
+
     // Phase gates
     if (card._requiresSpring  && !isSpring)  return false;
     if (card._requiresRegular && !isRegular) return false;

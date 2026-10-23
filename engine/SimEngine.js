@@ -25,12 +25,16 @@ import {
   SIM_WIN_PROB_MIN,
   SIM_WIN_PROB_MAX,
   SIM_WEATHER_ADJ,
-  SIM_H_CONTACT_HIT_DIVISOR,
-  SIM_H_CONTACT_K_DIVISOR,
-  SIM_H_POWER_HR_DIVISOR,
-  SIM_H_POWER_XBH_DIVISOR,
+  SIM_RATING_AVG,
+  SIM_PA_WALK_BASE, SIM_PA_WALK_PER_PT, SIM_PA_WALK_MIN, SIM_PA_WALK_MAX,
+  SIM_PA_K_BASE, SIM_PA_K_PER_CONTACT_PT, SIM_PA_K_PER_STUFF_PT, SIM_PA_K_MIN, SIM_PA_K_MAX,
+  SIM_PA_HIT_BASE, SIM_PA_HIT_PER_CONTACT_PT, SIM_PA_HIT_PER_STUFF_PT, SIM_PA_HIT_MIN, SIM_PA_HIT_MAX,
+  SIM_PA_INFIELD_HIT_PER_SPEED_PT,
+  SIM_HIT_HR_SHARE_BASE, SIM_HIT_HR_SHARE_PER_PT, SIM_HIT_HR_SHARE_MIN, SIM_HIT_HR_SHARE_MAX,
+  SIM_HIT_XBH_SHARE_BASE, SIM_HIT_XBH_SHARE_PER_PT, SIM_HIT_XBH_SHARE_MIN, SIM_HIT_XBH_SHARE_MAX,
+  SIM_HIT_TRIPLE_SHARE,
+  SIM_MAX_INNINGS_GUARD,
   SIM_H_SPEED_SB_THRESHOLD,
-  SIM_H_SPEED_INFIELD_DIVISOR,
   SIM_H_SPEED_STRETCH_THRESHOLD,
   SIM_H_SPEED_DOUBLE_SCORE_THRESHOLD,
   SIM_H_SPEED_TAG_THRESHOLD,
@@ -46,10 +50,6 @@ import {
   SIM_SAC_BUNT_POWER_MAX,
   SIM_SAC_BUNT_INNING_MIN,
   SIM_SAC_BUNT_PROB,
-  SIM_P_STUFF_K_BONUS_DIVISOR,
-  SIM_P_STUFF_HIT_QUALITY_DIVISOR,
-  SIM_P_CONTROL_WALK_BASELINE,
-  SIM_P_CONTROL_WALK_DIVISOR,
   SIM_P_CONTROL_HBP_THRESHOLD,
   SIM_P_STAMINA_INNINGS_DIVISOR,
   SIM_P_FATIGUE_HIT_QUALITY_BONUS,
@@ -181,15 +181,17 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   const oppSP   = _getRotationSP(effectiveOppTeam, players) || _findHealthySP(effectiveOppTeam.rosterIds || [], players);
 
   // Field condition modifiers
-  const fieldMod = _fieldConditionMod(game.fieldCondition);
+  // Offense environment = field condition × weather scoring modifier. Both act
+  // inside every at-bat (hit probability / HR share), never on the final score.
   const scoringMod = game.weather?.scoringMod ?? 1.0;
+  const fieldMod   = _clamp(_fieldConditionMod(game.fieldCondition) * scoringMod, 0.85, 1.15);
 
   // Run the full game simulation
   const gameState = _simulateFullGame(
     userLineup, oppLineup,
     userSP, oppSP,
     players,
-    { game, fieldMod, scoringMod, isHome: game.isHome, phase, isSpring }
+    { game, fieldMod, isHome: game.isHome, phase, isSpring }
   );
 
   // Prepend a game_start announcement play — first thing shown in PBP.
@@ -256,7 +258,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
 // ─────────────────────────────────────────────────────────────
 
 function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
-  const { game, fieldMod, scoringMod, isHome, phase, isSpring } = ctx;
+  const { game, fieldMod, isHome, phase, isSpring } = ctx;
 
   const plays = [];
 
@@ -283,6 +285,8 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
 
   // User team bats in bottom (home) or top (away)
   const userBatsBottom = isHome;
+  const homeScore = () => (userBatsBottom ? gs.userScore : gs.oppScore);
+  const awayScore = () => (userBatsBottom ? gs.oppScore  : gs.userScore);
 
   while (!_gameOver(gs)) {
     // Top of inning — away team bats
@@ -308,7 +312,9 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     _accrueInningAndFatigue(gs, players, userBatsBottom ? 'user' : 'opp');
     _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning);
 
-    if (gs.inning >= 9 && !userBatsBottom && gs.userScore > gs.oppScore) break;
+    // 9th inning or later: if the HOME team already leads after the top half,
+    // the bottom half is not played (home team wins).
+    if (gs.inning >= 9 && homeScore() > awayScore()) break;
 
     // Bottom of inning — home team bats
     const botSlots   = userBatsBottom ? userLineup.slots  : oppLineup.slots;
@@ -317,10 +323,14 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     const botPitcher = userBatsBottom ? gs.oppPitcher : gs.userPitcher;
     const botBatIdx  = userBatsBottom ? 'userLineupIdx' : 'oppLineupIdx';
 
+    // 9th inning or later: the bottom half ends the moment the home team takes
+    // the lead (walk-off). Pass the number of runs that wins it.
+    const walkoffRuns = gs.inning >= 9 ? (awayScore() - homeScore() + 1) : Infinity;
+
     const botPlays = _simulateHalfInning(
       botSlots, botBench, botPitcher, gs, players, fieldMod,
       botIsUser, isSpring, `BOT_${gs.inning}`, botBatIdx,
-      gs.inning
+      gs.inning, walkoffRuns
     );
     plays.push(...botPlays);
 
@@ -330,7 +340,8 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
 
     _updateCumulativeScores(botPlays, gs.userScore, gs.oppScore, isHome);
 
-    if (gs.inning >= 9 && userBatsBottom && gs.userScore > gs.oppScore) break;
+    // Walk-off: home team leads after its half of the 9th or later — game over.
+    if (gs.inning >= 9 && homeScore() > awayScore()) break;
 
     _accrueInningAndFatigue(gs, players, userBatsBottom ? 'opp' : 'user');
     _checkPitcherChange(gs, players, userBatsBottom ? 'opp' : 'user', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning);
@@ -338,26 +349,19 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     gs.inning++;
 
     // Spring training: end after 9 innings regardless of score (ties allowed).
-    // Regular season: play extra innings until someone wins — no ties. A high
-    // safety cap only guards against a pathological non-scoring loop.
+    // Regular season: play extra innings until someone wins — no ties.
     if (isSpring) {
       if (gs.inning > 9) break;
     } else {
       if (gs.inning > 9 && gs.userScore !== gs.oppScore) break;
-      if (gs.inning > 30) break; // safety valve — effectively never reached
+      if (gs.inning > SIM_MAX_INNINGS_GUARD) {
+        // Pathological guard only (never reached with a realistic run
+        // environment). The score is NEVER changed outside the plays — that
+        // used to add a phantom run the box score could not account for.
+        console.error('[SimEngine] extra-innings guard reached with the score tied');
+        break;
+      }
     }
-  }
-
-  if (scoringMod !== 1.0) {
-    gs.userScore = Math.max(0, Math.round(gs.userScore * scoringMod));
-    gs.oppScore  = Math.max(0, Math.round(gs.oppScore  * scoringMod));
-  }
-
-  // Regular season must never tie. If the safety cap was reached still level
-  // (pathological — effectively never with real offense), award the home team a
-  // walk-off run so the game always has a winner.
-  if (!isSpring && gs.userScore === gs.oppScore) {
-    if (userBatsBottom) gs.userScore += 1; else gs.oppScore += 1;
   }
 
   // Record the true last inning played. The loop increments gs.inning before the
@@ -471,9 +475,11 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
 // HALF-INNING SIMULATION
 // ─────────────────────────────────────────────────────────────
 
-function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, isUserBatting, isSpring, halfKey, batIdxKey, inning) {
+function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, isUserBatting, isSpring, halfKey, batIdxKey, inning, walkoffRuns = Infinity) {
   const plays  = [];
   let outs     = 0;
+  let halfRuns = 0;       // runs scored so far this half
+  let walkedOff = false;  // home team took the lead in the 9th+ — game ends now
   let bases    = { first: null, second: null, third: null };
   const pitcher = pitcherObj ? players[pitcherObj.id] : null;
 
@@ -493,7 +499,7 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     return plays;
   }
 
-  while (outs < 3) {
+  while (outs < 3 && !walkedOff) {
 
     // ── Stolen base attempt (between at-bats) ─────────────────
     if (outs < 2 && (bases.first || bases.second) && !isSpring) {
@@ -552,9 +558,22 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     // fatigue check below, which reads the same throwing-pitcher counter.
     gs[isUserBatting ? 'oppPitchCount' : 'userPitchCount']++;
 
-    const { newBases, runsScored, runnerIds, extraOuts, playMod } =
+    let { newBases, runsScored, runnerIds, extraOuts, playMod } =
       _advanceBases(bases, atBat, activeBatter, players, outs);
     bases = newBases;
+
+    // Walk-off (home half, 9th+): the game ends the instant the winning run
+    // scores. On anything but a home run only the runs needed to win count
+    // (official scoring rule); the remaining runners are simply stranded.
+    if (halfRuns + runsScored >= walkoffRuns) {
+      walkedOff = true;
+      if (atBat.type !== 'hr') {
+        const needed = Math.max(0, walkoffRuns - halfRuns);
+        runsScored = needed;
+        runnerIds  = runnerIds.slice(0, needed);
+      }
+    }
+    halfRuns += runsScored;
 
     const effectiveType = playMod || atBat.type;
     const rbi           = runsScored;
@@ -613,7 +632,8 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     rbi:          0,
     isScoring:    false,
     isBigPlay:    false,
-    outsAfter:    3,
+    outsAfter:    walkedOff ? outs : 3,
+    _walkoff:     walkedOff || undefined,
     _basesAfter:  { first: null, second: null, third: null },
     cumOurScore:   0,
     cumTheirScore: 0,
@@ -676,42 +696,47 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   const batterMod  = _gmRelVariance(batter.gmRelationship);
   const pitcherMod = _gmRelVariance(pitcher.gmRelationship);
 
-  // Pitcher fatigue modifiers — applied to pitcher-driven probabilities
-  const fatigueFlag = pitcher._simFatigued || false;
-  const fatigueHitQual = fatigueFlag ? SIM_P_FATIGUE_HIT_QUALITY_BONUS : 0;
-  const fatigueKMod    = fatigueFlag ? (1 - SIM_P_FATIGUE_K_PENALTY)   : 1;
-  const fatigueWalkMod = fatigueFlag ? SIM_P_FATIGUE_WALK_BONUS         : 0;
+  // Pitcher fatigue modifiers (multipliers on the pitcher-driven rates)
+  const fatigueFlag    = pitcher._simFatigued || false;
+  const fatigueHitMod  = fatigueFlag ? (1 + SIM_P_FATIGUE_HIT_QUALITY_BONUS) : 1;
+  const fatigueKMod    = fatigueFlag ? (1 - SIM_P_FATIGUE_K_PENALTY)        : 1;
+  const fatigueWalkMod = fatigueFlag ? (1 + SIM_P_FATIGUE_WALK_BONUS)       : 1;
 
+  // Offense environment: field condition × weather (temperature, wind, rain).
+  // It moves hit probability inside the at-bat, so the plays ARE the score —
+  // nothing is rescaled after the game (§60).
+  const envMod = fieldMod;
+
+  // Rating gaps from the league average (§60 plate-appearance model).
+  const A = SIM_RATING_AVG;
   const r = _roll();
 
-  // 1. Walk
-  const walkProb = Math.max(0,
-    ((SIM_P_CONTROL_WALK_BASELINE - control) / SIM_P_CONTROL_WALK_DIVISOR + fatigueWalkMod)
-    * pitcherMod * fieldMod
-  );
+  // 1. Walk — control below average → more walks
+  const walkProb = _clamp(SIM_PA_WALK_BASE + (A - control) * SIM_PA_WALK_PER_PT,
+                          SIM_PA_WALK_MIN, SIM_PA_WALK_MAX) * fatigueWalkMod * pitcherMod;
   if (r < walkProb) return { type: 'walk' };
 
   let pos = walkProb;
 
   // 2. HBP
-  const hbpProb = control < SIM_P_CONTROL_HBP_THRESHOLD ? 0.008 : 0.003;
+  const hbpProb = control < SIM_P_CONTROL_HBP_THRESHOLD ? 0.012 : 0.008;
   if (r < pos + hbpProb) return { type: 'hbp' };
   pos += hbpProb;
 
-  // 3. Strikeout
-  const kBase   = (100 - contact) / SIM_H_CONTACT_K_DIVISOR;
-  const kBonus  = (stuff - 50) / SIM_P_STUFF_K_BONUS_DIVISOR;
-  const kProb   = Math.max(0, (kBase + kBonus) * fatigueKMod * pitcherMod * batterMod * fieldMod);
+  // 3. Strikeout — stuff vs contact
+  const kProb = _clamp(SIM_PA_K_BASE
+                       + (A - contact) * SIM_PA_K_PER_CONTACT_PT
+                       + (stuff - A)   * SIM_PA_K_PER_STUFF_PT,
+                       SIM_PA_K_MIN, SIM_PA_K_MAX) * fatigueKMod * pitcherMod * batterMod;
   if (r < pos + kProb) return { type: 'strikeout' };
   pos += kProb;
 
-  // 4. Hit vs out
-  const hitBase  = (contact / SIM_H_CONTACT_HIT_DIVISOR) * batterMod;
-  const hitQPen  = (stuff / SIM_P_STUFF_HIT_QUALITY_DIVISOR + fatigueHitQual);
-  const hitProb  = Math.max(0, (hitBase - hitQPen) * fieldMod);
-
-  // Infield hit bonus
-  const infieldBonus = speed / SIM_H_SPEED_INFIELD_DIVISOR;
+  // 4. Hit vs out — contact vs stuff, plus speed-driven infield hits
+  const hitProb = _clamp(SIM_PA_HIT_BASE
+                         + (contact - A) * SIM_PA_HIT_PER_CONTACT_PT
+                         - (stuff - A)   * SIM_PA_HIT_PER_STUFF_PT,
+                         SIM_PA_HIT_MIN, SIM_PA_HIT_MAX) * fatigueHitMod * batterMod * envMod;
+  const infieldBonus = Math.max(0, (speed - A) * SIM_PA_INFIELD_HIT_PER_SPEED_PT);
   const adjHitProb   = Math.min(0.45, hitProb + infieldBonus);
 
   if (r >= pos + adjHitProb) {
@@ -719,16 +744,18 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
     const groundoutProb = 0.55; // slight groundout lean
     return { type: Math.random() < groundoutProb ? 'groundout' : 'flyout' };
   }
-  pos += adjHitProb;
 
-  // 5. Hit type: single, double, triple, HR
-  const hrProb  = (power / SIM_H_POWER_HR_DIVISOR) * batterMod;
-  const xbhProb = (power / SIM_H_POWER_XBH_DIVISOR) * batterMod;
+  // 5. Hit type: HR / triple / double / single — power sets the extra-base share
+  const hrShare  = _clamp(SIM_HIT_HR_SHARE_BASE + (power - A) * SIM_HIT_HR_SHARE_PER_PT,
+                          SIM_HIT_HR_SHARE_MIN, SIM_HIT_HR_SHARE_MAX) * envMod;
+  const xbhShare = _clamp(SIM_HIT_XBH_SHARE_BASE + (power - A) * SIM_HIT_XBH_SHARE_PER_PT,
+                          SIM_HIT_XBH_SHARE_MIN, SIM_HIT_XBH_SHARE_MAX);
+  const tripleShare = SIM_HIT_TRIPLE_SHARE * _clamp(speed / A, 0.5, 1.8);
 
   const hitRoll = _roll();
-  if (hitRoll < hrProb)               return { type: 'hr' };
-  if (hitRoll < hrProb + 0.01)        return { type: 'triple' }; // rare
-  if (hitRoll < hrProb + 0.01 + xbhProb) return { type: 'double' };
+  if (hitRoll < hrShare)                          return { type: 'hr' };
+  if (hitRoll < hrShare + tripleShare)            return { type: 'triple' };
+  if (hitRoll < hrShare + tripleShare + xbhShare) return { type: 'double' };
   return { type: 'single' };
 }
 
@@ -2020,13 +2047,15 @@ function _effectiveSR(player, subRatingKey, baseValue) {
 // ─────────────────────────────────────────────────────────────
 
 function _gameOver(gs) {
-  // Primary termination is handled by the loop breaks; this is the while-guard.
-  // Spring: done after 9 innings (ties allowed). Regular: play until scores
-  // differ — no ties — with a high safety cap that is effectively never reached.
-  if (gs.inning < 9) return false;
+  // While-guard, evaluated BEFORE an inning is played: gs.inning is the inning
+  // about to start. Regulation is 9 complete innings, so the game can only be
+  // over once inning 10+ is about to start. (This used to test `< 9`, which ended
+  // every spring game — and every non-tied regular game — after 8 innings.)
+  // Primary termination is the loop breaks; this mirrors them.
+  if (gs.inning <= 9) return false;
   if (gs.isSpring) return true;
   if (gs.userScore !== gs.oppScore) return true;
-  return gs.inning >= 30;
+  return gs.inning > SIM_MAX_INNINGS_GUARD;
 }
 
 // ─────────────────────────────────────────────────────────────

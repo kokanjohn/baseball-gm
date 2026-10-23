@@ -34,6 +34,14 @@ export const ALLSTAR_ANNOUNCE_GAME_MIN       = 45;  // earliest game the ASG ann
 export const ALLSTAR_ANNOUNCE_GAME_MAX       = 55;  // latest game the ASG announcement can fire
 export const STRETCH_RUN_FINAL_GAMES         = 5;   // "final N games" milestone trigger
 
+// New-franchise inbox seed (§60). Delivered by GameEngine.startNewGame through
+// CardEngine.deliverSeedCards — real instances, no push notification.
+//   sp1/sp2       — spring ballpark-prep and clubhouse openers
+//   sp_hint1/3    — league facility-standards + fan-experience benchmarking: the
+//                   first "the league is watching" signals toward All-Star hosting
+// plus ONE real trade proposal from TradeEngine (CardEngine.deliverSeedTradeOffer).
+export const NEW_TEAM_SEED_CARDS = Object.freeze(['sp1', 'sp2', 'sp_hint1', 'sp_hint3']);
+
 // ─────────────────────────────────────────────────────────────
 // SEASON PHASES (state machine values — Section 5)
 // ─────────────────────────────────────────────────────────────
@@ -210,13 +218,42 @@ export const GM_RELATIONSHIP_REACQUIRED_START = 45;  // re-acquired players star
 // SIM ENGINE — AT-BAT RESOLUTION (Section 7.2 — LOCKED)
 // ─────────────────────────────────────────────────────────────
 
-// Hitter sub-rating → outcome formulas (all divide by these denominators)
-export const SIM_H_CONTACT_HIT_DIVISOR      = 400;   // hit prob = contact / this
-export const SIM_H_CONTACT_K_DIVISOR        = 300;   // K rate = (100-contact) / this
-export const SIM_H_POWER_HR_DIVISOR         = 1800;  // HR prob = power / this
-export const SIM_H_POWER_XBH_DIVISOR        = 600;   // XBH rate = power / this
+// Plate-appearance model (§60 — supersedes the §7.2 divisor formulas).
+// §7.2's resolution order and rating→outcome mapping are unchanged (control →
+// walks, stuff vs contact → strikeouts and hits, power → HR/XBH share, speed →
+// infield hits); only the coefficients are re-centred. The §7.2 divisors assumed a
+// higher rating scale: at the generator's real league average (~55) the hit term
+// `contact/400 − stuff/300` is ≤ 0, so most at-bats could not produce a hit
+// (measured: 0.68 runs and 2.1 hits per team per game; 18/142 games hit the
+// extra-innings cap). Each rate is now a league-average baseline at rating 55,
+// moved linearly by the rating gap and clamped. Targets ≈ modern MLB per PA:
+// BB 8.5%, K 22.5%, H 22.5%, HR ≈ 3% → ~4.5 runs / team / game.
+export const SIM_RATING_AVG                 = 55;    // league-average sub-rating (generator mean)
+export const SIM_PA_WALK_BASE               = 0.085; // walk rate at average control
+export const SIM_PA_WALK_PER_PT             = 0.0025;// per point of control BELOW average
+export const SIM_PA_WALK_MIN                = 0.025;
+export const SIM_PA_WALK_MAX                = 0.170;
+export const SIM_PA_K_BASE                  = 0.245; // K rate, average contact vs average stuff
+export const SIM_PA_K_PER_CONTACT_PT        = 0.0040;// per point of contact BELOW average
+export const SIM_PA_K_PER_STUFF_PT          = 0.0040;// per point of stuff ABOVE average
+export const SIM_PA_K_MIN                   = 0.080;
+export const SIM_PA_K_MAX                   = 0.380;
+export const SIM_PA_HIT_BASE                = 0.200; // hit rate (non-infield), average vs average
+export const SIM_PA_HIT_PER_CONTACT_PT      = 0.0035;// per point of contact above average
+export const SIM_PA_HIT_PER_STUFF_PT        = 0.0030;// per point of stuff above average (reduces)
+export const SIM_PA_HIT_MIN                 = 0.110;
+export const SIM_PA_HIT_MAX                 = 0.340;
+export const SIM_PA_INFIELD_HIT_PER_SPEED_PT = 0.0006;// per point of speed above average
+export const SIM_HIT_HR_SHARE_BASE          = 0.105; // share of hits that are HR at average power
+export const SIM_HIT_HR_SHARE_PER_PT        = 0.0050;
+export const SIM_HIT_HR_SHARE_MIN           = 0.030;
+export const SIM_HIT_HR_SHARE_MAX           = 0.300;
+export const SIM_HIT_XBH_SHARE_BASE         = 0.175; // share of hits that are doubles at average power
+export const SIM_HIT_XBH_SHARE_PER_PT       = 0.0030;
+export const SIM_HIT_XBH_SHARE_MIN          = 0.090;
+export const SIM_HIT_XBH_SHARE_MAX          = 0.320;
+export const SIM_HIT_TRIPLE_SHARE           = 0.012; // share of hits that are triples (speed-scaled)
 export const SIM_H_SPEED_SB_THRESHOLD       = 65;    // speed above this → SB attempt eligible
-export const SIM_H_SPEED_INFIELD_DIVISOR    = 2000;  // infield hit bonus = speed / this
 export const SIM_H_SPEED_STRETCH_THRESHOLD  = 70;    // speed above this → stretch single to 3rd
 export const SIM_H_SPEED_DOUBLE_SCORE_THRESHOLD = 60; // speed above this → score from 1st on double
 export const SIM_H_SPEED_TAG_THRESHOLD      = 75;    // speed above this → tag from 3rd on flyout
@@ -245,19 +282,20 @@ export const SIM_SAC_BUNT_POWER_MAX         = 45;    // batter power at or below
 export const SIM_SAC_BUNT_INNING_MIN        = 6;     // inning 6+ only (late game)
 export const SIM_SAC_BUNT_PROB              = 0.18;  // prob eligible batter attempts sac bunt
 
-// Pitcher sub-rating → outcome formulas
-export const SIM_P_STUFF_K_BONUS_DIVISOR    = 200;   // K bonus = (stuff-50) / this
-export const SIM_P_STUFF_HIT_QUALITY_DIVISOR = 300;  // hit quality penalty = stuff / this
-export const SIM_P_CONTROL_WALK_BASELINE    = 80;    // walk prob = (this - control) / 400
-export const SIM_P_CONTROL_WALK_DIVISOR     = 400;
+// Pitcher sub-rating thresholds (rates live in the SIM_PA_* block above)
 export const SIM_P_CONTROL_HBP_THRESHOLD    = 50;    // HBP rate elevated below this control value
 export const SIM_P_STAMINA_INNINGS_DIVISOR  = 20;    // max IP = SIM_SP_INNINGS_BASE + floor(stamina/this)
 export const SIM_P_FATIGUE_MULTIPLIER       = 1.8;   // fatigueThreshold = stamina × this (batters faced)
 
 // Pitcher fatigue effects
-export const SIM_P_FATIGUE_HIT_QUALITY_BONUS = 0.10; // +10% hit quality when fatigued
+export const SIM_P_FATIGUE_HIT_QUALITY_BONUS = 0.10; // +10% hit rate when fatigued (multiplier)
 export const SIM_P_FATIGUE_K_PENALTY        = 0.15;  // −15% K rate when fatigued
-export const SIM_P_FATIGUE_WALK_BONUS       = 0.10;  // +10% walk rate when fatigued
+export const SIM_P_FATIGUE_WALK_BONUS       = 0.10;  // +10% walk rate when fatigued (multiplier)
+
+// Extra innings: the regular season plays until a winner. This guard only stops
+// a pathological loop; with a realistic run environment the chance of reaching
+// it is astronomically small. Runs are never added outside the plays.
+export const SIM_MAX_INNINGS_GUARD          = 99;
 
 // gmRelationship variance multiplier (Section 22.5)
 export const SIM_GM_REL_LOW_VARIANCE        = 0.15;  // ±15% variance below 30 gmRel

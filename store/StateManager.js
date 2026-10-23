@@ -174,13 +174,20 @@ export async function save() {
 /**
  * load(slotId)
  * Loads a slot from IndexedDB and makes it the active state.
- * Saves any in-progress state first if a slot is currently loaded.
+ * Flushes any in-progress state first if a slot is currently loaded.
+ *
+ * The flush covers RELOADING THE SAME SLOT too, not only switching slots.
+ * mutate() persists on a 2s debounce, so any mutation made shortly before a
+ * reload of the same slot (e.g. startNewGame seeding the inbox, then
+ * App.init → StateManager.init → load) would otherwise be discarded: the stale
+ * DB copy replaces memory, then the pending timer saves that stale copy back.
  * @param {String} slotId
  * @returns {Promise<void>}
  */
 export async function load(slotId) {
-  // Save current slot before switching
-  if (_state && _activeSlotId && _activeSlotId !== slotId) {
+  // Flush the current slot before replacing it in memory — whether switching
+  // slots or reloading the same one — so no pending mutation is lost.
+  if (_state && _activeSlotId) {
     await save();
   }
 
