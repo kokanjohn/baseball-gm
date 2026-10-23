@@ -1,0 +1,6261 @@
+# Baseball GM — Rebuild Master Plan
+> Living document. Updated throughout the planning process before any code is written.
+> Version: 1.0 — planning complete, ready for Phase 0
+
+---
+
+## Table of Contents
+
+1. [Core Design Principles](#1-core-design-principles)
+2. [Tech Stack & Deployment](#2-tech-stack--deployment)
+3. [File & Module Architecture](#3-file--module-architecture)
+4. [Canonical Data Model](#4-canonical-data-model)
+5. [State Machine — Season Phases](#5-state-machine--season-phases)
+6. [Module Contracts](#6-module-contracts)
+7. [Sim Engine Design](#7-sim-engine-design)
+8. [Live Game Engine Design](#8-live-game-engine-design)
+9. [Trade System Design](#9-trade-system-design)
+10. [Card System Design](#10-card-system-design)
+11. [Injury Card Redesign](#11-injury-card-redesign)
+12. [Push Notification Architecture](#12-push-notification-architecture)
+13. [Build Order](#13-build-order)
+14. [Open Design Questions](#14-open-design-questions)
+15. [Known Issues from v1 — Resolution Notes](#15-known-issues-from-v1--resolution-notes)
+
+---
+
+## 1. Core Design Principles
+
+These are non-negotiable rules that apply to every module and every card. Any implementation decision that conflicts with these principles is wrong by definition.
+
+### 1.1 Every Card Needs a Real Decision
+Every inbox message must present the GM with a genuine tradeoff — not just information delivery. A card that has no meaningful choice either needs one added or should not be a card at all.
+
+**Banned patterns:**
+- "Got It" as the only action
+- Yes/No where both options lead to the same meaningful outcome
+- Information-only cards that could be a toast notification instead
+
+**Valid decision categories:**
+- **Immediate in-game decisions** — lineup changes, pitching moves, injury responses
+- **Roster/transaction decisions** — IL moves, call-ups, DFA
+- **Strategic decisions** — trades, extensions, free agent offers
+- **Uncertainty decisions** — incomplete information where the GM must bet on an outcome
+- **Resource tradeoffs** — budget, morale, atmosphere, OVR in tension with each other
+
+### 1.2 Injuries Are Two-Act Events
+Players injured during a live game produce two separate cards. This matches real-world GM experience and creates meaningful uncertainty as a mechanic.
+
+**Act 1 — During the game (INGAME card)**
+- Immediate, uncertain. "Left the game in the 3rd. Being evaluated."
+- GM decision is immediate: burn a roster move now? Adjust lineup for the rest of this game?
+- Diagnosis is NOT known yet.
+
+**Act 2 — Post-game or next day (FOLLOWUP card)**
+- The actual diagnosis arrives.
+- GM decision is consequential: 10-day IL or 60-day IL? Who gets called up? Is this the moment to make a trade?
+- Occasionally Act 2 is better or worse than Act 1 suggested (uncertainty mechanic).
+
+Both acts must have a genuine decision. Neither can be a "Got It."
+
+### 1.3 Trade Cash Direction Is Deterministic
+Cash direction in trades is never ambiguous and never wrong.
+
+**Rule:** If the incoming player's rating is LOWER than the outgoing player's rating, the user RECEIVES cash (the other team sweetens the deal). If the incoming player's rating is HIGHER, the user PAYS cash (the user is acquiring the better player).
+
+**Formula (to be finalized in Section 9):**
+- Rating differential drives cash amount
+- Cash note in the card body must accurately describe direction: "They'll send $X" vs "You'll send $X"
+- Card labels must reflect direction: "Accept (receive $X)" vs "Accept (send $X)"
+
+### 1.4 The League Player Pool Is the Root Entity
+Everything in the game is built on top of the player pool. No game mechanic should be designed without first asking: "What does this do to a player object?"
+
+The `Player` object is the single source of truth for every person in the game. There is one canonical player object per player, referenced by roster, trade, IL, stats, and history systems — never copied or duplicated.
+
+### 1.5 No Patch Fixes — Fix the Bone, Not the Symptom
+
+When a bug is identified, the correct response is never to patch the symptom. Every fix must:
+
+1. **Trace to root cause** — what fundamental assumption, data model flaw, or ownership violation caused this?
+2. **Assess blast radius** — does that root cause affect anything else? Fix all of it, not just the reported symptom.
+3. **Fix structurally** — the fix changes the underlying design, not the surface behavior.
+
+A patch fix is defined as: any change that makes the symptom go away without addressing why it happened. Patch fixes are banned. They compound — each one makes the next bug harder to find and the codebase harder to reason about.
+
+**In practice this means:**
+- If a trade places the wrong player in the wrong slot, the question is not "how do we correct the slot" — it is "why does RosterEngine not own this placement exclusively?"
+- If a card fires at the wrong time, the question is not "add a guard clause" — it is "is the phase state machine incomplete?"
+- If a notification doesn't fire on Android, the question is not "retry the setTimeout" — it is "what is the correct architecture for background delivery?"
+
+This principle also applies to planning. If something being designed feels like it requires a special case or an `if` branch to handle a known edge case, that is a signal the underlying model is wrong — not that we need the special case.
+
+**Transparency rule:** If a suggestion made during planning or building looks like it's patching rather than fixing, flag it explicitly and trace back to the root before proceeding.
+
+### 1.6 Constants Over Magic Numbers
+
+Every mechanical value lives in `data/constants.js` as a named constant — never hardcoded inside engine logic. This rule enables: post-playtesting tuning without engine changes, accurate wiki documentation, and the difficulty preset system (Section 29).
+
+If a number appears in engine code that isn't derived from state, it must be imported from constants. No exceptions.
+
+### 1.7 Multiplayer-Informed Architecture
+
+Multiplayer leagues are a known future implementation — not in scope for this rebuild, but the architecture must not prevent it. Every structural decision should be evaluated against the question: "Does this close the door on multiplayer later?"
+
+**Architectural choices required by this principle:**
+
+- **Pure game logic functions:** `SimEngine`, `RosterEngine`, `CardEngine`, `TradeEngine` take state as input and return new state as output. No DOM access, no direct storage writes, no side effects inside game logic. These functions must be able to run server-side without modification.
+- **Globally unique UUIDs for all entities:** Players, teams, cards, save slots — all identified by UUID generated at creation. Never sequential integers. Two clients generating IDs independently must never collide.
+- **Plain JSON-serializable state:** No `Map` objects, no `Set` objects, no circular references, no functions stored in state. Everything in state must survive `JSON.stringify()` / `JSON.parse()` round-trips. This enables network transmission, Firestore storage, and state diffing.
+- **League simulation isolation:** `SeasonEngine` runs the league sim with no assumptions about whether it's running client-side or server-side. It receives state, returns updated state. Moving it server-side for multiplayer is a deployment change, not an architectural rewrite.
+
+**What this principle does NOT require now:**
+- No backend infrastructure
+- No user authentication
+- No real-time synchronization
+- No shared state management
+
+Those are built when multiplayer is the actual project. This principle only constrains *how* we build the single-player game so the door stays open.
+
+### 1.9 Archetypes Are the Difficulty System
+
+There is no separate difficulty setting. The archetype selection IS the difficulty selection — framed as an in-world franchise context rather than a meta-game toggle.
+
+The challenge profile of each archetype:
+
+| Archetype | Challenge type |
+|---|---|
+| Ember | Hard start — thin roster, tight finances, must build from nothing |
+| Lab | Patient hard — efficient roster but slow payoff, process-dependent |
+| Gambler | Chaotic hard — high variance, unpredictable ownership, boom-or-bust |
+| Institution | Medium — reliable but inflexible, veteran dependency |
+| Contender | Medium-hard — good roster but immediate playoff pressure |
+| Empire | Pressure hard — elite roster but championship-or-bust every season |
+
+All teams play the same mechanical game — same win probability formula, same injury rates, same card expiry windows. The difficulty comes entirely from roster quality, financial parameters, and ownership expectations, which are defined per archetype in Section 16.6. No separate constants, no preset system, no meta-game layer.
+
+A user who wants an easy experience picks Empire and enjoys sustained excellence with a strong roster. A user who wants the hardest challenge picks Ember and grinds a full rebuild. The framing is always in-world.
+
+### 1.10 No Spaghetti State
+
+State is owned by exactly one module. No module reaches into another module's state directly — it calls a function or dispatches an event. This is the single rule that would have prevented most of v1's bugs.
+
+### 1.11 Build Quality Standard — Correct Once, Correct Always
+
+Every phase of this build is treated as permanent. Nothing moves forward on the assumption it will be "cleaned up later." This principle has four practical rules:
+
+**Rule 1 — Retroactive correctness.** If a gap, incorrect assumption, or weak test is discovered in a completed phase, it is fixed immediately before the current phase continues — not noted for later. Later never comes. The fix is applied to the root cause, the gate test is strengthened to catch the same class of error in future, and the plan document is updated to reflect what was learned.
+
+**Rule 2 — Structural gate tests.** Every phase gate test must verify structural correctness, not just syntax validity and export presence. This means: exact counts (roster sizes, array lengths, game counts), required fields on every generated object, value ranges (OVR within bounds, scores non-negative), and cross-system consistency (a constant defined in constants.js matches the count generated by a factory).
+
+**Rule 3 — Pre-build audit.** Before building each phase, the builder explicitly states what assumptions are being carried forward from previous phases, verified against the actual built output — not against memory or the plan document. If an assumption can't be verified against the code, it is verified by running a test.
+
+**Rule 4 — Decisions surfaced immediately.** Any decision that needs to be made during a build — a number that's TBD in the plan, a cross-system interaction that wasn't fully specified, an architectural choice between two valid approaches — is surfaced to the owner before code is written, not discovered after. If the builder can resolve it from the plan without ambiguity, they do so and note it. If not, they stop and ask.
+
+**What this looks like in practice:**
+- The roster count error in Phase 2 (BP_COUNT=7 instead of 5) would have been caught by a gate test asserting `starterCount + benchCount + spCount + bpCount + pbCount === 28`.
+- The missing `_tickOffset` field would have been caught by a pre-build audit asking "what fields does GameEngine's tick() need on the game object that aren't there yet?"
+- The farm/waiver rule clarification was correctly surfaced before Phase 3 — that is the right pattern.
+
+This principle applies to the plan document itself. If the plan is discovered to be incomplete or incorrect, it is updated immediately. The plan is the source of truth, and it must stay accurate.
+
+---
+
+## 2. Tech Stack & Deployment
+
+**Unchanged from v1 — deliberately chosen for simplicity and zero build tooling.**
+
+| Concern | Solution |
+|---|---|
+| Language | Vanilla JavaScript (ES2020+, native modules) |
+| Markup/Style | HTML5 + CSS3 with custom properties |
+| Module system | Native ES modules (`type="module"`) — no bundler |
+| Persistence | IndexedDB via thin wrapper |
+| Theme preference | `localStorage` |
+| Hosting | GitHub Pages (static, no server) |
+| Offline | Service worker (cache-first for assets, network-first for HTML) |
+| Push notifications | Firebase Cloud Messaging (FCM) + Cloudflare Worker |
+| PWA | Web app manifest + service worker |
+
+**What changes from v1:**
+- Single 19,000-line HTML file → multiple focused JS modules imported via `<script type="module">`
+- Inline `<script>` logic → all logic in external `.js` files
+- Classic mode retired — live mode only (see Section 2.1)
+- `setTimeout`-based notification scheduling (broken) → proper FCM push via Cloudflare Worker cron
+- Ad-hoc state mutations → all state changes go through a single `StateManager`
+- No simulate/advance button — games play out in real time only
+
+### 2.1 Classic Mode Retirement (LOCKED)
+
+Classic mode is retired entirely. The game is live mode only — games are scheduled at real-world timestamps and play out in real time. There is no simulate option and no manual advance button.
+
+**Rationale:** Classic mode and live mode were two fundamentally different games sharing a UI. Every card pool, every injury model, every scheduling system needed a conditional branch for each mode. Retiring classic mode removes that entire layer of complexity from every system, allowing each feature to be built once and built correctly.
+
+**The engagement gap classic mode solved** — something to do when you don't want to watch a full game — is addressed instead by:
+- Around-the-league activity feed between games
+- Targeted inbox cards that arrive between games
+- Compose tab interactions with staff between games
+- Pre-game build-up cards in the 30–90 minute window before first pitch
+
+**What this means for schedule timing:** Every game must have a real-world timestamp assigned at schedule generation. The calendar pacing of games — how many per week, what time of day — is an open question that affects the entire engagement model (see OQ-27).
+
+---
+
+## 3. File & Module Architecture
+
+### 3.1 Directory Structure
+
+```
+/baseball-gm/
+│
+├── index.html                  # App shell only — imports app.js, no logic
+├── manifest.json
+├── sw.js                       # Service worker — cache + push receipt only
+├── icon-192.png
+├── icon-512.png
+│
+├── app.js                      # Bootstrap: init engine, load state, mount UI
+│
+├── engine/
+│   ├── GameEngine.js           # Orchestrator — owns game loop, milestone triggers
+│   ├── SimEngine.js            # Win probability, score generation, PBP pre-gen
+│   ├── SeasonEngine.js         # Schedule generation, standings, playoff bracket
+│   ├── RosterEngine.js         # All roster mutations — single entry point for all teams
+│   ├── TradeEngine.js          # Trade evaluation, execution, deferral, user proposals
+│   ├── CardEngine.js           # Card selection, delivery, resolution, follow-ups
+│   ├── InjuryEngine.js         # League-wide injury probability, processing, reports
+│   ├── LeagueEngine.js         # CPU team behavior, game sim, waiver activity, feed
+│   ├── WeatherEngine.js        # Weather buffer generation, game status transitions
+│   └── NotificationEngine.js  # Push subscription, schedule sync to Cloudflare
+│
+├── store/
+│   ├── StateManager.js         # Single source of truth — all state reads/writes
+│   ├── DB.js                   # IndexedDB wrapper (thin, no logic)
+│   └── schema.js               # State shape definition and migration versioning
+│
+├── ui/
+│   ├── App.js                  # UI root — mounts tabs, handles navigation
+│   ├── EventBus.js             # Pub/sub — decouples engine events from UI updates
+│   ├── Renderer.js             # DOM update utilities
+│   ├── screens/
+│   │   ├── DashboardScreen.js
+│   │   ├── RosterScreen.js
+│   │   ├── ScheduleScreen.js
+│   │   ├── LeagueScreen.js
+│   │   ├── PlayersScreen.js
+│   │   └── InboxScreen.js
+│   └── components/
+│       ├── LiveGameView.js     # Live game display (score, diamond, PBP, stats)
+│       ├── BoxScoreModal.js
+│       ├── PlayerCard.js
+│       ├── TradeModal.js
+│       ├── SettingsModal.js
+│       └── [other modals]
+│
+├── data/
+│   ├── player-names.js         # Name pools — ES module, 740 names, no separate farm pools
+│   ├── cards-pool.js           # Card definitions — ES module, c3/i1 collision fixed
+│   ├── constants.js            # All magic numbers, config values, enums
+│   └── league.js               # RETIRED — functionality moved to engine/LeagueFactory.js
+│
+├── engine/
+│   ├── PlayerFactory.js        # computeOVR(), createPlayer() — single source for all player creation
+│   ├── LeagueFactory.js        # buildFullLeague(), buildUserRoster(), buildLeagueRosters()
+│
+└── workers/
+    └── push-worker.js          # Cloudflare Worker — FCM cron scheduler
+                                # Deployed separately to Cloudflare, not GitHub Pages
+```
+
+### 3.2 Module Ownership Rules
+
+- `StateManager` owns all state. Nothing else writes to `state` directly.
+- `GameEngine` owns the game loop. It calls other engines; they don't call each other.
+- `CardEngine` owns the inbox. It calls `StateManager` to deliver effects; it doesn't touch roster directly.
+- `RosterEngine` owns all roster mutations. Trades, IL, callups, depth checks — all go through here.
+- `TradeEngine` evaluates and initiates trades. Execution calls `RosterEngine`.
+- UI modules never mutate state. They dispatch events; engines respond.
+
+---
+
+## 4. Canonical Data Model
+
+> Status: ACTIVE — sub-ratings and financial model locked. Season transition open questions in Section 14.
+
+### 4.1 Sub-Ratings System (LOCKED)
+
+Every player has 3 sub-ratings in addition to OVR. OVR is a weighted average of sub-ratings — it is always computed, never set directly.
+
+#### Hitter Sub-Ratings
+
+| Sub-rating | Range | What it drives |
+|---|---|---|
+| `contact` | 40–99 | Batting average, strikeout rate, hit type distribution |
+| `power` | 40–99 | Home run probability, extra-base hit rate, RBI opportunities |
+| `speed` | 40–99 | Stolen base attempts/success, infield hit probability, baserunning |
+
+**OVR formula (hitters):** `round(contact * 0.40 + power * 0.35 + speed * 0.25)`
+
+Speed weighted lowest because it is the least predictive of overall offensive value, but meaningful enough to affect the sim engine and generate distinct card events.
+
+#### Pitcher Sub-Ratings
+
+| Sub-rating | Range | What it drives |
+|---|---|---|
+| `stuff` | 40–99 | Strikeout rate, opponent batting average, swing-and-miss |
+| `control` | 40–99 | Walk rate, pitch efficiency, innings per outing |
+| `stamina` | 40–99 | SP innings length, BP recovery between appearances, fatigue |
+
+**OVR formula (pitchers):** `round(stuff * 0.40 + control * 0.35 + stamina * 0.25)`
+
+Stamina weighted lowest for the same reason as speed — meaningful but less predictive of pure output quality.
+
+#### Sub-Rating Generation
+
+At player creation, sub-ratings are generated around the target OVR with controlled variance:
+
+```
+// Base spread: ±12 from target OVR per sub-rating, clamped 40–99
+// One sub-rating is biased high (the player's strength)
+// One sub-rating is biased low (the player's weakness)
+// This creates realistic player archetypes automatically:
+//   High contact / low power → slap hitter
+//   High power / low speed → slugger
+//   High stuff / low control → wild ace
+//   High control / low stamina → specialist
+```
+
+The strength/weakness designation is random at generation but persists throughout the player's career as the baseline their development curves are applied to.
+
+#### Sub-Rating Display
+
+- OVR shown everywhere in the UI (roster list, trade cards, player rows)
+- Sub-ratings visible only in the player detail modal, shown as small labeled bars
+- Cards reference sub-ratings in body text only (e.g. "His strikeout rate has dropped — stuff is down two points") — never in subject or preview lines
+
+#### Sub-Ratings and the Card Pool
+
+Sub-ratings unlock card specificity that wasn't possible with a single OVR:
+
+- **Training cards** — "Approve an off-season power program for {player}" targets a specific sub-rating for improvement
+- **Decline cards** — "Velocity is down on {sp_name} — stuff has dropped noticeably this season" references `stuff` directly
+- **Scouting cards** — reports describe player archetypes: "elite contact, below-average power profile"
+- **Injury follow-up cards** — "The hamstring affects his speed rating until full recovery" (temporary sub-rating penalty)
+- **Trade evaluation** — trade value note describes the profile: "Elite stuff but control issues — high upside, real risk"
+
+#### Sub-Rating Change Over Time
+
+Sub-ratings change at the **season transition** (offseason processing), not during the season. Mid-season changes come only from specific card effects (injury, training program).
+
+**Age-based development curves:**
+
+| Age | General tendency |
+|---|---|
+| 21–24 | All sub-ratings can improve; speed declines slightly after 23 |
+| 25–27 | Peak years — sub-ratings stable with small variance |
+| 28–30 | Power and stuff begin gradual decline; contact and control more durable |
+| 31–33 | Meaningful decline likely each offseason; stamina drops noticeably |
+| 34+ | Steep decline; veterans may retain one elite sub-rating while others fall |
+
+**Offseason change formula (per sub-rating) — LOCKED:**
+
+Each sub-rating is evaluated independently using an age+type curve. Not all sub-ratings change at the same rate.
+
+```
+// Per-sub-rating age curves (baseChange value by age window):
+//
+//                 Growth   Peak    Prime   Decline  Steep
+//                 (21-24)  (25-27) (28-30) (31-33)  (34+)
+// contact/control: +1.5    +0.5    -0.5    -1.5     -3.0   (most durable)
+// power/stuff:     +1.0    +0.5    -1.0    -2.0     -3.5   (peaks early, fades mid)
+// speed/stamina:   +0.5    +0.0    -1.5    -2.5     -4.0   (fastest to decline)
+//
+// Speed declines slightly even at age 23 — fastest-aging sub-rating.
+// Contact/control are most durable — veterans retain these longest.
+
+baseChange = ageCurveValue(age, subRatingType)
+// Returns float per table above
+
+randomVariance = random(-2, +2)
+// Small noise — players don't always develop on schedule
+
+traitModifier = applyTrait(trait, subRatingType)
+// 'youngGun': +1 to all sub-ratings under 28
+// 'veteran': contact/control decline rate halved after 30
+// 'consistent': variance reduced to (-1, +1)
+// 'volatile': variance increased to (-4, +4)
+// 'clubhouseLeader': no direct sub-rating effect (morale/culture only)
+
+finalChange = clamp(baseChange + randomVariance + traitModifier, -5, +4)
+// Hard cap: no player improves more than 4 points or declines more than 5 in one offseason
+// OVR recomputed from new sub-ratings after all changes applied
+```
+
+**Implementation note (Phase 2 gap — FIXED in retroactive audit):**
+GameEngine's `_applyAgeAndDevelopment()` currently applies a single delta to all sub-ratings. This must be updated to use the per-sub-rating curves above before Phase 6 (SimEngine) is built, since SimEngine reads sub-ratings directly for outcome generation.
+
+**Injury recovery sub-rating penalty (temporary):**
+- Some injuries apply a temporary sub-rating penalty that persists until the player returns from IL
+- Example: hamstring → speed -5 until return game; elbow inflammation → stuff -4 until return game
+- Penalty is stored as `injuryPenalty: { subRating, amount }` on the player object
+- Removed when `ilReturnGame` is reached and player is restored to active roster
+- OVR reflects the penalty while it is active
+
+---
+
+### 4.2 Financial Model (LOCKED)
+
+Four separate financial concepts. None of them is "budget" — that word is retired.
+
+#### Payroll
+The sum of all active player contract salaries on the user's roster. **Computed value — never set directly.**
+
+```
+payroll = sum(player.contractSalary for all players on active roster + IL)
+```
+
+- Updates automatically whenever a player is added, removed, or traded
+- IL players count against payroll (they're still under contract)
+- Pending departure players count until the game-day drain runs
+
+#### Payroll Cap
+Ownership-set ceiling on player payroll. Set at the start of each season. Going over it triggers owner pressure cards — it does not hard-block roster moves (GMs in baseball can exceed the cap, they just pay consequences).
+
+- Initial value set at game creation based on difficulty/prestige settings
+- Can increase or decrease between seasons via ownership cards
+- Displayed as the primary financial bar in the UI: `payroll / payrollCap`
+
+#### Operating Budget
+Discretionary pool for non-payroll spending. Card misc costs, specialist fees, signing bonuses above the base contract, facility improvements, marketing spend. **Separate from payroll entirely.**
+
+- Set by ownership at the start of each season
+- Depleted by card decisions that have `_budgetCost` tokens
+- Does NOT reset mid-season (spending decisions are permanent within a season)
+- Resets to a new ownership-determined value each offseason
+- Can be increased mid-season by revenue cards (see below)
+
+#### Revenue
+Income generated by sponsorship, broadcast deals, marketing decisions, attendance milestones. **Tracked separately from operating budget** — it is a display metric showing franchise financial health, not a spendable pool.
+
+- Revenue cards that "generate income" increase the `revenue` metric
+- Revenue does not convert directly to operating budget (that would make the GM feel like a CFO)
+- Revenue feeds into the **ownership evaluation** at season end — high revenue = higher payroll cap and operating budget offered for next season
+- Displayed on Dashboard as a secondary metric, not in the primary financial bar
+
+#### Financial Objects in State
+
+```javascript
+// On userTeam object:
+finances: {
+  // Payroll (computed)
+  payroll: Number,              // $M — recomputed on every roster change
+
+  // Payroll cap
+  payrollCap: Number,           // $M — set by ownership each season
+  payrollCapHistory: Number[],  // Cap value per season (for franchise history)
+
+  // Operating budget
+  operatingBudget: Number,      // $M — set by ownership each season
+  operatingSpent: Number,       // $M — depleted by card decisions
+  // operatingRemaining = operatingBudget - operatingSpent (computed)
+
+  // Revenue
+  revenue: Number,              // $M — accumulated this season
+  revenueHistory: Number[],     // Revenue per season (for franchise history)
+}
+```
+
+#### Financial UI
+
+| Element | Shows |
+|---|---|
+| Primary financial bar | `payroll` vs `payrollCap` with color progression |
+| Operating budget indicator | `operatingRemaining` / `operatingBudget` — secondary, shown on Dashboard |
+| Revenue metric | Cumulative `revenue` this season — Dashboard only |
+| Card cost display | "Cost: $Xm from operating budget" — shown on cards with `_budgetCost` |
+
+#### Ownership Evaluation (Season Transition)
+
+At the end of each season, ownership sets next season's financial parameters based on:
+- Win total vs target wins (set by ownership card at season start)
+- Revenue generated vs prior season
+- Payroll discipline (did you stay under cap?)
+- Prestige tier
+
+This produces an ownership card during the offseason that presents the new cap and budget offer — with a decision. A strong season = generous offer. A poor season = tighter constraints, potentially with a choice between a lower cap or reduced operating budget.
+
+---
+
+### 4.3 Player Object (LOCKED)
+
+```javascript
+{
+  // Identity
+  id: String,                   // UUID — generated at creation, never changes
+  name: String,                 // Full name
+  pos: String,                  // Current active position
+  nativePos: String,            // Natural position (eligibility source of truth)
+  group: String,                // 'sh'|'bh'|'sp'|'bp'|'pp'|'il'
+  hand: String | null,          // 'R'|'L' — pitchers only
+  dob: String,                  // ISO date 'YYYY-MM-DD'
+
+  // Ratings — OVR is always computed from sub-ratings, never set directly
+  ovr: Number,                  // 40–99 — computed: weighted average of sub-ratings
+  subRatings: {
+    // Hitters
+    contact: Number,            // 40–99
+    power: Number,              // 40–99
+    speed: Number,              // 40–99
+    // Pitchers (contact/power/speed will be null)
+    stuff: Number,              // 40–99
+    control: Number,            // 40–99
+    stamina: Number,            // 40–99
+  },
+  // Only the 3 relevant sub-ratings are populated per player type.
+  // The other 3 are null. This avoids two separate player shapes.
+
+  injuryPenalty: {              // null when healthy
+    subRating: String,          // Which sub-rating is penalized
+    amount: Number,             // Points deducted (stored as positive number)
+  } | null,
+
+  // Individual GM relationship (0–100)
+  // Distinct from team morale — this is the player's personal trust in their GM
+  gmRelationship: Number,       // Starts at 50 for all new/acquired players
+                                // Re-acquired players start at 45 (partial reset)
+  _previouslyWithOrg: Boolean,  // True if player was previously traded away
+
+  // Contract
+  contractSalary: Number,       // $M per season
+  contractYears: Number,        // Total years on original deal
+  contractExpiry: Number,       // Season number when contract expires
+  contractExtended: Boolean,    // Has this contract been extended mid-deal?
+
+  // Trait
+  trait: String | null,         // 'veteran'|'youngGun'|'clubhouseLeader'|'volatile'|'consistent'
+
+  // Status flags
+  isInjured: Boolean,
+  isSuspended: Boolean,
+  isResting: Boolean,
+  isTraining: Boolean,
+  onPersonalLeave: Boolean,
+  _pendingDeparture: Boolean,   // Traded, awaiting game-day drain
+
+  // IL tracking
+  ilReturnGame: Number | null,  // Schedule index when player returns
+
+  // Season stats — shape depends on player type (hitter vs pitcher)
+  stats: {
+    // ── HITTERS (pitchers: all null) ──────────────────────────────
+    // Tracked fields (stored in state)
+    g:       Number,   // games played
+    ab:      Number,   // at-bats
+    h:       Number,   // hits
+    doubles: Number,   // doubles
+    hr:      Number,   // home runs
+    rbi:     Number,   // runs batted in
+    r:       Number,   // runs scored
+    bb:      Number,   // walks
+    k:       Number,   // strikeouts
+    sb:      Number,   // stolen bases
+    cs:      Number,   // caught stealing
+    hbp:     Number,   // hit by pitch
+    tb:      Number,   // total bases
+    // Computed on demand (not stored — derived from tracked fields above)
+    // avg    = h / ab
+    // obp    = (h + bb + hbp) / (ab + bb + hbp)
+    // slg    = tb / ab
+    // ops    = obp + slg
+    // bb_pct = bb / (ab + bb + hbp)
+    // k_pct  = k / ab
+    // xbh    = doubles + hr
+    // sb_pct = sb / (sb + cs)
+    // babip  = (h - hr) / (ab - k - hr)
+
+    // ── PITCHERS (hitters: all null) ──────────────────────────────
+    // Tracked fields (stored in state)
+    g:          Number,   // total appearances
+    gs:         Number,   // games started
+    ip:         Number,   // innings pitched
+    w:          Number,   // wins
+    l:          Number,   // losses
+    sv:         Number,   // saves
+    svo:        Number,   // save opportunities
+    hld:        Number,   // holds
+    bs:         Number,   // blown saves
+    qs:         Number,   // quality starts
+    h_allowed:  Number,   // hits allowed
+    hr_allowed: Number,   // home runs allowed
+    er:         Number,   // earned runs
+    bb:         Number,   // walks
+    k:          Number,   // strikeouts
+    hbp:        Number,   // batters hit by pitch
+    // Computed on demand (not stored)
+    // era  = (er / ip) * 9
+    // whip = (bb + h_allowed + hbp) / ip
+    // k9   = (k / ip) * 9
+    // bb9  = (bb / ip) * 9
+    // h9   = (h_allowed / ip) * 9
+    // hr9  = (hr_allowed / ip) * 9
+    // k_bb = k / bb
+    // sv_pct = sv / svo
+  },
+
+  // Spring training stats — same shape, tracked separately, never merge with season stats
+  springStats: { /* same shape as stats */ },
+
+  // Career stats — same tracked fields accumulated across all seasons
+  careerStats: {
+    // All tracked fields above, lifetime totals
+    seasons:    Number,   // seasons played
+    peakOvr:    Number,   // highest OVR achieved
+    peakSeason: Number,   // season number of peak OVR
+  },
+
+  // Ownership
+  teamId: String | null,        // Team ID of current owner
+}
+```
+
+### 4.4 Team Object — User Team
+
+```javascript
+{
+  id: String,                   // Fixed: 'user'
+
+  // Identity
+  city: String,
+  nickname: String,
+  abbr: String,
+  icon: String,                 // Emoji
+  bannerColor: String,          // Hex
+
+  // Roster — player IDs only, looked up in state.players registry
+  rosterIds: String[],
+
+  // Record
+  wins: Number,
+  losses: Number,
+  streak: Number,               // Positive = win streak, negative = loss streak
+
+  // Soft metrics (0–100)
+  morale: Number,
+  atmosphere: Number,
+  ownerTrust: Number,
+  managerConfidence: Number,
+
+  // Finances (see Section 4.2)
+  finances: {
+    payroll: Number,
+    payrollCap: Number,
+    payrollCapHistory: Number[],
+    operatingBudget: Number,
+    operatingSpent: Number,
+    revenue: Number,
+    revenueHistory: Number[],
+  },
+
+  // GM
+  gmName: String,
+
+  // Groundskeeper relationship (0–100) — field surface and weather
+  groundskeeperRelationship: Number,
+
+  // Facilities & Operations relationship (0–100) — ballpark infrastructure
+  facilitiesRelationship: Number,
+
+  // Ticket Office relationship (0–100) — sales, attendance, pricing
+  ticketOfficeRelationship: Number,
+
+  // Coaching staff
+  coachingStaff: {
+    manager:       { name, salary, contractExpiry, relationship, background },
+    pitchingCoach: { name, salary, contractExpiry, relationship },
+    hittingCoach:  { name, salary, contractExpiry, relationship },
+    bullpenCoach:  { name, salary, contractExpiry, relationship },
+    benchCoach:    { name, salary, contractExpiry, relationship },
+  },
+
+  // Pending transactions
+  _pendingAcquisitions: Object[],  // Deferred incoming players on game day
+}
+```
+
+### 4.5 League Team Object
+
+```javascript
+{
+  id: String,                   // e.g. 'NYE'
+  name: String,
+  abbr: String,
+  str: Number,                  // Base strength 0.45–0.57
+  divisionId: String,           // 'A' | 'B'
+  wins: Number,
+  losses: Number,
+  streak: Number,
+  rosterIds: String[],          // IDs in state.players registry
+  farmIds: String[],            // farm system player IDs
+  gmRelationship: Number,       // 0–100 relationship with user GM
+  rotation: {
+    order:        String[],     // SP playerIds in rotation order
+    currentIndex: Number,       // which slot starts the next game (0-based)
+  },
+}
+```
+
+### 4.6 Game Object
+
+```javascript
+{
+  index: Number,                // Position in schedule array (0-based)
+  opponent: String,             // Team name
+  isHome: Boolean,
+  date: String,                 // ISO date
+  gameTime: Number,             // Unix ms timestamp of first pitch (live mode)
+
+  weather: {
+    label: String,              // 'Clear'|'Overcast'|'Hot'|'Cold'|'Rain'|'Storm'
+    icon: String,
+    scoringMod: Number,         // Multiplier on run totals
+  },
+
+  status: String,               // 'scheduled'|'postponed'|'live'|'final'|'makeup'
+
+  // Live game — populated by SimEngine pre-game
+  plays: Play[] | null,
+  livePlayIndex: Number,
+
+  // Post-game — populated at commit, pre-gen fields stripped
+  result: String | null,        // 'W' | 'L'
+  ourScore: Number | null,
+  theirScore: Number | null,
+  boxScore: Object | null,
+  recap: Object | null,
+}
+```
+
+### 4.7 Card Instance Object
+
+```javascript
+{
+  // Definition reference
+  defId: String,                // Card definition ID (e.g. 'i1', 't4')
+  instanceId: String,           // UUID — unique per delivery
+
+  // Display (resolved at delivery)
+  type: String,                 // 'urgent'|'normal'|'good'
+  tag: String,
+  sender: String,
+  avatar: String,
+  subject: String,
+  preview: String,
+  body: String,
+  yesLabel: String,
+  noLabel: String,
+
+  // Lifecycle
+  deliveredAtGame: Number,
+  expiresAtGame: Number,
+  resolved: Boolean,
+  resolvedChoice: String | null, // 'yes'|'no'|'expired'
+
+  // Effects (copied from definition at delivery)
+  yesEffect: Object,
+  noEffect: Object,
+  autoResolveTax: Object | null,
+
+  // Linked entities (resolved at delivery — IDs only)
+  linkedPlayerIds: {
+    incoming: String | null,
+    outgoing: String | null,
+  },
+
+  // Follow-up
+  followup: Object | null,
+
+  // Flags
+  isInGame: Boolean,
+  requiresHome: Boolean,
+}
+```
+
+### 4.8 Save Slot Object
+
+Each save slot is an independent, complete game state. The app stores a collection of save slots in IndexedDB — one per team. Loading a team makes its slot the active state. Slots do not share a calendar, league, or player pool — they are fully isolated.
+
+```javascript
+// Stored in IndexedDB as an array: 'saveSlots'
+{
+  slotId: String,               // UUID — identifies the save slot
+  teamName: String,             // Display name: '{city} {nickname}'
+  archetype: String,            // Archetype ID chosen at creation
+  seasonNum: Number,            // For display in the team picker UI
+  lastPlayed: Number,           // Unix ms — for sorting slots by recency
+  state: GameStateObject,       // Full game state (see 4.9)
+}
+```
+
+**Save slot rules:**
+- Free tier: 1 save slot maximum
+- Premium tier: unlimited save slots
+- Switching teams = saving current slot, loading selected slot
+- Active slot ID stored in `localStorage` (survives app close, not tied to game state)
+- New Game always creates a new slot (never overwrites unless user explicitly deletes)
+- Delete slot: confirmation modal, cannot be undone
+
+### 4.9 Game State Object (per slot)
+
+```javascript
+{
+  // Schema
+  _version: String,             // e.g. '1.0.0' — for migration
+  _savedAt: Number,             // Unix ms timestamp of last save
+
+  // Season
+  seasonNum: Number,            // 1-based
+  phase: String,                // See Section 5
+
+  // Archetype (set at creation, never changes)
+  archetype: String,            // Archetype ID — shapes card weights, ownership behavior
+
+  // Player registry — single source of truth for ALL players in this slot
+  players: Object,              // { [playerId]: PlayerObject }
+
+  // Teams
+  userTeam: UserTeamObject,
+  leagueTeams: LeagueTeamObject[],
+
+  // Schedule
+  schedule: GameObject[],
+  leagueSchedule: Object,       // { dayMap: { [dateStr]: GameResult[] } }
+
+  // Weather — persistent 48-hour time series buffer
+  weatherBuffer: {
+    generatedAt: Number,        // Unix ms
+    hourlyFrames: Object[],     // 48 entries (free) or 168 entries (premium 7-day)
+  },
+
+  // Inbox
+  inbox: CardInstanceObject[],
+
+  // History
+  metricHistory: Object[],      // { gameIndex, ovr, wins, losses } per game
+  seasonHistory: Object[],      // Season summary per completed season
+
+  // Notifications
+  // NOTE: push subscription is per-device, not per-slot.
+  // Notification schedule is rebuilt when switching active slots.
+  push: {
+    quietStart: String,         // 'HH:MM' — per-slot quiet hours
+    quietEnd: String,
+    enabled: Boolean,
+  },
+
+  // Settings (per-slot — each team has its own settings)
+  settings: {
+    theme: String,              // 'dark'|'light'|'auto'
+    soundEnabled: Boolean,
+    soundVolume: Number,
+    hapticEnabled: Boolean,
+    hapticIntensity: String,    // 'light'|'medium'|'strong'
+  },
+}
+```
+
+---
+
+## 5. State Machine — Season Phases
+
+> Status: ANCHORS LOCKED — full transition rules to be completed in Phase 4 planning.
+
+```
+SETUP
+  ↓ (new game created, archetype selected, team configured)
+SPRING_TRAINING             ← 20 games, stats tracked, roster competitions active
+  ↓ (spring complete, opening day roster locked via competition cards)
+REGULAR_SEASON
+  ↓ (game 45–55: All-Star hosting announcement fires if threshold met)
+  ↓ (game 66 reached)
+ALL_STAR_BREAK              ← single event phase, All-Star cards fire for host team
+  ↓ (break resolved)
+REGULAR_SEASON              ← resumes
+  ↓ (game 88 reached)
+TRADE_DEADLINE              ← deadline window opens, trade pressure cards active
+  ↓ (game 92: deadline closes)
+REGULAR_SEASON              ← resumes, deadline trade cards blocked
+  ↓ (game 132 complete)
+PLAYOFF_BRACKET_BUILD       ← standings locked, bracket generated
+  ↓
+WILD_CARD               ← 1 game: 4th vs 5th per division
+  ↓ (winner advances)
+FIRST_ROUND             ← best of 3: 1st vs WC winner, 2nd vs 3rd
+  ↓
+DIVISION_SERIES         ← best of 5: first round winners
+  ↓
+WORLD_SERIES            ← best of 7: division champions
+  ↓ (series complete)
+SEASON_SUMMARY              ← summary card, prestige tier recalculated
+                            ← Franchise Legend check: Tier 5 + championship → win condition
+  ↓
+OFFSEASON                   ← contracts, manager/staff renewals, ownership eval card
+  ↓ (all mandatory decisions resolved)
+SPRING_TRAINING             ← season N+1 begins
+```
+
+### Key Schedule Anchors (LOCKED)
+
+| Anchor | Game / Timing |
+|---|---|
+| Spring training | 20 games (pre-season, stats tracked) |
+| Regular season | 132 games |
+| All-Star hosting announcement | Games 45–55 (if threshold met) |
+| All-Star Break | After game 66 |
+| Trade deadline opens | Game 88 |
+| Trade deadline closes | Game 92 |
+| Playoffs begin | After game 132 |
+
+### Spring Training Rules (LOCKED)
+
+Spring training is a fully playable phase — not a backdrop. Stats are tracked and matter.
+
+**Roster sizes (LOCKED):**
+- Regular season active roster: **28 players** — 9 starters + 5 bench hitters + 5 SP + 5 RP + 2 SP bench + 2 RP bench
+- Spring training roster: **38 players** — 28 active + 10 invitees (5 hitters + 5 pitchers)
+- Cuts before Opening Day: 10 players
+- Cut path: invitees return to farm; any active roster player cut during spring goes to waivers
+
+**What's tracked:**
+- Full batting and pitching stats per player, stored as `player.springStats` (separate from `player.stats`)
+- Team spring W/L record — displayed with "ST" badge on the schedule screen
+- Spring stats reset each spring; they never carry to the regular season stat line
+
+**What spring stats affect:**
+- Contested roster spot decisions: spring stat lines are presented side by side in decision cards, informing the GM's choice
+- Atmosphere: a strong spring record (above .550) generates a fan excitement card before opening day; a poor spring (below .300) generates a low-expectations ownership card
+- Neither outcome is punishing — spring results are a tone-setter, not a high-stakes mechanic
+
+**Spring training invitees (LOCKED):**
+- 10 farm players invited to spring camp (5 hitters + 5 pitchers), selected as those genuinely competing for roster spots
+- The 10 invitees are determined by RosterEngine at spring setup — highest-rated farm players at positions where bench spots are open
+- The Opening Day cut (38→28) is a GM decision, not automatic — presented via a roster management screen/modal before Opening Day
+- Auto-resolve penalty if the GM does not make cuts: lowest-rated invitees are sent to the farm automatically
+
+**Contested roster spots:**
+- 2–3 spots are flagged as open competitions at spring training start (set by archetype and roster state)
+- Each competition has 2 candidates: one incumbent, one challenger (usually a prospect)
+- Around spring game 12–15, a decision card fires per competition presenting the spring stats and manager's recommendation
+- The GM makes the final call — the chosen player joins the opening day roster in that slot
+- This is the primary spring-to-regular-season connection
+
+**Other spring card types:**
+- Manager observations on specific players (~2–3 cards)
+- Player readiness cards for anyone returning from offseason injury
+- sp11/sp11b/sp15 cards redesigned: reference real farm players by name only — no inline rating tokens
+
+**Phase 9 task (card token cleanup — LOCKED):**
+- All `{..._rating}` tokens must be removed from card body text in cards-pool.js
+- Player ratings are visible on the Roster/League screen — cards reference players by name and position only
+- Token resolver in CardEngine must not generate rating values for card text
+- Affects: sp11, sp11b, sp15, all trade cards (t1–t9), injury cards (i1–i5), scouting cards (s1–s3h), and any card using `{acq_*_rating}`, `{active_*_rating}`, `{dfa_player_rating}`, `{farm_*_pos}` tokens
+
+### Phase Rules
+
+- `_requiresRegular` cards blocked during SPRING_TRAINING and OFFSEASON
+- `_requiresSpring` cards blocked outside SPRING_TRAINING
+- Trade cards can fire during OFFSEASON (offseason trades are realistic)
+- IL moves always allowed regardless of phase
+- Playoff phases use separate game objects from the regular season schedule array
+- Trade deadline window: cards with `_requiresDeadline` only fire between games 88–92
+
+---
+
+## 6. Module Contracts
+
+> Status: UPDATED — classic mode references removed, new engines added.
+
+### 6.1 StateManager
+
+**Owns:** The entire `state` object and the save slot registry. Nothing else writes state directly.
+
+**Provides:**
+- `get(path)` — read any state value
+- `set(path, value)` — write with auto-save trigger
+- `mutate(fn)` — batch mutation with single save
+- `save()` — persist active slot to IndexedDB
+- `load(slotId)` — restore slot from IndexedDB
+- `listSlots()` — return all save slot metadata
+- `createSlot(config)` — create new save slot
+- `deleteSlot(slotId)` — delete a save slot
+- `reset()` — wipe active slot and reinitialize
+
+### 6.2 GameEngine
+
+**Owns:** The game loop — what happens next and when.
+
+**Provides:**
+- `tick()` — check timestamp, reveal next play if due, check milestone triggers
+- `commitGame(gameIndex)` — finalize a completed game, drain pending transactions
+- `commitCPUGames(date)` — process all CPU games for a given date
+- `getNextGame()` — returns the next unplayed user game object
+- `checkMilestone(phase, gameIndex)` — returns milestone config if one should fire
+- `buildCardContext(gameIndex)` — computes and returns the full situational card context object
+
+**Does NOT:** Touch DOM. Touch roster. Evaluate cards directly.
+
+### 6.3 RosterEngine
+
+**Owns:** All roster mutations for user and CPU teams.
+
+**Provides:**
+- `placePlayer(playerId, group, slotIndex?)` — move player to group/slot
+- `removePlayer(playerId)` — remove from active roster
+- `injurePlayer(playerId, ilDays)` — move to IL, set return date
+- `returnFromIL(playerId)` — flags player `_pendingILReturn: true`, adds to `state.ilReturnQueue`; never auto-activates — always surfaces a decision card (CardEngine Phase 9)
+- `suspendPlayer(playerId, games)` — bench for N games
+- `placeOnWaivers(playerId, teamId)` — moves player to waiverPool; this is the primary path for mid-season cuts, IL return decisions, and any removal outside spring training
+- `sendToFarm(playerId, teamId)` — ONLY valid during spring training cuts (38→28) or position-aware farm overflow displacement; all other removals go through placeOnWaivers()
+- `callUpFromFarm(playerId, teamId)` — promote farm player to active roster
+- `checkDepth(teamId?)` — returns Type 1/Type 2 integrity issues (user team if omitted)
+- `autoResolveDepth()` — promotes farm/bench players to fill critical gaps
+- `markPendingDeparture(playerId)` — trade deferral lock
+- `displaceFarmPlayer(teamId, group)` — position-aware overflow displacement
+
+**Does NOT:** Generate cards. Evaluate trade fairness. Touch sim engine.
+
+### 6.4 TradeEngine
+
+**Owns:** Trade evaluation, cash direction, deferral logic.
+
+**Provides:**
+- `evaluateTrade(incoming, outgoing)` — returns `{ cashDirection, cashAmount, valueNote }`
+- `executeTrade(incoming, outgoing, teamId)` — calls RosterEngine, updates league rosters
+- `deferTrade(incoming, outgoing, teamId)` — game-day path, marks pending departure
+- `drainPending(gameIndex)` — called at game commit, completes deferred trades
+- `evaluateUserProposal(offer, teamId)` — CPU evaluates user-initiated trade offer
+- `generateCounter(offer, teamId)` — CPU produces counter-offer terms
+
+**Cash direction rule (LOCKED):**
+- `incomingOVR < outgoingOVR` → user RECEIVES cash
+- `incomingOVR > outgoingOVR` → user PAYS cash
+- Equal OVR → no cash
+
+### 6.5 CardEngine
+
+**Owns:** Card selection, token resolution, delivery, expiry, follow-ups.
+
+**Provides:**
+- `checkAndDeliver(context)` — main loop: what cards fire now given this context?
+- `resolve(instanceId, choice)` — apply effects, mark resolved, queue follow-up
+- `expire(instanceId)` — auto-resolve with penalty
+- `getInbox()` — returns sorted pending cards
+- `applyPlayerRelationshipEffects(card, choice)` — updates gmRelationship on named players
+
+**Does NOT:** Mutate roster directly. Simulate games.
+
+### 6.6 NotificationEngine
+
+**Owns:** Push subscription lifecycle and schedule sync.
+
+**Provides:**
+- `requestPermission()` — prompts user, subscribes via Web Push
+- `syncSchedule(upcomingCards)` — sends schedule to Cloudflare Worker
+- `cancelNotification(cardInstanceId)` — removes from Worker schedule
+- `sendUrgent(payload)` — bypasses quiet hours, sends immediately
+- `sendTestNotification()` — triggers immediate test push
+
+### 6.7 InjuryEngine (NEW)
+
+**Owns:** Injury probability and processing for all 10 teams.
+
+**Provides:**
+- `runDailyInjuryCheck(date)` — evaluates injury probability for all active roster players across all teams
+- `injurePlayer(playerId, severity)` — determines IL duration, generates report text, calls RosterEngine
+- `processILReturns(date)` — checks return dates, calls RosterEngine.returnFromIL for due players
+- `getInjuryReport(playerId, requestingTeamId)` — returns filtered report based on GM relationship
+
+**Does NOT:** Generate inbox cards directly — fires events that CardEngine listens for.
+
+### 6.8 LeagueEngine (NEW)
+
+**Owns:** CPU team behavior — game simulation, roster decisions, waiver activity.
+
+**Provides:**
+- `simulateCPUDay(date)` — generates all CPU game objects for the day, assigns timestamps
+- `processWaiverClaims(date)` — evaluates pending waiver claims in priority order
+- `processCPURosterDecisions(date)` — IL placements, farm callups, contract decisions
+- `updateLeagueSchedule(date)` — commits CPU game results, updates standings, feeds activity log
+- `getActivityFeed(since)` — returns feed entries from the last N hours
+- `updateStandings()` — recalculates all standings from current records
+
+### 6.9 WeatherEngine (NEW)
+
+**Owns:** Weather time series generation and game status transitions.
+
+**Provides:**
+- `generateWeatherBuffer(fromDate)` — creates 48-hour hourly frame array
+- `getFrameForTime(timestamp)` — returns the weather frame for a given moment
+- `evaluateGameWeather(game)` — determines if a scheduled game should enter PRE_GAME_WATCH
+- `transitionGameStatus(game, newStatus)` — updates game.status, triggers appropriate cards
+- `getRadarFrames(fromTime, hours)` — returns pre-rendered radar frame data for the slider
+
+---
+
+## 7. Sim Engine Design
+
+> Status: LOCKED — full base-state simulation. Finalized during Phase 6 pre-build audit.
+
+### 7.1 Win Probability Formula (LOCKED)
+
+```
+winProb = 0.30                                        // SIM_BASE_WIN_PROB
+        + (ourOvr - oppOvr) × 0.010                  // SIM_OVR_DIFF_WEIGHT
+        + (morale - 50) × 0.001                       // moraleAdj: ±0.05 at extremes
+        + (atmosphere - 50) × 0.0006                  // atmosAdj: ±0.03 at extremes
+        + weatherAdj                                   // per condition (below)
+        + 0.04 (if home game)                          // home field advantage
+```
+
+Clamped to [0.20, 0.80] — no team guaranteed to win or lose.
+
+**Weather adjustments (LOCKED):**
+| Condition | Adjustment |
+|---|---|
+| Clear | 0.0 |
+| Overcast | −0.01 |
+| Hot | +0.02 (offense up) |
+| Cold | −0.02 |
+| Rain | −0.03 |
+| Storm | −0.05 |
+
+**gmRelationship → outcome variance (LOCKED — implemented in Phase 6):**
+- gmRelationship < 30: ±15% variance multiplier on that player's at-bat/pitch outcomes
+- gmRelationship > 80: −15% variance (consistency bonus)
+- Applied per player within `simulateAtBat()`, not at team level
+
+**Team OVR calculation:**
+- `ourOvr` = hitters avg OVR × 0.50 + SP avg OVR × 0.30 + BP avg OVR × 0.20
+- Only healthy, non-suspended players count
+- `oppOvr` = same formula from league team rosterIds
+
+### 7.2 Full Base-State Simulation (LOCKED)
+
+Full base-state tracking — not a simplified run distribution model.
+Required for: correct RBI attribution, IMP accuracy, two-act injury timing, realistic stat lines.
+
+**Base state per half-inning:**
+```javascript
+{ outs: 0|1|2, first: playerId|null, second: playerId|null, third: playerId|null, runs: Number }
+```
+
+**At-bat resolution sequence:**
+1. Walk — `pitcher.control` + batter discipline
+2. HBP — low flat prob, elevated for low-control pitchers
+3. Strikeout — `pitcher.stuff` vs `batter.contact`
+4. Hit type — contact → single/XBH split; power → HR/double/triple split
+5. Baserunner advancement — `batter.speed` affects stretch decisions
+6. Score runners who advance home; increment outs for out plays
+
+**Individual sub-rating → outcome mappings (LOCKED):**
+
+| Sub-rating | Formula |
+|---|---|
+| `contact` | Hit prob = `contact / 400`. K rate = `(100 − contact) / 300` |
+| `power` | HR prob = `power / 1800`. XBH rate = `power / 600` |
+| `speed` | SB attempt if `speed > 65`. Infield hit bonus = `speed / 2000` |
+| `stuff` | K bonus = `(stuff − 50) / 200`. Hit quality penalty = `stuff / 300` |
+| `control` | Walk prob = `(80 − control) / 400`. HBP elevated below 50 |
+| `stamina` | Max IP = `4 + floor(stamina / 20)`. Fatigue flag after max IP |
+
+**Baserunner advancement rules (LOCKED):**
+| Hit type | Runner on 1st | Runner on 2nd | Runner on 3rd |
+|---|---|---|---|
+| Single | 2nd (3rd if speed > 70) | Scores | Scores |
+| Double | Scores (if speed > 60) or 3rd | Scores | Scores |
+| Triple | Scores | Scores | Scores |
+| HR | Scores | Scores | Scores |
+| Groundout | Force advance if < 2 outs | Holds | Scores if < 2 outs |
+| Flyout | Holds (tags if speed > 75 + 3rd) | Holds | Tags and scores if < 2 outs |
+
+### 7.3 SP Rotation (LOCKED)
+
+- `state.userTeam.rotation: { order: String[], currentIndex: Number }` — manager-owned
+- Same field on each league team object
+- `order` = SP playerIds; set by manager at season/roster setup
+- `currentIndex` advances each game, wraps at `order.length`
+- Rotation changes via manager card only — GM never directly manipulates rotation
+- SP IP = `SIM_SP_INNINGS_BASE + floor(stamina / 20) + _rng(-1, 1)`
+- BP fills remaining innings in 1–2 inning stints using bullpen depth order
+
+### 7.4 Pitcher Fatigue (LOCKED)
+
+```
+fatigueThreshold = stamina × 1.8  (batters faced before tiring)
+_spFatigued flag fires → pitching change card eligible
+Fatigued SP: hit quality +10%, K rate −15%, walk rate +10%
+```
+
+### 7.5 CPU Game Play Generation (LOCKED)
+
+**Schedule structure** (matchups + dates) generated at season start — no outcomes, no plays.
+**Simulation** runs on game day via `LeagueEngine.processCPUDay()` using current rosters.
+This ensures CPU game outcomes always reflect the roster as it exists that day — injuries, trades, and callups are all factored in automatically.
+Plays stripped at commit (keep only `boxScore` and `recap`).
+At any moment, only current day's CPU plays exist in state (~70KB).
+Same SimEngine pipeline as user games — Section 28.4 satisfied.
+
+---
+
+## 8. Live Game Engine Design
+
+> Status: LOCKED — Play object shape and pre-generation rules defined during Phase 6 pre-build audit.
+
+### 8.1 Pre-Generation (LOCKED)
+
+All play-by-play generated before first pitch. Plays stored in `game.plays[]` array.
+Stripped to `boxScore` + `recap` only at commit.
+
+**Play Object Shape (LOCKED):**
+
+```javascript
+{
+  // Identity
+  playIndex:    Number,       // position in game.plays array
+  _halfInning:  String,       // e.g. 'TOP_1', 'BOT_3', 'BOT_9'
+  inning:       Number,       // 1-based
+  half:         'TOP'|'BOT',
+
+  // Players involved
+  batterId:     String,       // playerId
+  pitcherId:    String,       // playerId
+
+  // Outcome
+  type: String,               // 'walk'|'hbp'|'strikeout'|'groundout'|'flyout'|
+                              //  'single'|'double'|'triple'|'hr'|'sb'|'cs'|
+                              //  'pitching_change'|'inning_end'|'game_end'
+  description:  String,       // Human-readable: "Rodriguez singles to left"
+  rbi:          Number,       // runs batted in on this play
+  isScoring:    Boolean,      // true if any run scored
+  isBigPlay:    Boolean,      // HR, 3+ RBI play, game-tying/go-ahead — drives activity feed
+
+  // Running state AFTER this play resolves
+  outsAfter:    Number,       // 0 | 1 | 2 | 3 (3 = inning over)
+  _basesAfter: {              // baserunner state after play
+    first:  String | null,    // playerId or null
+    second: String | null,
+    third:  String | null,
+  },
+  cumOurScore:   Number,      // user team cumulative score after this play
+  cumTheirScore: Number,      // opponent cumulative score after this play
+
+  // Timing
+  _timestamp:   Number,       // Unix ms — when tick() should reveal this play
+
+  // Stat increments (applied by accumulateStats() at commit)
+  _statDeltas: {
+    [playerId]: { stat: String, delta: Number }[]
+  },
+}
+```
+
+**Timestamp distribution:**
+- Game starts at `game.gameTime`
+- Total game duration: ~3 hours (10,800,000 ms)
+- Plays distributed evenly across duration with small random variance per play
+- `_timestamp` = `gameTime + (playIndex / totalPlays × 10_800_000) + _rng(-15000, 15000)`
+- Weather delay offsets applied via `game._tickOffset` (Section GameEngine.applyWeatherDelay)
+
+### 8.2 Linescore Rules (LOCKED)
+
+- Away team always top row, home team always bottom row
+- Inning columns 1–9+ fill as half-innings complete
+- Active half-inning cell shows runs scored so far in that half-inning (in-progress)
+- R/H/E totals always reflect current cumulative totals
+- Extra innings append new columns dynamically
+- Empty future inning cells show `·` (middle dot)
+
+### 8.3 Play Reveal Logic (LOCKED)
+
+- `TICK_INTERVAL_MS` (5000ms) — defined in constants, interval owned by App.js
+- Each tick: reveal all plays where `play._timestamp + game._tickOffset <= now`
+- Multiple plays can reveal in one tick (catches up if app was backgrounded)
+- INGAME cards fire on `play.outsAfter === 3` (half-inning end) — never mid-at-bat
+- Auto-commit fires when `game.livePlayIndex >= game.plays.length`
+- GameScreen listens for `EventBus.emit('game:tick', { play, game })` to update display
+
+### 8.4 Tick Ownership (LOCKED)
+
+`App.js` owns the tick interval. One `setInterval` for the entire app lifecycle — started on `init()`, never stopped. The tick is cheap (one state read, one index check) and harmless when no game is live.
+
+```javascript
+// App.js tick loop (pseudocode — actual wiring in App.js)
+setInterval(() => {
+  const play = GameEngine.tick();
+  if (play) EventBus.emit('game:tick', { play, game });
+  // Auto-commit when game reaches FINAL
+  if (game?.status === GAME_STATUS.FINAL && !game._committed) {
+    GameEngine.commitGame(gameIndex);
+  }
+}, TICK_INTERVAL_MS);
+```
+
+### 8.5 Resumption (LOCKED)
+
+No special resumption logic. When the app opens mid-game:
+1. `App.init()` loads state — game object already has `livePlayIndex`, score, status
+2. Tick starts — immediately catches up by revealing all plays with timestamp ≤ now
+3. GameScreen renders from `livePlayIndex` — all previously-revealed plays in PBP feed
+4. If `status === FINAL` and not committed: `commitGame()` fires on first tick
+
+The game object IS the resume state. No separate resume handler needed.
+
+### 8.6 Weather Delay Handling (LOCKED)
+
+- `tick()` returns `null` when `game.status` is `DELAYED`, `SUSPENDED`, or `POSTPONED` — no plays reveal
+- `game._tickOffset` advances by the delay duration when delay clears — keeps timestamp anchoring correct
+- Suspended game makeup: `game.livePlayIndex` already points to the first unrevealed play
+- GameScreen observes `game.status` on every tick and switches display states accordingly
+
+### 8.7 Live Game State — Schema Architecture (LOCKED)
+
+There is no separate `state.liveGame` object. The game object in `state.schedule[currentGameIndex]` IS the live game state. This keeps the data model flat and makes resumption trivial.
+
+**Game object live tracking fields** (present on all game objects, updated as game progresses):
+```javascript
+game.livePlayIndex  // Number — index of next play to reveal (0 = nothing shown yet)
+game.ourScore       // Number — current user team score (updated per-play)
+game.theirScore     // Number — current opponent score
+game.currentInning  // Number — 1-based current inning
+game.currentHalf    // 'TOP'|'BOT'
+game.outs           // Number — 0, 1, or 2
+game.bases          // { first: String|null, second: String|null, third: String|null }
+game.status         // GAME_STATUS — single source of truth for all systems
+game._tickOffset    // Number — ms added to all _timestamps (for delay handling)
+```
+
+### 8.8 GameScreen Display States (LOCKED)
+
+| `game.status` | Dashboard | GameScreen |
+|---|---|---|
+| `SCHEDULED` | First-pitch countdown (fp-card) | Countdown + matchup info |
+| `PRE_GAME_WATCH` | Countdown + weather warning | Countdown + weather banner + radar |
+| `DELAYED` | "DELAYED" pill + duration | Rain overlay on diamond, delay countdown, radar |
+| `LIVE` | Score updating automatically | Full PBP feed + linescore + diamond state |
+| `SUSPENDED` | "SUSPENDED" pill | Frozen score/inning/outs/bases + next steps card |
+| `POSTPONED` | "PPD" result pill | Rescheduled date shown |
+| `FINAL` (pre-commit) | Score result | Final box score before commit |
+
+### 8.8 Weather System (LOCKED)
+
+Weather is a first-class game state and a persistent, browsable layer of the game world — not a card event bolted onto the game engine. Every system reads weather status from a shared source. One source of truth prevents the v1 divergence where the delay card fired but the live game kept running.
+
+#### Weather Architecture — Persistent Time Series (LOCKED)
+
+Weather is generated as a **continuous 48-hour time series** from the current real-world moment, not per-game. This buffer lives in state and is refreshed each time the app opens or when the leading edge of the buffer is within 2 hours of expiring.
+
+```javascript
+// state.weatherBuffer
+{
+  generatedAt: Number,        // Unix ms — when this buffer was generated
+  hourlyFrames: WeatherFrame[], // 48 entries, one per hour
+  // Each frame:
+  // { timestamp, condition, intensity, windSpeed, windDir,
+  //   precipChance, temp, fieldImpact, radarCellPosition }
+}
+```
+
+Games that fall within the buffer window inherit their weather from the corresponding hourly frame — not from independent generation. This guarantees coherence: a storm system on Tuesday night affects both the Tuesday game and the Wednesday morning conditions report from the groundskeeper.
+
+**Free vs Premium weather visibility (LOCKED):**
+- Free tier: 48 hours visible
+- Premium tier: 7-day forecast visible — knowing about a storm system 5 days out lets the user anticipate makeup game risk, prep the groundskeeper channel, and make strategic roster decisions before a key home stand
+
+#### Weather Game States
+
+A game progresses through weather states as conditions develop. Every state transition updates `game.status` and every system responds to that status.
+
+```
+SCHEDULED
+    ↓ (threatening conditions in hourly frame)
+PRE_GAME_WATCH          ← Warning window. Weather card fires. Expiry: 30 real minutes.
+    ↓ (conditions don't improve)
+DELAYED                 ← First pitch frozen. Delay card fires. Display shows delay screen.
+    ↓ (conditions clear)         ↓ (conditions don't clear within window)
+LIVE                    POSTPONED → Makeup game scheduled in calendar
+    ↓ (conditions deteriorate mid-game)
+SUSPENDED               ← Score/inning/outs/bases preserved exactly
+    ↓ (conditions clear)         ↓ (can't resume same day)
+RESUMED → LIVE → FINAL  POSTPONED (partial) → Makeup resumes from suspended state
+```
+
+#### Weather Card Timing and Expiry (LOCKED)
+
+Weather cards are the only card category with real-world minute-based expiry.
+
+| Card | Fires when | Expiry |
+|---|---|---|
+| Pre-game watch | 60–90 min before first pitch, threatening conditions | 30 real minutes |
+| Delay notification | Game transitions to DELAYED | 45 real minutes |
+| Delay extended | Delay exceeds 60 minutes | 20 real minutes |
+| Postponement | Game officially postponed | 24 hours |
+| Suspension | Game suspended mid-inning | Next day / makeup date |
+| Weather anticipation | User has premium and checks 24h+ forecast | Standard card timing |
+
+**No-action penalty (LOCKED):**
+If a time-sensitive weather card expires without user action, the card auto-resolves on the conservative path with a small penalty:
+- Pre-game watch ignored: morale -1, atmosphere -1
+- Delay card ignored: morale -1
+- Penalty is small — not punishing, but noticeable and realistic
+
+**Urgent notification priority:** Weather cards with minute-based expiry bypass the user's quiet hours window. This is the one exception to quiet hours — a weather delay notice 20 minutes before first pitch is always delivered. Implemented as `priority: 'urgent'` in the Cloudflare Worker send logic.
+
+#### Weather Radar Widget (LOCKED)
+
+A persistent, browsable radar visualization available at all times — not just during delays. Accessible from the Dashboard and from the live game view.
+
+**Display:**
+- Circular radar sweep showing a stylized storm cell moving across a regional map
+- Ballpark always centered regardless of zoom level
+- Storm cell moves relative to the ballpark
+- Color intensity: green (light) → yellow (moderate) → orange (heavy) → red (severe)
+- Estimated clearing time shown below radar when cell is present
+
+**Slider:** Scrubs through hourly frames from current time → +12 hours ahead, in 1-hour increments. 13 positions total. Pre-rendered SVG frames per hour — no real-time computation during scrubbing.
+
+**Zoom levels (3 levels):**
+- **Regional** (zoom out): Wide view, shows the weather system in context across the region. Useful for seeing where a storm is coming from.
+- **City** (default): Shows the ballpark area and storm cell proximity. Standard operational view.
+- **Local** (zoom in): Close view of the ballpark itself, field-level detail, groundskeeper relevance. Shows how directly the cell is tracking over the venue.
+
+Zoom transitions are CSS scale transforms on the SVG viewBox — no new data needed, just a different window into the same coordinate system.
+
+**Premium gating (LOCKED):**
+- Free users: radar available, slider covers current → +12 hours, 3 zoom levels
+- Premium users: slider extends to +48 hours on free tier data; with premium forecast, slider covers up to 7 days
+
+#### Weather and the Live Display
+
+Each weather status has a distinct display state:
+
+| Status | Display |
+|---|---|
+| `PRE_GAME_WATCH` | Normal pre-game + weather warning banner + radar widget |
+| `DELAYED` | Delay screen: "DELAYED" status pill, diamond grayed with rain overlay, countdown, radar |
+| `SUSPENDED` | Score/inning/outs/bases frozen, "SUSPENDED" pill, next steps shown |
+| `POSTPONED` | Rescheduled date shown, box score empty |
+| `RESUMED` | Live view resumes, "RESUMED" entry at top of PBP feed |
+
+Rain overlay: CSS animation of rain streaks layered over the base diamond SVG, triggered by `game.status === 'DELAYED'`.
+
+#### Field Impact System
+
+Weather affects the playing surface in ways that persist beyond the weather event. These field impacts are stored on the game object and fed to the sim engine as modifiers.
+
+```javascript
+game.fieldCondition: {
+  infieldSoftness: Number,    // 0–1 — affects groundball hit rate, baserunning
+  moundFirmness: Number,      // 0–1 — affects SP footing, pitch movement
+  trackCondition: Number,     // 0–1 — affects outfield play
+  temperature: Number,        // °F — affects bat speed (cold) and pitcher stamina (heat)
+}
+```
+
+Heavy rain 48 hours ago → elevated `infieldSoftness` today. Heat wave → reduced `stamina` sub-rating effectiveness for pitchers. Cold snap → slight contact penalty for hitters. These are sim engine inputs, not visual-only.
+
+The groundskeeper's field maintenance decisions (see Section 8.9) can improve field condition values before games.
+
+#### Makeup Game Scheduling
+
+When a game is postponed:
+- A makeup game is inserted at the next available travel day within 10 games
+- If no travel day exists, a doubleheader is scheduled
+- Makeup games flagged `isMakeup: true` on the game object
+- Suspended game makeups preserve: `resumeFromInning`, `resumeScore`, `resumePlays`
+
+#### Weather Postponement Thresholds (LOCKED)
+
+Postponement probability is computed from the weather frame at scheduled game time. Not binary — a 60% postponement chance means the game sometimes plays, which is realistic. The threshold is evaluated 2 hours before first pitch.
+
+**Precipitation intensity thresholds:**
+
+| Intensity | Delay probability | Postponement probability |
+|---|---|---|
+| Light (< 0.3) | 0% | 0% — play through it |
+| Moderate (0.3–0.59) | 40% | 10% |
+| Heavy (0.6–0.89) | 80% | 35% |
+| Severe (0.9+) | 15% | 80% — window may open briefly |
+
+**Temperature modifiers:**
+- Below 35°F with any precipitation → automatic postponement (override)
+- 35–45°F with any precipitation → +20% postponement probability
+- Above 95°F (heat) → no postponement; pitcher stamina penalty instead
+
+**Regional modifiers (applied multiplicatively):**
+- `north` → postponement probability ×0.75 (experienced groundskeepers, better drainage)
+- `south` → +15% delay probability for afternoon games (thunderstorm pattern)
+- `east` → postponement probability ×1.1 (softer ground baseline)
+- `west` → postponement probability ×0.65 (driest region, least rain risk)
+
+**Delay-to-postponement logic:**
+If the weather window doesn't clear within 2 hours of game time → game becomes postponed.
+If it clears within 2 hours → game becomes delayed (delayed start, plays from that point).
+
+**Mid-game suspension threshold:**
+If intensity reaches 0.8+ during a live game → game suspended.
+If 5+ innings completed when suspended → game is official, result stands.
+If fewer than 5 innings → resumes from suspension point at makeup date.
+
+**All thresholds stored as named constants in WeatherEngine** — no magic numbers in simulation logic.
+
+#### Weather on Schedule Screen (LOCKED)
+
+Weather icons shown on the schedule screen are limited to the 7-day forecast window only:
+- Completed games: show actual weather that occurred (stored on game object)
+- Games within next 7 days: show weather icon from rolling buffer
+- Games beyond 7 days: **no weather icon shown** — it's not realistic to know months in advance
+
+This means a weather icon on the schedule is always meaningful information, never fiction.
+
+---
+
+### 8.9 The Head Groundskeeper — Standing Character (LOCKED)
+
+The Head Groundskeeper owns the **playing surface only** — grass, infield dirt, mound, warning track, and weather impact on the field. Everything else in the ballpark belongs to Facilities & Operations (Section 8.10).
+
+The GM does not travel with the team. The GM is always in the front office. Road trips are not absences — they are windows of front office bandwidth when the ballpark isn't hosting games, making them ideal for field maintenance work. Cards frame this correctly: *"With no home games this week, we have a good window to get the infield drainage work done — want to move forward?"*
+
+#### Relationship Score
+
+`groundskeeperRelationship: Number` (0–100) on the `userTeam` object. Starts at 50.
+
+Increases by: using the compose channel proactively, approving maintenance requests, acting on weather warnings the groundskeeper flags.
+
+Decreases by: ignoring groundskeeper compose prompts, repeatedly declining maintenance requests, missing time-sensitive weather cards.
+
+**Relationship effects:**
+- High (70+): proactive weather warnings fire earlier (90 min out vs 60), field conditions maintained at higher baseline
+- Low (below 30): delayed information, field condition cards less frequent, mound prep cards less specific
+
+#### Compose Channel Prompts
+
+| Prompt | Available when | Generates |
+|---|---|---|
+| "Check field conditions before tomorrow's game" | Any time | Field condition report card |
+| "Check on the mound for {next_sp_name}" | Before a home game | SP mound prep card |
+| "How does the field look after that rain?" | After a weather event | Post-weather assessment card |
+| "What's your read on this week's weather?" | Any time | Weather anticipation card |
+| "Good window to get some field work done this road trip" | Road trip | Field maintenance decision card |
+| "Walk me through field priorities this offseason" | OFFSEASON phase | Hosting score contributor card |
+
+#### Groundskeeper Card Pool
+
+**Field condition cards:**
+- Post-rain infield softness notice — sim modifier applied
+- Heat wave pitcher warning — stamina sub-rating temporary penalty
+- Cold snap hitter advisory — contact modifier for upcoming games
+- Mound wear notice after heavy usage
+
+**Home stand cards** (higher frequency during home stands):
+- Pre-series field prep approval
+- Mid-home-stand maintenance check
+- Post-home-stand condition report
+
+**Road trip cards** (lower frequency — maintenance opportunity framing):
+- "Good window for infield work while we're away — approve?"
+- "Mound reconstruction scheduled — confirm timeline?"
+
+**Weather-anticipation cards:**
+- "Storm tracking for Thursday — start pre-treating the field?"
+- "Rough forecast for the home stand — brief the crew?"
+
+**Offseason field cards** (feed All-Star hosting score):
+- Outfield drainage improvement
+- Infield playing surface upgrade
+- Bullpen mound reconstruction
+- Warning track resurfacing
+
+---
+
+### 8.10 Facilities & Operations — Department (LOCKED)
+
+Facilities & Operations owns everything in the ballpark that isn't the playing surface: infrastructure, fan experience, broadcast facilities, security, and event logistics. Separate compose channel, separate relationship score, separate card pool.
+
+The GM is always present for F&O decisions — there is no travel-based absence framing here either. F&O cards are front office business decisions.
+
+#### Relationship Score
+
+`facilitiesRelationship: Number` (0–100) on `userTeam`. Starts at 50.
+
+High relationship: F&O flags problems proactively before they become public-facing issues. Low relationship: problems surface reactively, often after affecting atmosphere.
+
+#### F&O Domain
+
+- Visiting clubhouse and umpire room
+- Concourse infrastructure — concessions, restrooms, entry gates
+- Scoreboard and video board systems
+- Lighting systems
+- Press box and broadcast facilities
+- Bullpen and dugout infrastructure
+- Security and event staffing
+- Fan experience infrastructure — wifi, mobile ticketing, ADA compliance
+- Parking and transportation
+
+#### Compose Channel Prompts
+
+| Prompt | Available when | Generates |
+|---|---|---|
+| "Check on visiting clubhouse ahead of the series" | Before a home series | Visiting clubhouse condition card |
+| "How are the concourse systems holding up?" | Mid-home-stand | Concourse maintenance decision |
+| "Any issues from last night's game?" | Morning after home game | Post-game ops report |
+| "What facility projects can we tackle this road trip?" | Road trip | Infrastructure improvement card |
+| "Walk me through ballpark priorities this offseason" | OFFSEASON | Hosting score contributor card |
+
+#### F&O Card Pool
+
+**Pre-series preparation:**
+- Visiting clubhouse condition decision (affects GM relationship with visiting team)
+- Broadcast facility readiness for high-profile series
+- Security staffing level decision for rivalry games
+
+**Infrastructure decisions:**
+- Scoreboard/video board upgrade proposal
+- Concourse renovation section by section
+- Lighting system upgrade (affects night game atmosphere)
+- WiFi and mobile experience upgrade
+
+**Fan experience:**
+- Accessibility improvement proposal
+- Parking logistics decision for high-demand games
+- Food and beverage vendor decision (revenue vs atmosphere tradeoff)
+
+**Road trip maintenance window cards:**
+- "Good window to close a concourse section for repairs — approve?"
+- "Electrical systems need attention — schedule during road trip?"
+
+**Offseason F&O cards** (feed All-Star hosting score):
+- Press box renovation
+- Concourse full-section renovation
+- Umpire room upgrade
+- Broadcast infrastructure overhaul
+- Accessibility compliance upgrade
+
+---
+
+### 8.11 Ticket Office — Department (LOCKED)
+
+The Ticket Office handles all sales, attendance, pricing, and fan-facing financial decisions. Its decisions connect directly to the revenue and atmosphere metrics.
+
+**Core principle for ticket office cards:** Every card must be a business decision with a real tradeoff — not information delivery. "Attendance was low this week" is not a card. "Season ticket renewals are down 8% — offer an early-bird incentive or hold pricing?" is a card.
+
+#### Relationship Score
+
+`ticketOfficeRelationship: Number` (0–100) on `userTeam`. Starts at 50.
+
+High relationship: ticket office brings opportunities proactively (demand surge cards, group sales wins). Low relationship: missed revenue opportunities, delayed postponement handling.
+
+#### Compose Channel Prompts
+
+| Prompt | Available when | Generates |
+|---|---|---|
+| "Check on season ticket renewal status" | Any time | Renewal campaign decision card |
+| "How's demand looking for this series?" | Before a home series | Pricing/promotion decision |
+| "What's the rain check situation?" | After a postponement | Rain check handling card |
+| "How are playoff ticket inquiries looking?" | Games 100+ | Playoff demand card |
+| "Review group sales pipeline" | Any time | Group sales decision card |
+
+#### Ticket Office Card Pool
+
+**Season ticket management:**
+- Renewal campaign decision (incentive vs hold pricing)
+- Renewal rate milestone card (positive news, atmosphere boost)
+- Corporate package proposal
+
+**Single-game and series pricing:**
+- Demand surge opportunity — winning streak driving interest
+- Slow demand alert — losing streak affecting walk-up sales
+- Rivalry series pricing decision
+- Promotional giveaway decision (cost vs attendance vs atmosphere)
+
+**Post-postponement:**
+- Rain check outreach decision
+- Makeup game pricing decision
+
+**Playoff and special events:**
+- Playoff ticket allocation decision
+- All-Star week ticket management (hosting only)
+- Championship series demand card
+
+**Attendance milestones:**
+- Home sellout streak card (atmosphere + revenue boost)
+- Season attendance record approach card
+
+---
+
+### 8.12 Full Compose Channel Map (LOCKED)
+
+The complete cast of recurring characters and departments in the GM's world. All channels exist in the architecture from day one — content is added progressively, but no channel requires structural changes to add later.
+
+| Channel | Type | Primary domain | Initial priority |
+|---|---|---|---|
+| Manager | Field staff | Strategy, personnel, lineup, culture | High — built in core phases |
+| Pitching Coach | Field staff | Rotation management, arm health | High |
+| Hitting Coach | Field staff | Hitter development, slumps | High |
+| Bench Coach | Field staff | In-game decisions, morale | Medium |
+| Bullpen Coach | Field staff | Reliever usage and health | Medium |
+| Head Groundskeeper | Field staff | Playing surface, weather | High — weather system dependent |
+| Facilities & Operations | Front office | Ballpark infrastructure | Medium |
+| Ticket Office | Front office | Sales, attendance, pricing | Medium |
+| Scouting / Player Development | Front office | Prospects, opponents, acquisitions | Medium |
+| Media Relations | Front office | Press, public narrative | Low — event-driven |
+| Community Affairs | Front office | Fan relations, local events | Low |
+
+**"Initial priority"** reflects which channels are built first — not which matter most. High-priority channels have card pools in the initial release. Medium channels are added in subsequent content phases. Low channels are event-driven and can be added whenever appropriate cards are written.
+
+All channels share the same compose UI pattern and card delivery architecture. Adding a new channel is a content decision (write the cards, add the compose prompts) not an engineering decision.
+
+- On commit: slim all pre-gen fields, keep only `boxScore` and `recap`
+- `_drainTradeTransactions(gameIndex)` runs at commit
+- Deferred incoming players placed, pending departure players removed
+
+### 8.5 Calendar Pacing (LOCKED)
+
+Games are scheduled at real-world daily cadence — one game per day when scheduled, mirroring a real baseball calendar. A 132-game regular season plays out over approximately 5–6 months of real time.
+
+All games scheduled at **1:05 PM ET** (matching v1). This is the anchor timestamp from which play-by-play timestamps are distributed across the game's duration.
+
+**Travel days** (gaps between series with no game scheduled) are real calendar days with no game. They are not dead time — they have their own card pool and between-games engagement layer (see Section 8.6).
+
+**Schedule generation** must produce:
+- Series groupings (3 or 4 game series per opponent)
+- Home/away designation per series
+- Travel day identification (gap between series, different home/away status)
+- Home stand and road trip continuity tracking (consecutive home or road games)
+- Division opponent flagging
+- All-Star Break gap (no games scheduled around game 66)
+- Trade deadline window flagging (games 88–92)
+
+### 8.6 Situational Card Context (LOCKED)
+
+The CardEngine receives a rich context object before every card delivery check. This context is computed fresh each time and passed to every card's eligibility function — cards declare their situational requirements, the context satisfies or blocks them. No card computes its own situation.
+
+```javascript
+// Computed by GameEngine before each CardEngine check
+const cardContext = {
+  // Game basics
+  gameIndex: Number,
+  phase: String,
+  isHome: Boolean,
+
+  // Series context
+  seriesPosition: Number,        // 1st/2nd/3rd/4th game of this series
+  seriesLength: Number,          // 3 or 4
+  isDivisionOpponent: Boolean,
+  upcomingOpponent: String,
+
+  // Home stand / road trip position
+  isHomeStandOpener: Boolean,    // First game of a home stand
+  isHomeStandCloser: Boolean,    // Last home game before a road trip
+  isRoadTripOpener: Boolean,     // First game of a road trip
+  isRoadTripCloser: Boolean,     // Last road game before returning home
+  consecutiveHomeGames: Number,  // How deep into this home stand
+  consecutiveRoadGames: Number,  // How deep into this road trip
+  isTravelDay: Boolean,          // No game today — gap between series
+
+  // Between-games timing
+  daysUntilNextGame: Number,
+  daysSinceLastGame: Number,
+
+  // Recent performance
+  streak: Number,                // Positive = win streak, negative = loss streak
+  lastGameResult: String | null, // 'W' | 'L'
+
+  // Season context
+  gamesBack: Number,             // Games behind division leader (0 if leading)
+  playoffPosition: String,       // 'leading' | 'wildcard' | 'out'
+  daysUntilDeadline: Number | null,
+}
+```
+
+**Situational card flags (declared in card definitions):**
+- `_requiresHome: Boolean` — only fires during home games
+- `_requiresRoad: Boolean` — only fires during road games
+- `_requiresHomeStandOpener: Boolean`
+- `_requiresRoadTripOpener: Boolean`
+- `_requiresTravelDay: Boolean`
+- `_requiresDivisionOpponent: Boolean`
+- `_minConsecutiveRoadGames: Number` — road trip fatigue cards
+- `_minStreak: Number` — winning or losing streak threshold
+- `_requiresDeadlineWindow: Boolean` — only fires games 88–92
+
+### 8.7 Situational Card Categories (New in Rebuild)
+
+These card categories are new or significantly expanded from v1, enabled by the situational context system:
+
+**Home stand preparation cards** (fire on `_requiresHomeStandOpener`):
+- Facility readiness reports from the grounds crew or operations staff
+- Front office sponsor activation decisions tied to the home opener
+- Fan engagement initiatives — promotions, giveaways, community events
+- Season ticket holder outreach decisions
+
+**Travel day cards** (fire on `_requiresTravelDay`):
+- Front office desk work — scouting calls, contract research, trade conversations
+- League-wide activity recap — what happened around the league while traveling
+- Rest and recovery check-ins for high-usage players
+- Advance scouting report for the next opponent
+
+**Road trip culture cards** (fire on `_minConsecutiveRoadGames: 4+`):
+- Clubhouse temperature check — team cohesion under travel fatigue
+- Individual player road struggles (a specific hitter with poor road numbers)
+- Manager's approach to maintaining routine away from home
+
+**Series-specific opponent cards** (fire on `_requiresDivisionOpponent` or specific opponent context):
+- Scouting report decisions tied to the upcoming series
+- Historical rivalry callbacks — *"This is the fourth time we've faced New York this season"*
+- Opposing pitcher tendencies when a known ace is scheduled
+
+**Return home cards** (fire on `_requiresHomeStandOpener` after a road trip of 7+ games):
+- Morale recovery acknowledgment after a long road trip
+- Facility welcome-back cards — something positive about returning home
+- Fan energy cards if the home stand opens a key stretch of the season
+
+---
+
+### 8.13 Geographic Region (LOCKED — Phase 13.5)
+
+The user selects a region during team creation (Setup Step 2, between archetype and naming). Region is abstract — four options with flavor descriptions implying real geography without naming it. Affects weather, facilities, travel, card pools, and CPU team flavor.
+
+**Schema:** `state.settings.region: 'north'|'south'|'east'|'west'`
+
+**Four regions:**
+
+| Region | Climate character | Key mechanical effects |
+|---|---|---|
+| `north` | Cold springs/falls, frost risk | Postponement probability ×0.75 (better drainage), cold-suppressed offense Apr/Sep, pitcher stamina reduced in cold, groundskeeper snow/frost card pool |
+| `south` | Hot/humid, warm all season | Afternoon thunderstorm pattern (+15% delay for afternoon games), heat reduces pitcher stamina, no early/late season cold risk, irrigation/turf stress cards |
+| `east` | Moderate, highest rain frequency | Postponement probability ×1.1, coastal fog possibility, salt air corrosion in facilities cards, densest travel schedule |
+| `west` | Driest, wind primary factor | Postponement probability ×0.65, altitude lifts ball carry (slight scoring boost), longest road trips generate travel fatigue, dust/sand facilities cards |
+
+**What region does NOT affect:** archetype, roster structure, finances, playoff format, or card system mechanics. Region is atmosphere and modifier, not difficulty.
+
+**Setup screen change:** Region becomes Step 2. Full flow: Archetype → Region → Naming → Colors → Take the Job. (4 steps, still no mode selector — Section 2.1.)
+
+**New constant:** `REGIONS` object in `data/constants.js` with modifier profiles per region.
+
+---
+
+## 9. Trade System Design
+
+> Status: LOCKED — no cash in trades (decided Phase 8 pre-build).
+> Trade fairness communicated via a fairness rating signal, not cash exchange.
+> Cash considerations create budget complexity without adding meaningful strategy for a mobile GM sim.
+
+### 9.1 Cash Direction (LOCKED)
+
+| Rating differential | Cash direction | Card language |
+|---|---|---|
+| Incoming < Outgoing (user sends better player) | User RECEIVES cash | "They'll send $Xm to balance the deal" |
+| Incoming > Outgoing (user receives better player) | User PAYS cash | "You'll send $Xm to complete the deal" |
+| Incoming = Outgoing | No cash | "Even exchange" |
+
+### 9.2 Cash Amount Formula
+
+> TBD — to be designed. Inputs: rating differential, player salary, season phase.
+> Rough guidance: each rating point differential ≈ $Xm. To be calibrated.
+
+### 9.3 Trade Card Types (v1 baseline)
+
+| Card | Type | Notes |
+|---|---|---|
+| t1 | Pitcher acquire (cash) | CPU offers pitcher, user pays cash |
+| t2 | Hitter acquire (cash) | CPU offers hitter, user pays cash |
+| t3 | Pitcher-for-pitcher swap | Cash direction determined by formula |
+| t4 | Hitter-for-hitter swap | Cash direction determined by formula |
+| t5 | Cash-only acquire | User receives cash + player |
+| t6 | Prospect return | Minor leaguer comes back |
+
+### 9.4 Game-Day Deferral
+
+- Trade accepted on game day: outgoing marked `_pendingDeparture`, TRADED badge shown
+- Incoming held in `state._pendingAcquisitions`
+- Both shown in Pending Transactions section
+- `drainPending(gameIndex)` runs at game commit: removes outgoing, places incoming
+- Depth checks run AFTER drain, not before
+
+### 9.4b Contract Extensions (Phase 8)
+
+`player.contractExtended: Boolean` is present on the player object from Phase 2. Contract extension mechanics are built in Phase 8 alongside user-initiated trades.
+
+**Two distinct concepts — do not confuse:**
+
+**Contract extension** — offering a player additional years on their *current active* contract before it expires. A player on a 3-year deal in year 2 gets 2 more years added, effectively extending the deal. `contractExtended: true` prevents this from happening twice on the *same contract* — you cannot extend an already-extended deal. This is a mid-contract action.
+
+**Contract renewal / re-signing** — when a player's contract *expires*, you offer them a brand new contract. This is unlimited — a player can be re-signed season after season with no restriction. `contractExtended` resets to `false` on every new contract issued (re-sign, trade acquisition, free agent signing).
+
+Extension rules:
+- One extension per active contract (`contractExtended` guards this — resets to false on new contract)
+- Extension offered before the player's final contract year: gmRelationship +6
+- Extension offered after player has requested one: gmRelationship -2 (they had to ask)
+- Extended contract adds 1–3 years at current or slightly elevated salary
+- `contractExtended` set to true on execution; reset to false when a new contract is issued
+
+### 9.5 User-Initiated Trades (IN SCOPE — Phase 8)
+
+The user can propose trades from the Players tab or a league team's roster view. Designed now so nothing built in Phases 1–7 prevents it. Built in Phase 8 after the CPU trade foundation is proven stable.
+
+- "Offer Trade" button on any league player profile
+- Roster picker — user selects player(s) to offer in return
+- Side-by-side OVR and sub-rating comparison view
+- Cash direction auto-calculated by the same `TradeEngine.evaluateTrade()` used for CPU trades — identical logic, no special casing
+- CPU evaluation based on GM relationship score and rating differential
+- Per-team cooldown (~15 games) after a declined offer
+- Accepted user-initiated trades use the identical `executeTrade` / `deferTrade` path — no separate execution code
+
+### 9.6 Counter-Offer System (IN SCOPE — Phase 9)
+
+Extends user-initiated trades. CPU teams can counter instead of flat accept/decline.
+
+- CPU proposes a different player or adjusts cash
+- Maximum 2 rounds of negotiation per attempt
+- Counter weighted by GM relationship — friendly teams counter more reasonably
+- Counter-offer arrives as inbox card with revised terms
+- User can accept, decline, or counter back once
+
+### 9.7 Waiver System (IN SCOPE — Phases 10–12)
+
+Full waiver system. Data model built in Phase 1 so it's present from day one. User-facing features built in later phases once the player lifecycle is stable.
+
+**Data model fields (Phase 1):**
+- `state.waiverPool` — array of player IDs currently on waivers
+- `player.onWaivers: Boolean`
+- Waiver claim order: inverse standings (worst team claims first)
+- Claim window: 72 real-world hours before player clears to free agency
+
+**Phase 10:** CPU team waiver activity — league places and claims players automatically
+- Waiver priority cycling (LOCKED — Section 20.2): `state.waiverPriority` array added to schema (Phase 5 retroactive fix). Priority resets at season start by inverse standings. When a team uses a claim, they drop to last position, all others shift up. `LeagueEngine.processWaiverClaims()` currently uses simple inverse standings — must be updated in Phase 10 to implement full cycling logic.
+**Phase 11:** User waiver pool view in Players tab + claim interaction
+**Phase 12:** Full player release, dead cap tracking
+
+**Farm vs waivers rule (LOCKED — decided during Phase 3 planning):**
+- `sendToFarm()` is valid ONLY during spring training cuts (38→28) and position-aware farm overflow displacement
+- ALL other player removals — mid-season cuts, IL return decisions, declined re-signs — go through `placeOnWaivers()`
+- No minor league option restrictions — players can be sent to the farm freely during spring, but never mid-season outside overflow displacement
+- IL return always surfaces a decision card (CardEngine Phase 9) — `returnFromIL()` never auto-activates; flags `_pendingILReturn: true` and adds to `state.ilReturnQueue`
+
+---
+
+## 10. Card System Design
+
+> Status: LOCKED — finalized during Phase 9 pre-build audit.
+
+### 10.1 Card Pools (LOCKED)
+
+| Pool | When it fires | Notes |
+|---|---|---|
+| `DECISIONS_POOL` | Main pool — checked each game day | Includes spring cards (filtered by `_requiresSpring:true`) |
+| `PREGAME_POOL` | 30–90 min before first pitch | |
+| `INGAME_POOL` | Between half-innings during live games | |
+| `BETWEEN_GAMES_POOL` | Travel days, home stand openers/closers, road trip culture | New in v2 — 12 cards written in Phase 9 pre-build |
+| `FOLLOWUP_POOL` | Triggered by earlier card decisions | |
+| `PERSONAL_LEAVE_POOL` | Player personal leave situations | |
+| `MANAGER_CONTRACT_POOL` | Offseason manager contract renewals | |
+| `COACHING_CONTRACT_POOL` | Offseason coaching staff renewals | |
+
+Note: `SPRING_POOL` is not a separate array — spring cards live in `DECISIONS_POOL` filtered by `_requiresSpring:true`. `ALLSTAR_HOST_POOL` and `OFFSEASON_POOL` are future content phases.
+
+### 10.2 Token System
+
+Card text uses `{token}` placeholders resolved at delivery time.
+
+**Standard tokens (LOCKED — no rating tokens in card text):**
+- `{active_sp_name}`, `{active_sp_pos}` — random active SP. Name token automatically includes handedness: e.g. `"Marcus Johnson (R)"`. Applies to all pitcher name tokens. Format is `(R)`/`(L)` — short form for mobile space efficiency. Card authors never manually include handedness — the resolver enforces it.
+- `{active_hitter_name}`, `{active_hitter_pos}` — random active hitter
+- `{active_bp_name}` — random active bullpen arm
+- `{manager_name}`, `{pitching_coach_name}`, `{hitting_coach_name}`, `{bench_coach_name}`
+- `{physician_name}` — team physician
+- `{misc_cost_sm}`, `{misc_cost_capped}`, `{misc_cost_xs}`, `{misc_cost_lg}` — budget cost tokens (resolve to $K display string)
+- `{rev_amount}` — revenue token
+- `{streak_context_clause}` — contextual text based on current streak
+- `{next_opponent}` — name of next scheduled opponent
+- `{farm_pitcher_name}`, `{farm_hitter_name}` — farm system players (name only)
+
+**Removed tokens (Phase 9 cleanup):**
+- `{active_sp_rating}`, `{active_hitter_rating}`, `{active_bp_rating}`, all `{*_rating}` variants — removed. Player ratings are visible on the Roster/League screen. Cards reference players by name and position only.
+- `{trade_cash_note}` — removed. No cash in trades (LOCKED).
+
+### 10.3 Card Delivery Rules
+
+- Once-per-season deduplication (by card `id`)
+- `_minGames` — card won't fire before this schedule index
+- `_maxTier` — card won't fire above this prestige tier
+- `_requiresRegular` — only fires in REGULAR_SEASON phase
+- `_requiresSpring` — only fires in SPRING_TRAINING phase
+- `_requiresHome` — only fires for home games (INGAME cards)
+- `_requiresBenchSP` — only fires if a bench SP is available
+
+### 10.3b CardInstance Shape (LOCKED)
+
+See `store/schema.js` — `state.inbox` contains `CardInstance[]`. Each instance is created by CardEngine at delivery time from the card definition. Key fields: `instanceId`, `cardId`, `deliveredAt`, `expiresAt`, `expiresAtMs` (weather cards only), `resolved`, `choice`, `type`, `tag`, `sender`, `subject`, `preview`, `body`, `yesLabel`, `noLabel`, `yesEffect`, `noEffect`, `autoResolve`, `_playerRelationshipEffect`, `_budgetCost`, `_raw`.
+
+### 10.4 Auto-Resolve
+
+- Cards expire at `expiresAtGame`
+- `autoResolve: 'no'` → resolves as 'no' with `autoResolveTax` applied
+- `autoResolve: 'skip'` → dismissed silently (INGAME cards use this)
+- Expiry message shown in card history if `_expireMsg` set
+
+### 10.5 Priority Ordering
+
+Inbox sorted: `urgent` → `normal` → `good`, then by delivery game (newest first within tier).
+
+### 10.6 Personal Leave Status (Implementation Note)
+
+`player.onPersonalLeave: Boolean` exists on the player object (Section 4.3). This flag is set and cleared exclusively by CardEngine when PERSONAL_LEAVE_POOL cards are resolved. No other engine sets this flag. The personal leave state affects:
+- Player is unavailable for lineup (treated same as `isResting` for availability checks)
+- Duration is card-determined, not game-count-determined
+- CardEngine must clear the flag when the follow-up personal leave resolution card resolves
+
+---
+
+## 11. Injury Card Redesign
+
+### 11.1 The Two-Act Model
+
+All injury events that occur during a live game use the two-act structure. Classic mode injuries can use a condensed single card since there is no "live" moment.
+
+#### Act 1 Card (INGAME — fires during live game, between half-innings)
+
+```
+sender: 'Head Trainer'
+type: 'urgent'
+tag: 'INJURY'
+subject: '{player_name} down — leaving the game, evaluation pending'
+body: '{player_name} left the field in the {inning_ordinal} inning and is being evaluated
+      in the clubhouse. No diagnosis yet. {manager_name} wants to know how to handle
+      the lineup for the rest of the game.'
+yesLabel: 'Cover the slot — adjust the lineup now'
+noLabel: 'Hold — wait to see if they can return'
+yesEffect: { morale: -1 }
+noEffect: { morale: -2 }   ← higher risk if they can't return
+```
+
+Decision is real: burning a bench player vs gambling on a return.
+
+#### Act 2 Card (FOLLOWUP — fires next morning or post-game)
+
+```
+sender: 'Team Physician'
+type: 'urgent'
+tag: 'INJURY'
+subject: '{player_name} — diagnosis confirmed: {injury_description}'
+body: 'MRI results are in. {injury_description_full}. {physician_name} recommends
+      {recommended_il_days} days minimum. You can place on the 10-day IL now and
+      call someone up, or try to manage day-to-day and preserve roster flexibility.'
+yesLabel: 'Place on IL — call up {callup_candidate}'
+noLabel: 'Day-to-day — manage the roster manually'
+```
+
+Uncertainty mechanic: sometimes Act 2 is better than Act 1 feared (sprain not a tear),
+sometimes worse (stress fracture found). This is determined at Act 1 resolution time
+but not revealed until Act 2 fires.
+
+### 11.2 Classic Mode Injury Cards (RETIRED)
+
+Classic mode was retired in Section 3.4. All injury events use the two-act live model. References to "classic mode" in this section are legacy — ignore them.
+
+### 11.3 Existing Injury Cards (v1 audit)
+
+The existing cards `i1`–`i5` in `cards-pool.js` fire outside the live game context.
+These need to be:
+- Converted to Act 2 cards for live mode (Act 1 fires during the game instead)
+- Kept as-is for classic mode
+- The conflation in v1 (injury cards that didn't know whether they were in-game or post-game) is removed by the two-act model
+
+> Full card-by-card audit: TBD.
+
+---
+
+## 12. Push Notification Architecture
+
+### 12.1 Why v1 Broke on Android
+
+The v1 service worker used `setTimeout` inside `sw.js` to schedule notifications. Android kills service workers aggressively to save battery — any pending `setTimeout` dies with the worker. This is why notifications worked on desktop Chrome (which keeps workers alive longer) but silently failed on Android.
+
+The v1 `worker.js` Cloudflare Worker was the right architectural instinct but was only half-wired — it used FCM tokens directly rather than the proper Web Push subscription flow, mixing two different systems.
+
+### 12.2 Correct Architecture
+
+```
+App (browser)
+  │
+  ├─ 1. Request notification permission
+  ├─ 2. Subscribe: navigator.serviceWorker.ready
+  │       → registration.pushManager.subscribe({ applicationServerKey: VAPID_KEY })
+  │       → returns PushSubscription object (endpoint + keys)
+  │
+  ├─ 3. POST subscription + userId to Cloudflare Worker /register
+  │
+  └─ 4. When cards are delivered or scheduled:
+         POST updated schedule to Cloudflare Worker /schedule
+
+Cloudflare Worker (push-worker.js)
+  │
+  ├─ Stores: { userId → { subscription, schedule[] } } in KV store
+  │
+  ├─ Cron (every minute):
+  │   → Scan all KV records for due items (deliverAt <= now)
+  │   → For each due item: POST to Web Push endpoint (NOT FCM HTTP API directly)
+  │   → Uses VAPID private key to sign the push message
+  │   → Browser's push service delivers to device
+  │
+  └─ /cancel endpoint: removes item from schedule
+
+Service Worker (sw.js) — on device
+  │
+  ├─ Listens for 'push' event
+  ├─ Parses payload: { title, body, tag, data: { cardId } }
+  └─ Calls self.registration.showNotification(...)
+
+```
+
+**Key difference from v1:** The Cloudflare Worker sends to the browser's push service endpoint (e.g., `https://fcm.googleapis.com/fcm/send/...` — this is the Web Push endpoint embedded in the subscription, not a direct FCM API call). VAPID signing happens in the Worker, not in the app. The service worker on device only receives and displays — it never schedules.
+
+### 12.3 Firebase Role
+
+Firebase is used for:
+- Generating VAPID keys (Firebase → Project Settings → Cloud Messaging → Web Push certificates)
+- The browser's push service endpoint (on Android Chrome, this routes through FCM infrastructure)
+
+Firebase is NOT used for:
+- Direct FCM API calls
+- Firebase SDK in the app
+- Any server-side Firebase service
+
+This means Firebase setup is minimal: create project, enable Cloud Messaging, copy VAPID public key. Done.
+
+### 12.4 Cloudflare Worker Setup
+
+Required:
+- Cloudflare account with Workers enabled (free tier sufficient)
+- KV namespace: `BGM_SCHEDULES` bound to worker
+- Worker secrets:
+  - `VAPID_PRIVATE_KEY` — from Firebase project
+  - `VAPID_PUBLIC_KEY` — same, used in subscription
+  - `VAPID_SUBJECT` — `mailto:your@email.com`
+
+Worker endpoints:
+- `POST /register` — store subscription + initial schedule
+- `POST /schedule` — update schedule for existing user
+- `POST /cancel` — remove a specific notification
+- `GET /vapid-key` — returns VAPID public key (so app doesn't need to hardcode it)
+- Cron: `*/1 * * * *` — every minute, check for due notifications
+
+### 12.5 Notification Types
+
+| Type | When | Card involved |
+|---|---|---|
+| Pre-game reminder | 30 min before first pitch | Scheduled at season start per game |
+| Card delivery | When a new urgent card lands in inbox | Triggered by CardEngine.deliver() |
+| Injury update (Act 2) | Next morning after Act 1 | Triggered by FOLLOWUP card schedule |
+
+Quiet hours: if `deliverAt` falls within user's quiet window, advance to quiet window end time.
+
+### 12.6 Permission Flow (UI)
+
+1. First time app opens: no immediate permission request (bad practice, gets denied)
+2. After user completes first game: prompt with context — "Get notified before game time and when decisions arrive?"
+3. Settings > Notifications: toggle on/off, quiet hours, test button
+4. If permission denied: Settings shows "Notifications blocked — enable in browser settings" with instructions
+
+### 12.7 VAPID Key Setup — Confirmed Infrastructure (COMPLETED)
+
+All infrastructure is configured. These values are confirmed and stored in Cloudflare secrets.
+
+| Item | Value / Status |
+|---|---|
+| Firebase project ID | `baseball-gm-push` |
+| Firebase Sender ID | `157200420537` |
+| VAPID public key | `BPdBTqb92Gueg4-arpvFMQjD0rqcIABMYcIV7VAUbwepbsffrN-1YR8XfsjaYpZVX6qZ2Dvn30sp4H0_xNJzQCE` |
+| VAPID private key | Stored in Cloudflare secret `VAPID_PRIVATE_KEY` |
+| VAPID subject | Stored in Cloudflare secret `VAPID_SUBJECT` |
+| Cloudflare Worker name | `baseball-gm-push` |
+| Cloudflare Worker URL | `https://baseball-gm-push.baseball-gm.workers.dev` |
+| KV namespace | `SCHEDULES` (ID: `e533db8115844e999e38c36ec7ba43f3`) |
+| Cron trigger | `*/1 * * * *` (every minute) |
+
+**`PUSH_WORKER_URL` for `data/constants.js`:**
+```javascript
+export const PUSH_WORKER_URL = 'https://baseball-gm-push.baseball-gm.workers.dev';
+export const VAPID_PUBLIC_KEY = 'BPdBTqb92Gueg4-arpvFMQjD0rqcIABMYcIV7VAUbwepbsffrN-1YR8XfsjaYpZVX6qZ2Dvn30sp4H0_xNJzQCE';
+export const FCM_SENDER_ID = '157200420537';
+```
+
+**Security note — Phase 11 task:** Regenerate the VAPID key pair in Firebase after v2 push system is confirmed working. The private key was exposed during the setup audit. Steps: Firebase → Project Settings → Cloud Messaging → Web Push certificates → delete existing pair → generate new → update `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` in Cloudflare secrets immediately. Do not paste the new private key anywhere — copy directly from Firebase download into the Cloudflare secret field.
+
+**Checklist — all items complete:**
+- [x] Firebase project exists with FCM API V1 enabled
+- [x] VAPID key pair exists in Firebase Web Push certificates
+- [x] `FCM_SERVICE_ACCOUNT_JSON` deleted from Cloudflare
+- [x] `VAPID_PUBLIC_KEY` updated to Firebase key
+- [x] `VAPID_PRIVATE_KEY` updated to matching private key
+- [x] `VAPID_SUBJECT` set to operator email
+- [x] KV namespace `SCHEDULES` bound to worker
+- [x] Cron trigger set to `*/1 * * * *`
+- [ ] Regenerate VAPID keys after Phase 11 testing (security cleanup)
+
+---
+
+## 13. Season-to-Season Transition
+
+> Status: DESIGNED — open questions in Section 14 (items 11–16).
+
+This is one of the most complex state operations in the game. It touches every system simultaneously and must execute in strict order. The OFFSEASON phase is a real phase with its own rules — not a series of inline function calls.
+
+### 13.1 Transition Trigger
+
+The transition begins when the final playoff series resolves (or when the user's team is eliminated and all other series complete). The phase moves from the final playoff phase → `SEASON_SUMMARY` → `OFFSEASON`.
+
+### 13.2 Offseason Processing — Strict Execution Order
+
+Each step must complete before the next begins. StateManager batches mutations and saves once at the end of each step.
+
+**Step 1 — Lock the record**
+- Final standings saved to `seasonHistory`
+- Champion recorded
+- Franchise history updated (prestige tier recalculated)
+- `metricHistory` finalized for this season
+
+**Step 2 — Archive player stats**
+- Every player in `state.players`: `careerStats` updated from `stats`
+- `careerStats.seasons++`
+- `peakOvr` updated if this season's `ovr` is higher
+- `stats` reset to zero for all players
+- This runs on ALL players — user roster, all league rosters, IL players
+
+**Step 3 — Player aging**
+- Every player's age recalculated from `dob` (age is always computed from DOB, never stored — this prevents drift)
+- No state change needed for age itself, but this step gates Step 4
+
+**Step 4 — Sub-rating development and decline**
+- Runs for every player on all 10 rosters
+- Applies age curve + trait modifier + variance to each sub-rating
+- OVR recomputed from new sub-ratings
+- Injury penalties cleared (new season, clean slate)
+- Results logged to `careerStats.peakOvr` if applicable
+
+**Step 5 — Contract expiry**
+- Every player with `contractExpiry === seasonNum` is flagged `contractExpired: true`
+- User roster expiries → generate re-sign decision cards (one per expiring player, queued for OFFSEASON phase)
+- League roster expiries → CPU teams process automatically (see Step 7)
+
+**Step 6 — User roster decisions (player-gated)**
+The OFFSEASON phase does not advance to Step 7 until the user resolves all expiring contract cards. This is intentional — roster construction is a core GM activity. Each expiring player card presents:
+- Re-sign at market rate (based on age, OVR, and sub-rating trajectory)
+- Let walk (player enters free agency — see Open Question 11)
+- Negotiate extension (lower AAV in exchange for longer term — player must be receptive)
+
+**Step 7 — League roster turnover**
+- CPU teams process their own expiring contracts automatically
+- Each CPU team signs free agents to fill gaps (using the same player generation logic as initial league build, or from a free agent pool — see Open Question 11)
+- League team `str` values shift slightly based on offseason outcomes
+- This step runs silently — results visible in the League tab
+
+**Step 8 — Payroll recalculation**
+- `userTeam.finances.payroll` recomputed from new roster after all contract decisions
+- `operatingSpent` reset to 0
+- Revenue archived to `revenueHistory`, `revenue` reset to 0
+
+**Step 9 — Ownership evaluation card**
+- Single card generated based on season performance (see Section 4.2 — Financial Model)
+- Presents next season's `payrollCap` and `operatingBudget` offer
+- User can accept, negotiate (push back for better terms at cost of ownerTrust), or push back hard (higher risk)
+- This card is mandatory — OFFSEASON cannot advance without resolving it
+
+**Step 10 — Coaching staff decisions**
+- Generates MANAGER_CONTRACT_POOL and COACHING_CONTRACT_POOL cards for any expiring staff
+- These can resolve in any order
+- Manager exit conditions checked here — if `managerConfidence` is critically low, an exit card fires regardless of contract status
+
+**Step 11 — Schedule generation**
+- New 132-game schedule generated for season N+1
+- New league schedule generated for all 9 CPU teams
+- Game timestamps assigned (live mode only — based on real-world calendar from new season start date)
+
+**Step 12 — Spring training setup**
+- Spring training game schedule generated (~20 games)
+- Phase transitions to `SPRING_TRAINING`
+- `seasonNum++`
+- Spring-specific card pools unlock
+
+### 13.3 What Cannot Happen During OFFSEASON
+
+- No regular season games can be advanced
+- No INGAME cards can fire
+- No PREGAME cards can fire
+- Trade cards CAN fire (offseason trades are realistic)
+- Signing cards CAN fire (free agent signings are an offseason activity)
+- The schedule tab shows the new season's schedule in a "pending" state until spring begins
+
+### 13.4 Player Lifecycle Summary
+
+```
+Generated → On roster (active) → IL (injured) → Return from IL
+                ↓                                      ↑
+         _pendingDeparture (traded) ──────→ Removed from roster
+                ↓
+         contractExpired → Re-signed (stays) OR Released (free agent)
+                                                        ↓
+                                              Free agent pool (see OQ-11)
+                                                        ↓
+                                              CPU team signs OR
+                                              User signs via card OR
+                                              Retires (age/rating threshold)
+```
+
+---
+
+## 14. Build Order
+
+The single most important lesson from v1: **build the foundation first and don't move on until it's stable.** Each phase must be complete and tested before the next begins.
+
+### Phase 0 — Data & Constants (no logic) ✅ COMPLETE
+1. `data/constants.js` — all magic numbers, enums, config (no difficulty presets — archetype parameters in Section 16.6 serve this role)
+2. `data/player-names.js` — ES module export; 550→740 names; Scandinavian + West African names removed; ASCII-only enforced; separate FARM_H_NAMES/FARM_P_NAMES pools retired (farm draws from PLAYER_NAME_POOL); ACQ pools retained for external-player card flavor only
+3. `data/cards-pool.js` — ES module export; c3/i1 collision fixed (missing closing brace on c3 _onResolve); all pool arrays exported
+4. `data/league.js` — ES module export; state global references removed (seasonNum and leagueRosters now passed as parameters); functionality superseded by engine/LeagueFactory.js in Phase 2
+
+> **Gate:** All data files export cleanly. No logic, no state references. ✅ 24/24 tests passed
+
+### Phase 1 — State Foundation ✅ COMPLETE
+5. `store/schema.js` — canonical state shape including save slots, weatherBuffer, waiverPool, ilReturnQueue, followupQueue, seenMilestones (Array not Set — JSON-serializable)
+6. `store/DB.js` — IndexedDB wrapper; JSON round-trip enforcement on save; versionchange handler; appMeta store for small key-value app preferences
+7. `store/StateManager.js` — get/set/mutate/save/load/reset/createSlot/deleteSlot; debounced auto-save; one-per-archetype enforcement; free tier slot limit; migration on load; crypto.randomUUID for all IDs; active slot ID in localStorage
+
+> **Gate:** Can create a save slot, save state, close tab, reopen and restore. Multiple slots work independently. ✅ 38/38 tests passed
+
+### Phase 2 — Player & League Pool ✅ COMPLETE
+8. `engine/PlayerFactory.js` — `createPlayer()` single entry point for all player creation; `computeOVR()` single place OVR is ever calculated (accounts for injury penalty); sub-rating generation with strength/weakness bias; `computeAge()` always derived from DOB; all stat shapes; `clamp()` utility
+9. `engine/LeagueFactory.js` — `buildFullLeague()` orchestrates full league generation; `initNameRegistry()` shuffles single PLAYER_NAME_POOL for all draws including farm; `buildLeagueRosters()` all 9 CPU teams + farm (20 players each); `buildUserRoster()` per archetype OVR/age/contract parameters; `applyArchetypeToUserTeam()` applies soft metrics, finances, GM relationship adjustments; payroll cap enforcement at generation time (proportional salary compression — generation constraint not runtime patch); uuidFn injected as parameter for testability
+10. User team generation: all 6 archetypes handled with distinct OVR ranges, age skews, contract length distributions
+
+> **Gate:** Full 10-team league with 280 active + 200 farm players exists in state. All player objects complete. OVR computes correctly from sub-ratings. ✅ 35/35 tests passed (3 false positives on comment scanning)
+
+### 1.11b Build Full Features — No Artificial Gating During Development
+
+Build every feature fully during its phase. Never artificially restrict features to "free tier" behavior during development. Free vs premium gating is applied as a single pass when the monetization system is designed — not inline during screen builds.
+
+**Rationale:** Restricting features during development means the full feature is never tested until the worst possible time. Bugs discovered during free/premium implementation are harder to fix than bugs found during normal development. Build the full feature, test the full feature, then gate it.
+
+**Applies to:** hot/cold indicators (league-wide, not roster-only), radar slider range, watchlist size, stat leader categories, forecast depth, and any other feature with a planned free/premium split.
+
+### 1.12 Code Quality Standard — Written by Someone Who Knows What They're Doing
+
+Every file in this codebase should look like it was written by a senior engineer, not generated and left as-is. This is not cosmetic — code that reads clearly is code that can be debugged, extended, and understood by anyone who picks it up.
+
+**Enforced standards:**
+
+- **Naming conventions** — camelCase for functions and variables, PascalCase for classes, SCREAMING_SNAKE_CASE for constants. No abbreviations that aren't universally understood (`ovr`, `sp`, `rp` are domain terms and acceptable; `tmp`, `x`, `res` are not).
+- **JSDoc on every exported function** — `@param` with type and description, `@returns` with type and description. Internal helpers may use lighter comments but must have at least a one-line description.
+- **Error messages name the module and function** — `"RosterEngine.sendToFarm: player not found"` not `"player not found"`.
+- **No magic numbers inline** — every numeric constant is imported from `data/constants.js` by name.
+- **No commented-out code** — removed code is deleted, not commented out. The plan doc tracks decisions; the code does not.
+- **No `// TODO` or `// FIXME` in production files** — those are plan document items (Section 13 open questions).
+- **Functions do one thing** — if a function exceeds ~40 lines and does multiple distinct operations, it should be decomposed.
+- **File headers explain ownership** — every file starts with a JSDoc block stating what the module owns and explicitly what it does NOT do. This prevents scope creep.
+- **Consistent import ordering** — constants first, then store, then engines, then utilities.
+- **Pure function return values are mutations objects, never undefined** — if a pure function has nothing to mutate, it returns `{}`, not `undefined` or `null`.
+
+**Audit triggers (proactive — no prompting needed):**
+- Full cross-system audit after every 3 phases
+- Before any UI phase begins
+- After any decision that changes a locked value
+- Before the first browser test session
+
+### 1.13 Project Management Standard
+
+The build is managed proactively. The owner makes product decisions; the builder manages the build.
+
+**What the builder does without being asked:**
+1. **Pre-phase checklist** — before every phase: locked decisions, forward assumptions, questions needing answers, gate test specification.
+2. **Post-phase forward look** — after every phase: what was built, what was found and fixed, what the next phase depends on, any decisions needed.
+3. **Proactive audit scheduling** — cross-system audits triggered at the moments listed in Section 1.12, not when the owner notices something feels off.
+4. **Decision surfacing** — every TBD or stub encountered during a build is surfaced immediately with a recommendation. Never deferred silently.
+5. **Plan document currency** — the plan is updated as part of every phase. If a phase completes without a plan update, that is a failure.
+6. **Architectural health flags** — when something is technically correct but architecturally risky (a function doing too much, logic duplicated across two engines, a field referenced before it's defined), it is flagged proactively.
+
+**What the owner does:**
+- Makes product decisions when surfaced
+- Confirms or adjusts recommendations
+- Does not need to track implementation details, ask for audits, or manage phase sequencing
+
+### 1.14 Navigation Structure (LOCKED — from v1, carried into v2)
+
+**5 bottom nav tabs:**
+- **Dashboard** — wins/losses/OVR, morale/atmosphere, next game preview, advance button
+- **Inbox** — 3 internal tabs: `To Do` (with unread badge), `Completed`, `Compose`
+- **Team** — 2 internal tabs: `Players`, `Staff`
+- **League** — 3 internal tabs: `Players`, `Teams`, `Standings`
+- **Schedule** — flat list with Scores button
+
+Inbox tab labels match v1 exactly: To Do / Completed / Compose.
+Team screen label is "Team" not "Roster" — matches v1.
+Compose is a tab within Inbox, not a separate bottom nav item.
+
+### Pre-build process (adopted Phase 5 onward)
+Before each phase: explicit pre-flight audit of cross-system assumptions carried forward from previous phases.
+Gate tests must assert structural correctness (exact player counts, required fields, value ranges) — not just syntax validity and export presence.
+
+### Phase 3 — Roster Engine
+12. `engine/RosterEngine.js` — all roster mutations, farm send-down/callup
+13. Position-aware farm overflow displacement
+14. Depth checking (Type 1/Type 2) + auto-resolve
+15. IL system with return dates
+16. Waiver placement and tier transitions
+
+> **Gate:** Can move players between all tiers. Farm caps enforced. IL works. Waiver wire processes correctly.
+
+### Phase 4 — Season, Schedule & League Engine
+17. `engine/SeasonEngine.js` — full user schedule + all 9 CPU schedules (132 games each)
+18. Series grouping, home/away, travel days, staggered game times
+19. Standings calculation and update
+20. `engine/LeagueEngine.js` — CPU roster decisions, waiver activity, activity feed
+21. Season phase state machine
+
+> **Gate:** Full 132-game schedule for all 10 teams. Standings update correctly. CPU teams make roster decisions. Activity feed populates.
+
+### Phase 5 — Weather Engine
+22. `engine/WeatherEngine.js` — 48-hour buffer generation, hourly frames
+23. Game weather evaluation and status transitions
+24. Radar frame pre-generation
+
+> **Gate:** Weather buffer generates and persists. Game statuses transition correctly (DELAYED, POSTPONED, SUSPENDED). Radar frames available for UI.
+
+### Phase 6 — Sim Engine
+25. `engine/SimEngine.js` — win probability using difficulty preset constants
+26. Score generation with sub-rating inputs
+27. Full play-by-play pre-generation for user AND CPU games
+28. Live game timing (timestamp assignment per game time slot)
+
+> **Gate:** Can simulate any game (user or CPU) and produce a complete, valid play-by-play with correct cumulative scores and timestamps.
+
+### Phase 7 — Injury Engine
+29. `engine/InjuryEngine.js` — daily probability check across all teams
+30. Injury report generation with relationship-filtered text
+31. IL return processing
+
+> **Gate:** CPU teams get injured and call up farm players. Reports available with correct relationship filtering.
+
+### Phase 8 — Game Engine & Loop
+32. `engine/GameEngine.js` — orchestrator ✅ COMPLETE
+    - startNewGame, tick (with _tickOffset weather drift), commitGame (14-step sequence)
+    - getNextGame, checkMilestone, advancePhase, buildCardContext
+    - runOffseason (12-step, player-gated at steps 6+9), resumeOffseasonAfterResigns, resumeOffseasonAfterOwnership
+    - applyWeatherDelay, suspendGame, resumeSuspendedGame
+    - Only module that imports StateManager. Does not generate cards.
+    - schema.js: farmIds added to userTeam. Pre-flight: 58/58 + 1 gap caught (farmIds).
+    > **Gate:** 68/68 tests passed
+33. Live game tick + play reveal
+34. CPU game commit + league schedule update
+35. Milestone trigger detection
+36. Game commit + drain (trade deferral, pending acquisitions)
+37. Weather card triggering via WeatherEngine events
+
+> **Gate:** Full live game plays out. CPU games commit on schedule. Milestone screens trigger. Weather events work end-to-end.
+
+### Phase 9 — Card Engine
+38. `engine/CardEngine.js` — delivery with full situational context
+39. Token resolution including gmRelationship and trade cash direction
+40. Expiry with minute-based weather card support
+41. Follow-ups and two-act injury flow
+42. Player relationship effect application
+43. Wire all card pools including new groundskeeper, F&O, ticket office, playoff pools
+
+> **Gate:** Cards deliver, resolve, expire correctly. Two-act injury works. Relationship effects apply. All pools active.
+
+### Phase 10 — Trade Engine
+44. `engine/TradeEngine.js` — evaluation, cash direction from constants
+45. CPU-initiated trades
+46. Game-day deferral + drain
+47. User-initiated trades (Phase 8 from old plan)
+48. Counter-offer system
+
+> **Gate:** All trade types execute correctly. Cash direction is always right. User proposals and counters work.
+
+### Phase 11 — Notification Engine
+49. `engine/NotificationEngine.js`
+50. `workers/push-worker.js` (Cloudflare) — VAPID Web Push, cron, quiet hours, urgent bypass
+51. VAPID key setup (Section 12.7 checklist)
+52. Permission flow UI
+
+> **Gate:** Notification fires on real Android device when app is closed. Urgent weather notifications bypass quiet hours. Pre-game reminder arrives 30 min before first pitch.
+
+### Phase 12 — UI Core
+53. `ui/EventBus.js`
+54. `ui/App.js` + navigation + milestone screen routing
+55. `ui/screens/MilestoneScreen.js` — full catalog
+56. Dashboard with league activity feed widget
+57. Roster screen with farm system section
+58. Schedule screen
+59. League screen with activity feed, CPU game viewer, injury icons, stat leaders
+60. Players screen with waiver pool section and watchlist
+61. Inbox/Compose screen with all channel prompts
+
+> **Gate:** Full UI navigable with real game state. All screens show live data. CPU games watchable.
+
+### Phase 13 — Live Game UI
+62. User live game view (score, diamond, PBP, stats, linescore)
+63. CPU live game view (same components, different data source)
+64. Weather display states (delay screen, radar widget)
+65. Box score modal
+66. Recap modal
+
+> **Gate:** Both user and CPU games fully watchable with correct state.
+
+### Playoff Screen Spec (LOCKED — Phase 13)
+
+Two-panel bracket view, one panel per division.
+
+**Per-division bracket:**
+- Wild Card row: 4th seed vs 5th seed — single game chip
+- First Round row: 1st vs WC winner chip + 2nd vs 3rd chip (side by side)
+- Division Series row: winner chips collapse to single matchup
+- World Series row: division champion chips face each other
+
+Each series chip shows: team names, current series record (e.g. "2-1"), game status (LIVE/FINAL/TBD).
+User's team highlighted with accent color.
+Tapping a series chip opens that series detail (schedule of games + results).
+
+**World Series row** spans full width below both division panels.
+
+### Offseason Screen Spec (LOCKED — Phase 13)
+
+Shown when `state.phase === PHASE.OFFSEASON`.
+
+**Layout:**
+- Day indicator pill at top: "Offseason · Day X of 6"
+- Real-time progress bar showing time remaining in current day
+- Daily focus label (changes by day: "Season Review" / "Contract Decisions" / "Staff & Trades" / "Development" / "Final Decisions" / "Spring Begins")
+- Hard gate status row: 3 icons (Ownership / Contracts / Manager) — green checkmark when cleared, amber lock when pending
+- If all gates cleared: "Ready for Spring Training" banner with Start button
+- Normal inbox card list below (same as standard inbox)
+- On Day 6 with unresolved gates: "Auto-resolving remaining decisions…" banner
+
+### Phase 13 Component Pass — Supporting Components
+
+After all screen modules are built, the following components are built and wired in:
+
+| Component | Wired into | Notes |
+|---|---|---|
+| `RadarWidget.js` | DashboardScreen (next-game card), GameScreen (live view, delay state) | Section 8.8 LOCKED. Real SVG component — hourly frames, scrubber slider, 3 zoom levels. No placeholder. |
+| `LiveDiamond.js` | GameScreen | SVG baserunner diamond, updates on each tick |
+| `Linescore.js` | GameScreen, LeagueScreen (CPU games) | Per-inning cells, R/H/E totals |
+| `PlayerCard.js` | TeamScreen, LeagueScreen (player tap) | Full player detail modal |
+| `CardModal.js` | InboxScreen | Expanded card detail if body overflows |
+
+RadarWidget specifically: when built, wire `_renderRadarWidget(nextGame, state)` into DashboardScreen `_renderNextGameCard()` after the weather emoji line. The TODO comment is already in place in DashboardScreen.js.
+
+### Phase 13.5 — Geographic Region (LOCKED)
+
+Add region selection to SetupScreen as Step 2 (between archetype and naming). Region is abstract — four options with flavor descriptions. Affects weather behavior, facilities card pool, travel fatigue, CPU team name pool, and groundskeeper card pool.
+
+**Schema change:** `state.settings.region: 'north'|'south'|'east'|'west'`
+
+**Four regions:**
+
+| Region | Climate | Key weather behaviors | Facilities flavor | Travel pattern |
+|---|---|---|---|---|
+| `north` | Cold springs/falls, frost risk | Elevated postponement Apr/Sep, cold-suppressed offense, pitcher stamina reduced in cold | Snow/frost situations in groundskeeper pool, drainage after thaw, heated facilities budget | Dense geography, shorter trips |
+| `south` | Hot/humid, warm all season | Afternoon thunderstorm pattern, heat reduces pitcher stamina, elevated scoring, no early/late season cold risk | Heat management, turf stress in summer, irrigation needs | Mid-range trip distances |
+| `east` | Moderate, highest rain frequency | Coastal fog possibility, consistent rain risk across season, wind off water | Drainage investment, salt air corrosion over time, older stadium flavor | Densest schedule, frequent short hops |
+| `west` | Driest, wind primary factor | Lowest postponement rate, altitude lifts ball carry (slightly elevated scoring), wind cards unique to region | Dry field maintenance, dust/sand issues, water conservation | Longest road trips, meaningful travel fatigue |
+
+**What region does NOT affect:** archetype, roster structure, finances, playoff format, or card system mechanics. Region is atmosphere and modifier, not difficulty.
+
+**New constant:** `REGIONS` object in `data/constants.js` with the four keys and their weather modifier profiles.
+
+**SetupScreen change:** Region selection becomes Step 2. Steps become: Archetype → Region → Naming → Colors → Take the Job. (4 steps total, still no mode selector — Section 2.1.)
+
+**Gate:** Region stored in schema. WeatherEngine reads region modifier when generating buffer. Groundskeeper card pool filtered by region. Travel fatigue modifier applied in SimEngine.
+
+---
+
+### Phase 13.6 — Narrative Engine Infrastructure (LOCKED)
+
+The Narrative Engine is an enrichment layer on the existing card system. It does not create a new card type, a new inbox tab, or a new interaction pattern. Every card still has a meaningful yes/no choice. The narrative depth lives in the card body text — organizational memory, character voice, references to past decisions — not in new UI patterns.
+
+**Architecture:**
+
+```
+state.narrativeFlags[]          — append-only log of significant decisions
+NarrativeEngine.js              — reads flags, generates enrichment context
+CardEngine (delivery)           — calls NarrativeEngine at card delivery time
+                                  to select conditional card body variant
+```
+
+**`state.narrativeFlags` structure (Option B — flat append-only log):**
+
+```javascript
+state.narrativeFlags = [
+  // Each entry:
+  {
+    key:      String,    // e.g. 'extension_declined', 'facility_deferred', 'player_rushed_back'
+    subject:  String,    // playerId, staffId, or null for org-level flags
+    gameIdx:  Number,    // when it happened
+    season:   Number,    // which season
+    choice:   String,    // 'yes'|'no'|'auto'|null
+    context:  Object,    // optional: { amount, role, reason } — flag-specific metadata
+  }
+]
+```
+
+Query function (in NarrativeEngine):
+```javascript
+export function getFlags(state, filter)
+// filter: { key?, subject?, season?, minGameIdx?, maxGameIdx? }
+// returns matching flags sorted by gameIdx descending
+```
+
+**Flag taxonomy — every domain that generates flags:**
+
+*Roster decisions:*
+- `extension_declined` / `extension_accepted` — subject: playerId
+- `player_rushed_back` — IL return before recommended return date
+- `player_held_back` — IL return significantly after recommended date
+- `veteran_released` — releasing a player with gmRelationship >= 70
+- `prospect_called_up` — first call-up of a player from farm
+- `trade_accepted` / `trade_declined` — subject: lead playerId
+- `waiver_claimed` / `waiver_passed`
+
+*Financial decisions:*
+- `budget_conservative` — finished season >15% under payroll cap (count: cumulative)
+- `budget_aggressive` — exceeded payroll cap
+- `facility_upgrade_approved` / `facility_upgrade_deferred`
+- `sponsor_deal_accepted` / `sponsor_deal_declined`
+- `ticket_price_raised` / `ticket_price_lowered`
+
+*Staff decisions:*
+- `manager_extended_early` / `manager_extended_late` / `manager_contract_lapsed`
+- `coach_retained` / `coach_released`
+- `staff_request_approved` / `staff_request_declined` — subject: staffId
+
+*Operational decisions:*
+- `community_event_approved` / `community_event_declined`
+- `maintenance_approved` / `maintenance_deferred`
+- `promotional_night_approved` / `promotional_night_declined`
+- `media_engagement_high` / `media_engagement_low` — set based on compose frequency
+
+*Compose behavior:*
+- `compose_used` — topic: topicId, channel: channelId (tracks engagement pattern)
+- Aggregated into GM profile dimensions (see below)
+
+*Outcome flags (set automatically, not by user choice):*
+- `player_milestone_hit` — subject: playerId, context: { milestone }
+- `playoff_series_won` / `playoff_series_lost`
+- `season_record_above_500` / `season_record_below_500`
+- `attendance_trend_up` / `attendance_trend_down` — set end-of-season
+
+**GM Profile Dimensions (derived from flags, not stored directly):**
+
+NarrativeEngine computes these on demand from the flags log:
+
+| Dimension | Derived from |
+|---|---|
+| `spender` vs `conservationist` | budget flags, payroll vs cap ratio |
+| `loyal` vs `transactional` | extension_declined count, veteran_released count, trade frequency |
+| `aggressive` vs `cautious` | rushed_back count, call-up timing, trade deadline behavior |
+| `community_oriented` vs `business_focused` | community/promotional approvals vs declines |
+| `hands_on` vs `delegating` | compose frequency and channel distribution |
+| `process_driven` vs `results_driven` | correlates with archetype but diverges based on decisions |
+
+These dimensions feed card body variant selection. A `loyal + process_driven` GM receives different language in the same card than a `transactional + results_driven` GM.
+
+**Card body conditional variants:**
+
+Existing cards in `cards-pool.js` will have an optional `variants` array alongside the base `body`:
+
+```javascript
+{
+  id: 'il_return_act2',
+  body: 'Default body text...',
+  variants: [
+    {
+      condition: { flags: [{ key: 'player_rushed_back', subject: '{playerId}' }] },
+      body: 'Variant body that references the rushed return...',
+    },
+    {
+      condition: { gmProfile: { loyal: true, season: { min: 2 } } },
+      body: 'Variant body for a loyal GM in their second+ season...',
+    }
+  ]
+}
+```
+
+NarrativeEngine selects the first matching variant at delivery time. If no variant matches, the base `body` is used. This means all existing cards continue to work unchanged — variants are additive.
+
+**`NarrativeEngine.js` exports:**
+```javascript
+export function getFlags(state, filter)
+export function setFlag(state, flagEntry)         // called by card resolution handlers
+export function getGMProfile(state)               // returns derived dimension object
+export function selectCardVariant(card, state)    // returns body string for delivery
+export function getRelevantFlags(state, card)     // returns flags contextually relevant to a card
+```
+
+**Flag instrumentation points (where setFlag is called):**
+
+Every yes/no card resolution in CardEngine checks if the resolved card has a `flagKey` field. If so, it calls `NarrativeEngine.setFlag()`. This means flag instrumentation is centralized in CardEngine's `resolve()` function — no scattered calls across multiple files.
+
+Cards that generate flags have a `flagKey` and optional `flagContext` field in the card pool entry:
+```javascript
+{
+  id: 'contract_extension_veteran',
+  flagKey: 'extension_declined',      // set on 'no' resolution
+  flagKeyYes: 'extension_accepted',   // set on 'yes' resolution
+  flagSubject: '{playerId}',          // resolved at delivery
+  // ... rest of card
+}
+```
+
+Automatic flags (outcome-based, not choice-based) are set by GameEngine after `commitGame()` and by SeasonEngine at season boundary.
+
+**Gate:** NarrativeEngine passes all unit tests. `state.narrativeFlags` correctly populated after card resolutions. `selectCardVariant()` returns correct variant based on flags. CardEngine's `resolve()` calls `setFlag()` where flagKey is present.
+
+---
+
+### Phase 13.7 — Narrative Card Content (LOCKED)
+
+Expand the card pool with narrative-aware variants for all high-impact existing cards, and add new cards that could only exist because of the flag system.
+
+**Existing cards to add variants to (priority order):**
+1. All IL return cards (flag: player_rushed_back)
+2. Contract extension cards (flag: extension_declined/accepted history)
+3. Trade inquiry cards (flag: trade history, GM profile loyalty dimension)
+4. Manager relationship cards (flag: manager_extended_early/late/lapsed)
+5. Ownership check-in cards (flag: budget_conservative/aggressive, season record)
+6. Facility cards (flag: facility_upgrade_deferred history)
+
+**New cards that require the flag system:**
+- "Long memory" cards — arrives 10-15 games after a significant decision, references it indirectly through a character voice
+- "Reputation" cards — a staff member or player references the GM's established pattern ("You've always given players time to work through slumps...")
+- "Consequence" cards — a deferred facility upgrade surfaces as a playing condition issue in a subsequent season
+- "Milestone witness" cards — when a player hits a career milestone, the narrative context references their history with the franchise
+
+**Authorship principle:** Card body variants never reference the flag system directly. They speak in character voices. The groundskeeper doesn't say "you deferred the drainage upgrade." He says "the water's been sitting longer than I'd like out near first base. Same issue we talked about last summer." The user feels the world remembering, not the system reporting.
+
+**Gate:** At least 6 existing card types have narrative variants. At least 4 new flag-dependent cards exist in the pool. All variants pass the authorship principle (no direct flag references in card text).
+
+---
+
+### Phase 13.8 — Franchise History Screen (LOCKED)
+
+A browsable record of significant franchise events, organized by season. Called "History" or "Franchise Story" in the UI — never "diary."
+
+**`state.history` structure (append-only array):**
+```javascript
+state.history = [
+  {
+    id:       String,     // unique entry ID
+    type:     String,     // 'trade'|'injury'|'retirement'|'coaching'|'playoff'|
+                          //  'milestone'|'prestige'|'record'|'championship'
+    season:   Number,
+    gameIdx:  Number,
+    headline: String,     // short display label e.g. "Rodriguez traded to Boston"
+    detail:   String,     // fuller description
+    playerId: String,     // optional — links to player data
+    icon:     String,     // emoji for the entry type
+  }
+]
+```
+
+**What gets recorded automatically:**
+- Trades (both directions, with context: standings at time of trade)
+- Serious injuries (IL stints > 14 games)
+- Player retirements
+- Coaching hires and fires
+- Playoff series results (each round, game-by-game record)
+- World Series victory (full summary entry)
+- Prestige tier changes
+- Franchise Legend unlock
+- Season final record and division finish
+- Player milestones (first call-up, 100th career game, significant IMP peaks)
+
+**UI:** Accessible from Settings or a dedicated section. Organized by season, collapsible. Each entry shows icon + headline, expandable to detail. User can optionally add a personal note to any entry (short freeform text — stored in `entry.userNote`). Looking back at Season 1 entries from Season 3 is the emotional payoff of this feature.
+
+**Connection to Narrative Engine:** `getFlags()` and `state.history` are both read by NarrativeEngine when selecting card variants. A card delivered in Season 3 can reference a history entry from Season 1 if the conditions match.
+
+**Gate:** History entries created for all listed event types. History screen renders correctly with season grouping. User notes save and persist.
+
+---
+
+### Phase 14 — PWA Shell
+67. `manifest.json` — name, icons, theme color, display: standalone
+68. Service worker — offline shell, cache strategy for static assets
+69. App icons — all required sizes (192, 512, apple-touch-icon)
+70. Dynamic favicon — team color applied to favicon canvas at runtime
+
+> **Gate:** App installs to home screen on iOS and Android. Opens as standalone (no browser chrome). Works offline for cached assets.
+
+---
+
+### Phase 15 — Season/Gameplay Polish
+71. Full offseason flow (6-day structure, tiered gates) — wire OffseasonEngine fully
+72. Playoff bracket and round management — wire PlayoffScreen to SeasonEngine bracket
+73. Playoff roster expansion cards
+74. Franchise Turning Point and Franchise Legend flows
+75. Settings screen (all toggles, theme/color live preview, region display)
+76. Debug panel (full catalog from Section 24)
+
+> **Gate:** Full season-to-season transition works. Playoffs complete. Franchise Legend fires. Debug tools operational.
+
+---
+
+### Phase 16 — Reports System
+
+Basic reports free. Full analytical suite premium (Section 1.11b — build all fully, gate in Phase 18).
+
+**Three report types:**
+
+**Roster Report** — all players ranked by OVR, with IMP trend (30-day), age, contract years remaining, salary. Sortable by any column. Shows depth chart gaps. Free tier: OVR + position + age only. Premium: full sortable suite with IMP.
+
+**Financial Report** — payroll by position group, operating budget vs spent, projected next-season payroll (based on expiring vs retained contracts), attendance trend by homestand, revenue vs expenses. Premium only.
+
+**Trade Value Report** — composite score per player based on OVR + age curve + IMP trend + contract value. Identifies surplus value (tradeable) and core assets (untouchable). Premium only. Surfaces automatically when a trade card arrives.
+
+**UI:** Accessible from Team screen as a "Reports" sub-tab alongside Players and Staff.
+
+> **Gate:** Roster report functional and accurate. Financial and trade value reports functional for premium. Reports update correctly after game commits.
+
+---
+
+### Phase 17 — Waiver System
+77. User waiver pool view in Players tab
+78. Claim interaction with priority display
+79. Full player release + dead cap tracking
+80. IL return waive option
+
+> **Gate:** User can browse waiver pool, claim players, release players. Priority cycling works correctly.
+
+---
+
+### Phase 18 — Monetization (ui/Premium.js)
+
+> **Prerequisite:** All features must be built and tested in full (premium) mode before this phase begins. Section 1.11b.
+
+**Architecture (single source of truth):**
+
+All premium gating flows through one module: `ui/Premium.js`
+
+```javascript
+export function isPremium()
+export function requiresPremium(feature)
+// Features: 'hotcold_league' | 'weather_7day' | 'radar_full' | 'save_slots_full'
+//           | 'reports_full' | 'narrative_depth' | 'history_full'
+//           | 'farm_arcs' | 'career_history' | 'scouting_full' | 'watchlist_full'
+```
+
+Every feature with a free/premium split calls `isPremium()` or `requiresPremium(feature)`.
+No conditional in engine code — engines always run at full capability.
+Gating is view-only: hide, blur, or upgrade prompt in the UI layer.
+
+**Free vs Premium splits:**
+
+| Feature | Free | Premium |
+|---|---|---|
+| Hot/cold indicators | Own roster only | League-wide |
+| Weather forecast | 48h (next game) | 7-day rolling (168h) |
+| Radar scrubber | Current → +12h | Full 48h range |
+| Save slots | 1 slot | Unlimited |
+| Reports | Roster (OVR/pos/age only) | Full sortable suite + financial + trade value |
+| Narrative card depth | Mechanical cards always delivered | Full narrative variant pool |
+| Franchise History | Current season only | Full multi-season history |
+| Farm system | OVR + position | Full arc indicators + development notes |
+| Career history | Current season stats | Season-by-season breakdown |
+| Scouting reports | Basic opponent tendencies | Full breakdown via compose |
+| Watchlist | 5 players | Unlimited |
+
+**Phase 18 tasks:**
+81. Build `ui/Premium.js` with purchase/unlock flow
+82. Add `isPremium: false` to `state.settings` in schema
+83. Wire `requiresPremium()` into each feature's UI render — one pass per feature per table above
+84. Staff delegation system
+85. Ad placement integration (non-blocking, dead time only)
+
+**Pricing model:** One-time purchase recommended. Subscription only if real-world data integration added post-launch.
+
+> **Gate:** Free and premium experiences distinct. No premium feature accessible without unlock. `isPremium()` returns false by default; purchase flow sets `state.settings.isPremium = true` and saves.
+
+---
+
+## 14. Open Design Questions
+
+These must be answered before the relevant phase begins. Adding questions here as they arise.
+
+| # | Question | Phase blocked | Status |
+|---|---|---|---|
+| 1 | Sub-ratings for players — design and ranges | Phase 2 | ✅ Locked — Section 4.1 |
+| 2 | Financial model — payroll vs operating budget vs revenue | Phase 2 | ✅ Locked — Section 4.2 |
+| 3 | Multi-team save slots — Model A vs Model B | Phase 1 | ✅ Locked — Model B, Section 4.8 |
+| 4 | Difficulty tiers vs archetype system | Phase 2 | ✅ Locked — Archetype system, Section 16 |
+| 5 | Trade cash amount formula — $M per rating point differential | Phase 8 | ❓ Open |
+| 6 | Trade deadline game index | Phase 4 | ✅ Locked — opens game 88, closes game 92 |
+| 7 | Waiver pool — rebuild scope or post-launch? | Phase 10 | ✅ Locked — in scope, Phases 10–12, Section 9.7 |
+| 8 | User-initiated trades — rebuild scope or post-launch? | Phase 8 | ✅ Locked — in scope, Phase 8, Section 9.5 |
+| 9 | Spring training game count and integration | Phase 4 | ✅ Locked — 20 games, stats tracked, contested spots mechanic, Section 5 |
+| 10 | All-Star Break system | Phase 4 | ✅ Locked — Section 17 |
+| 11 | Prestige tiers and win condition | Phase 4 | ✅ Locked — Section 18 |
+| 12 | Classic mode — keep, retire, or premium? | — | ✅ Locked — retired entirely, Section 2.1 |
+| 13 | Where do released/walked players go? | Phase 5 | ✅ Locked — waiver → farm → retirement, Section 20 |
+| 37 | User team divisionId stored explicitly in state | Phase 4 complete | ✅ Locked — always Division A, stored as `userTeam.divisionId: 'A'` in schema to avoid hardcoding in standings logic. schema.js updated. |
+| 38 | Sim soft metric adjustments | Phase 6 | moraleAdj=(morale-50)*0.001, atmosAdj=(atmosphere-50)*0.0006, weatherAdj per condition. Confirm ranges are gameplay-balanced before Phase 6 SimEngine build. |
+| 14 | Do CPU teams poach user's expiring contract players? | Phase 5 | ✅ Locked — yes, gmRelationship-gated, sign-and-trade mechanic, Section 22 |
+| 15 | How many offseason decisions are mandatory before spring? | Phase 5 | ✅ Locked — tiered gates, 6-day offseason, Section 23 |
+| 16 | Does the farm system feed into offseason promotions? | Phase 5 | ✅ Locked — yes, full farm system with story arcs, Section 20 |
+| 17 | Retirement threshold — age/OVR that triggers retirement | Phase 5 | ✅ Locked — Section 20.7 |
+| 18 | Ownership evaluation card — win target thresholds per archetype | Phase 5 | ✅ Locked — annual adjustment + tier bumps + archetype floors/ceilings, Section 25 |
+| 19 | Initial payrollCap and operatingBudget values per archetype | Phase 2 | ✅ Locked — Section 16.6 |
+| 20 | Final archetype names | Phase 2 | ✅ Locked — Section 16.1 |
+| 21 | Theme preference — per-slot or global? | Phase 1 | ✅ Locked — per-slot, gameMode field removed |
+| 22 | Premium pricing model — one-time vs subscription | Post-launch | ❓ Open |
+| 23 | Ad implementation — SDK and confirmed placements | UI phase | ❓ Open |
+| 24 | One team per archetype rule | Phase 1 | ✅ Locked — Section 16.3 |
+| 25 | Archetype transitions | Phase 5 | ✅ Locked — Section 16.3 |
+| 26 | Multiplayer leagues — scope and architecture | Future v3 | ✅ Locked — Section 1.7 |
+| 27 | Calendar pacing — daily cadence vs compressed schedule | Phase 4 | ✅ Locked — real-world daily cadence, Section 8.5 |
+| 28 | WAR/hot-cold player value calculation — factors and formula | Phase 5 | ✅ Locked — Impact Rating (IMP), Section 30 |
+| 29 | Additional stats — which require new tracked fields vs computable | Phase 2 | ✅ Locked — full stat shapes in Section 4.3 |
+| 30 | Difficulty preset system | Phase 1 | ✅ Removed — archetypes serve as difficulty selection, Section 1.9 |
+| 31 | CPU full schedule — confirmed full 132-game league schedule for all 9 teams | Phase 4 | ✅ Locked — full schedule, Section 28 |
+| 32 | Player watchlist size — free vs premium | Phase 9 | ✅ Locked — free: 5, premium: 50 |
+| 33 | Stat leaders categories | Phase 9 | ✅ Locked — AVG, HR, RBI, SB, ERA, W, K, SV (8 categories) |
+| 34 | Hot/cold visibility — own roster vs league-wide | Phase 9 | ✅ Locked — free: own roster only, premium: league-wide |
+| 35 | Feed retention window | Phase 9 | ✅ Locked — 72 hours, then gone |
+| 36 | CPU game detail level — PBP, diamond, box score | Phase 4 | ✅ Locked — full detail, same pipeline as user game, Section 28 |
+| 39 | Playoff bracket structure and seeding | Phase 6 pre-build | ✅ Locked — Section 26.1. All 5 per division qualify. 1/3/5/7 game progression. Division-contained. Head-to-head tiebreaker. |
+
+## 20. Player Lifecycle & Farm System (LOCKED)
+
+### 20.1 The Three-Tier Player Lifecycle
+
+Every player in the game exists in exactly one of three tiers at any time. Tier assignment is a property of the player object, not a separate list.
+
+```
+TIER 1 — Active Roster
+  ↓ (cut, not re-signed, or optioned down)
+TIER 2 — Waiver Wire (72-hour window)
+  ↓ (claimed by a team)        ↓ (clears waivers unclaimed)
+TIER 1 (new team)           TIER 3 — Farm System
+                                ↓ (called up)
+                            TIER 1 (return to roster)
+                                ↓ (age/OVR threshold met, not claimed for 1 offseason)
+                            RETIRED
+```
+
+Player tier is stored as `player.tier: 'active' | 'waivers' | 'farm' | 'retired'`.
+Team ownership stored as `player.teamId` — always points to the team that controls the player's rights, even when on waivers or the farm.
+
+### 20.2 Waiver Wire System (LOCKED)
+
+#### Priority Order
+
+Waiver priority is dynamic, not static. It resets at the start of each season and shifts throughout the season as claims are used.
+
+**Season start:** Priority set by inverse final standings from the prior season. Worst record = highest priority (1st claim). Best record = lowest priority. First season: inverse of archetype-based starting strength.
+
+**Priority cycling (LOCKED):**
+- When a team uses a waiver claim: that team immediately drops to lowest priority (position 10)
+- All teams below the claiming team shift up one position
+- A team that claims early in the season burns their priority for the rest of the season
+
+This means teams face a genuine strategic decision: use priority now for a good player, or hold it for something better later. CPU teams evaluate this based on roster need urgency and player rating.
+
+**User priority visibility:** The user's current waiver priority position is always visible in the Players tab waiver view — *"Your current waiver priority: 4th of 10."* This is actionable information: placing a player on waivers when you're 1st priority means you're likely to lose them; placing them when you're 9th means other teams probably won't claim.
+
+#### Waiver Process
+
+1. Player is placed on waivers — `player.tier = 'waivers'`, `player.onWaivers = true`, `player.waiverStartTime` set (Unix ms)
+2. 72-hour real-world claim window opens
+3. CPU teams evaluate: does this player address a positional weakness? Is the OVR upgrade worthwhile? Is this team's priority high enough to beat competing claimants?
+4. Highest-priority claiming team wins the player
+5. Claiming team must immediately drop a player to maintain roster size — that dropped player enters waivers
+6. Claiming team's priority drops to last
+7. If unclaimed after 72 hours: player optioned to the placing team's farm system
+
+#### CPU Team Waiver Logic
+
+CPU teams claim waived players based on three factors:
+- **Positional need:** Does the player fill a genuine gap (injured starter, expiring contract at that position)?
+- **Rating threshold:** Is the player's OVR at least equal to the weakest player at that position on their roster?
+- **Priority feasibility:** Would using this claim burn priority that might be needed for a more urgent need?
+
+CPU teams do not claim players they don't need. This keeps the waiver wire realistic — a poor backup catcher doesn't get claimed by a team with three healthy catchers.
+
+### 20.3 Farm System (LOCKED)
+
+#### Full Player Registry
+
+All 10 teams — user and CPU — maintain persistent farm systems. Every farm player is a full player object in `state.players` with a UUID, stats, sub-ratings, contract, and story arc. There is no "generated on demand" farm player — every callup draws from a persistent, known object.
+
+This enables the emergent gameplay of learning CPU team depth patterns: a user who pays attention over multiple seasons learns that the New York Empire almost always calls up the same RF prospect when their starting RF is injured. That's real strategic intelligence earned through observation.
+
+#### Farm Roster Composition Caps (LOCKED)
+
+Fixed composition caps — separate hitter and pitcher limits, not a single total:
+
+```javascript
+export const FARM_HITTER_MAX = 12;
+export const FARM_PITCHER_MAX = 8;
+export const FARM_HITTER_MIN_POSITIONS = ['C', 'CI', 'MI', 'OF']; // min 1 each
+export const FARM_PITCHER_MIN_SP = 2;
+export const FARM_PITCHER_MIN_RP = 2;
+```
+
+Total farm capacity: 20 players per team.
+
+**Overflow displacement rule (LOCKED):**
+When an incoming player would exceed the cap for their group:
+1. Check which position is most overstocked (most players relative to minimum coverage)
+2. The lowest OVR player at that position is the displacement candidate
+3. If displacement would violate minimum position coverage, skip and find the next-lowest at a non-critical position
+4. Displaced player goes to **waivers** — not retirement. Other teams can claim them.
+5. If displaced player clears waivers unclaimed → free agency → retirement eligibility
+
+This ensures the farm never loses its last catcher or last SP to make room for a fifth OF prospect.
+
+#### User Farm System UI
+
+Located on the Roster screen as a collapsible section below Pending Transactions:
+
+```
+Roster Screen sections:
+├── Hitters               (collapsible)
+├── Pitchers              (collapsible)
+├── Injured List          (collapsible)
+├── Pending Transactions  (collapsible)
+└── Farm System           (collapsible)
+    ├── Position Players — 12 max, sorted by position group then OVR
+    └── Pitchers — 8 max, sorted by role then OVR
+```
+
+**Farm player row displays:**
+- Name, position, OVR badge, age, trait indicator
+- Send-down date
+- Story arc indicator: ↑ motivation, ↓ decline, — stable
+- Brief context note: *"Optioned Apr 14 — performing well"*
+
+Tapping opens full player card — same modal as active roster players.
+
+**CPU farm systems:** Not browsable by the user. CPU farm players surface when called up — their profile shows farm origin. The user cannot browse CPU farm rosters directly.
+
+### 20.4 Farm System Story Arcs (LOCKED)
+
+A player sent to the farm isn't just a stat entry — they have an ongoing story. Arc is determined at send-down time based on trait, age, and a random element, and plays out over subsequent games.
+
+#### Motivation Arc (responds well)
+- **Triggered by:** veteran trait, consistent trait, younger players (22–25), or random chance (~45% baseline)
+- **Sub-rating effect:** Small upward drift during farm time (+0.5 to +1.5 per sub-rating per month on farm, up to +3 max before callup)
+- **Card generated at callup threshold:** *"Davis has been outstanding at Triple-A — his contact numbers are the best they've been in years. He's ready."* Callup card presents genuine decision: promote now and displace someone, or let him keep developing?
+- **Morale effect on callup:** +2 morale on active roster when a motivation-arc player returns
+
+#### Decline Arc (responds poorly)
+- **Triggered by:** volatile trait, older players (30+), high-rated players (75+) sent down (pride injury), or random chance (~25% baseline)
+- **Sub-rating effect:** Small downward drift (-0.5 to -1.5 per sub-rating per month, down to -4 max)
+- **Card generated:** *"Word from the farm is that Miller hasn't been himself since the send-down. He's asking questions about his future with the organization."* Options: call up early (disrupts roster but stops decline), talk to him (managerConfidence decision), or let it play out
+- **Extended decline risk:** If decline arc player stays in farm more than 60 real days, they may request release — generating a card with a deadline
+
+#### Stable Arc (neither improves nor declines)
+- **Triggered by:** ~30% baseline for any player not otherwise triggered
+- **Sub-rating effect:** No change
+- **Card generated:** Simple callup-ready notification when needed, no narrative weight
+
+#### Arc Modifiers
+- `youngGun` trait: motivation arc probability +20%, decline arc probability -10%
+- `volatile` trait: decline arc probability +25%, variance on sub-rating changes increased
+- `clubhouseLeader` trait: always stable arc (veterans accept organizational decisions gracefully)
+- Age 28+: decline arc probability +10% per year above 28
+
+### 20.5 Callup Mechanics
+
+When a farm player is called up to the active roster:
+
+1. A callup card fires in the inbox — presenting the decision to promote and who gets displaced
+2. User confirms the promotion — depth check identifies the displaced player
+3. Displaced player goes to farm (or waivers if farm is full)
+4. Farm player's story arc status clears on callup — they start fresh on the active roster
+5. Sub-rating changes from the farm arc are permanent — a player who developed on the farm keeps those gains
+
+**Auto-callup for depth emergencies:** If a Type 2 roster integrity failure exists (a starter slot uncovered) and the user doesn't act within 4 hours of the next game, `RosterEngine.autoResolveDepth()` promotes the highest-OVR eligible farm player automatically. A notification fires immediately when the auto-callup occurs.
+
+### 20.6 End-of-Season Farm Processing
+
+During the season transition (Step 4 — development/decline), farm players receive the same sub-rating aging treatment as active roster players. Additionally:
+
+- Farm players on decline arc for a full season may retire if OVR drops below threshold (feeds OQ-17)
+- Farm players on motivation arc for a full season may receive a contract upgrade offer (generates offseason card)
+- Farm roster spots freed by retirements or promotions may be filled by newly generated prospects (keeping farm depth meaningful across seasons)
+
+### 20.7 Player Retirement (LOCKED — resolves OQ-17)
+
+A player retires when both conditions are met:
+- Age ≥ 35 AND OVR < 55, OR
+- Age ≥ 38 (regardless of OVR — physical decline assumed), OR
+- Farm system decline arc completes with OVR < 50
+
+**Retirement triggers:**
+- End-of-season processing: players meeting the threshold retire silently (no card) unless they were on the user's active roster or farm in the past 2 seasons
+- If they were recently connected to the user: a brief retirement notification card fires (*"Former [Team] player {name} has announced his retirement."*)
+- Veterans (trait: `veteran`) get one additional season grace period before the age/OVR check applies — veterans fight to stay on the field
+
+**Retirement in the player registry:** `player.tier = 'retired'`, `player.retiredAt = seasonNum`. Retired players remain in the registry permanently for franchise history — career stats preserved, visible in franchise records.
+
+Constants:
+```javascript
+export const RETIREMENT_AGE_HARD = 38;
+export const RETIREMENT_AGE_SOFT = 35;
+export const RETIREMENT_OVR_SOFT = 55;
+export const RETIREMENT_OVR_FARM = 50;
+```
+
+---
+
+## 22. Player-GM Relationship System (LOCKED)
+
+### 22.1 Overview
+
+Each player has a `gmRelationship` score (0–100) representing their personal trust in and satisfaction with the GM — distinct from team morale, distinct from their trait, and persistent across seasons.
+
+| Metric | What it measures | Scope | Changes from |
+|---|---|---|---|
+| `morale` | Team-wide emotional state | Whole roster | Win/loss streaks, broad decisions |
+| `atmosphere` | Organizational energy | Organization | Facility, performance, events |
+| `player.gmRelationship` | Individual player's trust in the GM | One player | Decisions that specifically affect that player |
+
+A team can have 72 morale while a franchise cornerstone has a 35 gmRelationship because the GM declined to extend his contract. These metrics coexist independently.
+
+### 22.2 Starting Values
+
+- New players (generated at game start): 50
+- Acquired players (trade, waiver, free agency): 50
+- Re-acquired players (previously in the org and traded away): 45 — partial reset, history acknowledged
+- Re-acquired players show `_previouslyWithOrg: true` on their player card: *"Previously with the organization"*
+
+### 22.3 Relationship Effects — Positive
+
+| Decision | gmRelationship effect | Who it affects |
+|---|---|---|
+| Named clubhouse leader | +8 | That player |
+| Contract extension offered before player requests it | +6 | That player |
+| Farm callup after motivation arc earned it | +5 | That player |
+| Defended player publicly in a media card | +5 | That player |
+| Accepted trade specifically recommended by manager | +3 | Incoming player |
+| Approved player-specific training program | +4 | That player |
+| Chose player's preferred rest schedule when offered | +3 | That player |
+| Team wins a championship | +5 | All players on roster |
+
+### 22.4 Relationship Effects — Negative
+
+| Decision | gmRelationship effect | Who it affects |
+|---|---|---|
+| Declined contract extension player requested | -8 | That player |
+| Passed over veteran for clubhouse leader | -6 | Passed-over player |
+| Sent player down to farm | -5 to -10 (arc-dependent) | That player |
+| Traded away player's close teammate | -3 | Remaining player |
+| Chose cost over player in contract negotiation | -6 | That player |
+| Ignored player's personal leave request | -10 | That player |
+| IL placement when player wanted to play through | -5 | That player |
+| Ignored a player-specific card for 3+ games (expired) | -2 | That player |
+
+### 22.5 How gmRelationship Feeds Into Other Systems
+
+**CPU poaching (OQ-14 — LOCKED):**
+A player with gmRelationship below 60 is eligible to be targeted by CPU teams in the offseason. Three conditions must all be true for a poaching card to fire:
+1. The player fills a genuine positional need for that CPU team
+2. The player's OVR meets that team's acquisition threshold
+3. The player's gmRelationship is below 60
+
+A player at 60+ gmRelationship is simply not contacted by other teams — loyalty built through good decisions actively protects the roster.
+
+When all three conditions are met, a poaching card fires from the competing GM. Decision:
+- **Re-sign him** — pay market rate (lower gmRelationship = higher market demand), poaching disappears
+- **Accept the sign-and-trade** — get a return package; quality weighted by your relationship with that CPU team's GM
+- **Let it play out** — risk free agency with no return, but preserve payroll flexibility
+
+Card fires before the user has seen the re-sign offer — decision made under genuine uncertainty. Sign-and-trade package quality: strong CPU GM relationship = fair package. Weak relationship = low-ball offer.
+
+**Contract negotiations:**
+- gmRelationship below 40: player demands a premium above market rate — relationship damage has a dollar cost
+- gmRelationship above 70: player accepts a slight discount to stay — loyalty has a financial reward
+- This makes relationship management a financial strategy, not just a soft metric
+
+**Sim engine performance variance:**
+- gmRelationship below 30: increased outcome variance on that player's contributions — slightly more likely to underperform on any given game. Small effect, not dramatic.
+- gmRelationship above 80: small consistency bonus — this player shows up reliably
+
+**Clubhouse disruption cards:**
+A player with gmRelationship below 30 AND volatile trait is a disruption risk. Specific cards fire when this combination is present: *"Sources say Miller has been vocal in the clubhouse about the front office's decisions."* Decision: address it directly (managerConfidence cost, relationship recovery possible) or ignore it (morale risk).
+
+**Trade value signals:**
+When evaluating CPU-initiated trades, player gmRelationship colors the value note qualitatively — not as a number, but as a signal. High relationship: *"He's been a reliable presence and clearly values his time here."* Low relationship: *"He's been productive but a change of scenery might benefit both sides."*
+
+**Trade card — audit flag:**
+Every card in `cards-pool.js` that specifically names and affects a player needs a `_playerRelationshipEffect` field in its `yesEffect` and `noEffect` objects. This is a **Phase 9 task** (CardEngine build) — every card's effects are reviewed for player-specific relationship impact at that time. The card schema supports this field from day one.
+
+**gmRelationship decay (Phase 6+ task — LOCKED):**
+Without active maintenance, gmRelationship drifts toward 50 at ~-1 per 10 games for extreme values (>70 or <30). Implementation: add to `GameEngine.commitGame()` sequence after Step 11 (metric history snapshot). Not yet implemented — add in Phase 6 when SimEngine drives per-player outcomes.
+
+**gmRelationship → sim variance (Phase 6 task — LOCKED):**
+- gmRelationship < 30: increased outcome variance on that player's contributions (more volatile stat lines)
+- gmRelationship > 80: small consistency bonus (player shows up reliably)
+- SimEngine must accept gmRelationship as an input parameter for each player's at-bat/pitch resolution. Design this into SimEngine from the start — do not patch in later.
+
+### 22.6 gmRelationship Visibility
+
+The GM never sees a raw score — that would feel gamey. Instead they see qualitative signals:
+- Player card shows a relationship indicator using descriptive language: *"Loyal"* (70+), *"Content"* (50–69), *"Unsettled"* (30–49), *"Disgruntled"* (below 30)
+- Player card shows a small icon reflecting the category, not a number
+- Cards and compose channel prompts reference the relationship qualitatively in their body text
+- The score itself is internal to the engine
+
+### 22.7 Relationship Decay
+
+Without active maintenance, gmRelationship drifts slowly toward 50 over time — extreme values (very high or very low) decay toward neutral at a rate of approximately -1 per 10 games. This prevents relationship scores from being permanently toxic or permanently maxed out without any decisions being made. Active decisions are required to keep a player's relationship high.
+
+---
+
+### 21.1 Injuries Are Not User-Only
+
+Injuries happen to players on all 10 teams using the same probability model. In v1, injuries only fired against the user's roster because the injury system was wired into the card engine. This made CPU teams feel invincible and the league artificial.
+
+In the rebuild: `InjuryEngine` runs on every team's active roster during the daily simulation tick — not just the user's. CPU team injuries are silent (no inbox card for the user), but they update the player registry and affect CPU team OVR and lineup decisions.
+
+**Parity rule:** CPU teams experience injuries at the same statistical frequency as the user's team. Same constants, same probability tables. No hidden invincibility.
+
+### 21.2 CPU Team Injury Processing
+
+When a CPU player is injured:
+1. `player.isInjured = true`, `player.ilReturnDate` set
+2. CPU team automatically calls up the highest-OVR eligible farm player at that position
+3. CPU team OVR recalculated — opponent rating in the sim engine reflects the injury
+4. Player becomes visible as injured in the League screen (see 21.3)
+
+A user who notices the league's best SP is out for 3 weeks might exploit that window at the trade deadline. That's real GM strategy enabled by this system.
+
+### 21.3 League Injury Visibility (LOCKED)
+
+On the League screen, injured CPU players show a small **💬 icon** next to their name. Tapping generates a brief inline injury report. Information quality scales with GM relationship:
+
+| Relationship with that team | Information shown |
+|---|---|
+| Below 40 | *"The organization is not commenting on player availability."* |
+| 40–60 | *"Upper body injury. Day-to-day."* |
+| 61–80 | *"Hamstring strain. Estimated 2–3 weeks."* |
+| 81–100 | *"Grade 1 hamstring strain. Targeting return in 10–14 days. No structural concern."* |
+
+**Report timestamp:** Reports older than 5 days show a stale indicator — *"(Report from 6 days ago — status may have changed)"*. Information freshness is part of the mechanic.
+
+**Implementation:** Injury report text is pre-generated at injury time and stored on the player object as `player.injuryReport: { vagueText, detailedText, generatedAt }`. The League screen applies the relationship filter at display time. No card fires — this is a passive information layer the user pulls, not pushed at them.
+
+### 21.4 Multiplayer Forward-Compatibility Note
+
+In the multiplayer context (future v3), this system applies in reverse — other GMs can tap your injured players and see reports filtered by their relationship score with you. Designed now so nothing prevents this later.
+
+---
+
+## 23. Offseason Structure (LOCKED)
+
+### 23.1 Duration
+
+The offseason lasts exactly **6 calendar days** — long enough to feel meaningful, short enough to not be a nuisance. Each day has a primary focus, giving the offseason a structured arc that the notification system supports.
+
+| Day | Primary focus | Card pools active |
+|---|---|---|
+| 1 | Season summary. Ownership evaluation card fires. | SEASON_SUMMARY, OFFSEASON |
+| 2 | Expiring player contracts. CPU poaching cards can fire. | OFFSEASON |
+| 3 | Manager and coaching staff renewals. Trade cards active. | OFFSEASON, MANAGER_CONTRACT, COACHING_CONTRACT |
+| 4 | Facility and groundskeeper offseason cards. Farm development. Free agency signings. | OFFSEASON |
+| 5 | Final reminder day — unresolved hard gates get urgent notification. Soft gates begin auto-resolving. | OFFSEASON |
+| 6 | Spring training begins at end of day. Hard gate auto-resolve with penalty fires for anything still unresolved. | SPRING_TRAINING |
+
+### 23.2 Decision Tiers (LOCKED)
+
+**Hard gates — spring cannot begin without these resolving:**
+- Ownership evaluation card (sets financial parameters for new season)
+- All expiring player contracts on active roster (re-sign, sign-and-trade, or let walk)
+- Manager contract (you need a manager to run spring training)
+
+Auto-resolve behavior if hard gate reaches Day 6 unresolved: resolves on conservative path with penalty. Notification fires: *"Ownership made a decision in the absence of your response."* Small consequence — not catastrophic, but meaningful.
+
+**Soft gates — auto-resolve after timer if ignored:**
+- Coaching staff renewals → auto-renew at same salary after 4 days if unresolved
+- CPU poaching cards → auto-resolve to "let it play out" after 4 days
+- Free agency signing cards → auto-decline after 3 days
+
+**Non-gated — available but never blocking:**
+- Facility and groundskeeper offseason cards (carry to spring if unresolved)
+- Farm system management cards
+- Scouting and development cards
+- Trade cards (come and go throughout offseason)
+- Community and media cards
+
+### 23.3 Offseason Notification Cadence
+
+The notification system supports the offseason arc with one daily summary push rather than individual card notifications — except for hard gates on Day 5, which fire individual urgent notifications. This prevents notification fatigue during a 6-day window where multiple cards arrive daily.
+
+---
+
+## 24. Debug Tools (LOCKED)
+
+### 24.1 Purpose
+
+The debug panel enables testing of any game phase or transition without playing through a full season. Essential for testing the offseason transition, playoff flow, weather events, and multi-season mechanics. Built as a proper tool, not an afterthought.
+
+### 24.2 Access
+
+Debug mode is never visible in production. Access via one of:
+- URL parameter: `?debug=true` (development only)
+- Hidden tap sequence: tap version badge in Settings 5 times (same UX as iOS developer mode)
+
+All debug actions are logged to an in-panel console showing exact state changes made.
+
+### 24.3 Debug Tool Catalog
+
+| Tool | What it does |
+|---|---|
+| **Jump to game N** | Advances to any schedule index, simulating all prior games with randomized results |
+| **Jump to trade deadline** | Advances to game 88, simulates prior games |
+| **Jump to All-Star Break** | Advances to game 66, triggers All-Star hosting check |
+| **Jump to season end** | Simulates all remaining games, sets final record, advances to SEASON_SUMMARY |
+| **Jump to offseason** | Enters OFFSEASON phase with configurable win total (input field) |
+| **Jump to spring training** | Completes all offseason gates on default paths, enters SPRING_TRAINING |
+| **Set season number** | Jump to any season number for multi-season mechanic testing |
+| **Trigger specific card** | Dropdown of all card definition IDs — delivers that card immediately to inbox |
+| **Trigger weather event** | Force DELAYED, POSTPONED, or SUSPENDED on next scheduled game |
+| **Force injury** | Injure a specific player with configurable severity and return timeline |
+| **Set metric value** | Input fields for morale, atmosphere, ownerTrust, managerConfidence |
+| **Set player gmRelationship** | Set a specific player's relationship score for testing poaching and contract cards |
+| **Force farm arc** | Set a specific farm player's arc to motivation, decline, or stable |
+| **Set waiver priority** | Set user's waiver priority position |
+| **Set prestige score** | Set cumulative prestige score for testing tier advancement cards |
+| **Trigger Franchise Turning Point** | Forces the Ember/Lab turning point card |
+| **Trigger Franchise Legend** | Forces the Dynasty win condition card |
+| **Reset weather buffer** | Force regeneration of the weather time series |
+| **Set hosting score** | Set the All-Star hosting score to any value |
+| **Simulate CPU injuries** | Force a round of league-wide injury processing |
+
+### 24.4 Testing Expectations for v2
+
+The planned architecture significantly reduces the testing burden compared to v1:
+
+**Will not need extensive testing (architectural fixes):**
+- Trade cash direction — locked formula in constants, always correct
+- Boxscore sync — pre-computed fields, single source of truth
+- Card timing — phase flags and context object enforce eligibility
+- Push notifications on Android — proper VAPID architecture, no setTimeout
+
+**Will still require real-world testing:**
+- Card token resolution — every card produces readable, grammatically correct text
+- Roster depth edge cases — last catcher to IL with no farm catcher, etc.
+- Push notification delivery on a real Android device
+- Full offseason transition (2–3 times, different archetypes) — use debug jump tools
+- Weather event flows end-to-end — delay, postponement, suspended game, makeup
+
+**Honest estimate:** v2 testing will require approximately 30% of the effort v1 required. The remaining testing is the interesting kind — does the game feel right? — rather than the frustrating kind — why is this broken again?
+
+---
+|---|---|---|
+| Push notifications silently fail on Android | `setTimeout` in SW — killed by OS | Cloudflare Worker cron + VAPID Web Push (Section 12) |
+| Trade cash going wrong direction | Cash direction computed inconsistently, no single rule | Locked formula in TradeEngine (Section 9.1) |
+| Trade card body text inconsistent with cash direction | Token resolved before direction known | `{trade_cash_note}` token resolved last, after direction computed |
+| Live boxscore not updating mid-inning | PBP reveal logic and linescore were reading different fields | Pre-computed `cumOurScore`/`cumTheirScore` on every play; linescore reads same fields as PBP |
+| Injured players re-promoted by depth checks | `_ensureDepth` didn't exclude `_pendingDeparture` | RosterEngine depth checks explicitly exclude `_pendingDeparture` and `isInjured` |
+| Incoming traded player placed before game commit | Deferral check ran after roster push | Deferral check runs BEFORE roster push in RosterEngine |
+| Injury cards didn't fit live mode | Cards written before live mode existed | Two-act injury model (Section 11) separates in-game and post-game cards cleanly |
+| Coach card collision around line 525 in cards-pool.js | Manual editing of 19,000-line file — closing brace missing | Fixed in Phase 0 when export is added; module structure prevents this class of error |
+| Weather delay card fired but live game kept running | Weather was a card event, not a game state — two separate systems with no shared state | Weather is a first-class `game.status` — all systems read the same state (Section 8.8) |
+| League team `str` not reflected in opponent rating lookup | `_getOpponentRating` used hardcoded values in some paths | All opponent ratings computed from `leagueTeams[].str` via single utility function |
+
+---
+
+*Document last updated: Planning session — OQ-15 locked (6-day offseason, tiered gates), expanded debug tools catalog, testing expectations documented*
+*Next: OQ-18 — Ownership win target escalation across seasons (final substantive open question)*
+
+---
+
+## 16. GM Archetype System
+
+> Status: LOCKED — names, profiles, parameters, and persistence rules all confirmed.
+
+Replaces the concept of "difficulty tiers." The archetype is chosen at game creation and defines the franchise context the user inherits. It is an in-world concept — not a meta-game difficulty setting. Ownership hired you to execute a specific mandate. That mandate shapes everything.
+
+### 16.1 The Six Archetypes (LOCKED)
+
+| ID | Name | One-line premise |
+|---|---|---|
+| `ember` | **The Ember** | A once-great franchise, cold now. You're the rebuild. |
+| `contender` | **The Contender** | A good team that hasn't broken through. Playoff expectations. |
+| `empire` | **The Empire** | A dynasty in progress. Championship or bust. |
+| `gambler` | **The Gambler** | A volatile franchise. Boom-or-bust everything. |
+| `lab` | **The Lab** | Analytics-forward. Process over results, for now. |
+| `institution` | **The Institution** | Old-school, veteran-heavy, deeply traditional. |
+
+#### The Ember
+*A once-great franchise, cold now. Long-suffering fans. You're the rebuild.*
+- Roster profile: younger players, wide OVR spread (some gems, some liabilities), affordable contracts
+- PayrollCap: low — ownership is cutting costs while rebuilding
+- OperatingBudget: minimal — no room for expensive fixes
+- Ownership patience: high — they hired you to rebuild, they know it takes time
+- Win target: modest (season 1: ~68 wins)
+- Starting morale: low-medium
+- Starting atmosphere: low
+- GM relationships: neutral across the board — new face, no history
+- Card weighting: development cards, scouting cards, culture cards weighted higher; trade deadline pressure lower
+- Sim tendency: more variance — this roster can surprise or collapse
+
+#### The Contender
+*A good team that hasn't broken through. Solid core, playoff expectations.*
+- Roster profile: mid-to-high OVR, mix of veterans and mid-career players, some expensive contracts
+- PayrollCap: mid-high
+- OperatingBudget: comfortable
+- Ownership patience: medium — two seasons to make a run, then questions get asked
+- Win target: high (season 1: ~88 wins, playoff berth expected)
+- Starting morale: medium-high
+- Starting atmosphere: medium-high
+- GM relationships: mixed — some good relationships from prior trades, one friction point
+- Card weighting: trade cards weighted higher near deadline; ownership pressure cards active
+
+#### The Empire
+*A dynasty in progress. Championship or bust.*
+- Roster profile: high OVR across the board, veteran-heavy, expensive long-term contracts
+- PayrollCap: high — ownership will spend to win
+- OperatingBudget: generous
+- Ownership patience: low — they're paying for championships, not rebuilds
+- Win target: very high (season 1: ~95 wins, deep playoff run expected)
+- Starting morale: high
+- Starting atmosphere: high
+- GM relationships: mostly strong — established franchise, known quantity
+- Card weighting: ownership pressure cards frequent; high-profile signing cards; legacy/prestige cards
+- Risk: contract flexibility is limited — you're locked into expensive veterans
+
+#### The Gambler
+*A volatile franchise. Boom-or-bust everything.*
+- Roster profile: uneven — some elite players, notable weaknesses, aggressive contract structure
+- PayrollCap: mid — owner will bend rules but isn't unlimited
+- OperatingBudget: medium, but owner will approve bold moves
+- Ownership patience: unpredictable — loves a big swing, hates mediocrity
+- Win target: variable — owner reacts to narrative, not just wins
+- Starting morale: volatile baseline
+- Starting atmosphere: medium with high variance
+- GM relationships: some very strong, some actively hostile — this team has made enemies
+- Card weighting: bold trade cards, high-risk/high-reward decisions, volatile player cards
+- Sim tendency: high variance outcomes — this team wins big or loses ugly
+
+#### The Lab
+*An analytics-forward organization. Process over results, for now.*
+- Roster profile: efficiently constructed — mid-OVR but excellent sub-rating profiles (high contact, high control), affordable contracts, younger skew
+- PayrollCap: mid — ownership values efficiency over spending
+- OperatingBudget: medium, biased toward development spend
+- Ownership patience: high — they believe in the model
+- Win target: modest early, escalating (season 1: ~78 wins; they're building)
+- Starting morale: medium
+- Starting atmosphere: low-medium (fans are skeptical of the approach)
+- GM relationships: neutral to slightly cold — traditional GMs distrust analytics shops
+- Card weighting: scouting cards, training/development cards, innovative lineup cards; fewer emotional/culture cards
+- Unique mechanic: development cards have higher upside — The Lab's players develop faster
+
+#### The Institution
+*Old-school, veteran-heavy, deeply traditional.*
+- Roster profile: veteran-skewed, reliable OVR, slower development ceiling, loyal long-termers
+- PayrollCap: mid-high — respects paying veterans fairly
+- OperatingBudget: medium
+- Ownership patience: medium — values stability and reputation as much as wins
+- Win target: consistent (season 1: ~82 wins; they want steady excellence)
+- Starting morale: high — veterans run a tight clubhouse
+- Starting atmosphere: high — deep fanbase, loyal
+- GM relationships: strong with traditional teams, cold with analytics teams
+- Card weighting: culture cards, veteran leadership cards, coaching staff cards; trade cards are conservative (they don't trade veterans lightly)
+- Unique mechanic: veteran trait bonuses amplified; young players take longer to develop (culture is set in its ways)
+
+### 16.2 Archetype at Game Creation
+
+The game creation flow presents the six archetypes with:
+- A one-sentence premise (as above)
+- Three at-a-glance indicators: Roster Strength / Ownership Patience / Financial Room
+- No sliders — the archetype IS the configuration
+
+After selecting an archetype, the user customizes:
+- GM name
+- Team city and nickname
+- Team icon (emoji picker)
+- Primary and secondary team colors (COLOR_PALETTE pickers)
+
+Note: Game mode selection is not present — classic mode is retired (Section 2.1). Always live mode.
+
+The archetype pre-fills all financial and roster parameters. The user never sees raw numbers at setup — they see the story.
+
+### 16.3 Archetype Persistence (LOCKED)
+
+The archetype is set at game creation and never changes — it is the founding identity of the franchise. What changes across seasons is the *result* of playing well or badly: financial parameters shift via the ownership evaluation card, prestige tier evolves, card weights adjust. The identity stays constant; the circumstances change around it.
+
+**One team per archetype (LOCKED):**
+- A user cannot have two save slots with the same archetype
+- Free tier: 1 save slot (any archetype)
+- Premium tier: up to 6 save slots — one per archetype maximum
+- The slot picker enforces this at creation — already-used archetypes are shown but not selectable
+- This makes each archetype feel like a distinct franchise identity, not a setting
+
+**The Franchise Turning Point (LOCKED):**
+A single special transition event available once per franchise lifetime. Fires only for Ember and Lab archetypes that achieve something extraordinary — winning a championship or reaching the highest prestige tier. Presented as an ownership card:
+
+*"What you've built here is no longer a rebuild. The organization has changed. Ownership is ready to invest accordingly."*
+
+The user chooses: accept the transition (new financial parameters matching Contender tier, higher expectations going forward) or decline (stay the course, keep patient ownership and lower pressure). This is a meaningful decision — some players will decline to preserve the low-pressure environment. The archetype label does not change, but the parameters shift permanently. This event can only fire once.
+
+No other archetype transitions exist. A Contender does not become an Empire through good play — that would require a different ownership situation, which is out of scope for the single-player game. The Turning Point is the one exception because it represents something genuinely rare and earned.
+
+### 16.5 Archetype and the Card System
+
+The archetype biases which cards are weighted higher in the draw pool each game. It does not block cards — any card can appear for any archetype — but frequency shifts meaningfully. An Empire player sees more championship pressure cards. An Ember player sees more development opportunity cards. This makes each archetype feel tonally distinct throughout the season.
+
+---
+
+### 16.6 Archetype Parameter Table (LOCKED)
+
+Concrete initial values used to initialize the state object at game creation.
+
+**Financial scale (LOCKED):** All monetary values stored in **$K (thousands)**.
+Display formatter `formatMoney(amountK)` in `ui/formatters.js` handles contextual display:
+- Under $1,000K → `$XXK` (e.g. `$350K`)
+- $1,000K and over → `$X.XM` (e.g. `$1.2M`, `$35M`)
+
+This ensures `$350K` never displays as `$0.35M` and `$85,000K` never appears.
+Player salaries, payroll caps, operating budgets, and card costs all use $K internally.
+
+| Parameter | Ember | Contender | Empire | Gambler | Lab | Institution |
+|---|---|---|---|---|---|---|
+| **Roster** | | | | | | |
+| Starter OVR range | 52–72 | 62–80 | 72–90 | 55–88 | 58–76 | 65–82 |
+| Avg roster OVR | ~62 | ~72 | ~82 | ~68† | ~67 | ~74 |
+| Age skew | Young (22–27) | Mixed (24–32) | Veteran (28–35) | Mixed (23–34) | Young-mid (22–29) | Veteran (27–34) |
+| Contract length skew | Short (1–2yr) | Mixed (1–3yr) | Long (2–4yr) | Aggressive (1–4yr) | Short-mid (1–2yr) | Mid (2–3yr) |
+| **Finances** | | | | | | |
+| PayrollCap | $85M | $120M | $160M | $110M | $95M | $125M |
+| Starting payroll | ~$6M | ~$18M | ~$30M | ~$12M | ~$9M | ~$15M |
+| Payroll cap | $8M | $22M | $35M | $16M | $12M | $18M |
+| Operating budget | $500K | $1.5M | $2.5M | $1.25M | $750K | $1M |
+| OperatingBudget | $8M | $18M | $28M | $15M | $12M | $16M |
+| **Ownership** | | | | | | |
+| OwnerTrust start | 65 | 60 | 55 | 50 | 70 | 60 |
+| Season 1 win target | 68 | 88 | 95 | 72–88* | 78 | 82 |
+| Patience rating | High | Medium | Low | Erratic | High | Medium |
+| **Soft Metrics** | | | | | | |
+| Starting morale | 52 | 65 | 78 | 45–70‡ | 58 | 72 |
+| Starting atmosphere | 40 | 68 | 82 | 55 | 45 | 75 |
+| ManagerConfidence | 60 | 65 | 70 | 55 | 62 | 68 |
+| **GM Relationships** | | | | | | |
+| Default all teams | 50 | 50 | 50 | 50 | 50 | 50 |
+| Adjustments | None | +15 one, −10 one | +20 two teams | +25 one, −20 two | −10 three teams§ | +15 two, −15 two |
+| **Card Weights** | | | | | | |
+| Development cards | +40% | baseline | −20% | baseline | +60% | −10% |
+| Scouting cards | +30% | baseline | baseline | +10% | +50% | baseline |
+| Trade cards | baseline | +20% | +30% | +40% | baseline | −20% |
+| Ownership pressure | −30% | +20% | +50% | erratic¶ | −20% | baseline |
+| Culture/morale cards | +20% | baseline | baseline | +30% | −20% | +30% |
+| **Sim** | | | | | | |
+| Outcome variance | High | Medium | Low | Very high | Medium | Low-medium |
+| Turning Point eligible | Yes | No | No | No | Yes | No |
+
+*Gambler win target randomized between 72–88 at season start — owner reacts to narrative, not a fixed number.
+†Gambler OVR has high spread — some elite players, some well-below-average.
+‡Gambler starting morale randomized within range at game creation.
+§Lab relationship penalty: three traditional GM teams start skeptical of the analytics approach.
+¶Gambler ownership pressure cards fire on a weighted-random schedule regardless of performance.
+
+**Starting payroll vs cap — intentional gap:**
+- Ember: ~$25M room — space to add, but a thin roster to start
+- Contender: ~$20M room — some flexibility, meaningful decisions
+- Empire: ~$15M room — very little flexibility, locked into veterans
+- Gambler: ~$25M room, but existing contracts are front-loaded and aggressive
+- Lab: ~$25M room — efficient construction leaves operating room
+- Institution: ~$20M room — stable but most of it is committed to veterans
+
+If generated roster payroll overshoots cap at creation time, contract salaries are adjusted downward proportionally during generation — this is a generation constraint, not a runtime patch.
+
+---
+
+## 17. All-Star Game System (LOCKED)
+
+### 17.1 The Hosting Score
+
+A background metric that accumulates from decisions throughout the season and across seasons. The user never sees a raw number — they receive qualitative signal through relevant card outcomes: *"The league office has taken notice of the improvements to your facility"* or *"Your atmosphere ratings are among the best in the league this season."*
+
+**What contributes to the hosting score:**
+- Facility improvement cards accepted (scoreboard, visiting clubhouse, field quality, concourse upgrades, etc.)
+- Atmosphere metric sustained above 70 for a full season
+- Revenue metric — the league wants to host the game somewhere profitable
+- Prestige tier — minimum Tier 2 required for first hosting; minimum Tier 3 for second
+
+The formula and exact threshold values live in `data/constants.js` as named constants (wiki-documentable, easily tunable).
+
+### 17.2 The Announcement Card (LOCKED)
+
+Fires during the **current season**, around games 45–55, if the hosting score threshold is met. This is intentionally earlier than real-world timing because the narrative benefit of in-season announcement — the user sees the payoff of their decisions while still playing — outweighs the realism cost.
+
+The announcement is a high-prominence card: different visual weight from standard inbox cards, explicit celebration language, distinct sender (*"Commissioner's Office"*).
+
+### 17.3 What Hosting Delivers (LOCKED)
+
+When the announcement fires, the following are applied or queued:
+
+**Immediate (on card resolution):**
+- One-time revenue bonus: $10–15M (scaled by atmosphere and prestige tier)
+- Atmosphere bump: +15, sustained for the remainder of the hosting season
+- OwnerTrust: +10
+- GM relationship boost: +5 with all league teams (organizational prestige signal)
+
+**All-Star Week card set (fires during the All-Star Break phase):**
+A set of 3–4 cards exclusive to the hosting team, each with a real decision:
+- Sponsor activation decision (revenue vs atmosphere tradeoff)
+- Community event decision (atmosphere vs operating budget)
+- Media access decision (atmosphere vs clubhouse distraction)
+- Player selection influence card (one of your players is in contention — advocate publicly or stay quiet)
+
+**Post-All-Star glow (remainder of hosting season):**
+- Home attendance modifier: +small atmosphere boost on home game cards for ~20 games post-break
+- One special trade target card: a player from another team who *"was impressed by your organization during All-Star week"* — exclusive to hosting franchises, fires within 10 games of the break
+
+### 17.4 Escalating Stakes (LOCKED)
+
+Hosting once sets a new, permanently higher threshold for all future bids. The league explicitly acknowledges this in future hosting-related card text.
+
+| Hosting instance | Threshold difficulty | Additional requirement |
+|---|---|---|
+| First hosting | Achievable with 2–3 seasons of sustained effort | Prestige Tier 2+ |
+| Second hosting | Significantly harder — requires peak facility ratings | Prestige Tier 3+, min 3 seasons since last hosting |
+| Third hosting | Dynasty-level achievement — near maximum on all inputs | Prestige Tier 5, min 4 seasons since last hosting |
+
+Hosting three times in a franchise's history is one of the conditions that can contribute to the Franchise Legend win condition (see Section 18).
+
+---
+
+## 18. Prestige Tier System & Win Condition (LOCKED)
+
+### 18.1 Philosophy (LOCKED)
+
+**Philosophy B operates each season:** Every season has a clear ownership win target. Meeting or exceeding it is that season's verdict — success or failure is explicit at the season summary screen.
+
+**Philosophy C defines the franchise arc:** Reaching the highest prestige tier AND winning a championship in the same season triggers the **Franchise Legend** end state — a proper conclusion with a ceremony card, full franchise history summary, and the choice to retire the franchise or continue building the legacy.
+
+### 18.2 The Five Prestige Tiers (LOCKED)
+
+| Tier | Name | What it represents |
+|---|---|---|
+| 1 | **Cellar Dweller** | Struggling franchise — below .500, no meaningful playoff history |
+| 2 | **Fringe Contender** | Occasional winning seasons, first playoff appearance reached |
+| 3 | **Established Franchise** | Consistent winning, multiple playoff runs, recognized organization |
+| 4 | **Perennial Contender** | Regular playoff presence, at least one championship, respected league-wide |
+| 5 | **Dynasty** | Multiple championships, sustained excellence, franchise legend in progress |
+
+### 18.3 Tier Advancement
+
+Prestige tier is recalculated at the SEASON_SUMMARY phase each year. It is based on a **cumulative prestige score** that accumulates across all seasons played. The score never decreases — prestige is earned permanently, not lost in bad seasons. (Ownership patience and financial parameters respond to bad seasons; prestige does not.)
+
+**Prestige score inputs (exact weights in `data/constants.js`):**
+
+| Event | Points |
+|---|---|
+| Each regular season win | +1 |
+| Winning season (>66 wins in 132-game season) | +15 bonus |
+| Playoff appearance | +25 |
+| Each playoff round won | +20 |
+| Championship won | +100 |
+| All-Star Game hosted | +40 |
+| Franchise Turning Point achieved (Ember/Lab) | +30 |
+| Season win target met | +10 |
+| Season win target exceeded by 10+ wins | +20 bonus |
+
+**Tier thresholds (exact values in `data/constants.js`):**
+
+| Tier | Cumulative score required |
+|---|---|
+| 1 → 2 | 150 points |
+| 2 → 3 | 400 points |
+| 3 → 4 | 800 points |
+| 4 → 5 | 1,400 points |
+
+A well-run franchise playing consistently good baseball reaches Tier 5 in approximately 6–8 seasons. A championship-focused run can get there faster. The thresholds are tunable constants — not magic numbers embedded in logic.
+
+### 18.4 Tier Advancement Card
+
+When the prestige tier increases, a prominent card fires at the SEASON_SUMMARY phase acknowledging the milestone. Different from a standard inbox card — this is a franchise moment. The sender is the ownership group; the language is celebratory and specific to the tier reached.
+
+### 18.5 The Franchise Legend Win Condition (LOCKED)
+
+**Trigger:** Prestige Tier 5 AND a championship won in the same season.
+
+**What happens:**
+1. The World Series victory card resolves normally
+2. The SEASON_SUMMARY phase plays out normally
+3. A special **Franchise Legend** card fires — distinct visual treatment, full-screen ceremony presentation, franchise history displayed in its entirety
+4. The card presents a final decision: *"Your legacy here is complete. Will you step away at the top, or keep building?"*
+   - **Retire the franchise:** Save slot is marked "Legend" status, read-only. A permanent achievement badge on the team picker screen. The franchise exists as a completed story.
+   - **Continue building:** Game continues into the next offseason. Ownership raises expectations further. New challenges unlock (league expansion rumors, international competition cards, media legacy cards). The game doesn't end — but it acknowledges that you won.
+
+**Why this matters:** Players who want closure get it. Players who want to keep going can. Neither is penalized. The win condition is a narrative beat, not a hard stop.
+
+### 18.6 Secondary Win Conditions (Contributing Achievements)
+
+These don't trigger the Franchise Legend on their own but contribute to the franchise's legacy score and are tracked in the franchise history:
+
+- First championship
+- Back-to-back championships
+- Three championships in five seasons
+- All-Star Game hosted three times
+- Franchise Turning Point completed (Ember/Lab only)
+- 10 consecutive winning seasons
+- Reaching Tier 5 from a Tier 1 Ember start (the full rebuild arc)
+
+Each of these fires its own milestone card when achieved. All are documented in the franchise history modal and will be covered in the player wiki.
+
+---
+
+## 19. Player Reference Wiki (Future Project)
+
+> Status: NOTED — does not affect current build scope. Shapes how we build.
+
+A companion website — separate from the app, hosted on GitHub Pages in a companion repo — that gives players full transparency into the game's mechanics. Inspired by the reference wikis that exist for deep RPG and simulation games (Stardew Valley, Dwarf Fortress, etc.).
+
+**What it would cover:**
+- How each archetype affects starting parameters and card weights
+- How every card's effects impact each metric (full effect tables)
+- How the All-Star hosting score is calculated and what contributes to it
+- Sub-rating development curves by age and trait
+- Prestige tier thresholds and scoring inputs
+- Trade cash direction formula
+- Sim engine win probability formula
+- How roster depth checks work
+- Season transition processing order
+
+**The architectural implication for this build (ACTIVE):**
+
+Every mechanical value must live in `data/constants.js` as a named constant, not as a magic number inside logic code. This is required for the wiki to be accurate and maintainable. It also makes the game easier to tune and debug.
+
+Examples of what must be constants:
+```javascript
+// data/constants.js
+export const ALLSTAR_HOSTING_THRESHOLD_BASE = 850;
+export const ALLSTAR_HOSTING_THRESHOLD_SECOND = 1400;
+export const PRESTIGE_TIER_THRESHOLDS = [0, 150, 400, 800, 1400];
+export const PRESTIGE_POINTS_CHAMPIONSHIP = 100;
+export const TRADE_CASH_PER_RATING_POINT = 2.5; // $M
+export const SPRING_TRAINING_GAME_COUNT = 20;
+export const TRADE_DEADLINE_OPEN = 88;
+export const TRADE_DEADLINE_CLOSE = 92;
+// ... etc
+```
+
+No engine module should contain a hardcoded number that isn't either derived from state or imported from constants. This is a code quality rule enforced from Phase 0.
+
+> Status: FRAMEWORK DRAFTED — feature details and pricing are open questions (see Section 15).
+
+### 17.1 The Between-Games Problem
+
+In live mode, the user's next game is tomorrow at 1pm. There can be 23 hours of dead time. The app needs intentional design for this window — not filler, but meaningful lightweight engagement that respects the GM fantasy.
+
+### 17.2 Between-Games Features (Free)
+
+**League Activity Feed**
+A live-updating feed on the Dashboard showing what's happening around the league between games: CPU trades, injuries to other teams, standings shifts, hot streaks. No decisions required — this is ambient awareness. Makes the league feel alive when you're not playing.
+
+**Compose Tab (deepened)**
+The Compose tab currently generates cards based on topic. The between-games window is when a real GM would check in with staff. Specific between-games compose prompts:
+- "Check in with {pitching_coach} about tomorrow's starter" → generates a contextual pregame card
+- "Request a scouting report on upcoming opponent" → generates a scouting card with opponent tendencies
+- "Check clubhouse temperature" → generates a morale/culture card
+These should feel like proactive GM actions, not random card draws.
+
+**Lineup Tinkering**
+The roster screen is always available. Between games is when GMs adjust their lineup for the next opponent. Small UI additions: "Next opponent is {team} — their starter is a lefty" as a contextual nudge.
+
+**Notification-Driven Re-entry**
+The pregame reminder notification (30 min before first pitch) is the primary re-entry mechanism. Secondary: card delivery notifications for anything urgent that arrives between games.
+
+### 17.3 Between-Games Features (Premium)
+
+**Weather Radar**
+Animated procedural radar visualization available at all times — not just during delays. Slider covers current time → +12 hours in 1-hour increments with 3 zoom levels. Free users see weather status cards and delay indicators only. See Section 8.8 for full design.
+
+**Extended Weather Forecast**
+Free tier: 48-hour weather visibility. Premium tier: 7-day forecast. Knowing about a storm system 5 days out lets the user anticipate makeup game risk, prep the groundskeeper channel, and make strategic roster decisions before a key home stand.
+
+**Extended Scouting Reports**
+Detailed opponent breakdowns: starter tendencies, bullpen usage patterns, lineup hot/cold zones. Free users get a summary card; premium users get the full report with sub-rating level detail.
+
+**Prospect Development Tracker**
+Farm system visibility — see your prospects' sub-rating progression, projected call-up timeline, development milestone cards. Free users see a basic farm list; premium users see full development arcs.
+
+**Historical Stat Depth**
+Career stat breakdowns by season, sub-rating history charts, franchise records. Free users see current season and career totals; premium users see season-by-season breakdowns.
+
+**Staff Delegation**
+The ability to hire department heads or assistants to handle certain categories of messages automatically. See Section 17.6 for full design.
+
+**Additional Save Slots**
+Free tier: 1 save slot. Premium: up to 6 save slots (one per archetype). The primary premium hook — directly enables the multi-team feature.
+
+**Ad-Free Experience**
+See Section 17.4.
+
+### 17.4 Advertising Model
+
+**Core rule: ads interrupt dead time, never active play.**
+
+Permitted ad placements:
+- Between the end of a committed game and returning to the dashboard (post-game interstitial)
+- On the Dashboard when no live game is in progress and no urgent cards are pending
+- In the League tab when browsing standings (banner format, non-intrusive)
+
+Banned ad placements:
+- During a live game (any moment from first pitch to final out)
+- When a card is open and waiting for a decision
+- During the game creation / archetype selection flow
+- During offseason decisions (contract renewals, ownership evaluation)
+- On the Roster screen during an active transaction
+
+**Premium removes all ads.** Clean value proposition: the experience without interruption.
+
+**Ad implementation:** Client-side ad SDK (Google AdSense for PWAs or similar). Not a Phase 1 concern but must be designed into the UI layout from the start so placements don't require later restructuring.
+
+### 17.5 Premium Pricing Model
+
+> Exact pricing is an open question (OQ-22). Framework only here.
+
+- **One-time purchase** — pay once, unlock all premium features forever. Simpler, better user trust, no subscription fatigue.
+- **Monthly subscription** — recurring revenue, but higher churn risk for a game with natural stopping points between seasons.
+
+Recommendation: one-time purchase for the core premium unlock. Optional subscription for a future "live data" tier if real-world data integration is ever added (out of scope for this rebuild).
+
+### 17.6 Staff Delegation (Premium Feature — LOCKED as planned feature)
+
+The ability to hire department heads or assistants to handle certain categories of messages automatically, without requiring GM input on every decision.
+
+**How it works:**
+The GM hires a delegate for a specific channel or card category. The delegate auto-resolves cards in their domain using a configurable decision style (conservative, balanced, aggressive). The GM still sees the outcome as a brief inbox notification — *"Facilities handled the concourse repair request — approved, $1.2M from operating budget"* — but doesn't make the decision themselves.
+
+**The tradeoff (real decision, not just convenience):**
+Delegates make reasonable but imperfect decisions. A conservative delegate may decline a revenue opportunity the GM would have taken. An aggressive delegate may overspend on operating budget. Delegate quality is tied to their experience level (upgradeable) and the GM's relationship score with that department. A neglected relationship means a less reliable delegate.
+
+**Delegatable channels:**
+- Facilities & Operations (infrastructure decisions)
+- Ticket Office (sales and pricing decisions)
+- Community Affairs (fan relations and local events)
+- Media Relations (press and public narrative)
+
+**Non-delegatable — always require GM input:**
+- Manager, Pitching Coach, Hitting Coach, Bench Coach, Bullpen Coach — field decisions are the GM's core job
+- Head Groundskeeper — weather and field conditions are too consequential to delegate
+- Scouting / Player Development — acquisition decisions are the GM's core job
+- Any card tagged `urgent` — regardless of delegation settings, urgent cards always surface to the GM
+
+**Implementation note:** Delegation settings live in the save slot settings object, not the game state. Each slot can have different delegation preferences.
+
+---
+
+## 25. Ownership Win Target Escalation (LOCKED)
+
+### 25.1 Annual Adjustment
+
+Each offseason, ownership adjusts the coming season's win target based on last season's performance relative to target. Adjustment is bounded — ownership cannot raise by more than 5 wins or lower by more than 3 wins in a single offseason.
+
+| Last season result | Target adjustment |
+|---|---|
+| Missed target by 10+ wins | −3 |
+| Missed target by 5–9 wins | −2 |
+| Missed target by 1–4 wins | −1 |
+| Met target (within 2 wins) | +1 |
+| Exceeded target by 3–7 wins | +3 |
+| Exceeded target by 8+ wins | +5 |
+
+### 25.2 Prestige Tier Milestone Bumps
+
+When prestige tier advances, ownership recalibrates expectations upward regardless of recent performance — a one-time bump applied that season:
+
+| Tier advancement | One-time target bump |
+|---|---|
+| Tier 1 → 2 | +5 wins |
+| Tier 2 → 3 | +7 wins |
+| Tier 3 → 4 | +8 wins |
+| Tier 4 → 5 | +10 wins |
+
+### 25.3 Archetype Floors and Ceilings
+
+Win targets never drop below the floor or rise above the ceiling for the franchise's archetype. These are tunable constants.
+
+| Archetype | Target floor | Target ceiling |
+|---|---|---|
+| Ember | 60 | 88 |
+| Contender | 75 | 95 |
+| Empire | 85 | 98 |
+| Gambler | 65 | 92 |
+| Lab | 65 | 90 |
+| Institution | 72 | 92 |
+
+All values in `data/constants.js` — adjustable after testing without touching engine code.
+
+---
+
+## 26. Playoffs (LOCKED)
+
+### 26.1 Bracket Structure (LOCKED — finalized during Phase 6 pre-build audit)
+
+All 5 teams per division qualify. Bracket is fully division-contained until the World Series.
+
+**Per-division bracket (identical structure for Division A and Division B):**
+
+| Round | Format | Matchup | Notes |
+|---|---|---|---|
+| Wild Card | 1 game | 4th seed vs 5th seed | Single elimination — win or go home |
+| First Round | Best of 3 | 1st vs WC winner; 2nd vs 3rd | Higher seed hosts all games |
+| Division Series | Best of 5 | First Round winners | Higher seed hosts |
+| World Series | Best of 7 | Division A champion vs Division B champion | Better record hosts |
+
+**Seeding:**
+- Seeds 1–5 determined by regular season record within each division
+- Tiebreaker: head-to-head record (wiki-documented — see Section 19)
+- Overall #1 seed: best record in the entire league (determines World Series home field)
+- Overall #2 seed: best record in the other division (confirmation only — no bracket effect)
+
+**Wild Card significance:**
+- 4th and 5th place finish is a genuine penalty — one bad game ends your season
+- Rich card/decision territory if the user team is seeded 4th or 5th
+- No bye for any team — 1st seed plays the Wild Card winner, not a rested team
+
+**Series progression:** 1 game → best of 3 → best of 5 → best of 7
+Each round longer than the last — escalating drama and commitment.
+
+CPU-vs-CPU series simulated automatically using team OVR ratings with home field modifier.
+
+### 26.2 Playoff Roster Expansion (LOCKED)
+
+Before each playoff round, the GM receives a **playoff roster submission card** — a genuine strategic decision, not a formality.
+
+Before the Wild Card game:
+- GM can activate up to 3 additional players from: farm callups, players returning from IL, or previously inactive players
+- Card presents the options with OVR and position displayed
+- Decision has tactical weight: extra reliever vs extra bench bat vs activating an injured starter
+
+Between rounds (First Round → Division Series → World Series):
+- GM can make up to 1 roster change per round
+- Players added must be declared before the next series begins
+
+```javascript
+export const PLAYOFF_ROSTER_EXPANSION_ROUND1 = 3;
+export const PLAYOFF_ROSTER_EXPANSION_BETWEEN_ROUNDS = 1;
+```
+
+### 26.3 Playoff-Specific Card Pool
+
+Regular season card pools are suspended during playoffs. Active pools:
+
+| Pool | Content |
+|---|---|
+| `PLAYOFF_PREGAME_POOL` | Pre-series scouting, opponent tendencies, matchup analysis |
+| `PLAYOFF_ROTATION_POOL` | Starter selection for each game, skip decisions, SP-in-relief options |
+| `PLAYOFF_BULLPEN_POOL` | High-leverage usage, rest concerns, closer sequencing |
+| `PLAYOFF_INJURY_POOL` | Two-act injury model with elevated stakes — playoff injury = higher drama |
+| `PLAYOFF_ATMOSPHERE_POOL` | Home playoff crowd energy, travel decisions, media access |
+| `PLAYOFF_ADJUSTMENT_POOL` | Mid-series opponent adjustments — *"They've figured out your closer"* |
+
+### 26.4 Playoff Sim Adjustments
+
+Playoff games use the same SimEngine with adjusted constants:
+
+```javascript
+export const PLAYOFF_HOME_FIELD_BONUS = 0.035;  // stronger than regular season
+export const PLAYOFF_ACE_FREQUENCY = 1.4;        // aces pitch more often
+export const PLAYOFF_VARIANCE_MULTIPLIER = 1.2;  // upsets more likely — anything can happen
+```
+
+### 26.5 Elimination and Advancement
+
+Series conclusions are milestone screen moments (see Section 27). After a series win or loss, the SEASON_SUMMARY or next round begins with the appropriate milestone screen.
+
+---
+
+## 27. Milestone Screens (LOCKED)
+
+### 27.1 What They Are
+
+Milestone screens are full-screen interstitial moments that replace the normal dashboard at the game's most important junctures. They are not cards, not modals — they are scene-setters with a completely different visual language.
+
+**What makes them different from cards:**
+- Full-screen — no inbox chrome, no sender/avatar, no card frame
+- Single action only: "Continue" or a swipe gesture
+- Large illustrative SVG — thematic, atmospheric
+- Typography-driven — the moment's name large, a one-line subtext beneath
+- Color palette shifts from the app's normal dark theme
+- Brief ambient sound if enabled (crowd noise, stadium ambience — one moment)
+- One-time display per trigger — shown once, never repeated for that instance
+
+### 27.2 Milestone Screen Catalog (LOCKED)
+
+| Trigger | Screen title | Subtext | Visual tone |
+|---|---|---|---|
+| Spring training begins | **Spring Training** | *"The work starts here."* | Warm, hopeful |
+| Regular season game 1 | **Opening Day** | *"The season begins."* | Bright, anticipatory |
+| All-Star Break (non-host) | **Midsummer** | *"Halfway there."* | Reflective, calm |
+| All-Star Break (host) | **All-Star Week** | *"The league comes to you."* | Celebratory, prestige |
+| Trade deadline opens | **The Deadline** | *"Make your move."* | Tense, urgent |
+| Trade deadline closes | **Deadline Passed** | *"The window is closed."* | Brief closure |
+| Final 5 regular season games | **The Stretch Run** | *"Every game matters now."* | Stakes-driven |
+| Playoff clinch | **Postseason Bound** | *"You earned it."* | Earned triumph |
+| Wild Card begins | **Wild Card** | *"Win or go home."* | Cinematic |
+| Division Series begins | **Division Series** | *"The real test starts now."* | Cinematic |
+| Championship Series begins | **Championship Series** | *"One series from the top."* | Elevated tension |
+| World Series begins | **The World Series** | *"This is what it's all for."* | Maximum stakes |
+| Series win (any round) | **Series Won** | *"On to the next."* | Triumph |
+| Series loss / elimination | **Season Over** | *"A season to build on."* | Respectful, not harsh |
+| Championship won | **Champions** | *"You did it."* | Full ceremony |
+| Offseason begins | **The Offseason** | *"The work begins again."* | Calm transition |
+| New season (season 2+) | **Year [N]** | *"A new chapter."* | Continuity, franchise arc |
+| Franchise Turning Point | **A New Era** | *"Everything changes now."* | Pivotal, weighted |
+| Franchise Legend | **A Legacy Complete** | *"Your name is in the record books."* | The game's most important screen |
+
+### 27.3 Sequencing With Cards
+
+Milestone screens and cards are sequenced, not simultaneous:
+
+1. Milestone screen shows (full-screen, atmospheric)
+2. User taps "Continue"
+3. Normal game view returns
+4. First card of the new phase is waiting in the inbox
+
+The milestone sets the stage. The card delivers the first decision. These are separate concerns — the screen never contains a decision, the card never tries to be a ceremony.
+
+### 27.4 Implementation
+
+Milestone screen configs live in `data/constants.js`. `GameEngine` checks for milestone triggers at each phase transition and game index boundary.
+
+```javascript
+export const MILESTONE_SCREENS = {
+  OPENING_DAY: {
+    title: 'Opening Day',
+    subtitle: 'The season begins.',
+    palette: 'warm',          // CSS palette token
+    icon: '⚾',
+    triggerPhase: 'REGULAR_SEASON',
+    triggerGame: 0,
+  },
+  TRADE_DEADLINE: {
+    title: 'The Deadline',
+    subtitle: "Make your move.",
+    palette: 'urgent',
+    icon: '⏱',
+    triggerPhase: 'TRADE_DEADLINE',
+    triggerGame: 88,
+  },
+  // ... full catalog
+}
+```
+
+`MilestoneScreen.js` is a standalone UI component in `ui/screens/`. It reads the config, renders the screen, and dispatches a `MILESTONE_DISMISSED` event when the user taps Continue. `GameEngine` listens for this event before resuming normal game flow.
+
+One-time display enforced by `state.seenMilestones: String[]` — milestone ID pushed to the array on dismiss, never shown again for that franchise instance. Stored as Array (not Set) to satisfy the JSON-serializable state rule (Section 1.7).
+
+---
+
+*Document last updated: v1.0 — Firebase and Cloudflare infrastructure confirmed and documented. All planning complete. Ready to begin Phase 0.*
+
+## 28. League Activity System & CPU Game Detail (LOCKED)
+
+### 28.1 The Living League Principle
+
+The league operates independently of the user. CPU teams run their own franchises — games, transactions, injuries, roster moves — on their own schedules. The user is one GM among ten, not the center of the universe.
+
+### 28.2 Full CPU Schedule
+
+Every CPU team plays a full 132-game schedule against the other 9 teams. The schedule structure (matchups + dates) is generated at season start and stored in `state.leagueSchedule.dayMap`. No outcomes, no plays at generation time.
+
+**Why simulation happens on game day, not at season start (LOCKED):**
+CPU game outcomes depend on the roster as it exists on that date — after all injuries, trades, and callups that occurred since Opening Day. Pre-generating outcomes at season start would produce results based on stale rosters. `LeagueEngine.processCPUDay()` runs on each calendar date, pulls current rosters from `state.players`, runs SimEngine, commits results, accumulates stats, strips plays, keeps box score and recap.
+
+This enables: real game results feeding player stats, authentic league standings, watchable CPU games, and a rich activity feed — all with roster-accurate simulation.
+
+**Schedule generation constraint:** At least 4 teams have a game on any given day during the regular season. On the user's off/travel days, there are always CPU games to follow.
+
+### 28.3 Game Timing (LOCKED)
+
+All 10 teams share the same day-of-week time range. No division-based time splits. No timezone accounting.
+
+```javascript
+export const GAME_TIMES_BY_DOW = {
+  MON: ['7:05 PM'],
+  TUE: ['7:05 PM'],
+  WED: ['1:05 PM', '7:05 PM'],
+  THU: ['1:05 PM', '7:05 PM'],
+  FRI: ['7:05 PM'],
+  SAT: ['1:05 PM', '4:05 PM', '7:05 PM'],
+  SUN: ['1:05 PM', '4:05 PM'],
+}
+```
+
+Teams in the same series play at the same time. Teams in different series on the same day may have different time slots, creating the staggered schedule that keeps the league feed active throughout the day.
+
+**User's team timing:** First spring training game always at 1:05 PM regardless of day. After that, the user's team follows the same time assignment logic as every CPU team.
+
+### 28.4 CPU Game Detail Level (LOCKED)
+
+CPU games are watchable from the League screen with close to the same detail as the user's live game:
+
+- Live score header (away/home, current score)
+- Diamond SVG showing baserunner state — updates as plays reveal
+- High-level PBP feed: scoring plays, home runs, strikeouts, walks, pitching changes, stolen bases, final out
+- Box score updating as runs score and outs accumulate
+- Linescore with per-inning cells filling as half-innings complete
+- Status pill: PRE-GAME / LIVE / FINAL
+
+The CPU game uses the same pre-generation pipeline as the user's game. The difference is display context — the user watches their own game on the main dashboard; CPU games are watched by navigating to that game in the League screen.
+
+CPU games run on the same 5-second tick cycle. The user can watch one CPU game at a time. Switching away and back shows the current state.
+
+### 28.5 League Activity Feed (LOCKED)
+
+A 72-hour rolling feed of transactions and events from around the league. Accessible from the League screen and as a widget on the Dashboard.
+
+**Feed entry types:**
+
+| Type | Example entry | Timing |
+|---|---|---|
+| IL placement | "BOS placed CF Rodriguez on the 10-day IL" | When injury fires |
+| Farm callup | "SEA recalled SP Nakamura from Triple-A" | When callup processes |
+| Waiver claim | "NYE claimed 1B Torres off waivers from ATL" | When claim resolves |
+| Trade | "CHI and MIA completed a trade: SP Wallace to MIA, OF Garza to CHI" | When trade commits |
+| Game result | "BOS def. NYE 4–2 — Kondo 7IP, 1ER" | When game commits |
+| Injury update | "LAP SS Torres (hamstring) — 2–3 weeks" | When diagnosis fires |
+| Standings shift | "ATL moves into Wild Card position" | When standings recalculate |
+| Playoff clinch | "CHI clinched a playoff berth" | When standings confirm it |
+| Free agent signing | "ATL signed RP Castillo to a 1-year deal" | During offseason |
+
+**Retention:** 72 hours. Entries older than 72 hours are removed from the feed. No archive — gone is gone. Season-level summaries (trades this season, IL stints this season) are accessible in team detail views separately.
+
+**Standings context near season end:** In the final 10 games of the season, game result entries automatically include a standings note when the result affects playoff positioning — *"SEA def. MIA 3–1 — SEA moves to 1 game behind the Wild Card lead."*
+
+### 28.6 Player Watchlist (LOCKED)
+
+The user can watch individual players from any team. Watched players surface in the between-games feed with recent stats, injury status, and roster decisions.
+
+- Free tier: 5 watched players
+- Premium tier: 50 watched players
+
+Watchlist is per save slot. Adding a player to the watchlist is a single tap from their player card anywhere in the app.
+
+### 28.7 League Stat Leaders (LOCKED)
+
+A league-wide leaderboard accessible from the League screen. Updates daily.
+
+**8 categories (initial release):**
+
+| Batting | Pitching |
+|---|---|
+| AVG | ERA |
+| HR | W |
+| RBI | K |
+| SB | SV |
+
+Top 5 players per category shown. User's players highlighted when they appear.
+
+**Future expansion (noted for post-launch design session):** OPS, BB, WHIP, Holds, and the Impact Rating (IMP) metric. The IMP calculation and the additional stat fields are fully designed in Sections 30 and 4.3.
+
+### 28.8 Hot/Cold Indicators (LOCKED)
+
+A simple directional indicator per player based on recent simulated performance.
+
+- Calculated from last 7 games played
+- Three states: 🔥 Hot, ❄️ Cold, — Neutral
+- Free tier: own roster players only
+- Premium tier: league-wide
+
+**Future expansion (Section 30):** IMP-7/IMP-15/IMP-30/IMP-S rolling Impact Rating windows, similar to fantasy baseball performance ratings.
+
+---
+
+
+## 29. Difficulty Preset System
+
+> **REMOVED** — Archetypes serve as the difficulty selection (Section 1.9). No separate difficulty setting exists. All mechanical constants are fixed values; challenge comes entirely from archetype roster quality, financial parameters, and ownership expectations.
+
+---
+
+
+
+## 30. Impact Rating (IMP) — LOCKED
+
+### 30.1 What It Is
+
+**Impact Rating** — shortened to **Impact**, acronym **IMP** — is the game's proprietary player value metric. It is a single decimal number representing how much a player is contributing relative to the position average — positive means above average, zero means replacement level, negative means below.
+
+Impact Rating is not WAR. It is a hybrid of fantasy baseball counting-stat accessibility and positional normalization from baseball analysis. The name is deliberately simple and ownable — no other sport uses "Impact Rating" as a standalone baseball metric, and "his Impact is running hot" reads naturally in any context within the game.
+
+**Displayed as:** "Impact" in the UI. "IMP" in tight spaces (stat tables, player rows). "Impact Rating" in full contexts (wiki, onboarding, settings descriptions).
+
+**Expected ranges:**
+| IMP range | What it means |
+|---|---|
+| +6.0 and above | Elite — MVP-caliber season |
+| +3.0 to +5.9 | Solid starter — clear positive contributor |
+| +1.0 to +2.9 | Average starter — holds their own |
+| -1.0 to +0.9 | Replacement level — borderline roster spot |
+| Below -1.0 | Below replacement — roster decision needed |
+
+### 30.2 Rolling Windows
+
+IMP is calculated four ways from the same formula, using different stat windows:
+
+| Window | Stat source | Character |
+|---|---|---|
+| IMP-7 | Last 7 days of games | Volatile — pure hot/cold signal |
+| IMP-15 | Last 15 days | Short-term form trend |
+| IMP-30 | Last 30 days | Most actionable for roster decisions |
+| IMP-S | Full season | Most stable — true season value |
+
+**Hot/cold indicator** (Section 28.8) is IMP-7 vs threshold constants:
+```javascript
+export const IMP_HOT_THRESHOLD   = 2.5;   // IMP-7 above this = 🔥
+export const IMP_COLD_THRESHOLD  = -2.0;  // IMP-7 below this = ❄️
+```
+
+### 30.3 Hitter IMP Formula
+
+```
+IMP = (OPS_delta   × IMP_H_OPS_WEIGHT)
+    + (HR_rate_delta × IMP_H_HR_WEIGHT)
+    + (RBI_rate_delta × IMP_H_RBI_WEIGHT)
+    + (SB_net        × IMP_H_SB_WEIGHT)
+    + (BB_pct_delta  × IMP_H_DISCIPLINE_WEIGHT)
+    - (K_pct_delta   × IMP_H_STRIKEOUT_PENALTY)
+    - (BABIP_luck_adjustment)
+```
+
+**Definitions:**
+- `OPS_delta` — player OPS minus position average OPS (e.g. SS average OPS is lower than DH average OPS)
+- `HR_rate_delta` — player HR per AB minus position average HR rate
+- `RBI_rate_delta` — player RBI per AB minus position average RBI rate
+- `SB_net` — `SB - (CS × 1.5)` — caught stealing costs more than a steal gains
+- `BB_pct_delta` — player BB% minus position average BB%
+- `K_pct_delta` — player K% minus position average K% (high K% is negative)
+- `BABIP_luck_adjustment` — if player BABIP exceeds their career BABIP (or league average for new players) by more than `IMP_H_BABIP_ADJ_TRIGGER`, a small downward correction is applied. Prevents lucky hot streaks from inflating IMP.
+
+All `_delta` values are position-normalized — a shortstop is compared to other shortstops, not to the whole league.
+
+### 30.4 Pitcher IMP Formula
+
+```
+IMP = (ERA_delta   × IMP_P_ERA_WEIGHT)
+    + (WHIP_delta  × IMP_P_WHIP_WEIGHT)
+    + (K9_delta    × IMP_P_K9_WEIGHT)
+    - (BB9_delta   × IMP_P_WALK_PENALTY)
+    - (HR9_delta   × IMP_P_HR_PENALTY)
+    + (QS_rate     × IMP_P_QS_BONUS)      // SP only
+    + (SV_pct      × IMP_P_SAVE_BONUS)    // closers only
+    + (HLD_rate    × IMP_P_HOLD_BONUS)    // setup relievers only
+    + (IP_bonus)                           // durability value
+```
+
+**Definitions:**
+- All `_delta` values normalized against SP average or RP average (not combined)
+- `ERA_delta` — league average SP/RP ERA minus player ERA (higher is better)
+- `QS_rate` — QS / GS (quality start percentage, SP only)
+- `SV_pct` — SV / SVO (save percentage, closers only)
+- `HLD_rate` — HLD / (HLD + BS) (hold success rate, setup relievers only)
+- `IP_bonus` — logarithmic durability bonus: `log(IP) × IMP_P_IP_LOG_SCALE`. Rewards innings eaters without letting volume dominate.
+
+### 30.5 All IMP Constants (wiki-documented, all tunable)
+
+```javascript
+// data/constants.js — IMP weights
+
+// Hitter
+export const IMP_H_OPS_WEIGHT          = 8.0;
+export const IMP_H_HR_WEIGHT           = 0.8;
+export const IMP_H_RBI_WEIGHT          = 0.4;
+export const IMP_H_SB_WEIGHT           = 0.3;
+export const IMP_H_DISCIPLINE_WEIGHT   = 3.0;
+export const IMP_H_STRIKEOUT_PENALTY   = 2.5;
+export const IMP_H_BABIP_ADJ_TRIGGER   = 0.040;
+export const IMP_H_BABIP_ADJ_WEIGHT    = 1.5;
+
+// Pitcher
+export const IMP_P_ERA_WEIGHT          = 3.5;
+export const IMP_P_WHIP_WEIGHT         = 4.0;
+export const IMP_P_K9_WEIGHT           = 1.2;
+export const IMP_P_WALK_PENALTY        = 1.8;
+export const IMP_P_HR_PENALTY          = 2.0;
+export const IMP_P_QS_BONUS            = 0.5;
+export const IMP_P_SAVE_BONUS          = 0.8;
+export const IMP_P_HOLD_BONUS          = 0.4;
+export const IMP_P_IP_LOG_SCALE        = 0.015;
+
+// Thresholds
+export const IMP_HOT_THRESHOLD         = 2.5;
+export const IMP_COLD_THRESHOLD        = -2.0;
+export const IMP_ELITE_THRESHOLD       = 6.0;
+export const IMP_BELOW_REPLACEMENT     = -1.5;
+```
+
+Post-testing: if IMP-S values are running too high league-wide, reduce `IMP_H_OPS_WEIGHT`. If pitchers are rating too similarly, widen `IMP_P_ERA_WEIGHT`. No engine changes required.
+
+### 30.6 Display Contexts
+
+IMP is displayed differently in different contexts:
+
+| Context | What's shown |
+|---|---|
+| Roster screen player row | IMP-S with small hot/cold indicator |
+| Player detail modal | All four windows (IMP-7, IMP-15, IMP-30, IMP-S) as a small bar chart |
+| Watchlist | IMP-7 and IMP-S side by side |
+| League stat leaders | IMP-S leaderboard — top 5 hitters, top 5 pitchers |
+| Trade card value note | Qualitative IMP language ("elite contributor", "below replacement") — not the number |
+| IMP-7 display label | Shows as "IMP-7" in UI |
+
+Free users see IMP-S only. Premium users see all four windows.
+
+### 30.7 Wiki Documentation
+
+The IMP wiki page covers:
+- What IMP measures and the design philosophy
+- Hitter and pitcher formulas in plain English
+- Position normalization explained
+- BABIP luck adjustment explained
+- Rolling window meanings and when to use each
+- Expected IMP ranges reference table
+- Full constants table with current values and descriptions
+
+---
+
+
+
+---
+
+## 33. Tutorial System (POST-LAUNCH — LOCKED ORDER)
+
+> ⚠️ Status: NOT STARTED. Must be the very last step after all game systems are fully locked and complete.
+
+The tutorial is built last — after every screen, card, and mechanic is finalized — to ensure it accurately reflects the actual game rather than an earlier version of it.
+
+**Scope:**
+- New user onboarding flow for first-time players
+- Triggered automatically on first save slot creation
+- Non-blocking — user can dismiss at any point and return via Settings
+- Covers: archetype selection, reading the dashboard, inbox cards, the live game screen, the roster screen, and the trade system
+- Does NOT cover every feature — focused on the critical path to first meaningful decision
+
+**Dependency:** Tutorial cannot be written until Phase 13 (App Shell) and all UI screens are complete. It is the final deliverable after everything else is locked.
+---
+
+## 34. Narrative Engine (Phase 13.6–13.7 — LOCKED)
+
+The Narrative Engine is an enrichment layer on the existing card system. It does not create a new card type, a new inbox tab, or a new interaction pattern. Every card still requires a meaningful yes/no choice from the user. The narrative depth lives in the card body text — the voice, the organizational memory, the references to past decisions — not in new UI patterns.
+
+### 34.1 Architecture
+
+```
+state.narrativeFlags[]          — append-only log of significant decisions
+NarrativeEngine.js              — reads flags, generates enrichment context
+CardEngine (delivery)           — calls NarrativeEngine at card delivery time
+                                  to select conditional card body variant
+```
+
+NarrativeEngine is a pure engine (no StateManager import). It receives state as a parameter.
+
+### 34.2 narrativeFlags Schema (LOCKED — Option B flat log)
+
+```javascript
+state.narrativeFlags = [
+  {
+    key:      String,    // e.g. 'extension_declined', 'facility_deferred'
+    subject:  String,    // playerId, staffId, or null for org-level flags
+    gameIdx:  Number,    // when it happened
+    season:   Number,    // which season
+    choice:   String,    // 'yes'|'no'|'auto'|null
+    context:  Object,    // optional flag-specific metadata { amount, role, reason }
+  }
+]
+```
+
+Query: `NarrativeEngine.getFlags(state, { key?, subject?, season?, minGameIdx?, maxGameIdx? })`
+
+### 34.3 Full Flag Taxonomy
+
+**Roster decisions:**
+- `extension_declined` / `extension_accepted` (subject: playerId)
+- `player_rushed_back` — IL return before recommended date
+- `player_held_back` — IL return significantly after recommended date
+- `veteran_released` — releasing a player with gmRelationship >= 70
+- `prospect_called_up` — first call-up from farm
+- `trade_accepted` / `trade_declined` (subject: lead playerId)
+- `waiver_claimed` / `waiver_passed`
+
+**Financial decisions:**
+- `budget_conservative` — finished season >15% under cap (count cumulative)
+- `budget_aggressive` — exceeded payroll cap
+- `facility_upgrade_approved` / `facility_upgrade_deferred`
+- `sponsor_deal_accepted` / `sponsor_deal_declined`
+- `ticket_price_raised` / `ticket_price_lowered`
+- `concession_investment_approved` / `concession_investment_declined`
+
+**Staff decisions:**
+- `manager_extended_early` / `manager_extended_late` / `manager_contract_lapsed`
+- `coach_retained` / `coach_released`
+- `staff_request_approved` / `staff_request_declined` (subject: staffId)
+
+**Operational decisions:**
+- `community_event_approved` / `community_event_declined`
+- `maintenance_approved` / `maintenance_deferred`
+- `promotional_night_approved` / `promotional_night_declined`
+- `media_engagement_high` / `media_engagement_low` (set from compose frequency)
+
+**Marketing and concessions:**
+- `concession_upgrade_approved` / `concession_upgrade_declined`
+- `marketing_campaign_approved` / `marketing_campaign_declined`
+- `fan_experience_invested` / `fan_experience_deferred`
+
+**Compose behavior (aggregated):**
+- `compose_used` — topic: topicId, channel: channelId (tracks engagement pattern)
+
+**Outcome flags (set automatically after game commits and season boundaries):**
+- `player_milestone_hit` (subject: playerId, context: { milestone })
+- `playoff_series_won` / `playoff_series_lost`
+- `season_record_above_500` / `season_record_below_500`
+- `attendance_trend_up` / `attendance_trend_down` (end of season)
+- `ownership_trust_gained` / `ownership_trust_lost` (offseason gate outcomes)
+
+### 34.4 GM Profile Dimensions (Derived)
+
+NarrativeEngine computes these on demand — never stored directly in state:
+
+| Dimension | Derived from |
+|---|---|
+| `spender` vs `conservationist` | budget flags, payroll vs cap ratio |
+| `loyal` vs `transactional` | extension_declined count, veteran_released count, trade frequency |
+| `aggressive` vs `cautious` | rushed_back count, call-up timing, trade deadline behavior |
+| `community_oriented` vs `business_focused` | community/promotional/fan-experience approvals vs declines |
+| `hands_on` vs `delegating` | compose frequency and channel distribution |
+| `process_driven` vs `results_driven` | correlates with archetype but diverges based on actual decisions |
+
+### 34.5 Card Body Conditional Variants
+
+Existing cards get an optional `variants` array alongside the base `body`:
+
+```javascript
+{
+  id: 'il_return_act2',
+  body: 'Default body text...',
+  variants: [
+    {
+      condition: { flags: [{ key: 'player_rushed_back', subject: '{playerId}' }] },
+      body: 'Variant referencing the rushed return (in character voice, never directly)...',
+    },
+    {
+      condition: { gmProfile: { loyal: true }, season: { min: 2 } },
+      body: 'Variant for a loyal GM in their second+ season...',
+    }
+  ]
+}
+```
+
+NarrativeEngine selects the first matching variant at delivery time. Base `body` used if no variant matches. All existing cards continue to work unchanged — variants are additive.
+
+**Authorship principle (LOCKED):** Card body variants never reference the flag system directly. They speak in character voices. The groundskeeper doesn't say "you deferred the drainage upgrade." He says "the water's been sitting longer than I'd like out near first base. Same issue we talked about last summer." The world remembers — the system does not report.
+
+### 34.6 Flag Instrumentation (LOCKED)
+
+Flag-setting is centralized in `CardEngine.resolve()`. Cards that generate flags have `flagKey` and optional `flagKeyYes` fields in the card pool entry:
+
+```javascript
+{
+  id: 'contract_extension_veteran',
+  flagKey:     'extension_declined',   // set on 'no'
+  flagKeyYes:  'extension_accepted',   // set on 'yes'
+  flagSubject: '{playerId}',           // resolved at delivery
+}
+```
+
+Automatic (outcome-based) flags are set by `GameEngine.commitGame()` and `SeasonEngine` at season boundaries.
+
+### 34.7 NarrativeEngine.js Exports
+
+```javascript
+export function getFlags(state, filter)           // query the flat log
+export function setFlag(state, flagEntry)         // append to log
+export function getGMProfile(state)               // derive dimension object
+export function selectCardVariant(card, state)    // return body string for delivery
+export function getRelevantFlags(state, card)     // flags contextually relevant to a card
+```
+
+---
+
+## 35. Franchise History Screen (Phase 13.8 — LOCKED)
+
+A browsable record of significant franchise events organized by season. Called "History" or "Franchise Story" in the UI — never "diary."
+
+### 35.1 state.history Schema
+
+```javascript
+state.history = [
+  {
+    id:       String,     // unique entry ID
+    type:     String,     // 'trade'|'injury'|'retirement'|'coaching'|'playoff'|
+                          //  'milestone'|'prestige'|'record'|'championship'
+    season:   Number,
+    gameIdx:  Number,
+    headline: String,     // short display label e.g. "Rodriguez traded to Boston"
+    detail:   String,     // fuller description
+    playerId: String,     // optional
+    icon:     String,     // emoji for entry type
+    userNote: String,     // optional user-added note
+  }
+]
+```
+
+### 35.2 Auto-Recorded Events
+
+- Trades (both directions, with standings context at time of trade)
+- Serious injuries (IL stints > 14 games)
+- Player retirements
+- Coaching hires and fires
+- Playoff series results (each round, game-by-game record)
+- World Series victory (full summary entry)
+- Prestige tier changes
+- Franchise Legend unlock
+- Season final record and division finish
+- Player milestones (first call-up, significant IMP peaks, career statistical thresholds)
+
+### 35.3 UI
+
+Accessible from Settings or a dedicated section. Organized by season, collapsible. Each entry shows icon + headline, expandable to detail. User can add a personal note to any entry (short freeform text). Multi-season view is the emotional payoff — looking back at Season 1 from Season 3.
+
+### 35.4 Narrative Engine Connection
+
+Both `getFlags()` and `state.history` are read by NarrativeEngine when selecting card variants. A card delivered in Season 3 can reference a history entry from Season 1 if conditions match.
+
+---
+
+## 36. Reports System (Phase 16 — LOCKED)
+
+Three report types. Basic free, full suite premium.
+
+### 36.1 Roster Report
+
+All players ranked by OVR. Columns: name, position, OVR, 30-day IMP trend, age, salary, contract years remaining.
+
+Free tier: OVR + position + age only. No sorting.
+Premium tier: full sortable suite with IMP trend.
+
+Shows depth chart gaps explicitly (e.g. "No backup at C").
+
+### 36.2 Financial Report (Premium)
+
+- Payroll by position group
+- Operating budget vs spent
+- Projected next-season payroll (expiring vs retained contracts)
+- Attendance trend by homestand
+- Revenue vs expenses
+- Concessions and ticket revenue breakdown
+
+### 36.3 Trade Value Report (Premium)
+
+Composite score per player: OVR + age curve + IMP trend + contract value. Identifies surplus value (tradeable) vs core assets. Surfaces automatically when a trade card arrives — the relevant player's report data appears inline in the card context.
+
+### 36.4 Player Comparison Tool (Premium)
+
+Side-by-side stats for two players — triggered by selecting two players in any player list. Answers the trade evaluation question without requiring the user to hold numbers in their head.
+
+### 36.5 UI
+
+Reports sub-tab in the Team screen alongside Players and Staff. Reports are read-only, no actions. Stats-first users navigate here directly.
+
+
+---
+
+## 37. GitHub Deployment Guide (Phase 14 — for owner)
+
+This section documents exactly what to do when it's time to put the v2 files into the GitHub repo. Written for a non-technical user.
+
+### 37.1 Folder structure
+
+The v2 app uses subfolders. GitHub doesn't have a "create folder" button — you create a folder by uploading a file into a path that includes the folder name. The assistant will walk through this file by file in Phase 14. The structure is:
+
+```
+/ (repo root)
+├── index.html
+├── manifest.json
+├── sw.js
+├── icon-192.png
+├── icon-512.png
+│
+├── data/
+│   ├── constants.js
+│   ├── player-names.js
+│   └── cards-pool.js
+│
+├── store/
+│   ├── schema.js
+│   ├── DB.js
+│   └── StateManager.js
+│
+├── engine/
+│   ├── PlayerFactory.js
+│   ├── LeagueFactory.js
+│   ├── RosterEngine.js
+│   ├── SeasonEngine.js
+│   ├── LeagueEngine.js
+│   ├── GameEngine.js
+│   ├── SimEngine.js
+│   ├── WeatherEngine.js
+│   ├── InjuryEngine.js
+│   ├── TradeEngine.js
+│   ├── CardEngine.js
+│   ├── IMPEngine.js
+│   ├── PrestigeEngine.js
+│   ├── OffseasonEngine.js
+│   └── NarrativeEngine.js
+│
+└── ui/
+    ├── formatters.js
+    ├── EventBus.js
+    ├── App.js
+    │
+    ├── screens/
+    │   ├── SetupScreen.js
+    │   ├── DashboardScreen.js
+    │   ├── InboxScreen.js
+    │   ├── TeamScreen.js
+    │   ├── LeagueScreen.js
+    │   ├── ScheduleScreen.js
+    │   ├── GameScreen.js
+    │   ├── PlayoffScreen.js
+    │   ├── OffseasonScreen.js
+    │   └── HistoryScreen.js
+    │
+    └── components/
+        ├── RadarWidget.js
+        ├── LiveDiamond.js
+        ├── Linescore.js
+        ├── PlayerCard.js
+        └── CardModal.js
+```
+
+### 37.2 Icon replacement (LOCKED)
+
+The new app icons are already named correctly. To update them:
+- Go to the repo root on GitHub
+- Click `icon-192.png` → Edit (pencil) → upload new file with the same name
+- Repeat for `icon-512.png`
+- No folder change needed — both files stay in the repo root
+
+The `manifest.json` built in Phase 14 references them at root level. No path changes required.
+
+### 37.3 How to create a folder on GitHub by uploading a file
+
+GitHub creates folders automatically when you include a folder path in a filename during upload. To upload `constants.js` into a `data/` folder:
+1. In your repo, click **Add file → Upload files**
+2. Drag the file in — it will appear as `constants.js`
+3. Before committing, click the filename field and type `data/` before it, making it `data/constants.js`
+4. GitHub creates the `data/` folder automatically
+
+The assistant will give exact per-file instructions during Phase 14 deployment.
+
+---
+
+## 38. Locked Implementation Decisions (Session — Phase 13.5–13.6)
+
+### 38.1 selectCardVariant wiring order (Phase 13.6 — LOCKED)
+
+`NarrativeEngine.selectCardVariant()` runs **before** token resolution in CardEngine's delivery path. The correct order is:
+
+1. Select the variant body (choose which version of the card text to use based on narrative flags)
+2. Then resolve tokens in that chosen body (fill in player names, costs, etc.)
+
+This is the only correct order. Token resolution must run on the final chosen text — not on placeholder text that might then get swapped out.
+
+### 38.2 Phase 13.5 pre-existing bugs fixed
+
+Two duplicate constant declaration bugs in `constants.js` were found and corrected during Phase 13.5:
+- Duplicate `PRESTIGE_POINTS_TURNING_POINT` declaration
+- Duplicate `IMP_H_OPS_WEIGHT` and full IMP block
+
+These were pre-existing in the uploaded file, not introduced by Phase 13.5 edits.
+
+### 38.3 SetupScreen import bug fixed (Phase 13.5)
+
+`SetupScreen.js` was importing `createNewGame` from `GameEngine.js`, but `GameEngine.js` only exports `startNewGame`. This mismatch would have caused a runtime crash on new game creation. Fixed in Phase 13.5 — `SetupScreen` now correctly imports and calls `startNewGame`.
+
+
+---
+
+## 39. xBA and xSLG — Planned Addition (Phase 16)
+
+> Status: NOTED — not in current build scope. Planned for Phase 16 alongside the Reports screen.
+
+### 39.1 What they are
+
+Expected Batting Average (xBA) and Expected Slugging Percentage (xSLG) are luck-adjusted versions of BA and SLG. They answer: "given the quality of contact this batter made, what would a typical player produce?" In real baseball these derive from Statcast exit velocity and launch angle.
+
+### 39.2 Why they're not in the current build
+
+The sim currently goes directly from sub-ratings → hit type outcome. There is no intermediate "quality of contact" layer. Adding xBA/xSLG properly requires:
+
+1. A `contactQuality` value (0–1) per at-bat in `simulateAtBat` — how hard the ball was hit regardless of outcome
+2. A batted ball type per at-bat (`groundBall` / `lineDrive` / `flyBall`)
+3. Both stored on each play's `_statDeltas`
+4. Expected stat computation from those inputs
+5. Display additions in TeamScreen, LeagueScreen, PlayerCard, and Reports
+
+This is a clean extension of the existing system — the foundation supports it — but it touches enough files that it belongs in a dedicated phase.
+
+### 39.3 Phase 16 implementation plan
+
+- Add `contactQuality: Number` and `batType: 'gb'|'ld'|'fb'` fields to the play object shape (Section 8.1)
+- Generate both in `SimEngine.simulateAtBat()` based on `contact`, `power`, and hit type
+- Accumulate per-player in `accumulateStats()` — store raw totals for xBA/xSLG computation
+- Compute xBA and xSLG on demand in `IMPEngine` or a new `StatsEngine` helper
+- Surface in: PlayerCard (alongside BA/SLG), Reports roster report (premium), player comparison tool
+- Add to IMP formula as optional inputs once validated against sim output ranges
+
+### 39.4 Constants needed (all go in data/constants.js)
+
+```javascript
+export const xBA_LINEDRIVE_RATE  = 0.685;  // league average LD hit rate
+export const xBA_FLYBALL_RATE    = 0.205;  // league average FB hit rate
+export const xBA_GROUNDBALL_RATE = 0.240;  // league average GB hit rate
+export const xSLG_LINEDRIVE_SLG  = 1.120;
+export const xSLG_FLYBALL_SLG    = 0.530;
+export const xSLG_GROUNDBALL_SLG = 0.260;
+```
+
+All tunable post-testing — constants not magic numbers.
+
+
+---
+
+## 40. Session Status — Phase 13.5–13.8 Complete (May 31, 2026)
+
+### 40.1 Completed this session
+
+All sub-phases of Phase 13 are now complete:
+
+**Phase 13.5 — Geographic Region**
+- `constants.js`: `REGIONS` constant (4 regions), `REGION_DEFAULT`, all weather postponement threshold named constants, fixed 2 pre-existing duplicate constant declarations
+- `schema.js`: `state.settings.region: 'north'` default added
+- `SetupScreen.js`: Region selection as Step 2 (4-card grid), full flow now Archetype → Region → Naming → Colors → Take the Job. Fixed pre-existing `createNewGame`→`startNewGame` import bug and config field name mismatches.
+- `WeatherEngine.js`: `region` param on `generateWeatherBuffer` and `evaluateGameWeather`, region-weighted condition generation, `_computePostponeProb` uses named constants, `_generateTemp` applies regional `tempOffset`
+- `SimEngine.js`: `region` + `consecutiveRoadGames` on `computeWinProbability`, `_computeTravelFatigue` helper, west altitude bonus
+- `GameEngine.js`: `startNewGame` sets `s.settings.region` from config
+- `cards-pool.js`: `_groundskeeperFlavor` filter pattern documented, 5 universal groundskeeper cards tagged
+
+**Phase 13.6 — Narrative Engine Infrastructure**
+- `schema.js`: `state.narrativeFlags: []` added
+- `engine/NarrativeEngine.js`: New pure engine — `getFlags`, `setFlag`, `getGMProfile`, `selectCardVariant`, `getRelevantFlags`
+- `CardEngine.js`: `flagKey` instrumentation in `resolve()`, `selectCardVariant` wired before `resolveTokens` in `_createInstance`
+
+**Phase 13.7 — Narrative Card Content**
+- `cards-pool.js`: 7 card types with `flagKey` fields and `variants` arrays (`i4`, `i6`, `s3`, `s3h`, `t1`, `f1`, `mgr_contract_renewal`). 4 new flag-dependent narrative cards (`narr_long_memory_trade`, `narr_reputation_loyal`, `narr_consequence_facility`, `narr_milestone_witness`). Authorship principle verified clean.
+
+**Phase 13.8 — Franchise History**
+- `schema.js`: `state.history: []` added
+- `GameEngine.js`: History entries written for trades (commitGame Step 3), season record, championship, prestige tier advancement, Franchise Legend
+- `CardEngine.js`: History entry written for serious IL stints (>14 days) in `deliverInjuryAct2`
+- `ui/screens/HistoryScreen.js`: New screen — season grouping, collapsible entries, user notes, `openHistory()` / `closeHistory()` API
+
+**Audit #4** — Passed 0 blocking issues. 41/41 files syntax clean.
+
+**Plan updates this session**
+- Section 37: GitHub deployment guide (folder structure, icon replacement, step-by-step for non-technical user)
+- Section 38: Locked implementation decisions (selectCardVariant wiring order, pre-existing bugs fixed)
+- Section 39: xBA/xSLG planned addition (Phase 16)
+- Section 40: This status entry
+
+### 40.2 Complete file inventory — current state
+
+All 41 source files complete and passing Audit #4:
+
+```
+index.html                    — app shell (unchanged this session)
+manifest.json                 — Phase 14 — NOT YET BUILT
+sw.js                         — Phase 14 — NOT YET BUILT
+
+data/
+  constants.js                ✅ Phase 13.5 — REGIONS, weather thresholds, duplicate fix
+  player-names.js             ✅ unchanged
+  cards-pool.js               ✅ Phase 13.7 — flagKey, variants, 4 new narrative cards
+
+store/
+  schema.js                   ✅ Phase 13.5/13.6/13.8 — region, narrativeFlags, history
+  DB.js                       ✅ unchanged
+  StateManager.js             ✅ unchanged
+
+engine/
+  PlayerFactory.js            ✅ unchanged
+  LeagueFactory.js            ✅ unchanged
+  RosterEngine.js             ✅ unchanged
+  SeasonEngine.js             ✅ unchanged
+  LeagueEngine.js             ✅ unchanged
+  GameEngine.js               ✅ Phase 13.5/13.8 — region wiring, history entries
+  SimEngine.js                ✅ Phase 13.5 — region + travel fatigue
+  WeatherEngine.js            ✅ Phase 13.5 — region-aware generation
+  InjuryEngine.js             ✅ unchanged
+  TradeEngine.js              ✅ unchanged
+  CardEngine.js               ✅ Phase 13.6/13.8 — narrative wiring, injury history
+  IMPEngine.js                ✅ unchanged
+  PrestigeEngine.js           ✅ unchanged
+  OffseasonEngine.js          ✅ unchanged
+  NarrativeEngine.js          ✅ Phase 13.6 — NEW
+
+ui/
+  formatters.js               ✅ unchanged
+  EventBus.js                 ✅ unchanged
+  App.js                      ✅ unchanged
+  Premium.js                  — Phase 18 — NOT YET BUILT
+
+  screens/
+    SetupScreen.js            ✅ Phase 13.5 — Region step, import fix
+    DashboardScreen.js        ✅ unchanged
+    InboxScreen.js            ✅ unchanged
+    TeamScreen.js             ✅ unchanged
+    LeagueScreen.js           ✅ unchanged
+    ScheduleScreen.js         ✅ unchanged
+    GameScreen.js             ✅ unchanged
+    PlayoffScreen.js          ✅ unchanged
+    OffseasonScreen.js        ✅ unchanged
+    HistoryScreen.js          ✅ Phase 13.8 — NEW
+    ReportsScreen.js          — Phase 16 — NOT YET BUILT
+
+  components/
+    RadarWidget.js            ✅ unchanged
+    LiveDiamond.js            ✅ unchanged
+    Linescore.js              ✅ unchanged
+    PlayerCard.js             ✅ unchanged
+    CardModal.js              ✅ unchanged
+```
+
+### 40.3 Known gaps entering Phase 14
+
+| Item | Phase |
+|---|---|
+| manifest.json | 14 |
+| sw.js (service worker) | 14 |
+| Dynamic favicon (team color) | 14 |
+| App icons (replace in repo root) | 14 — owner replaces icon-192.png + icon-512.png |
+| HistoryScreen wired into Settings gear button | 15 |
+| Full offseason wire-up | 15 |
+| Full playoff bracket wire-up | 15 |
+| Settings screen | 15 |
+| Debug panel | 15 |
+| Reports screen + xBA/xSLG | 16 |
+| Waiver pool UI | 17 |
+| ui/Premium.js | 18 |
+| Tutorial system | Post-launch |
+
+### 40.4 Audit schedule
+
+| Audit | Timing | Status |
+|---|---|---|
+| Audit #1 | Post-Phase 9 | ✅ Complete |
+| Audit #2 | Post-Phase 12 pre-UI | ✅ Complete |
+| Audit #3 | Post-Phase 13 screens | ✅ Complete — 89/89 |
+| Audit #4 | Before Phase 14 | ✅ Complete — 41/41, 0 issues |
+| Audit #5 | Before first browser test | ⏳ Pending — after Phase 15 |
+
+
+---
+
+## 41. Standing Operational Rule — Continuous Improvement Checks
+
+Added end of Phase 13.8 session.
+
+After every phase, and at any natural pause point, run a quick scan for:
+
+- **Stale TODO comments** — phase numbers that have passed, deferred items that are now in scope
+- **Incomplete resets** — module-level state variables that should clear on mount/init but don't
+- **Unwired UI elements** — buttons, modals, or controls that exist in HTML but have no event listeners
+- **False positives in audits** — grep results that look like violations but are comments or reads, not active code
+- **Pre-existing bugs** — things that were broken before the current phase started, caught incidentally during pre-build checks
+
+These are not full audits. They take 5 minutes and catch the kind of small issues that become confusing the moment you open the app in a browser. The three fixes at the end of the Phase 13.8 session (SetupScreen reset, gear button wiring, stale TODO phases) are the model for this.
+
+This runs in addition to the scheduled full audits — not instead of them.
+
+
+---
+
+## 42. Compose Channel Overhaul (Phase 15 — Review Point)
+
+> Status: NOTED — review during Phase 15 before Settings screen is finalized.
+
+The compose tab was designed before the narrative engine, geographic region, and franchise history existed. With those systems now in place, the compose prompts are worth revisiting to make sure they're taking advantage of what's been built.
+
+**Specific areas to review:**
+
+- Groundskeeper compose prompts should reflect the franchise's region (a north franchise asks about frost/drainage; a west franchise asks about wind/dust)
+- Compose prompts that generate cards should be eligible to trigger narrative variants where relevant (e.g. asking the groundskeeper about field conditions after previously deferring a facility upgrade should feel different)
+- The 11-channel structure (Section 8.12) is correct and stays — this is about the prompt content within channels, not the architecture
+- Any compose prompt that fires a card which now has a flagKey should ensure the flag is set on resolution — audit this during Phase 15
+
+**What this is not:**
+- A structural change to the compose system
+- New channels
+- New card types
+
+This is a content and wiring review — make sure the prompts and the cards they generate are as good as the systems they sit on top of.
+
+
+---
+
+## 43. Standing Operational Rule — Runtime Execution Testing
+
+Added after Phase 15 browser testing revealed a class of errors that `node --check` (syntax-only) does not catch.
+
+**The problem:** `node --check` validates syntax only. It does not catch:
+- Variables referenced before they are defined (ReferenceError)
+- Functions called by the wrong name (_private vs public)
+- Import mismatches (wrong export name between files)
+- Logic errors that only surface at runtime
+
+**The rule:** After building or modifying any engine file, run an actual import test in addition to the syntax check. The test directory at `/tmp/bgm-test/` mirrors the production folder structure and can be used for this purpose.
+
+**Minimum test after every engine change:**
+```bash
+node --input-type=module << 'EOF'
+import * as M from 'file:///tmp/bgm-test/engine/ChangedEngine.js';
+console.log('✅ imports OK');
+
+
+---
+
+## 43. Standing Operational Rule — Runtime Execution Testing
+
+Added after Phase 15 browser testing revealed a class of errors that node --check (syntax-only) does not catch.
+
+The problem: node --check validates syntax only. It does not catch:
+- Variables referenced before they are defined (ReferenceError)
+- Functions called by the wrong name (_private vs public)
+- Import mismatches (wrong export name between files)
+- Logic errors that only surface at runtime
+
+The rule: After building or modifying any engine file, run an actual import test in addition to the syntax check.
+
+Full path test after any change to LeagueFactory, GameEngine, CardEngine, or StateManager: run the startNewGame execution path test. It exercises: createGameState, buildFullLeague, generateUserSchedule, computeFullStandings, computeSeasonPrestige, computeAllIMP.
+
+Bugs caught by this test that syntax-checking missed during Phase 15:
+- _computeAge called instead of computeAge in PlayerFactory.js
+- playersOut referenced in wrong scope in LeagueFactory.js
+- PRESTIGE_POINTS_ALLSTAR_HOST name mismatch in constants.js
+- IMP_CS_COST and IMP_MIN_BF_7 missing from constants.js
+- get body() getter methods and _onResolve inline functions in cards-pool.js
+- Unescaped apostrophes in single-quoted strings in cards-pool.js
+
+
+---
+
+## 44. Browser Testing Log — Phase 15 (First Browser Test)
+
+All bugs discovered and fixed during the first live browser test of v2.
+URL: https://kokanjohn.github.io/baseball-gm/
+
+### 44.1 Deployment fixes (path issues)
+
+These were GitHub Pages subdirectory hosting issues — the app was deployed at /baseball-gm/ but files were referencing paths at the root.
+
+- manifest.json: start_url, scope, and icon paths updated to /baseball-gm/ prefix
+- sw.js: all 44 precache asset paths updated to /baseball-gm/ prefix, OFFLINE_URL updated, scope fixed
+- index.html: <base href="/baseball-gm/"> added, manifest/icon links changed to relative paths
+- App.js: service worker registration path fixed to /baseball-gm/sw.js with correct scope
+
+### 44.2 App initialization bugs
+
+- App.js called StateManager.load() with no argument → DataError. Fixed to StateManager.init().
+- App.js called StateManager.get() before checking if slot loaded → ReferenceError. Fixed to guard on hasSlot return value.
+- App.js never called SetupScreen.mount() → swirly background with no content. Fixed by adding mount() call after _showScreen('setup').
+- App.js never mounted any screens before switchTab() → blank dashboard, broken nav. Fixed by importing and mounting all 5 screens before switchTab('dashboard').
+
+### 44.3 Runtime reference errors (caught only in browser, not by node --check)
+
+These required actual code execution to surface — syntax checking alone is insufficient.
+
+- PlayerFactory.js: _computeAge called instead of computeAge (private vs public name mismatch)
+- LeagueFactory.js: playersOut referenced inside buildLeagueRosters where variable is called players
+- constants.js: PRESTIGE_POINTS_ALLSTAR_HOST missing (PrestigeEngine imports this name, constant exported as PRESTIGE_POINTS_ALLSTAR_HOSTED)
+- constants.js: IMP_CS_COST and IMP_MIN_BF_7 missing entirely
+- SetupScreen.js: region cards used archetype-card CSS class, causing archetype listener to fire on region taps and overwrite _archetype with undefined. Fixed by giving region cards their own region-card class.
+- cards-pool.js: Multiple v1-incompatible patterns required full cleanup:
+  - All get body(), get subject(), get yesLabel(), get yesEffect(), get yesMsg() getter methods replaced with static values
+  - All _onResolve, _onExpire inline function blocks removed (referenced undefined state, pickName, applyTagModifier)
+  - 3 missing closing braces (rv4, op3, tier_fa_interest) left by _onResolve removal
+  - dl1 getter methods removed, static values added
+  - s3h card duplication fixed
+  - All unescaped apostrophes in contractions inside single-quoted strings escaped
+
+### 44.4 Screen rendering fixes (first dashboard load)
+
+- updateHeader read state.userTeam.name (field doesn't exist). Fixed to construct from city + nickname.
+- settings CSS had two conflicting .settings-row definitions. Old definition overriding new icon-layout style. Unified to single definition.
+- Tier badge (Cellar Dweller) overflowing header. Fixed with max-width:110px and text-overflow:ellipsis.
+- _gameStatusBadge returning PRE-GAME when no scheduled time. Fixed to return game date string instead.
+- DashboardScreen/ScheduleScreen reading game._scheduledMs (doesn't exist). SeasonEngine already stores Unix ms in game.gameTime. Fixed to read game.gameTime.
+- Weather radar showing ugly placeholder when no weather generated. Fixed to hide radar entirely when hourlyFrames is empty.
+- Default sun emoji (☀️) on every schedule row. _makeGameObject defaults weather.label to Clear which maps to ☀️. Fixed by only showing weather icon when game._weatherGenerated is true.
+
+### 44.5 Screen feature gaps fixed
+
+Dashboard:
+- Wins/losses cards opened schedule screen. Changed to open a game log bottom sheet showing game-by-game W/L results.
+- First pitch countdown now reads game.gameTime correctly, shows seconds in final minute, adds haptic feedback in final 60s.
+
+Team screen:
+- Sections expanded by default. Fixed: _groupOpen initializes hitters/pitchers to false.
+- Status showed ACT/BENCH. Fixed to Active/Bench.
+- Bench↔starter move buttons missing entirely. Added swap buttons to all hitter/pitcher rows with _handleSwap function.
+
+Schedule screen:
+- Opponent team names not clickable. Added data-opp attribute and _openTeamModal function.
+
+League screen:
+- Default tab was standings. Changed to players.
+- Players tab missing last-name search. Added search input and _lpSearch filter.
+- Players tab had only All/My Team filter chips. Added per-team chips for all 9 CPU teams.
+- Teams not clickable in Teams or Standings tabs. Added click handlers and _openLeagueTeamModal function.
+- Stat leaders blank (required 30 AB / 5 IP threshold). Threshold lowered to 1 AB / 0.1 IP so leaders appear from game 1.
+
+GameEngine:
+- New game start had empty inbox. Fixed by seeding sp1, sp2, and one random trade card after startNewGame saves state.
+
+### 44.6 Standing rule additions (from this session)
+
+Section 43 formalized: runtime execution testing required after every engine change. node --check alone is not sufficient. Use /tmp/bgm-test/ test directory which mirrors production folder structure.
+
+The full startNewGame execution path test must be run after any change to LeagueFactory, GameEngine, CardEngine, or StateManager.
+
+### 44.7 Known remaining issues (as of this log entry)
+
+Cosmetic/UX issues still to address:
+- Settings modal color swatches not showing team creation colors on open
+- No reset/new game option in settings
+- Install to home screen button unnecessary (owner uses Chrome menu)
+- Dashboard stat cards (morale, atmosphere, owner trust) visual polish
+- W/L game log modal score format (score.user vs score.us field name mismatch likely)
+- Overall UI polish pass needed — v2 is functional but not yet as polished as v1 was after iteration
+
+Next phase after current fixes are confirmed working:
+- Phase 16: Reports screen + xBA/xSLG
+- Ongoing: UI polish pass
+
+
+
+---
+
+## 45. UI Polish Pass — Session 2 (June 3, 2026)
+
+### 45.1 Screen-by-screen port philosophy established
+
+After initial browser testing revealed a large gap between v2 scaffolded screens and v1 look/feel, we established the correct approach: for each screen, read the full v1 implementation first (all CSS, all event handlers, all render logic), then produce a complete replacement adapted to v2 state shape. Patching is slower and produces worse results than a proper port.
+
+### 45.2 DashboardScreen — full port
+
+- Week banner now shows SPRING TRAINING / SPRING GAME N / OPENING DAY / GAME N (not record)
+- Stat cards W/L/OVR are centered, OVR color updates dynamically based on actual rating
+- Progress bars use _barColor() for precise color gradients (green/gold/orange/red)
+- Next game card shows last game W/L badge, spring training badge, game time formatted
+- First pitch countdown reads game.gameTime (Unix ms, not _scheduledMs which didn't exist)
+- Radar widget hidden when no weather data generated yet
+- Wins/losses tap opens a game log bottom sheet instead of navigating to schedule
+- Haptic feedback in countdown final 60 seconds
+- _barColor() helper added
+- ngc-last, ngc-right, recap-btn, season-done-card CSS added to index.html
+
+### 45.3 InboxScreen fixes
+
+- Single-action cards (autoResolve:'yes') show one centered button, not both Yes/No
+- Compose tab rebuilt: flat recipient grid, inline topic list, stateful _composeChannel/_composeTopic
+- Topic cooldowns show remaining games per topic
+- _composeChannel and _composeTopic added to module state, reset on tab switch
+- _showTopicPanel/_hideTopicPanel removed (replaced by stateful refresh approach)
+
+### 45.4 TeamScreen fixes
+
+- Sections collapsed by default (_groupOpen hitters/pitchers: false)
+- Status labels show "Active"/"Bench" instead of "ACT"/"BENCH"
+- Swap buttons added to all hitter/pitcher rows (Bench/▲ Start, Bench/▲ Active)
+- _handleSwap function added — moves players between starter/bench slots
+- Role parameter threaded through _renderPitcherRow and _renderPitcherGroup
+
+### 45.5 ScheduleScreen fixes
+
+- Score field fallback: score.us ?? score.user and score.them ?? score.opponent
+- Weather icon only shown when game._weatherGenerated is true (no more default sun)
+- Opponent team names clickable — _openTeamModal function added
+- _scheduledTime reads game.gameTime (Unix ms) correctly after SeasonEngine fix
+
+### 45.6 LeagueScreen fixes
+
+- Default tab changed from standings to players
+- Last-name search input added (_lpSearch filter)
+- Per-team filter chips added for all 9 CPU teams
+- Teams clickable in both Teams and Standings tabs — _openLeagueTeamModal added
+- Stat leaders threshold lowered from 30 AB / 5 IP to 1 AB / 0.1 IP
+- PCT column added to standings
+- lp-chip-sm CSS added for smaller team chips
+- lgt-card cursor:pointer added
+
+### 45.7 Settings modal — full rebuild
+
+- Franchise info section added: GM name, team, season (all read from state on open)
+- Color swatches now reflect actual saved colors when settings opens
+- _initSettingsPickers (wires listeners once at init) separated from _refreshSettingsSwatches (updates display on open)
+- Reset button changed to "New / Switch Team" → opens TeamSelectScreen
+- Install button removed (user accesses via Chrome menu on Android)
+- "Danger Zone" section label changed to "Teams"
+
+### 45.8 GameEngine — colors fix
+
+- startNewGame was writing config.region to state.settings but NOT writing primaryColor or secondaryColor
+- Fixed: state.settings.primaryColor and state.settings.secondaryColor now saved on new game start
+- This was the root cause of settings modal always showing gold/green defaults
+
+### 45.9 TeamSelectScreen — new screen
+
+Built full Load or Start a Team screen (ui/screens/TeamSelectScreen.js):
+- Shows all saved teams as tappable cards (tap = load)
+- Active team has gold border and ACTIVE badge
+- Each card shows: team name, archetype, season, W-L, last-played time, Tier X of 5 badge
+- Delete button on each card with confirmation sheet
+- New Team card at bottom goes straight to setup (no free-tier gate during development)
+- Added to sw.js precache
+- Wired into App.js via _openTeamSelect() helper
+- Settings "New / Switch Team" button opens this screen
+- SAVE_SLOT_LIMIT_FREE raised to 99 (TODO Phase 18: lower to 1)
+
+### 45.10 SetupScreen — archetype step redesign
+
+Complete redesign of Step 1 (archetype selection):
+- Layout: 2-column grid, 3 rows (3 difficulty groups)
+- Difficulty grouping: Easy (Institution/Empire), Normal (Contender/Gambler), Hard (The Lab/Ember)
+- Difficulty rationale: roster strength is the primary difficulty axis — Empire starts with max roster (easiest), Ember starts with minimum (hardest)
+- Each difficulty group wrapped in faint border with centered inline label (EASY/NORMAL/HARD)
+- Icons removed from all archetype cards
+- Real dot elements (arch-dot/arch-dot.filled) replace text strings (●●○○○)
+- Dot rows in two aligned columns (label col + dots col) centered within each card
+- No taglines at bottom of cards
+- Card names and premises centered
+- Premises shortened to one line
+- "CONTINUE" button (all caps, no arrows) pinned to bottom
+- "Team Type" replaces "Choose Your Franchise"
+- Logo/diamond/title removed from all setup steps
+- All steps now use consistent step-header pattern
+
+### 45.11 App name
+
+"The Front Office" conflicts with a well-known soccer GM app. Using "Your Team" as placeholder in setup screen title. Final name TBD after playtesting. Candidates discussed: The War Room, Club Control, The Hot Corner.
+
+### 45.12 SeasonEngine — gameTime field clarification
+
+- _parseGameTime already returns Unix ms timestamp stored in game.gameTime
+- DashboardScreen and ScheduleScreen updated to read game.gameTime (not game._scheduledMs)
+- Bad _makeGameObject modification reverted
+
+### 45.13 Initial inbox cards seeding
+
+- startNewGame now delivers sp1, sp2, and one random trade card after saving state
+- Inbox no longer empty on first load
+
+### 45.14 SAVE_SLOT_LIMIT_FREE
+
+- Raised to 99 in constants.js for full testing
+- TODO Phase 18: lower back to 1
+
+
+
+---
+
+## 46. UI Polish & Sim Realism — Session 3 (June 6, 2026)
+
+### 46.1 Session scope
+
+This session covered: schedule screen overhaul, live game engine bugs, full sim realism (Option C runner advancement), league screen rebuild, team/player interconnection, CPU team names by region, and a comprehensive set of bug fixes. Every file that ships has been ES-module checked before delivery.
+
+---
+
+### 46.2 ScheduleScreen — full overhaul
+
+**Month grouping**
+- Spring training games now fall under the March month group (no separate "Spring Training" section)
+- All months render as collapsible month groups with the same header pattern
+- Month headers show game count ("22 Games") instead of chevrons
+- Only the current month is open by default; all others are closed
+- Manual toggles are preserved across refreshes — auto-open only fires when `currentGameIndex` moves into a new month
+- `_monthOpen` keyed by 'YYYY-MM'
+
+**Spring training schedule**
+- Spring training anchored to March 14, no day-of-week rolling
+- 10 games with off-day pattern `[2, 5, 8]` (game-game-off-game-game-off-game-game-off-game-game)
+- Last spring game lands ~March 26-28; Opening Day is April 1 (no Monday roll)
+- CPU teams also get 10 spring training games in `generateCPUSchedules` with the same date pattern, so the Scores modal shows full league during spring training
+
+**Scores modal**
+- "Scores" button added to schedule header
+- Day navigation: prev/next day arrows + month jump buttons
+- User's game shown first with accent border; CPU games below
+- User's game: live score + inning indicator when active; final score when committed; scheduled time when upcoming
+- CPU games: final score when played; scheduled time when not yet played
+- Refreshes every 5 seconds while open
+- Spring training CPU games now appear (previously empty)
+- "No games today" shown on true off days
+
+**Player tap from team modal**
+- Tapping a team name on the schedule screen opens the team modal
+- Tapping a player in the team modal opens `openPlayerCard` (canonical PlayerCard.js)
+- `roster:changed` listener added so team name changes from settings reflect immediately
+
+**Bugs fixed**
+- March header not collapsing — auto-reopen logic was fighting manual toggle; removed
+- `_openTeamModal` function declaration was missing (orphaned function body at module scope) — restored
+- Duplicate `_renderGroup` function declaration causing `SyntaxError: Unexpected end of input` — removed
+- `(missed)` note removed from committed game rows
+
+---
+
+### 46.3 DashboardScreen — live game fixes
+
+**OPP/US in linescore while staying on dashboard**
+- `_onTick` was calling `_renderLinescore(ds)` without abbr params, causing fallback to `'OPP'`/`'US'` on every tick
+- Fixed: `_onTick` now derives `userAbbr`/`oppAbbr` from state and passes them to `_renderLinescore`
+
+**3 outs displayed before half flip**
+- `_deriveGameState` was reading `curHalf`/`curInning` from the last play without advancing when outs=3
+- Fixed: when `outs >= 3 && !isFinal`, code advances `curHalf` (TOP→BOT or BOT→TOP+inning++) and resets `outs = 0`
+- Display now immediately shows the upcoming half with 0 outs
+
+**PBP null entries**
+- Old `_onTick` PBP handler had three branches that could miss plays
+- Simplified to: `if (play && play.description && play.type !== 'inning_end' && play.type !== 'game_end')`
+
+**game_start announcement**
+- Was showing both SPs: "Corporan takes the mound. Lopez starts for the home team."
+- Now shows only the relevant pitcher: away SP when user is home, user SP when user is away
+
+**R H E linescore**
+- Linescore now shows three totals columns: R (runs), H (hits), E (errors)
+- H and E tracked from play sequence in `_deriveGameState`
+- E column header is red; E values are red when non-zero, muted when zero
+- `totalAwayHits`, `totalHomeHits`, `totalAwayErrors`, `totalHomeErrors` added to `_deriveGameState` return
+
+**IMP hot/cold strip**
+- Gated to `gamesPlayed >= 3` so it doesn't show pre-game with default values
+
+**Countdown timer**
+- Changed `Math.floor(diffMs / 60000)` to `Math.ceil(...)` so countdown shows one more minute (rounds up)
+
+---
+
+### 46.4 SimEngine — Option C full runner advancement
+
+This was a major rewrite of `_advanceBases` and `_simulateHalfInning`. All runner advancement is now modeled with realistic probabilities.
+
+**New play types**
+- `double_play` — batter out + runner out; `extraOuts = 1` signals second out to half-inning loop
+- `fielders_choice` (FC) — batter reaches first safely, lead runner out; no AB charged
+- `error` (E) — batter reaches safely, no out; no AB charged
+- `sac_fly` (SF) — flyout scoring a runner from third; no AB charged, `sf: 1` stat recorded
+- `sac_bunt` (SH) — batter out, runners advance one base; no AB charged, `sac: 1` stat recorded
+- `stolen_base` (SB) — between-pitch runner advancement; `sb: 1` stat
+- `caught_stealing` (CS) — failed steal; runner out, `cs: 1` stat
+
+**Runner advancement model**
+- **Double:** runner from first tries to score; throw-out probability roll based on `SIM_THROWOUT_PLATE_BASE = 0.28` minus speed factor. Can be thrown out at plate — otherwise stops at third
+- **Single:** runner from second: throw-out roll at plate. Runner from first: if speed ≥ 70, tries for third with throw-out check
+- **Flyout:** tag-up from second now possible (50% of fast runners try for third). Throw-out check at third
+- **Groundout:** checks in order — error (6%), double play (40% with runner on first, <2 outs), fielder's choice (30% of remainder), standard groundout
+
+**Stolen base attempts**
+- `_attemptStolenBase` runs before each at-bat if fast runner on base and <2 outs
+- Threshold: `SIM_H_SPEED_SB_THRESHOLD = 65`; attempt prob: `SIM_SB_ATTEMPT_PROB = 12%`
+- Success rate: `SIM_SB_BASE_SUCCESS = 68%` + speed/500
+- Second stealing third: 70% of first→second attempt rate
+
+**Sac bunt**
+- Checks before normal at-bat resolution: low-power (`power ≤ 45`), runners on, <2 outs, inning 6+, 18% chance
+- 85% success (batter out, runners advance); 15% fail (treated as weak groundout)
+
+**`_buildStatDeltas` — stat accuracy**
+- No AB on sac fly, sac bunt, walk, HBP, error, FC
+- `sf`, `sac`, `sb`, `cs` counters added
+- Pitcher `ip` only charged on actual batter outs (not FC, error)
+
+**New constants added to constants.js**
+- `SIM_THROWOUT_PLATE_BASE`, `SIM_THROWOUT_EXTRA_BASE`, `SIM_SPEED_THROWOUT_DIVISOR`
+- `SIM_SB_BASE_SUCCESS`, `SIM_SB_SPEED_BONUS_DIVISOR`, `SIM_SB_ATTEMPT_PROB`
+- `SIM_FC_PROB`, `SIM_DP_PROB`, `SIM_ERROR_PROB`
+- `SIM_SAC_BUNT_POWER_MAX`, `SIM_SAC_BUNT_INNING_MIN`, `SIM_SAC_BUNT_PROB`
+
+**`_isOut` updated**
+- Now includes `sac_bunt` and `caught_stealing`
+
+**DashboardScreen box score updated**
+- AB correctly excludes sac fly, sac bunt, walk, HBP
+- Stolen bases counted in box score
+- Pitcher outs: double play correctly adds 2
+- New play type icons: `double_play: '▲▲'`, `fielders_choice: 'FC'`, `sac_fly: 'SF'`, `sac_bunt: 'SH'`, `error: 'E'`, `stolen_base: 'SB'`, `caught_stealing: 'CS'`
+
+---
+
+### 46.5 SimEngine — W/L/SV/HD pitcher decisions
+
+`_assignPitcherDecisions(plays, userScore, oppScore, isHome)` — post-processing function that runs after simulation completes, assigns pitcher decisions using real baseball rules:
+
+- **Win:** SP gets win if ≥15 outs (5 innings); otherwise goes to pitcher on mound when user took permanent lead
+- **Loss:** Pitcher who gave up the go-ahead run that held
+- **Save:** Last pitcher used if: user won, entered with lead ≤3, recorded ≥1 out, doesn't have the win
+- **Hold:** Middle relievers who entered in save situation, recorded ≥1 out, left with lead intact
+
+Decisions attached to `game_end` play as `_statDeltas`; `accumulateStats` now allows `game_end` plays through for this purpose. `w`, `l`, `sv`, `hd` stats accumulate correctly at commit time.
+
+---
+
+### 46.6 LeagueFactory — region-specific team names
+
+`LEAGUE_TEAMS` replaced by `LEAGUE_TEAMS_BY_REGION` — four regions × 9 teams each. All city names and team nicknames are completely fictional (no real MLB, MiLB, or other professional team names).
+
+| Region | Teams |
+|---|---|
+| North | Ironfield Bears, Greystone Foxes, Northhaven Pines, Ridgecrest Owls, Hollowbrook Herons, Coldwater Elk, Frostburg Lynx, Ashmont Ravens, Clearfield Bucks |
+| South | Bayside Pelicans, Palmetto Kings, Sunridge Hawks, Copperfield Bulls, Bayou Herons, Crestview Gators, Suncoast Tarpon, Delta Cranes, Mossglen Foxes |
+| East | Harborview Gulls, Tideland Anchors, Seagrove Osprey, Lightshore Breakers, Millbay Sails, Cliffport Herons, Cheswick Skippers, Reedmont Cranes, Gulfport Mullets |
+| West | Mesaview Condors, Peakstone Pumas, Canyon Rams, Dryrock Hawks, Highgrass Coyotes, Arroyo Dust Devils, Ridgeway Eagles, Sundusted Vipers, Saltflat Scorpions |
+
+- `buildFullLeague` accepts `region` param; selects correct team set
+- `buildLeagueRosters` accepts optional `teamDefs` param (defaults to north)
+- `startNewGame` passes `config.region || 'north'` to `buildFullLeague`
+- `_LEAGUE_TEAM_DEFAULTS_BY_REGION` in App.js matches all four regions for the Settings team name reset button
+- `LEAGUE_TEAMS` backward-compat export points to north set
+
+---
+
+### 46.7 player-names.js — real player name audit
+
+16 real MLB player names removed and replaced with fictional alternatives:
+
+| Old | New |
+|---|---|
+| Robinson Cano | Roberto Canosa |
+| Johan Santana | Jorge Santamaria |
+| Felix Hernandez | Felix Herreros |
+| Adrian Beltre | Andres Beltran |
+| Miguel Cabrera | Miguel Cabrales |
+| Yadier Molina | Yadier Moreira |
+| Carlos Beltran | Carlos Beltrado |
+| Pablo Sandoval | Pablo Sandiago |
+| Hanley Ramirez | Hanley Restrepo |
+| Asdrubal Cabrera | Andres Cabrales |
+| Victor Martinez | Victor Maravilla |
+| Freddy Garcia | Freddy Galvez |
+| Erick Aybar | Erick Aguilar |
+| Pedro Strop | Pedro Estrada |
+| Javier Santana | Javier Salinas |
+| Hyun-Jin Jin | Hyun-Soo Jin |
+
+---
+
+### 46.8 LeagueScreen — Players tab rebuild
+
+**Position filter**
+- Row 1: `Batters | Pitchers`
+- Row 2: `C | 1B | 2B | 3B | SS | OF | DH | SP | RP`
+- Position families: clicking `2B` shows `2B` and `2B/SS` players; `1B` → `1B/3B`; `SS` → `2B/SS`; `3B` → `1B/3B`; `DH` → `DH/OF`; `OF` → `DH/OF`
+- Defaults to `Batters`
+
+**Roster/team filter bar**
+- `All | Other Teams | [team dropdown] [last name search]`
+- "Other Teams" hides user's own players (not "On Rosters" which was ambiguous)
+- Team dropdown: 130px wide; last name search: 90px fixed
+- Search bypasses all other filters — any player findable by name regardless of pos/team/roster state
+
+**Search focus bug fixed**
+- `refresh()` was replacing the DOM and destroying input focus
+- Fix: save cursor position before refresh, re-find input by ID after refresh, restore focus + cursor position
+- Only one search event listener (old code had two)
+
+**Column changes**
+- `Form` → `IMP`, `OVR` → `RTG`, `SV+H` → `SVHD`
+- No sort arrows in column headers — active column highlighted only
+- Clicking same column toggles asc/desc
+
+**Pitcher stats added**
+- IP, BB, SVHD (saves + holds) added to pitcher view
+- ERA calculation uses `outs` field (from sim) correctly
+
+**IMP as first stat column**
+- Shows `+2.4` / `-1.8` / `—` in colored badge
+- Hot/cold emoji removed from player rows (IMP number is sufficient)
+
+**Sticky header**
+- Filter bars + column headers are `position: sticky; top: 0`
+- Only `#lp-list` scrolls
+
+**`roster:changed` listener added**
+- Team name changes from settings now immediately refresh the Players tab
+
+---
+
+### 46.9 LeagueScreen — Teams and Standings tabs
+
+**Teams tab**
+- Every team card (both divisions including user's team) opens `_openLeagueTeamModal`
+- Modal shows Hitters / Pitchers sections with tappable player rows
+- Tapping a player opens `openPlayerCard` (canonical PlayerCard.js)
+- Modal has proper flex layout with scrollable body
+
+**Standings tab**
+- Every standing row (including user's own row) is tappable with `cursor: pointer`
+- Tapping opens `_openLeagueTeamModal` → same player drill-down as Teams tab
+
+**Team grade column (TODO Phase 17)**
+- v1 showed a trade relationship grade for each CPU team based on trade history
+- Currently shows `—` (no trades have occurred)
+- Will be implemented in Phase 17 (Waiver/Trade UI) when trade tracking is active
+
+---
+
+### 46.10 PlayerCard.js — emoji removal
+
+- GM Relationship labels: `😊 Strong` → `Strong`, `😤 Strained` → `Strained`, `😐 Neutral` → `Neutral`
+- Bar color and label text still communicate the relationship tier without emojis
+
+---
+
+### 46.11 SeasonEngine — spring/season timing
+
+- Spring training: starts March 14, no day-of-week rolling, 10 games, ends ~March 26-28
+- Regular season: starts April 1 exactly, no Monday rolling
+- `generateCPUSchedules` now includes 10 spring training CPU games matching the same date pattern
+- `SPRING_TO_SEASON_GAP_DAYS = 18` for the `startDateOverride` path
+
+---
+
+### 46.12 Universal stale-screen fix
+
+**Problem:** After saving team name changes in Settings, screens showing team names didn't update until the user navigated away and back.
+
+**Root cause:** `_applyLeagueTeams` in App.js emits `roster:changed`, but not all screens were listening to it.
+
+**Fix:** `roster:changed → refresh()` listener added to:
+- LeagueScreen (new)
+- ScheduleScreen (new)
+- DashboardScreen (was already present)
+
+**Rule going forward:** Any screen that displays team names must wire `roster:changed → refresh()`. This is the canonical event for any mutation to `state.leagueTeams` or `state.userTeam` name/abbr fields.
+
+---
+
+### 46.13 EventBus listener cleanup — universal fix
+
+**Problem:** All screens that use EventBus were storing the return value of `EventBus.on()` (which returns the handler function) then trying to destructure as `[event, handler]` in `unmount()`. `EventBus.off()` was called with garbage arguments and handlers were never removed. Every tab switch added a new set of handlers.
+
+**Fix applied to:** TeamScreen, LeagueScreen, InboxScreen, DashboardScreen, ScheduleScreen.
+
+**Pattern (canonical):**
+```js
+const wire = (event, handler) => {
+  EventBus.on(event, handler);
+  _listeners.push({ event, handler });
+};
+
+// In unmount:
+_listeners.forEach(({ event, handler }) => EventBus.off(event, handler));
+```
+
+---
+
+### 46.14 PlayerCard.js — canonical player detail sheet
+
+`ui/components/PlayerCard.js` deployed for the first time. All player detail entry points now use this single component:
+- TeamScreen: tapping a player row
+- LeagueScreen Players tab: tapping a player row
+- LeagueScreen Teams tab: team modal → player row
+- LeagueScreen Standings tab: standing row → team modal → player row
+- ScheduleScreen: opponent team modal → player row
+
+The custom `_openPlayerSheet` function previously built into ScheduleScreen was removed and replaced with `openPlayerCard` from the canonical component.
+
+---
+
+### 46.15 Service worker cache versioning
+
+Cache version bumped to `tfo-v2-r20` over the course of this session (r2 through r20). Every deployment batch bumps the version. Rule: bump whenever 3+ JS files change in a batch.
+
+---
+
+### 46.16 Known pending items (as of Session 3)
+
+**Phase 7 — WeatherEngine wiring (deferred)**
+- WeatherEngine.js is fully built (698 lines) but not called from GameEngine
+- Infrastructure in place: `GAME_STATUS.POSTPONED/DELAYED/SUSPENDED`, `scheduleMakeupGame`, `resumeSuspendedGame`
+- Needs: automatic weather evaluation on each tick, CPU team postponements, doubleheader scheduling
+- Dedicated phase required — touches tick loop, card delivery, groundskeeper system
+
+**Phase 17 — Trade grade column in Teams tab**
+- v1 showed a trade relationship grade for each CPU team (how many trades, how equitable)
+- Currently shows `—` (no trades have occurred yet)
+- Wire when trade tracking is active in Phase 17
+
+**All-Star hosting**
+- `evaluateAllStarHostingEligibility` imported in GameEngine but never called at `PHASE.ALL_STAR_BREAK`
+- `_hostedAllStarThisSeason` flag exists on `userTeam`
+- `ALL_STAR_WEEK` milestone with `requiresHosting: true` exists
+- Wire in Phase 19
+
+**Spring roster expansion (38-man) — Phase 15**
+- 10 invitees from farm (5H+5P), Opening Day cut to 28, keeper tags
+- Not yet built
+
+**Phase 16 — Reports screen + xBA/xSLG**
+**Phase 17 — Waiver pool UI + trade system**
+**Phase 18 — Monetization**
+**Phase 19 — All-Star Game hosting**
+
+**Sim realism — intentional walk (IBB)**
+- Not modeled; could approximate by bumping walk probability for high-power batters with bases loaded
+- Low priority — rare in real baseball
+
+**Diamond/out dots — verify in live testing**
+- All new play types (stolen_base, caught_stealing, double_play, FC, error, sac_fly, sac_bunt) set `_basesAfter` and `outsAfter` correctly
+- Has not been verified in a live game since Option C implementation
+
+
+---
+
+## 47. TeamScreen Full Rebuild — Design Spec (Session 3, pre-implementation)
+
+### 47.1 SP/RP designation + handedness on all pitcher rows
+
+- Remove slot numbers (#1, #2) from rotation rows — never show these
+- Every pitcher row (rotation, bullpen, bench) shows `player.pos` (SP/RP) and `player.hand` (L/R) inline after the player name, same pattern as farm rows
+- During spring training, invitee pitcher rows also get an "ST" badge
+- Format: `Name · SP · R` or `Name · RP · L`
+
+---
+
+### 47.2 Roster optimization (ropt) bar + hint button
+
+**The bar:**
+- Sits in the Team screen header alongside the payroll bar
+- Label: "Lineup OPT" with percentage value colored green (≥90), blue (≥60), red (<60)
+- `?` hint button to the right of the percentage
+
+**`_calcRopt(state)` — pure function:**
+- For each active hitter slot: compare starter OVR vs best eligible bench hitter for that slot (using `_eligibleSlots` — see 47.3)
+- For each rotation slot: compare active SP OVR vs best bench SP
+- For each bullpen slot: compare active RP OVR vs best bench RP
+- Score = `Math.floor(activeSum / bestPossibleSum * 100)`
+- Returns `{ score: Number, moves: Array<String> }`
+- Spring invitees on bench are included as candidates
+
+**Team OVR card:**
+- Small card in header row alongside payroll: "OVR: 71"
+- Computed as average OVR of all active starters (9 hitters + 5 SP + 5 RP = 19 slots)
+- Same color tier as player row OVR badges
+
+**Hint sheet:**
+- Bottom sheet listing up to 5 specific suggested swaps
+- Format: "Start Torres (72) over Martinez (65) at SS"
+- Pitchers: "Move SP Reyes (71) into rotation over Santos (64)"
+- If already 100%: "Your best available players are all active."
+
+---
+
+### 47.3 Position eligibility (`_eligibleSlots`)
+
+Port of v1's `eligibleLineupSlots`. Every bench hitter is eligible for their natural position(s) AND DH. Used by ropt calculation and swap modal.
+
+```
+C       → [C, DH]
+1B      → [1B, DH]
+2B      → [2B, DH]
+3B      → [3B, DH]
+SS      → [SS, DH]
+OF      → [OF, DH]
+DH/OF   → [OF, DH]
+2B/SS   → [2B, SS, DH]
+1B/3B   → [1B, 3B, DH]
+SS/OF   → [SS, OF, DH]
+1B/OF   → [1B, OF, DH]
+other/  → split on / + DH
+```
+
+---
+
+### 47.4 Swap modal — always a 1-for-1 exchange
+
+**Rule:** Nobody moves without a replacement going the other way. Roster counts stay exactly right at all times.
+
+**Bench hitter → starter (▲ button):**
+1. Show slot picker: `[natural pos(es)] + [DH]` — always shown, even single-position players have DH option
+2. Slot chosen → show current starter at that slot → confirm swap
+3. If slot is empty → promote directly, no confirmation needed
+4. If no bench players eligible for any slot → button disabled
+
+**Starter → bench (Bench button):**
+1. Show bench players eligible for that starter's slot
+2. Bench player chosen → swap atomically
+3. If no eligible bench players exist for that slot → Bench button is **disabled** (not greyed with a message — just disabled)
+
+**Bench pitcher → active (▲ button):**
+- SP → show current 5-man rotation → tap one to replace
+- RP → show current bullpen → tap one to replace
+- If rotation/bullpen not full → promote directly
+
+**Active pitcher → bench (Bench button):**
+- Show bench pitchers of same type (SP shows SP bench, RP shows RP bench)
+- Tap to swap
+- If no bench pitchers of same type → button disabled
+
+**Multi-position players (2B/SS, 1B/3B, etc.):**
+- Step 1 slot picker always fires — user picks which slot to fill
+- Step 2 shows the starter at that specific slot
+- Back button in modal returns from step 2 to step 1
+
+**Spring training — expanded bench:**
+- Same flow, more choices
+- Invitees appear as options in both directions
+- Keeper tags are completely independent of lineup decisions
+
+**Enforcement:**
+- Hard caps: 9 `STARTING_HITTERS`, 5 `STARTING_PITCHERS`, 5 `BULLPEN`
+- Bench: uncapped during spring training; normal depth (5H/2SP/2RP) during regular season
+- Caps enforced naturally by the swap-only model — you can only promote when someone goes the other way
+
+---
+
+### 47.5 Spring training invitees
+
+**At `startNewGame` and at `advancePhase(SPRING_TRAINING)` for subsequent seasons:**
+- Pull top 5 farm hitters and top 5 farm pitchers by OVR
+- Set `player._isSpringInvitee = true`, `player._isKeeper = false`
+- Assign real bench groups: `BENCH_HITTERS` or `PITCHER_BENCH`
+- Move IDs from `farmIds` → `rosterIds`
+- Farm section now shows only remaining farm players — no player appears in two places
+
+**Keeper toggle (Option B — tag during spring, maximum flexibility):**
+- Every player row during spring shows a keeper badge (solid pill = keeper, outline = cut)
+- Default: regular roster players start as `_isKeeper: true`, invitees start as `_isKeeper: false`
+- Tap to toggle at any time during spring training
+- Cap: cannot tag more than 28 keepers; toast fires if user tries: "Untag another player first"
+- Counter shows "Keepers: 26/28" in the section header
+- Keeper tag is independent of lineup decisions — starting an invitee does not auto-tag them
+
+**Keeper badge is visible on all player rows during spring (hitters and pitchers), including:**
+- Starting lineup players
+- Bench players
+- Spring invitees (who also show "ST" badge)
+
+**At `advancePhase(REGULAR_SEASON)`:**
+1. Read all players where `_isKeeper: true`
+2. If exactly 28 → `applySpringCuts(state, keeperIds)` directly
+3. If < 28 → auto-fill from untagged regular roster players by OVR descending; toast: "Your roster was filled automatically"
+4. Hard guard: if > 28 (shouldn't happen due to cap) → drop lowest-OVR excess keepers
+5. Non-keeper invitees: `_isSpringInvitee: true` → return to `farmIds`, reset to `PRACTICE_SQUAD`
+6. Non-keeper regular players → waived (not farm)
+7. Clear `_isSpringInvitee` and `_isKeeper` flags from all players
+
+**No player in two places guarantee:**
+- Spring start: invitee leaves `farmIds`, enters `rosterIds`
+- Spring end: non-keeper invitees leave `rosterIds`, return to `farmIds`
+- A player is either in `rosterIds` OR `farmIds`, never both
+
+---
+
+### 47.6 Files that change
+
+| File | What changes |
+|---|---|
+| `constants.js` | Add `SPRING_INVITEE_HITTERS: 5`, `SPRING_INVITEE_PITCHERS: 5` to `ROSTER_LIMITS` |
+| `schema.js` | Add `_isSpringInvitee: false`, `_isKeeper: false` to player schema |
+| `GameEngine.js` | `_addSpringInvitees()` at `startNewGame` and `advancePhase(SPRING_TRAINING)`; `advancePhase(REGULAR_SEASON)` reads keeper flags |
+| `RosterEngine.js` | `toggleKeeperTag(state, playerId)`; update `applySpringCuts` to use keeper flags |
+| `TeamScreen.js` | SP/RP+hand labels; ropt bar+hint; swap modal with slot picker; keeper toggle+ST badge; slot caps enforced; no slot numbers |
+
+---
+
+### 47.7 Card system updates required (Phase 15 — deferred)
+
+**Edit existing cards:**
+- Spring training standout cards currently reference the old competition system (incumbent vs challenger, cards firing around game 12-15)
+- These need to be rewritten to reference the keeper system — e.g. "Torres has been outstanding this spring. Consider tagging him as a keeper." rather than "Will you start Torres or Martinez on Opening Day?"
+- All `triggerPhase: 'SPRING_TRAINING'` cards in CardEngine need audit
+
+**New cards to add:**
+- **Thin at position warning:** If the user has fewer than 2 eligible bench players for a given position slot (e.g. only one catcher on the entire 38-man roster including invitees), a card fires early in spring: "You're thin at catcher — consider calling up a prospect or monitoring your depth."
+- **Keeper deadline reminder:** Around spring game 8 (of 10): "Opening Day is approaching. You have [N] keepers tagged — you need 28."
+- **Auto-resolve notification:** If spring ends with fewer than 28 keepers tagged: "We filled your roster automatically. [X] players were added based on rating."
+- **Unexpected invitee breakout:** If an invitee's spring OVR improvement or spring stats significantly exceed expectations, a card fires: "[Name] is making a strong case for a roster spot."
+
+---
+
+### 47.8 Known edge cases
+
+- **Bench button disabled** when no eligible replacement exists for that starter's slot — no message, just disabled state
+- **DH slot** — every hitter is eligible for DH; slot picker always includes DH as an option
+- **Multi-position bench player** — slot picker fires first, then replacement selection
+- **Promoted invitee still shows ST badge** — even if a spring invitee is moved into the starting lineup, their ST badge remains; their keeper tag stays wherever the user set it
+- **After spring cuts, `_isSpringInvitee` and `_isKeeper` cleared** — clean state for regular season
+
+---
+
+## 48. TeamScreen Full Rebuild — Implementation (Session 3)
+
+### 48.1 Phase 1 — Data layer (COMPLETE)
+
+**Files changed:** `constants.js`, `schema.js`, `GameEngine.js`, `RosterEngine.js`
+
+**`constants.js`**
+- Added `SPRING_INVITEE_HITTERS: 5` and `SPRING_INVITEE_PITCHERS: 5` to `ROSTER_LIMITS`
+
+**`schema.js`**
+- Added `_isSpringInvitee: Boolean` and `_isKeeper: Boolean` to player schema comment
+
+**`GameEngine.js`**
+- Added `_addSpringInvitees(s)` function — position-scarcity aware selection treating OF as 3 separate slots, ranks farm players by (scarcity DESC, OVR DESC), picks top 5 hitters and 5 pitchers, moves them from `farmIds` → `rosterIds`, sets `_isSpringInvitee: true`, `_isKeeper: false`, assigns real bench groups (`BENCH_HITTERS` or `PITCHER_BENCH`)
+- Tags all existing 28-man players as `_isKeeper: true` by default at spring start
+- Called in `startNewGame` (season 1) AND new `case PHASE.SPRING_TRAINING` in `advancePhase` (all subsequent seasons)
+- Added `case PHASE.SPRING_TRAINING` to `advancePhase` switch
+- Updated `case PHASE.REGULAR_SEASON` to use keeper flags: if any keeper tagged → `applySpringCuts`; if none tagged → `autoResolveSpringCuts`
+- Added imports: `applySpringCuts`, `toggleKeeperTag` from RosterEngine
+
+**`RosterEngine.js`**
+- Added `toggleKeeperTag(state, playerId)` — flips `_isKeeper`, enforces 28-keeper cap, returns `{ error: String }` if cap hit
+- Rewrote `applySpringCuts(state)` — now reads `_isKeeper` flags directly (no longer accepts a passed array); auto-fills to 28 from untagged regular players if under; invitees not kept → farm; regular players not kept → waivers; clears both flags from all players after cuts
+- Updated `autoResolveSpringCuts` to build a patched state with top-28 tagged then call the new `applySpringCuts`
+
+---
+
+### 48.2 Phase 2 — Display layer (COMPLETE)
+
+**Files changed:** `TeamScreen.js`
+
+**Imports**
+- Added `ROSTER_LIMITS` and `PHASE` to constants import
+
+**`_eligibleSlots(player)`** — new function
+- Returns array of slot labels a player can fill including DH
+- Handles all multi-position combos: `2B/SS`, `1B/3B`, `DH/OF`, `SS/OF`, `1B/OF`, etc.
+- Every hitter includes DH in their eligible slots
+
+**`_calcRopt(state)`** — new function
+- Returns `{ score: 0–100, moves: String[], teamOvr: Number }`
+- Slot-aware: uses `_eligibleSlots` to find best bench candidates per active slot
+- SP/RP handled separately from hitters
+- `teamOvr` = average OVR across all 19 active starters
+
+**`refresh()` header — second row added**
+- Team OVR card alongside payroll card
+- Ropt bar row below payroll bar: "Lineup OPT N%" with colored fill (green ≥90, blue ≥60, red <60)
+- `?` hint button wired to `_calcRopt` toast — exact v1 format: "To improve: [move] · [move] · [move]" (max 3, joined by ` · `)
+
+**`_renderHitterGroup` / `_renderHitterRow`**
+- Now accepts `isSpring`, `allPlayers`, `rosterIds` params
+- Keeper badge on every row during spring: `♦` (solid, green) = keeper, `◇` (outline, muted) = cut
+- ST badge on invitee rows during spring
+- `data-keeper` attribute set for Phase 3 toggle wiring
+
+**`_renderPitcherGroup` / `_renderPitcherRow`**
+- Now accepts `isSpring`, `allPlayers`, `rosterIds` params
+- **Slot numbers removed** — never show `#1`, `#2` etc.
+- SP/RP + handedness shown on every pitcher row always: `SP · RHP`, `RP · LHP`
+- Section headers: "Rotation (SP)" and "Bullpen (RP)"
+- Keeper badge and ST badge during spring (same as hitters)
+
+**`_renderPlayers`**
+- Computes `isSpring` from `state.phase === PHASE.SPRING_TRAINING`
+- Computes `keeperCount` from roster during spring
+- Renders keeper banner at top: "Spring Camp · Keepers: N/28" (turns accent green at 28)
+- Passes `isSpring`, `players`, `rosterIds` down to group renderers
+
+**CSS added:** ropt bar, keeper badge, ST badge, keeper banner, pitcher-pos-hand, player-sub line, row-actions flex column
+
+---
+
+### 48.3 Phase 3 — Interaction layer (COMPLETE)
+
+**Files changed:** `TeamScreen.js`
+
+**Swap buttons — disabled state**
+- Hitter starter "Bench" button: disabled if no bench player has the slot in `_eligibleSlots`
+- Pitcher "Bench" button: disabled if no bench pitcher of the same type (SP/RP) exists
+- `disabled` attribute prevents firing entirely — no message, just visually dimmed (`.swap-btn:disabled { opacity: .3 }`)
+
+**Keeper toggle**
+- `[data-keeper]` tap → lazy imports `toggleKeeperTag` from RosterEngine
+- Error from cap hit → `App.showToast(result.error, 'negative')`
+- Success → `StateManager.mutate` writes `_isKeeper` flip → `refresh()`
+- Player card tap guarded: tapping keeper badge does not open player card
+
+**`_handleSwap(playerId, role, state)` — full rewrite**
+
+Four paths, all producing clean 1-for-1 swaps:
+
+| Path | Behavior |
+|---|---|
+| Bench hitter → starter | `_openSlotPicker` → user picks slot → if empty promote directly; if occupied `_execHitterSwap` |
+| Starter hitter → bench | `_openReplacementPicker` showing eligible bench → tap → `_execHitterSwap` |
+| Bench pitcher → active | If below cap promote directly; else `_openReplacementPicker` showing active pool → tap → `_execPitcherSwap` |
+| Active pitcher → bench | `_openReplacementPicker` showing same-type bench pool → tap → `_execPitcherSwap` |
+
+**`_execHitterSwap(incoming, slot, outgoing)`**
+- Single `StateManager.mutate`: sets incoming to `STARTING_HITTERS`, outgoing to `BENCH_HITTERS`
+- Fires `roster:changed`, descriptive toast, `refresh()`
+
+**`_execPitcherSwap(incoming, outgoing, isSP)`**
+- Single `StateManager.mutate`: sets incoming to `STARTING_PITCHERS` or `BULLPEN`, outgoing to `PITCHER_BENCH`
+- Fires `roster:changed`, descriptive toast, `refresh()`
+
+**`_openSlotPicker(player, slots, starters, onSlotChosen)`**
+- Step 1 for bench→starter hitter swaps
+- Shows each eligible slot with current occupant name + OVR, or "Empty — promote directly"
+- Tap closes modal and calls `onSlotChosen(slot)`
+
+**`_openReplacementPicker(title, candidates, onChosen)`**
+- Generic picker for all "who comes out?" decisions
+- Shows player name, pos/hand, OVR badge
+- Tap closes modal and calls `onChosen(player)`
+
+**`_showSwapSheet(title, subtitle, rowsHtml, wireRows)`**
+- Shared bottom sheet renderer used by both pickers
+- Modal ID `ts-swap-modal` — new open removes any existing one first (no stacking)
+- Closes on `×` button or tap-outside
+
+---
+
+### 48.4 Swap modal CSS
+
+`.sm-row`, `.sm-slot-label`, `.sm-slot-sub`, `.sm-current`, `.sm-empty`, `.sm-pick-info`, `.sm-pick-name`, `.sm-pick-sub`, `.sm-pick-ovr`, `.sm-arrow` — all added to `_injectCSS`
+
+---
+
+### 48.5 Items still pending from Section 47
+
+- **Card system updates (Phase 15)** — spring training standout cards need rewriting for keeper system; 4 new card types (thin-at-position, keeper deadline, auto-resolve notification, invitee breakout) — deferred
+- **Live testing** — spring invitees on bench, keeper toggle, bench button disabled (only catcher scenario), slot picker for all hitter types, pitcher swap modal, Opening Day cuts on phase transition
+
+---
+
+### 48.6 Cache version
+
+`tfo-v2-r29` after Phase 3 delivery.
+
+---
+
+## 49. Session 3 Close — State of the App (August 2026)
+
+### 49.1 Cache version at close
+`tfo-v2-r38`
+
+### 49.2 Work completed this session (not previously documented)
+
+**Regional team names restored (Section 46.6 re-implemented)**
+- `LeagueFactory.js` was overwritten from uploads at start of Phase 1 (lineupSlots work), losing `LEAGUE_TEAMS_BY_REGION`
+- Re-built from transcript — all 4 regions × 9 teams now in `LeagueFactory.js`
+- Old flat array with real-sounding names (New York Empire, LA Palms, etc.) removed
+- `buildFullLeague` accepts `region` param; `buildLeagueRosters` accepts `teamDefs`
+
+**TeamScreen fixes (post-lineupSlots)**
+- OF slot picker now enumerates all 3 OF slots (was only showing first)
+- DH player no longer duplicated in slot picker (`_eligibleSlots` now returns `['DH']` for `pos === 'DH'`, not `['DH','DH']`)
+- OVR color numbers fixed — no longer follow team accent color (`!important` overrides in `_injectCSS`)
+
+**TeamScreen payroll bar removed**
+- Red progress bar above ropt bars removed; payroll card in header is sufficient
+
+**DashboardScreen countdown fixed**
+- `_renderFirstPitchCountdown` was using `Math.floor` while `_startCountdown` used `Math.ceil`
+- Now both use `Math.ceil` — no visible jump from 48→49 when dashboard first loads
+
+**Background catch-up**
+- `visibilitychange` listener in `App.js`
+- On resume: computes elapsed time, calls `tick()` silently for each missed interval
+- Single `game:tick` emitted at end with latest play — dashboard refreshes to correct state
+- Auto-commits if game reached FINAL during fast-forward
+
+### 49.3 Known issues at close
+
+**CRITICAL: Live box score (Stats tab) does not work properly**
+- Stats during a live game are not displaying correctly
+- This is the first priority for the next session
+- `_buildBoxScore` and `_renderBoxScore` in `DashboardScreen.js` need full audit
+- May require ground-up rewrite of the box score accumulation system
+- Trace from `_statDeltas` → `accumulateStats` → `_deriveGameState` → render
+
+**MAJOR MISSING: Weather radar display**
+- `WeatherEngine.js` (698 lines) fully built but not called anywhere
+- Visual radar component needs to be designed and built — flagship visual feature
+- Should use real radar color conventions, animated sweep, storm cell movement
+- Phase 7 in plan doc
+- Should be tackled after live box score is resolved
+
+### 49.4 Project setup for new Claude project
+- `PROJECT_SETUP.md` — full onboarding document for new session
+- `PROJECT_INSTRUCTIONS.md` — Claude project instructions
+- All output files at `tfo-v2-r38` are the authoritative current version
+
+---
+
+## 50. Full-Codebase Audit + Remediation (Session 4)
+
+A senior-review audit of all 42 source files was performed before any changes. Findings clustered into five recurring root patterns rather than isolated bugs: (A) logic duplicated across modules and drifting, (B) `lineupSlots`/`rotation.order` never reconciled after roster changes, (C) locked lifecycle steps never actually implemented, (D) an event-wiring gap, (E) shallow save migration. The remediation is sequenced as batches; new-game required after each batch that touches `constants.js`/`schema.js`/engines.
+
+### 50.1 Batch 0 — Spring-count landmine (COMPLETE, `tfo-v2-r39`)
+
+**Bug:** `SPRING_TRAINING_GAME_COUNT` was `20` in `constants.js`, but the schedule generator produced `10` spring games (hardcoded in two places). The constant drives regular-season index math in `GameEngine` (`gameIndex - SPRING_TRAINING_GAME_COUNT`) and the phase transition in `SeasonEngine.getNextPhase`. With the wrong value: the first regular-season game computed a regular index of `-10` (corrupting IL-return timing), and `getNextPhase` kept schedule positions 10–19 (real regular-season games) in the SPRING phase.
+
+**Root-cause fix (not a patch):**
+- `constants.js` — `SPRING_TRAINING_GAME_COUNT` set to its correct value `10` (single source of truth). The off-day pattern `[2,5,8]` is tuned for 10.
+- `SeasonEngine.js` — both spring loops (user `_generateSpringGames` and `generateCPUSchedules`) now derive their bound from `SPRING_TRAINING_GAME_COUNT` instead of a hardcoded `10`, so generator and constant can never drift again. Removed the local `SPRING_CPU_GAME_COUNT`.
+- `SeasonEngine.generateUserSchedule` — added a fail-loud gate: throws if `springGames.length !== SPRING_TRAINING_GAME_COUNT` (per §1.11 structural gate-test rule). A future divergence surfaces immediately at generation.
+- Stale "20 games" comment corrected.
+
+**Verified:** first regular game → regular index `0`; phase at first regular game → `REGULAR_SEASON`; total schedule length `142` (10 + 132).
+
+**Files:** `data/constants.js`, `engine/SeasonEngine.js`, `sw.js` (cache `tfo-v2-r38` → `tfo-v2-r39`). Fresh team required.
+
+### 50.2 Queued batches (agreed)
+
+- **Batch 1 — Box score + live-game consolidation (Path A).** One shared stat accumulator reading `_statDeltas`; wire the orphaned `GameScreen`/`Linescore`/`LiveDiamond` components as the shared live-game render path; Dashboard keeps the full live experience but draws from those shared pieces (no reduction in UX); write `game.boxScore` at commit; strip plays at commit; point `ScheduleScreen._openResultSheet` at the stored box; fix holds `hd`→`hld`. Folded in: shallow-migration hardening (deep nested fill) and the `game:phaseChanged` emit on auto transitions (Opening Day / playoffs / offseason) from the `commitGame` result in `App.js`.
+- **Batch 2 — Roster integrity.** A single `reconcileRoster(state)` invariant (lineupSlots + rotation.order + 28-cap) called after every roster mutation across `InjuryEngine`, `RosterEngine`, `CardEngine._applyRosterAction`, and `TeamScreen` swaps; fix `checkDepth` counting injured incumbents as coverage; fix `_buildSyntheticCPUTeam` (0 hitters under lineupSlots model).
+- **Batch 3+ — Farm-cap mismatch (8 vs 10 pitchers), then duplication/cleanup** (shared `_escape`/formatters, dup tick constant, `_teamOvr` bench+starter lumping, TeamScreen "Bench" badge for starters).
+
+### 50.3 Batch 0.5 — Headless test harness (COMPLETE)
+
+The live-only design makes time-based transitions impractical to test manually (waiting real days; every restart loses progress). Because the engines are pure and state is JSON (§1.7), the whole season can run headless in Node. Delivered under `tools/harness/`:
+
+- `shims.js` — installs in-memory `indexedDB` + `localStorage`, ensures `crypto.randomUUID`, a **seeded** `Math.random` (reproducible runs), and a controllable virtual clock (overrides `Date.now`). Dev/test only; never imported by the app.
+- `sim-season.js` — seeds a fresh game via the REAL `startNewGame`, then drives the REAL `GameEngine.tick`/`commitGame` through the season with time collapsed, printing a pass/fail invariant checklist (schedule structure, every game reaches FINAL + commits, score==linescore, currentGameIndex advances, phase-aware active-roster bounds, Opening Day phase transition).
+- Requires a root `package.json` with `{"type":"module"}` (harmless to the static PWA; Node-only). Run: `node tools/harness/sim-season.js [games] [seed]`.
+
+**Result:** full 142-game season runs in ~18s; 839/850 checks pass on seed 1. This is now the regression gate — run after every change.
+
+**Bug the harness found on first run (#21 — queued as Batch 0.6):** `getNextPhase` (SeasonEngine) is called from `commitGame` with `regularIdx = gameIndex − SPRING_TRAINING_GAME_COUNT`, but its `SPRING_TRAINING` branch compares that against `SPRING_TRAINING_GAME_COUNT` *again* (a double-subtraction). Effect: spring→regular fires ~10 games late, so the Opening Day cut to 28 never runs on time and the roster sits at 38 through the first ten "regular" games. Fix: make `getNextPhase` take the raw schedule index and compute the regular-relative index internally for the All-Star/deadline/playoff checks; verify All-Star (66), trade deadline (88/92), and playoffs (132) all still land correctly via the harness before shipping.
+
+Note: roster-integrity (Pattern B) checks passed this seed only because no injury/trade fired in the regular season — Batch 2 will add deterministic fault injection (force injuries/trades) to exercise `reconcileRoster`.
+
+### 50.4 Batch 0.6 — Phase-transition fixes (COMPLETE, `tfo-v2-r40`)
+
+Found by the Batch 0.5 harness on its first run. `getNextPhase` (SeasonEngine) is documented to take a regular-season-relative index, and `commitGame` passed `regularIdx = gameIndex − SPRING_TRAINING_GAME_COUNT`. Two bugs resulted:
+1. The `SPRING_TRAINING` branch compared that regular-relative index against `SPRING_TRAINING_GAME_COUNT` again (double-subtraction) → spring→regular fired ~10 games late, so the Opening Day cut to 28 never ran on time (roster sat at 38 through the first ten "regular" games).
+2. The playoff branch used `reg >= REGULAR_SEASON_GAME_COUNT` (132), but the final regular game only reaches `reg = 131` → **playoffs never triggered**; the season dead-ended in REGULAR_SEASON.
+
+**Structural fix:** `getNextPhase` now takes the RAW schedule index and derives the regular-relative index (`reg`) internally. Spring ends when `scheduleIndex + 1 >= SPRING_TRAINING_GAME_COUNT`; playoffs begin when `reg + 1 >= REGULAR_SEASON_GAME_COUNT`. `commitGame` passes the raw `gameIndex` (removed the now-unused `regularIdx`). All-Star (raw 76 / reg 66) and the trade deadline (98/103) are unchanged.
+
+**Harness-verified timeline:** spring→regular after game 9; All-Star after 76; deadline 98→103; playoffs after 141. Full season 851/851 checks pass; the harness now also asserts the playoff trigger so this can't silently regress.
+
+**Files:** `engine/SeasonEngine.js`, `engine/GameEngine.js`, `sw.js` (r39→r40), `tools/harness/sim-season.js` (added playoff-trigger check). Fresh team recommended.
+
+### 50.5 Batch 0.7 — Dev tooling: version display, easy debug access, PWA update, live speed (COMPLETE, `tfo-v2-r41`)
+
+Addresses testing friction: no visible build version, hidden debug access (700ms long-press), and stale-cache confusion (new deploys not visible without clearing site data).
+
+- **Visible version:** `App.APP_VERSION` ('tfo-v2-r41', bump alongside `sw.js` CACHE_VERSION) shown in Settings and the Debug banner.
+- **Obvious debug access:** replaced the hidden long-press with an explicit "🛠 Developer Menu" button in Settings. (`data-debug-trigger` long-press removed.)
+- **In-PWA update/refresh:** `sw.js` gains a `GET_VERSION` message handler. App.js surfaces "🔄 New version ready" when a newer service worker is waiting (no forced mid-game reload), and a "↻ Check for updates & refresh" button applies it (`registration.update()` → SKIP_WAITING → `controllerchange` → single reload). No more clearing site data.
+- **Live speed (dev):** `App.setDevTimeScale(n)` restarts the tick loop at `TICK_INTERVAL_MS / n`. Default 1× — shipping players are unaffected and remain live-only (rule #1 intact). Developer Menu offers 1× / 10× / 60× / 300× for watching games play out quickly.
+
+**Files:** `ui/App.js`, `index.html`, `sw.js` (r40→r41), `ui/screens/DebugScreen.js`. Verification note: PWA update flow and tick timing are browser-only (syntax-checked here; verify live).
+
+**Follow-up found while wiring this (queued):** `commitGame` only commits FINAL games and `_silentlyCommitGame` (instant resolve) isn't exported — so the existing Debug "Simulate N games" buttons are no-ops on unplayed games, and instant "skip to next game / Opening Day / All-Star" controls need a small exported `simulateGameNow(gameIndex)` in GameEngine (harness-verifiable). Deferred to a follow-up batch.
+
+### 50.6 Batch 1 — Box score + live-game consolidation (Path A)
+
+**Phase 1 — Shared accumulator + committed box (COMPLETE, `tfo-v2-r42`, harness-verified).**
+The stat-attribution logic existed 3× and drifted (§50 Pattern A). Phase 1 collapses box-score construction onto one function that consumes each play's `_statDeltas` — the same data `accumulateStats` uses for season totals — so live box, committed box, and season stats cannot diverge.
+
+- **`SimEngine.accumulateBox(plays, players, {awayOrder,homeOrder,userIsHome})`** — the single source of truth. Team-agnostic (away/home; TOP = away batting). Routes each delta by role (playerId===pitcherId → pitcher/fielding side; game_end decisions → the pitcher's existing side; else → hitter/batting side), so shared stat names (`k`,`bb`,`h`) never collide. Runs read from runners' `r` deltas (correct without an RBI); pitcher innings counted as integer outs (no 0.333 drift); full 9-man hitter order seeded from the starting lineup with pinch-hitters appended by appearance. Output is self-contained (names/pos snapshotted) so it survives play-stripping.
+- **`generatePlays`** snapshots the starting away/home batting orders before simulation mutates slots, builds the box via `accumulateBox`, and returns `{ plays, boxScore, liveLineups }`.
+- **`GameEngine`** stores `liveLineups` at activation and silent-commit, and at commit promotes the precomputed box to **`game.boxScore`**. Plays are NOT stripped yet (Phase 2, once all readers use `boxScore`).
+- **Holds fix (#7):** `_assignPitcherDecisions` now emits `stat:'hld'` (was `'hd'`), matching schema + readers.
+- **Harness:** adds per-game box checks — boxScore written, box runs == final score, linescore sums == box runs, both lineups seeded. Full season **1419/1419**.
+
+Phase 1 is additive and low-risk: `game.boxScore` is new and not yet read by the UI, the old `_buildBoxScore` is simply no longer called, and nothing user-visible changes except holds now landing in season stats.
+
+**Phase 2 (next):** wire the orphaned GameScreen/Linescore/LiveDiamond as the shared live render path (Dashboard keeps the full live experience, drawn from those pieces); Dashboard live box + ScheduleScreen result sheet read `game.boxScore` / live `accumulateBox`; THEN strip plays at commit; remove dead `_buildBoxScore`. Fold in migration hardening (#4) and the `game:phaseChanged` emit on auto transitions (#5).
+
+**Phase 2a — Shared box renderer + committed box + play-stripping (COMPLETE, `tfo-v2-r43`, harness-verified).**
+Migrated the last committed-game `plays` reader to the stored box, then stripped plays at commit.
+
+- **`ui/components/BoxScore.js`** (new) — one shared two-team renderer consuming the `accumulateBox` shape (AB R H RBI BB K SB AVG / IP H ER BB K ERA, sticky name column + horizontal scroll). Replaces the third inline box (ScheduleScreen); Dashboard live card will use it in 2b.
+- **`ScheduleScreen._openResultSheet`** now renders `game.boxScore` via `renderBoxScore` (both teams, correct R/SB), with an on-the-fly `accumulateBox(game.plays…)` fallback for old saves committed before the box existed. Gate updated to accept stored box.
+- **`GameEngine.commitGame`** strips `plays`, `_precomputedBoxScore`, `liveLineups` at the end of commit (only when `boxScore` is present). Confirmed only reader was ScheduleScreen (Linescore.linescoreFromGame is called solely by the still-unwired GameScreen; `computeAllIMP` reads state, not plays). **State no longer grows across the season** (full-season harness runtime ~17s → ~7.7s).
+- **Removed dead `_buildBoxScore`/`buildBoxScore`** from SimEngine.
+- **Folded in #5:** App.js emits `game:phaseChanged` on auto transitions (Opening Day/All-Star/deadline/playoffs) from the `commitGame` result, so the four listening screens refresh.
+- **Harness:** adds "plays stripped after commit" check. Full season **1561/1561**.
+
+Deferred: migration hardening (#4) not required — old committed games are handled by the ScheduleScreen fallback; deep-fill remains queued.
+
+**Phase 2b (next):** Dashboard live card computes `accumulateBox(revealedPlays, liveLineups)` and renders via the shared `BoxScore.js` (Priority 1 — the live box you *see*), replacing `_deriveGameState`'s inline box; optionally adopt shared Linescore/LiveDiamond. Browser-verified at 300× dev speed.
+
+**Phase 2b — Live box via the shared accumulator (COMPLETE, `tfo-v2-r44`). Priority 1 resolved.**
+The Dashboard live card was the last of the three drifting box implementations.
+
+- **`DashboardScreen._renderBoxScore`** now builds the live box with `accumulateBox(revealedPlays, players, game.liveLineups)` and renders it through the shared `BoxScore.js` — both teams, full 9-man lineup seeded from first pitch, correct runs and stolen bases, pinch-hitters appended by appearance. Falls back to `game.boxScore` once plays are stripped.
+- **Removed** the buggy inline box loop from `_deriveGameState` (this also deletes the undefined-`userIds` crash on the `game_end` play and the wrong `hd` field) and the box keys from its return.
+- **Removed** the dead `_deriveBattingOrder` — the hand-maintained clone of SimEngine's batting order (Pattern A). Batting order now flows from the sim via `game.liveLineups`.
+
+The live box, the committed box (Schedule), and season stats are now all produced by one function (`SimEngine.accumulateBox`) reading `_statDeltas` — they cannot drift. Priority 1 (the live box score) is fixed. Browser-verify: watch a live game (Developer Menu → Live Speed 300×) and confirm both lineups, runs/SB, and pitcher lines tick correctly.
+
+**Batch 1 status:** box-score consolidation COMPLETE. Remaining optional Path-A cleanup (not a bug): the Dashboard live card still uses its own inline linescore/diamond rather than the shared `Linescore.js`/`LiveDiamond.js`; those components + `GameScreen.js` remain orphaned and could be adopted or retired in a later consolidation pass.
+
+### 50.7 Batch 1 leftover — retire orphaned live-view files (COMPLETE, `tfo-v2-r45`)
+
+Closed out the Path-A leftover by removing dead/inferior code rather than adopting it:
+
+- **Deleted `ui/screens/GameScreen.js`** (907 lines) — a complete alternate live view, imported by nothing since the Dashboard is the live view. Its one genuinely-correct piece (a `_statDeltas`-based box) was already harvested into `accumulateBox`/`BoxScore.js` in Batch 1.
+- **Deleted `ui/components/Linescore.js`** (250 lines) — only imported by GameScreen, and inferior to the Dashboard's inline linescore (component shows only R; inline shows R/H/E with correct per-inning data, whereas the component's `linescoreFromGame` produced cumulative + collapsed innings).
+- **Deleted `ui/components/LiveDiamond.js`** (227 lines) — only imported by GameScreen. It is a nicer animated diamond, but adopting it into the Dashboard would require restructuring the Dashboard's separate outs display (untestable DOM change on the working live card). Deferred as an opt-in visual upgrade instead of risking the live card blind.
+- **`sw.js`** — removed the three precache entries; bumped r44→r45.
+
+Net: ~1,384 lines of dead code removed, zero working-code changes, zero regression risk. The three drifting box implementations are now one (`accumulateBox`), and the redundant live-view stack is gone. Remaining optional polish: adopt the LiveDiamond visual (browser-verified) if a fancier diamond is wanted.
+
+---
+
+## 51. Current State — Start of Batch 2 (session checkpoint)
+
+**Deployed and green through `tfo-v2-r45`.** Full-season harness: **1561/1561**, run automatically on every commit via GitHub Actions (`.github/workflows/harness.yml`).
+
+**Done this session (Batches 0 → 1 + cleanup):**
+- Batch 0 — `SPRING_TRAINING_GAME_COUNT` landmine fixed (constant matches generator; fail-loud gate).
+- Batch 0.5 — Headless season harness (`tools/harness/`) + in-memory shims; the regression gate.
+- Batch 0.6 — `getNextPhase` double-subtraction + playoff off-by-one fixed (found by the harness).
+- Batch 0.7 — Dev tooling: visible version, obvious Developer Menu (replaced long-press), in-PWA update/refresh, live-speed control.
+- Batch 1 — Box score + live-game consolidation. One shared accumulator (`SimEngine.accumulateBox`) feeds the live box (Dashboard), committed box (Schedule), and season stats; `game.boxScore` written at commit; plays stripped at commit (state stops growing); holds `hd`→`hld`; `game:phaseChanged` emitted on auto transitions. Shared `ui/components/BoxScore.js`. Deleted the orphaned GameScreen/Linescore/LiveDiamond.
+
+**Next: Batch 2 — Roster integrity (audit Pattern B).** Root cause: `lineupSlots`/`rotation.order` and the 28-man active count are never reconciled after a roster change. Symptoms span four layers (all in §50 findings): `InjuryEngine.injurePlayer` (leaves injured player in the lineup, no backfill), `RosterEngine.checkDepth` (counts the injured incumbent as coverage → auto-backfill never fires), `CardEngine._applyRosterAction` (IL-return activates to bench/bullpen, no lineup/rotation restore, no 28-cap enforcement), `TeamScreen._execPitcherSwap` (changes group but not `rotation.order`, so rotation edits are ignored by the sim). Fix: a single `reconcileRoster(state, teamId)` invariant called after every roster mutation, plus fixing `checkDepth`'s injured-incumbent bug and `_buildSyntheticCPUTeam` (0 hitters under lineupSlots model). Verify deterministically by adding fault injection (force injuries/trades) to the harness and asserting active count stays 28 and every lineup slot / rotation entry points to a healthy, rostered player.
+
+
+---
+
+## 52. Batch 2 — Roster Integrity (Session 5) — DELIVERED
+
+**Deploys as `tfo-v2-r46`** (`sw.js` CACHE_VERSION + `App.js` APP_VERSION both bumped from r45/r41 → r46).
+
+### The single invariant
+`RosterEngine.reconcileRoster(state, teamId = 'user', { autoManage = false })` — a **pure** function (reads state, works on clones, returns a mutation object) that must hold after *any* roster mutation. Guarantees:
+1. `lineupSlots` is exactly the 9 canonical slots in `C/1B/2B/3B/SS/OF/OF/OF/DH` order; every non-null occupant is a healthy, rostered `BENCH_HITTERS` hitter eligible for that slot.
+2. Vacant slots backfill from eligible healthy **bench** hitters (always); if bench can't cover, the slot is filled from farm (CPU) or reported (user).
+3. `rotation.order` = rostered, healthy `STARTING_PITCHERS`, de-duped, no injured/departed ids; a short rotation tops up from `PITCHER_BENCH` (always), then farm (CPU only); `currentIndex` clamped.
+4. Active-count (regular season): CPU (`autoManage`) calls up from farm to reach `ACTIVE_TOTAL` (28) and waives the lowest-OVR droppable surplus back down; the **user** is never auto-managed — reconcile reports `pendingCallups {slots, count}` and `pendingSurplus [ids]` for the card/UI layer. Spring: no cap enforcement.
+5. No id in both `rosterIds` and `farmIds`.
+
+Also added: `applyRosterMutation(state, mut)` (one shared merge impl for the non-GameEngine callers; ignores the advisory keys `pendingCallups`/`pendingSurplus`/`surplusCount`), and `eligibleSlotsFor(player)` (the authoritative lineup-slot eligibility map — TeamScreen's local `_eligibleSlots` now delegates to it, so the swap UI and reconcile can never disagree).
+
+### Manager-vs-GM ownership (the design decision)
+Following the plan's framing that lineup + rotation are **manager**-owned and roster construction is **GM**-owned, reconcile splits cleanly:
+- **Manager domain — always automatic, all teams** (only rearranges players *already on the active roster*): pull injured/departed players out of slots + rotation; slide a bench hitter into a vacated slot; promote a `PITCHER_BENCH` pitcher into a short rotation. Non-destructive, no roster-size change.
+- **GM domain — auto for CPU, gated for the user**: farm call-ups and waivers. CPU auto-manages to a legal 28; the user's needs are *reported*, not acted on.
+
+So after a user injury the injured player leaves the lineup, a bench player covers if possible, and the team sits at 27 with a reported pending call-up. The user picks the call-up (penalty-free if active). **Deferred to Batch 2.5** (the IL card flow): the grace-window timer, the "didn't act" metric penalty, the suboptimal auto-fallback call-up, and the "who comes off the roster?" surplus card on IL activation. Batch 2 just *exposes* `pendingCallups`/`pendingSurplus` so 2.5 has something to consume.
+
+### The four-layer fix (+ two engine bugs)
+- **GameEngine** commit pipeline Step 5: replaced the user-side `autoResolveDepth(s)` (which silently auto-called-up from farm) with `reconcileRoster(s, 'user')` + `applyRosterMutation` — manager-domain integrity + report pending, no auto farm call-up. `autoResolveDepth` import dropped (now unused there).
+- **LeagueEngine** `processCPURosterDecisions`: after per-team IL-returns + `autoResolveDepth`, runs `reconcileRoster(patched, team.id, { autoManage: true })` on a patched view that reflects this team's and every earlier team's accumulated mutations; merges `players`/`leagueTeams`/`waiverPool`.
+- **CardEngine** `_applyRosterAction`: after `il_return_activate` / `il_return_waive` / `il_return_farm`, runs `reconcileRoster('user')` + apply (restores lineup/rotation; activation surplus is reported, never silently waived). `trade_execute` is intentionally **not** reconciled here — it defers to the commit-pipeline reconcile after `drainPendingTrades`.
+- **TeamScreen**: `_execHitterSwap` and `_execPitcherSwap` reconcile after their mutate (**pitcher-swap fix**: `rotation.order` now reflects the swap — before, the swap changed only `group` and the sim, which reads `rotation.order`, ignored it entirely). `_handleCallUp` reconciles after call-up and shows a warning toast if the roster is now over 28 (user must send down/waive). Local `_eligibleSlots` delegates to `eligibleSlotsFor`.
+- **Bug — `checkDepth`** (RosterEngine): rewrote coverage counting to a clean healthy-body count. Removed the injured-incumbent miscount (an injured starter carried group IL but was still counted as coverage, so a CRITICAL gap never fired) and the muddled `.length + (some ? 1 : 0)` collapse.
+- **Bug — `_buildSyntheticCPUTeam`** (SimEngine): pulled hitters from `STARTING_HITTERS` (no longer assigned under the lineupSlots model) → 0 hitters → 0-0 fallback games. Now pulls from `BENCH_HITTERS` and seats a proper 9-entry `lineupSlots` by eligibility so `_buildLineup` fields a full lineup.
+
+`InjuryEngine.js` — **no functional change** (deliberate: it's pure/player-scoped; team-level backfill is reconcile's job).
+
+### Verification
+- `test-reconcile.mjs` — **71/71** (bench backfill, no-cover → vacant+`pendingCallups` for user vs farm-fill for CPU, SP injury → `PITCHER_BENCH` promotion, pitcher-swap → `rotation.order` reflects it, ghost/dup slot cleanup, CPU surplus auto-waive to 28, user surplus reported-not-dropped, `checkDepth` CRITICAL when the injured incumbent isn't miscounted).
+- `test-harness-logic.mjs` — **15/15** on a realistic base incl. a CPU team (CPU injury → 28, CPU departure w/ deleted player → 28, user injury → 27 + pending, user SP injury → bench-SP promote + rotation 5; all clean lineup/rotation).
+- **Harness fault injection** added to `tools/harness/sim-season.js`: at the first committed regular-season game it JSON-clones the live state and runs the four fault scenarios (user hitter injury, user SP injury, CPU hitter injury, CPU departure), asserting no injured/departed id remains in any slot or the rotation and that the active-count rule holds (user opens a spot + reports; CPU auto-manages to 28).
+
+### Needs LIVE (browser) verification (harness can't test the DOM)
+- Pitcher swap taking effect in a watched live game (Developer Menu → Live Speed 300×) — the rotation actually changes who starts.
+- TeamScreen swap/call-up toasts; the over-28 warning toast after a manual call-up.
+- Fresh team required (touched `GameEngine`/`LeagueEngine`/`SimEngine`).
+
+### Forward-compatibility for Batch 2.5
+reconcile leaves the user roster possibly at 27 (injury, awaiting call-up) or 29 (IL activation / manual call-up, awaiting drop) — legal for the sim (it reads `lineupSlots` + groups), enforced by user choice. 2.5 builds on `pendingCallups`/`pendingSurplus`: wire injuries live (nothing currently sets `isInjured` — `runDailyInjuryCheck`/`InjuryEngine.injurePlayer` are never called; injury-card `onYes` types are unhandled), add the IL/call-up card with a grace window + "didn't act" penalty + suboptimal auto-fallback, and the "who comes off?" surplus card on IL activation.
+
+---
+
+## 53. r47 (staged) + r48 — Rotation fix & Live Game View audit (Session 6)
+
+### r47 (staged with #1; deployed base already at r47)
+**Wrong starter (rotation display vs sim).** The Team screen sorted the rotation by OVR, but the sim starts `rotation.order[currentIndex]`, and `order` was built in roster-generation order — so the pitcher shown on top wasn't the one who started. Fixes: `GameEngine` now OVR-sorts `rotation.order` at team creation (ace = order[0] opens game 1); `TeamScreen` renders the rotation in true `order` sequence ("Rotation (SP) — in start order") with a green **NEXT** badge on `order[currentIndex]`, so the display matches what the sim starts and the badge advances as the rotation cycles. Requires a fresh team. Verified: ace opens G1, badge tracks G2–5 and wraps, stray SPs append safely.
+
+### r48 — Live Game View audit (Priority 1)
+Ground-up pass on the reveal → derive → render path. Root causes and fixes:
+
+- **Cadence / inning-batching (#2, #3).** `GameEngine.tick()` revealed one play per call; with the r47 dev speed scaling the scaled clock raced ahead while plays trickled out one-per-interval → PBP/diamond lagged and batched by inning. `tick()` now **batch-reveals**: it advances `livePlayIndex` past every play whose (scaled) timestamp has passed, in one tick. Harness-safe: at scale 1 the caller's clock only advances to the next play, so exactly one play reveals per call — bit-identical to before, and the headless harness (which steps a virtual clock to `nextPlay._timestamp + 1000`) is unaffected.
+- **PBP batch render (#2).** `_onTick` no longer assumes one new play per tick; it appends every play revealed since `_pbpRenderedIdx` (oldest→newest), and the index is synced to `livePlayIndex` on every full dashboard render. Diamond, score, inning/outs, and linescore update from the single `_deriveGameState` snapshot, so all live elements stay in lockstep.
+- **Stats/PBP sync (#4).** The box already derives from the same revealed-plays snapshot (`SimEngine.accumulateBox`) and rebuilds on tab-switch and per-tick when the Stats tab is active — the batch-reveal keeps it current with the PBP.
+- **Inning-score sequencing (#5).** Root cause: `_deriveGameState` built the linescore run arrays from `inning_end`-based `completedHalves` **before** the outs≥3 speculative advance moved the highlight, so the highlight jumped to the next inning while the just-finished half's runs were still absent. Rewrote the linescore to post by **progression (ordinal)**: a half's runs post once the current position has moved past it (`ord(half,inn) < curOrd`), or at game end for any half that was played. Score and highlight now move atomically. This also removes the dependency on `inning_end` plays (which carry `half:'END'` in places). Verified with a standalone invariant test (bottom-half posts exactly when the highlight reaches the next inning; walk-offs post at final).
+- **"Us"/"US"/"You" team labels (#4).** These were empty-abbr fallbacks. Added shared helpers `_userAbbr`/`_userFull`/`_oppAbbr`/`_oppFull` (abbr → nickname → city → name, never a placeholder) and routed the live card, tick-handler linescore, `_renderLinescore` fallback, and the box score through them. Box now shows full team names on both sides.
+
+**Deploys as `tfo-v2-r48`** (`sw.js` CACHE_VERSION + `App.js` APP_VERSION). Fresh team required (rotation-order init changed in r47's GameEngine edit). Batch-reveal is scale-1-identical, so the CI harness is expected to stay green; the reconcile unit suites (71/71, 15/15) are unaffected and still pass.
+
+**Live (browser) checks — can't be covered by the harness:** at 25×/40×, PBP + diamond keep pace with no inning-batching; Stats stays in sync with PBP; the linescore posts a half's runs before/as the highlight advances; team names show correctly (no "Us"/"US").
+
+---
+
+## 54. r50 — Scheduling: no double-booking (Session 7, batch 1 of 3)
+
+**Root cause.** The user's schedule (series blocks, `SeasonEngine.generateUserSchedule`) and the CPU league schedule (`generateCPUSchedules` → `leagueSchedule.dayMap`, a round-robin over `leagueTeams`) are generated independently. The user is not in `leagueTeams`, so on a day the user plays opponent X, the CPU dayMap also pairs X with another team → X is booked twice. Separately, `commitGame` only updated the *user's* record, never the opponent's, so the opponent's standings omitted every game it played against the user.
+
+**Fixes.**
+- `LeagueEngine.processCPUDay(state, dateStr)` now looks up the user's opponent for that date (via `state.schedule`) and **drops** any CPU-slate game involving that team before simulating — the user's opponent plays only the user that day. (Its round-robin partner sits idle that day; a minor schedule-sparsity trade-off, not a correctness issue.)
+- `GameEngine.commitGame` Step 1b now also **credits the opponent's league record** with the mirror result, so the opponent's standings include user games. The record update is gated on a new `g._recordApplied` flag instead of `alreadyCommitted`, so it runs exactly once for **both** watched and silently-committed games — this also fixes a latent bug where `_silentlyCommitGame` (games missed by 4+ hours) set `_committed`/`result` but never updated the win/loss record at all.
+
+**Verification.** New `test-schedule.mjs` (9/9): the user's opponent is dropped from the slate, unrelated CPU games still play, the dropped-game partner sits idle, and mirror-credit is correct both ways. Harness `sim-season.js` gains a per-game invariant: the user's opponent must not appear in `dayMap[game.date]` after commit. Reconcile suites unaffected (71/71, 15/15).
+
+**Deploys as `tfo-v2-r50`.** Fresh team required (schedule generation). Batch 1 of 3 (r50 scheduling → r51 pitching changes → r52 end-of-game results); deployed together as the r52 bundle.
+
+---
+
+## 55. r51 — Pitching changes (Session 7, batch 2 of 3)
+
+**Root causes (three, compounding).**
+1. **Empty bullpen source.** `_checkPitcherChange` filtered relievers out of the *batting lineup* (`userLineup.slots`), which never contains pitchers — so `bullpen` was always empty and no reliever ever entered. This was the primary blocker.
+2. **Fatigue threshold far too high.** `maxBatters = stamina × 1.8` ≈ 80–150 batters (stamina is OVR-scaled, ~45–85), i.e. ~20+ innings — a starter never tired inside a 9-inning game even if the bullpen had worked.
+3. **Cross-wired counter.** The batters-faced increment referenced the opposite counter from the fatigue check (`userPitchCount` vs `oppPitchCount`), so fatigue tracked the wrong pitcher. And the count was never reset on a change, so a fresh reliever would inherit the starter's count.
+
+**Fixes.**
+- `_buildLineup` now also returns `bullpen` — healthy rostered relievers (BULLPEN + PITCHER_BENCH), sorted weakest→best so lower-leverage arms enter first and the closer finishes. `_checkPitcherChange` sources relievers from this (the synthetic CPU opponent is covered too, since it reads `team.rosterIds`).
+- Fatigue is now **innings-based**, evaluated per inning in `_simulateFullGame` via `_accrueInningAndFatigue` + `_pitcherTargetInnings` (starters ~5–8 IP by stamina, relievers ~1–2 IP). Innings (not batters) keeps the hook stable regardless of how much offense a game produces. The old batter-based block and the `SIM_P_FATIGUE_MULTIPLIER` constant use were removed; the throwing-pitcher counter direction was corrected and both the count and innings reset when a reliever enters.
+
+**Result.** Starters go ~5–7 innings then the pen takes over, for both the user's team and the CPU. Verified by new `test-pitching.mjs` (6/6): every game (25/25 per side) uses ≥2 pitchers, the first change lands mid/late (avg ~inning 7 for stamina-70 starters), and no starter is yanked before the 4th. Harness `sim-season.js` gains a season-level check that the bullpen is used in ≥70% of committed games. Reconcile/schedule suites unaffected.
+
+**Deploys as `tfo-v2-r51`.** Fresh team required (SimEngine). Batch 2 of 3.
+
+**Open polish note:** relievers enter weakest→closer and one reliever may finish multiple innings; true one-inning-per-arm modern bullpen usage is a candidate for a future pass.
+
+---
+
+## 56. r52 — End-of-game results: ties, extra innings, series screen (Session 7, batch 3 of 3)
+
+**Ties no longer recorded as losses.** Result was computed as `won ? 'win' : 'loss'`, so a tie fell through to a loss. Now 3-way (`win`/`loss`/`tie`) in all three code paths (`_silentlyCommitGame`, the watched-commit result, and Step 1b). The schema's `springWins`/`springLosses` were vestigial (never referenced — spring games increment the regular `wins`/`losses`), so a real `ties` counter was added to the user schema and CPU team init. Step 1b increments `ties` for both the user and the mirror-credited opponent on a tie (no streak change). Standings (`computeFullStandings`) now carry `ties`; win% still excludes them. Displays show **T** instead of an implicit L: the dashboard last-game badge, the schedule game-result label, and the season/final-record lines (`W–L–T`, shown only when ties > 0).
+
+**No phantom top-10th.** The game loop increments the inning before the end check, so `game_end` was tagged with the post-increment value (10 after a 9-inning game). `game_end` now records the true last inning played, derived from the actual plays. With the r49 derive fix (suppress the speculative advance when the next play is `game_end`), the phantom 10th is gone in both data and display.
+
+**Regular season never ties.** The real terminator was `_gameOver`, which capped at inning 14 regardless of score. Both the loop breaks and `_gameOver` were rewritten: spring ends after 9 (ties allowed), regular season plays extra innings until the score differs, with a 30-inning safety valve that realistic offense never reaches. `gs` now carries `isSpring` so `_gameOver` can distinguish the two.
+
+**Series screen fixed.** `MILESTONE_SCREENS.SERIES_WON` had `triggerPhase: null, triggerGame: null`, so the generic seen-gated loop fired it on game 1 regardless of result. Added `SERIES_LOST` and `SERIES_SPLIT`, flagged all three `isSeries: true` (skipped by the generic loop), and added `_checkSeriesMilestone`: it fires only when the just-committed game is the last of a multi-game series (next game is a different opponent / schedule end), computes the outcome from the user's record across the consecutive same-opponent block, and returns Won/Lost/Split with the actual record in the subtitle. Fires once per series (guarded by `_seriesMilestoneFired`), recurring rather than seen-gated.
+
+**Verification.** New `test-endgame.mjs` (10/10): regular games never tie before the safety cap, extra innings occur, spring never exceeds 9, `game_end` inning matches the real final inning, 3-way outcome, and all series cases (ongoing → no fire, Won/Lost/Split, single game → not a series). All prior suites still green.
+
+**Deploys as `tfo-v2-r52`** — the combined r50+r51+r52 bundle. Fresh team required.
+
+---
+
+## 57. r53 — Five reported regressions fixed at root + a process correction (Session 7, batch 4)
+
+After the r52 bundle, five issues were reported that earlier claims had said were fixed. The root cause of the *recurrence* was a process failure: fixes were verified against the changed function (isolated unit tests) rather than the user-visible artifact, "throughout/fixed" was claimed from narrow changes, and instances were fixed instead of classes. This batch fixes each at the layer where the data originates and verifies against the real artifact.
+
+**1 — "Us" instead of the team abbr (Scores screen, and everywhere).** Root: SetupScreen collects city + nickname but never an abbreviation, so `createUserTeamObject` set `abbr: config.abbr || ''` = empty, and every screen fell back to its placeholder ('Us'/'US'/'You'/'YOU'). Fix at the source: the schema now derives the abbr from the nickname (else city, else 'TM') as three uppercase letters when setup supplies none. ScheduleScreen's fallbacks were additionally hardened (nickname → city) as defense. Verified: `createUserTeamObject({nickname:'Bears'})` → 'BEA'; city-only → 'ROA'; explicit respected. **⚠ See §59: this schema change was deployed to the wrong path and is not live.**
+
+**2 — Opponent double-booked on the first spring day.** Root: the r50 fix dropped the conflict only at *commit* time, but the Scores screen reads the *stored* day-map before any game is played. Fix at generation: new `SeasonEngine.reconcileScheduleConflicts(userSchedule, leagueSchedule, leagueTeams)` strips every CPU game involving the user's opponent-of-the-day from the stored day-map, wired into both schedule-generation sites (team creation and new season). Verified against a **real generated schedule**: 76 conflicts before, 0 after, including the first spring day. The r50 commit-time drop + opponent-record credit remain as harmless defense.
+
+**3 — Wrong pitcher "takes the mound."** Root: the game-start announcement named the away team's starter, but the home team pitches the top of the 1st. Fix: announce the home starter (`moundSP = homeSPPlayer`), pitcherId = home SP.
+
+**4 — Reliever missing from the Stats tab for ~an inning.** Root: `accumulateBox` skipped any play without stat deltas, and a `pitching_change` play carries the incoming pitcher but an empty `_statDeltas`. Fix: a `pitching_change` branch at the top of the box loop registers the pitcher on the correct side immediately (side resolved by `teamId` vs `userIsHome`).
+
+**5 — "Season Over" screen after game 1.** Root (a *class*): `SEASON_OVER`, `CHAMPIONS`, and `FRANCHISE_TURNING_POINT` all have `triggerPhase: null, triggerGame: null`, and the generic seen-gated loop fired the first unseen one on game 1. Fix: the generic loop now skips **any** milestone lacking both a phase and a game trigger — those must be fired explicitly by game logic. (Wiring explicit end-of-season/championship triggers remains future work; `SEASON_OVER`/`CHAMPIONS` currently do not fire at all.)
+
+**Also — regular season truly never ties.** Pathological no-score games could reach the inning-30 safety cap still level. A cap-level tie now awards the home team a walk-off run. **⚠ See §59: this tiebreaker combines with the weather `scoringMod` to add runs that are not in the plays.**
+
+**Process changes going forward:** (a) fix at the layer where the data originates; (b) verify against the real artifact, not the changed function; (c) back any "everywhere" claim with a grep/scan showing zero remaining instances; (d) fix the class, not the instance; (e) calibrate claims to evidence ("changed" vs "verified").
+
+**Verification:** seven local suites, 126 checks, 0 failures — reconcile 71, harness-logic 15, schedule 9, pitching 6, endgame 9, schedule-integrity 5 (real generated schedule), r53 11.
+
+**Deploys as `tfo-v2-r53`.** Fresh team required (schema, schedule generation, and SimEngine all changed).
+
+---
+
+## 58. r54 — Spring stats on League leaders + Player Card (Session 7, batch 5)
+
+**Diagnosis (confirmed against the real commit path):** stats commit correctly and immediately at game end — the watched-game path auto-commits when the game hits FINAL (App.js), and the silent path commits via `_silentlyCommitGame`; both run `accumulateStats` that same tick. Spring games write to `player.springStats`, regular games to `player.stats` (separate, never merged). The problem was purely display: every stat surface read only `player.stats`, so during spring nothing showed.
+
+**Fix (display only — no fresh team required):** PlayerCard and LeagueScreen's stat leaders select the stat source by phase — `state.phase === PHASE.SPRING_TRAINING ? springStats : stats`. During spring they carry a "SPRING TRAINING" designation (amber header on the League leaders block; amber badge on the Player Card stat label). Once the regular season begins they show `stats` with the normal "Season Stats" label. The League Standings tab already refreshes on `game:committed`, so leaders update live during spring.
+
+**Verification:** `test-spring-stats.mjs` (13/13). Full regression green (8 suites, 139 checks).
+
+**Deploys as `tfo-v2-r54`.** Files changed: ui/components/PlayerCard.js, ui/screens/LeagueScreen.js (+ version bump).
+
+**Open follow-up (not done):** spring stats reset at opening day by design; an optional "spring line" section on the Player Card during the season was offered but not requested.
+
+
+---
+
+## 59. Session 8 — Reconstruction + state of the repo at r54 (October 2026)
+
+**Plan doc reconstruction.** The Project copy of this doc ended at §51. §52–§58 were written during Session 5–7 but only ever existed as chat downloads (the doc was not in the repo). They were recovered verbatim from the Chat #2 transcript (§52, §53, §54, §55, §56, §57) or from its delivery summary (§58). r49 never had its own section; from the commit it was: PBP rendered before the score update in `_onTick` (so a play appears with the score it produced), and `_deriveGameState` suppresses the speculative half-inning advance when the next play is `game_end` (no "TOP 10th" flash before FINAL).
+
+**Source of truth going forward.** The GitHub repo is canonical. Project knowledge files were frozen at r45 and are no longer used for source; each session clones `kokanjohn/baseball-gm` directly. Only `BGM_Rebuild_Plan.md` and `PROJECT_SETUP.md` belong in Project knowledge. This doc should also live in the repo root.
+
+**Findings at the r54 baseline (all fixed in §60 unless noted):**
+1. **r52/r53 schema changes were never live.** They were uploaded to `data/schema.js`; the app imports `store/schema.js`. The abbr derivation ("Us" fix) and the `ties` field were not running.
+2. **CI harness red, 1706/1720.** All 14 failures were "box runs ≠ final score" — exactly one run missing.
+3. **The run environment was broken since at least the Aug 8 build:** 0.5–0.7 runs and ~2 hits per team per game. The §7.2 hit term `contact/400 − stuff/300` is ≤ 0 at the generator's real league average (~55), so most at-bats could not produce a hit. 18/142 games reached the extra-innings cap still tied; r53's cap tiebreaker then added a run that existed in no play (cause of finding 2).
+4. **r52 regression: games ended after 8 innings.** `_gameOver` is the loop's entry guard and tested `inning < 9`, so it ended every spring game and every non-tied regular game before the 9th was played.
+5. **Bottom-of-9th rule keyed on the user, not the home team** — when the user was away and led after the top of the 9th, the home team never batted; walk-offs played on to 3 outs.
+6. **Empty inbox on a new team.** `startNewGame` saved, then seeded 3 cards via a 2s-debounced mutate; `SetupScreen` immediately ran `App.init` → `StateManager.load(sameSlot)`, which only flushed when switching slots, so the DB copy (no cards) replaced memory and the timer then saved it back. The seeds were also built by the *debug* injector (no expiry, `_resolved` instead of `resolved`, unresolved budget cost, empty token context).
+7. **94 of 140 delivered card types showed raw `{tokens}`.** The resolver knew ~25 tokens; the v1-ported pool uses 115. Its regex also excluded digits (`{sp2_items}` could never match), and each text field re-rolled every random pick (subject and body could name different players; shown cost ≠ charged cost). `_revenueToken` revenue was never credited.
+8. **60 pool cards promise roster actions that have no handler** (42 action types: signings, call-ups, benching, training, DFA claims…). Accepting them changed nothing but soft metrics. Only `il_return_*`, `trade_execute/decline`, `injury_act2` are wired. *(Gated in §60; wiring them is a future batch.)*
+9. **v1 pool trade cards `t1`–`t9` were fake trades** (actions unhandled; `t7` was cash, retired by §9.1). The real `TradeEngine.generateCPUTradeOffer` → `deliverTradeOffer` path existed but nothing called it, and its offer direction was inverted (accepting would have "acquired" the user's own player).
+10. **All-Star hosting score is designed (§17) but not accumulated.** `userTeam.hostingScore` exists and is never written; the announcement card is never delivered; eligibility uses prestige tier + atmosphere only. The spring hint cards `sp_hint1/2/3` move atmosphere. *(Not built — see §60 open items.)*
+11. **Push notifications never worked.** `App._registerPushSubscription` is an empty stub, `sw.js` has no `push` handler, and the Cloudflare worker source is not in the repo. Infrastructure from §12.7 is live: `https://baseball-gm-push.baseball-gm.workers.dev/vapid-key` returns the VAPID public key.
+12. **`ui/components/BoxScore.js` was missing from the `sw.js` precache** since r45 (offline/first-install failure risk).
+13. `_simFatigued` is never set, so the in-at-bat fatigue modifiers never apply (the r51 innings-based hook still pulls tired pitchers). *(Not changed.)*
+
+---
+
+## 60. r55 — Inbox seeding, real trades, full card tokens, realistic sim (Session 8)
+
+**Deploys as `tfo-v2-r55`.** Fresh team required (constants, schema, GameEngine, SimEngine changed). CI harness: **2293/2293** on seeds 1, 7, 13 (full 142-game seasons).
+
+### Persistence
+- `StateManager.load()` now flushes pending state before replacing it **whenever a slot is loaded** — same slot or different. Class fix: any mutate followed within 2s by a reload previously lost data.
+
+### New-franchise inbox seed (LOCKED)
+- `NEW_TEAM_SEED_CARDS = ['sp1','sp2','sp_hint1','sp_hint3']` (constants) + **one real TradeEngine offer** (`CardEngine.deliverSeedTradeOffer`, `force: true` skips only the probability roll). 5 cards on a new team.
+- `sp_hint1`/`sp_hint3` are the first "the league is watching" signals toward All-Star hosting.
+- Seeds use `CardEngine.deliverSeedCards` → the normal `_createInstance` path; flagged `_seed: true` and **never push-notified**. `startNewGame` saves after seeding.
+
+### Trades
+- `generateCPUTradeOffer` direction fixed: `incomingIds` = CPU player the user receives, `outgoingIds` = user player sent (matches `evaluateTrade`/`executeTrade`).
+- `checkAndDeliver` now asks CPU teams for real offers (one per check, skipping teams with a pending offer). Trade window: spring, and regular season through `TRADE_DEADLINE_CLOSE`. ~6 real offers per 40 games observed.
+- v1 pool trade cards `t1`–`t9` marked `_retired: true`; `_filterEligible` never delivers retired cards.
+
+### Card tokens (LOCKED design)
+- New pure module `engine/CardTokens.js`: `buildTokenMap(cardDef, context, state)` → `{ values, amountsK }`, built **once per card instance**; `applyTokens`, `hasUnresolvedTokens`, `formatK`. Player picks within one card never repeat a player.
+- New data file `data/card-tokens.js`: phrase pools + money ranges for the 68 tokens the action-free cards use. Edit pools against the exact card sentence.
+- `_createInstance`: every text field (subject, preview, body, sender, labels, `yesMsg`, `noMsg`, `expireMsg`) from the one map; **a card with any unresolved `{token}` is never delivered**. Money: `_budgetCost` (yes), `_budgetCostNo` (`{no}` form or `_rawBudgetCostNo`), `_revenueK` (`_revenueToken`, credited to `finances.revenue` on yes) — all the same draw the text shows.
+- `resolveTokens()` remains as a single-string wrapper; never use it field-by-field.
+- `deliverCardById` (debug) and compose cards build instances through the same path.
+- `userTeam.ownerName` generated at team creation (schema default `''`, token falls back to "Ownership").
+- **Action gate:** `HANDLED_CARD_ACTIONS` (CardEngine) lists the onYes/onNo actions with real handlers. Pool cards declaring any other action are not delivered. Add the action name in the same change that adds its handler. 180 cards deliverable now; 60 gated pending action wiring.
+
+### Sim engine (supersedes §7.2 coefficients — structure unchanged)
+- **Plate-appearance model** re-centred on `SIM_RATING_AVG = 55` (the generator's real mean): walk / K / hit rates are league-average baselines moved linearly by the rating gap and clamped (`SIM_PA_*`, `SIM_HIT_*` in constants). §7.2's resolution order and rating→outcome mapping are unchanged. Observed: 4.2–5.1 R and 8.0–9.0 H per team per game; extras ~2–3% of games; nothing near the cap.
+- **Weather and field act inside every at-bat** (`fieldMod × weather.scoringMod` on hit probability and HR share). The post-game score rescale is gone.
+- **No runs outside the plays.** The r53 cap tiebreaker is removed; `SIM_MAX_INNINGS_GUARD = 99` only stops a pathological loop (logs an error, never edits the score).
+- `_gameOver` entry guard fixed (`inning <= 9` → not over): 9 full innings always played.
+- Bottom of the 9th+ skipped only when the **home** team leads; **walk-offs end the game immediately**, counting only the runs needed to win except on a home run (`_walkoff` flag on the inning-end play).
+- Fatigue modifiers are multipliers (were additive +0.10 to walk rate).
+
+### Schema / deployment
+- `store/schema.js` replaced with the intended r52/r53 version; stray `data/schema.js` deleted.
+- `sw.js` precache gains `data/card-tokens.js`, `engine/CardTokens.js`, `ui/components/BoxScore.js`.
+
+### Harness additions (`tools/harness/sim-season.js`)
+New-team seeds survive the `App.init` reload and are real instances; seeded trade direction; every game: runs in plays == final score, ≥ 9 innings, bottom half skipped only when home leads, regular season never ties; season run/hit environment bands; no delivered card has a raw token; **every deliverable pool card (incl. variants) resolves**; shown money == applied money; no retired card delivered; real CPU offers arrive with correct direction; every app module is precached.
+
+### Open items carried forward
+1. **Timed delivery + push notifications** (next batch): cards currently arrive in bursts right after each game commit. Design proposed in-session: plan the next batch of cards at commit with real `deliverAtMs` times between games, reveal them on tick/app open, and sync the same schedule to the Cloudflare worker so pushes arrive with the app closed. Blocked on the worker's source (its `/register` and `/schedule` contract).
+2. **Wire the 42 unhandled card actions** (re-enables 60 cards).
+3. **All-Star hosting score** accumulation + announcement card (§17).
+4. Outcome messages (`yesMsg`/`noMsg`) are now resolved on each instance but not displayed — the inbox toast says only "Decision made." (UI pass).
+5. `_simFatigued` never set (finding 13).
