@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r55';
+export const APP_VERSION = 'tfo-v2-r56';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -268,6 +268,17 @@ export async function init() {
   EventBus.on('card:delivered',      () => _updateInboxBadge());
   EventBus.on('card:resolved',       () => _updateInboxBadge());
   EventBus.on('game:committed',      (payload) => _onGameCommitted(payload));
+  // A commit schedules the next stretch of cards — send the schedule to the push worker.
+  EventBus.on('game:committed',      () => _syncPush());
+
+  // Messages from the service worker (push arrived / notification tapped)
+  if (!_swMessagesWired) {
+    _swMessagesWired = true;
+    navigator.serviceWorker?.addEventListener('message', (event) => {
+      if (event.data?.type === 'OPEN_INBOX')    { _releaseDueCards().then(() => switchTab('decisions')); }
+      if (event.data?.type === 'PUSH_RECEIVED') { _releaseDueCards(); }
+    });
+  }
   EventBus.on('game:phaseChanged',   (payload) => _onPhaseChanged(payload));
   EventBus.on('settings:themeChanged', (payload) => {
     const state = StateManager.get();
@@ -439,8 +450,16 @@ export async function init() {
   mountLeague();
   mountSchedule();
 
-  // Navigate to dashboard by default
-  switchTab('dashboard');
+  // Navigate to dashboard by default — or the inbox when opened from a
+  // notification tap (sw.js opens /baseball-gm/?tab=inbox).
+  const openInbox = new URLSearchParams(location.search).get('tab') === 'inbox';
+  switchTab(openInbox ? 'decisions' : 'dashboard');
+  if (openInbox) history.replaceState(null, '', location.pathname);
+
+  // Deliver anything that came due while the app was closed, then make sure
+  // the push worker has this device's current schedule.
+  await _releaseDueCards({ quiet: true });
+  _syncPush({ immediate: true });
 
   // Restore the dev live-speed multiplier into GameEngine's reveal clock (it
   // starts at 1 and only App knows the persisted value). No-op at 1×.
@@ -580,6 +599,35 @@ import { formatMoney, formatPhaseLabel } from './formatters.js';
  * Safe to call multiple times — idempotent.
  */
 let _lastActiveTime = Date.now();
+let _swMessagesWired = false;
+
+/**
+ * _releaseDueCards({ quiet })
+ * Moves scheduled cards whose time has come into the inbox (§61), refreshes
+ * the badge/inbox, and tells the push worker the schedule shrank. Unless
+ * `quiet`, shows an in-app toast when the user is not on the Inbox tab.
+ */
+async function _releaseDueCards({ quiet = false } = {}) {
+  if (!StateManager.get()) return [];
+  const { releaseDueCards } = await import('../engine/CardEngine.js');
+  const released = releaseDueCards();
+  if (!released.length) return released;
+  EventBus.emit('card:delivered', { cards: released, source: 'scheduled' });
+  if (!quiet && _activeTab !== 'decisions' && document.visibilityState === 'visible') {
+    const c = released[released.length - 1];
+    const more = released.length > 1 ? ` (+${released.length - 1} more)` : '';
+    showToast(`📬 ${c.sender ? c.sender + ': ' : ''}${c.subject}${more}`, 'neutral', 4500);
+  }
+  _syncPush();
+  return released;
+}
+
+/** Send the current card schedule to the push worker (debounced). */
+function _syncPush(opts) {
+  import('./PushClient.js')
+    .then(P => P.syncPushSchedule(opts))
+    .catch(err => console.warn('App._syncPush:', err.message));
+}
 
 export function startTick() {
   if (_tickInterval) return;
@@ -594,6 +642,11 @@ export function startTick() {
     // Lazy import to avoid circular dep at module load time
     const { tick, commitGame } = await import('../engine/GameEngine.js');
     const state   = StateManager.get();
+    if (!state) return;
+
+    // Timed inbox delivery (§61) — independent of whether a game is live.
+    await _releaseDueCards();
+
     const gameIdx = state?.currentGameIndex ?? 0;
     const game    = state?.schedule?.[gameIdx];
 
@@ -1010,8 +1063,9 @@ function _refreshSettingsSwatches() {
   // ── Quiet hours ───────────────────────────────────────────
   const qStart = document.getElementById('quiet-start');
   const qEnd   = document.getElementById('quiet-end');
-  if (qStart) qStart.value = localStorage.getItem('bgm_quiet_start') || '22:00';
-  if (qEnd)   qEnd.value   = localStorage.getItem('bgm_quiet_end')   || '08:00';
+  const _push = StateManager.get()?.push || {};
+  if (qStart) qStart.value = _push.quietStart || '22:00';
+  if (qEnd)   qEnd.value   = _push.quietEnd   || '08:00';
 
   // Always reset to main view
   document.getElementById('settings-view-main')?.classList.remove('tdm-view-hidden');
@@ -1065,12 +1119,13 @@ function _initSettingsPickers() {
   document.getElementById('notif-toggle')?.addEventListener('change', _toggleNotifications);
   document.getElementById('notif-test-btn')?.addEventListener('click', _sendTestNotification);
 
-  document.getElementById('quiet-start')?.addEventListener('change', (e) => {
-    localStorage.setItem('bgm_quiet_start', e.target.value);
-  });
-  document.getElementById('quiet-end')?.addEventListener('change', (e) => {
-    localStorage.setItem('bgm_quiet_end', e.target.value);
-  });
+  // Quiet hours live in state.push (§61) — the card scheduler reads them there.
+  const _setQuiet = (key, value) => {
+    if (!value || !StateManager.get()) return;
+    StateManager.mutate(s => { s.push = { ...(s.push || {}), [key]: value }; });
+  };
+  document.getElementById('quiet-start')?.addEventListener('change', (e) => _setQuiet('quietStart', e.target.value));
+  document.getElementById('quiet-end')?.addEventListener('change', (e) => _setQuiet('quietEnd', e.target.value));
 
   // ── Team info edit ────────────────────────────────────────
   document.getElementById('settings-team-edit-btn')?.addEventListener('click', () => {
@@ -1274,45 +1329,38 @@ function _refreshNotifStatus() {
 }
 
 async function _requestNotifPermission() {
-  if (!('Notification' in window)) return;
-  const result = await Notification.requestPermission();
+  const { enablePush } = await import('./PushClient.js');
+  const result = await enablePush();
   if (result === 'granted') {
-    localStorage.setItem(_NOTIF_PREF_KEY, 'true');
-    // Register push subscription via service worker if available
-    _registerPushSubscription().catch(() => {});
+    showToast('Notifications on — new messages will reach this device.', 'positive', 3000);
+  } else if (result === 'error') {
+    showToast('Could not register this device for notifications. Try again.', 'negative', 3500);
+  } else if (result === 'unsupported') {
+    showToast('This browser does not support push notifications. Install the app to your home screen first.', 'neutral', 4500);
   }
   _refreshNotifStatus();
 }
 
-function _toggleNotifications(e) {
+async function _toggleNotifications(e) {
   const on = e.target.checked;
   localStorage.setItem(_NOTIF_PREF_KEY, on ? 'true' : 'false');
   _refreshNotifStatus();
+  // Paused → the worker's schedule for this device is cleared; resumed → re-sent.
+  const { syncPushSchedule } = await import('./PushClient.js');
+  syncPushSchedule({ immediate: true });
 }
 
-function _sendTestNotification() {
-  if (Notification.permission !== 'granted') return;
+async function _sendTestNotification() {
+  const { sendTestPush } = await import('./PushClient.js');
   try {
-    new Notification('The Front Office', {
-      body: 'Push notifications are working. ⚾',
-      icon: '/baseball-gm/icon-192.png',
-    });
-  } catch (e) {
-    // Some browsers require service worker notifications
-    navigator.serviceWorker?.ready.then(sw => {
-      sw.showNotification('The Front Office', {
-        body: 'Push notifications are working. ⚾',
-        icon: '/baseball-gm/icon-192.png',
-      });
-    });
+    const ok = await sendTestPush();
+    showToast(ok
+      ? 'Test sent through the push server — it arrives within a minute. Close the app to see it arrive.'
+      : 'Enable notifications first.', ok ? 'positive' : 'neutral', 5000);
+  } catch (err) {
+    console.error('App._sendTestNotification:', err);
+    showToast('Test failed — could not reach the push server.', 'negative', 3500);
   }
-}
-
-async function _registerPushSubscription() {
-  if (!navigator.serviceWorker) return;
-  const reg = await navigator.serviceWorker.ready;
-  if (!reg.pushManager) return;
-  // Subscription handled by service worker — no VAPID key needed for local test
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -44,6 +44,7 @@ import { activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRoste
 import { evaluateTrade, executeTrade, recordDeclinedOffer, generateCPUTradeOffer } from './TradeEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens } from './CardTokens.js';
+import { planDeliveryTimes } from './CardScheduler.js';
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -107,7 +108,11 @@ export function checkAndDeliver(context) {
   _processILReturnQueue(state, context);
 
   // 3. Check inbox capacity
-  const currentInbox = (state.inbox || []).filter(c => !c.resolved);
+  // Capacity counts cards already scheduled to arrive, not just the inbox.
+  const currentInbox = [
+    ...(state.inbox || []).filter(c => !c.resolved),
+    ...(state.scheduledCards || []),
+  ];
   if (currentInbox.length >= MAX_INBOX_SIZE) return;
 
   // 3b. Real CPU trade proposals (TradeEngine). At most one per check; it
@@ -143,14 +148,10 @@ export function checkAndDeliver(context) {
 
   if (delivered.length === 0) return;
 
-  // 5. Deliver to inbox
-  StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), ...delivered];
-    _sortInbox(s.inbox);
-  });
-
-  // 6. Schedule notifications for urgent cards
-  _scheduleNotifications(delivered, context);
+  // 5. Schedule for real-world delivery between now and the next game (§61).
+  // releaseDueCards() moves each into the inbox when its time comes; the same
+  // schedule is synced to the push worker so it arrives with the app closed.
+  _scheduleCards(delivered, state);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -564,10 +565,93 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = f
     ...(seed ? { _seed: true } : {}),
   };
 
+  if (seed) {
+    // New-franchise seed: visible immediately, never pushed.
+    StateManager.mutate(s => {
+      s.inbox = [...(s.inbox || []), instance];
+      _sortInbox(s.inbox);
+    });
+  } else {
+    _scheduleCards([instance], state);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// TIMED DELIVERY (§61)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * _nextGameTime(state, nowMs)
+ * First pitch of the next game that has not been played yet, or null.
+ */
+function _nextGameTime(state, nowMs) {
+  const sched = state.schedule || [];
+  for (let i = state.currentGameIndex || 0; i < sched.length; i++) {
+    const g = sched[i];
+    if (!g || g._committed) continue;
+    if (Number.isFinite(g.gameTime) && g.gameTime > nowMs) return g.gameTime;
+  }
+  return null;
+}
+
+/**
+ * _scheduleCards(instances, state)
+ * Gives each card its own random delivery time (waking hours, before the next
+ * first pitch) and parks it in state.scheduledCards.
+ */
+function _scheduleCards(instances, state) {
+  if (!instances?.length) return;
+  const nowMs = Date.now();
+  const times = planDeliveryTimes(instances.length, {
+    nowMs,
+    windowEndMs: _nextGameTime(state, nowMs),
+    quietStart:  state.push?.quietStart,
+    quietEnd:    state.push?.quietEnd,
+  });
+  // planDeliveryTimes returns ascending times; shuffle the pairing so card
+  // order in the pool doesn't dictate arrival order.
+  const order = instances.map(c => ({ c, r: Math.random() })).sort((a, b) => a.r - b.r);
+  const scheduled = order.map(({ c }, i) => ({ ...c, deliverAtMs: times[i] }));
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), instance];
+    s.scheduledCards = [...(s.scheduledCards || []), ...scheduled]
+      .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+  });
+}
+
+/**
+ * releaseDueCards(nowMs = Date.now())
+ * Moves every scheduled card whose time has come into the inbox.
+ * Called on every app tick (and by the harness after every tick).
+ * @returns {Object[]} the cards released (empty array if none)
+ */
+export function releaseDueCards(nowMs = Date.now()) {
+  const state = StateManager.get();
+  const due = (state?.scheduledCards || []).filter(c => c.deliverAtMs <= nowMs);
+  if (!due.length) return [];
+  const ids = new Set(due.map(c => c.instanceId));
+  StateManager.mutate(s => {
+    s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId));
+    s.inbox = [...(s.inbox || []), ...due.map(c => ({ ...c, arrivedAtMs: c.deliverAtMs }))];
     _sortInbox(s.inbox);
   });
+  return due;
+}
+
+/**
+ * getPushSchedule(state, nowMs = Date.now())
+ * The scheduled cards, shaped for the push worker's /register endpoint.
+ * Seed cards are never included.
+ */
+export function getPushSchedule(state, nowMs = Date.now()) {
+  return (state?.scheduledCards || [])
+    .filter(c => !c._seed && c.deliverAtMs > nowMs - 60 * 1000)
+    .map(c => ({
+      id:        c.instanceId,
+      deliverAt: c.deliverAtMs,
+      title:     c.sender  || 'The Front Office',
+      body:      c.subject || 'New message in your inbox',
+      tag:       c.instanceId,
+    }));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -597,7 +681,7 @@ function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = fals
   if (!force && !_tradeWindowOpen(state, context)) return false;
 
   const pendingFrom = new Set(
-    (state.inbox || [])
+    [...(state.inbox || []), ...(state.scheduledCards || [])]
       .filter(c => !c.resolved && c._proposingTeamId)
       .map(c => c._proposingTeamId));
 
@@ -931,7 +1015,7 @@ function _filterEligible(pool, context, state) {
 
   // Build set of already-delivered card IDs this season
   const deliveredIds = new Set(
-    (state.inbox || [])
+    [...(state.inbox || []), ...(state.scheduledCards || [])]
       .filter(c => !c._expiredSeason || c._expiredSeason === state.seasonNum)
       .map(c => c.cardId)
   );
@@ -1315,15 +1399,6 @@ function _sortInbox(inbox) {
 // NOTIFICATION SCHEDULING
 // ─────────────────────────────────────────────────────────────
 
-function _scheduleNotifications(cards, context) {
-  // NotificationEngine (Phase 14) will handle actual push scheduling.
-  // CardEngine just marks urgent weather cards with real-world expiry.
-  for (const card of cards) {
-    if (card.type === 'urgent' && card.tag === 'WEATHER' && card.expiresAtMs) {
-      // NotificationEngine.scheduleWeatherAlert(card) — wired in Phase 14
-    }
-  }
-}
 
 // ─────────────────────────────────────────────────────────────
 // FOLLOWUP FIRING

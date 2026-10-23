@@ -16,7 +16,7 @@
  *   - If both cache and network fail, serve the offline fallback
  */
 
-const CACHE_VERSION  = 'tfo-v2-r55';
+const CACHE_VERSION  = 'tfo-v2-r56';
 const CACHE_NAME     = `the-front-office-${CACHE_VERSION}`;
 const OFFLINE_URL    = '/baseball-gm/index.html';
 
@@ -56,6 +56,7 @@ const PRECACHE_ASSETS = [
   '/baseball-gm/engine/TradeEngine.js',
   '/baseball-gm/engine/CardEngine.js',
   '/baseball-gm/engine/CardTokens.js',
+  '/baseball-gm/engine/CardScheduler.js',
   '/baseball-gm/engine/IMPEngine.js',
   '/baseball-gm/engine/PrestigeEngine.js',
   '/baseball-gm/engine/OffseasonEngine.js',
@@ -65,6 +66,7 @@ const PRECACHE_ASSETS = [
   '/baseball-gm/ui/formatters.js',
   '/baseball-gm/ui/EventBus.js',
   '/baseball-gm/ui/App.js',
+  '/baseball-gm/ui/PushClient.js',
 
   // Screens
   '/baseball-gm/ui/screens/SetupScreen.js',
@@ -183,4 +185,44 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'GET_VERSION') {
     event.ports?.[0]?.postMessage({ version: CACHE_VERSION });
   }
+});
+
+// ─────────────────────────────────────────────────────────────
+// PUSH — show inbox notifications from the push worker (§61)
+// Always shown (also while the app is open), so a new message is noticed on
+// any screen. tag = card instanceId, so a repeat replaces rather than stacks.
+// ─────────────────────────────────────────────────────────────
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; }
+  catch { data = { body: event.data ? event.data.text() : '' }; }
+
+  event.waitUntil(Promise.all([
+    self.registration.showNotification(data.title || 'The Front Office', {
+      body:  data.body || 'New message in your inbox',
+      tag:   data.tag  || 'bgm',
+      icon:  '/baseball-gm/icon-192.png',
+      badge: '/baseball-gm/icon-192.png',
+      data:  data.data || {},
+    }),
+    // Let any open window pull the card into the inbox right away.
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(list => list.forEach(c => c.postMessage({ type: 'PUSH_RECEIVED', cardId: data.data?.cardId }))),
+  ]));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const client of list) {
+        if (client.url.includes('/baseball-gm/')) {
+          client.postMessage({ type: 'OPEN_INBOX' });
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow('/baseball-gm/?tab=inbox');
+    })
+  );
 });

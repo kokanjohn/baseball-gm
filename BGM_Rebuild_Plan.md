@@ -6259,3 +6259,38 @@ New-team seeds survive the `App.init` reload and are real instances; seeded trad
 3. **All-Star hosting score** accumulation + announcement card (§17).
 4. Outcome messages (`yesMsg`/`noMsg`) are now resolved on each instance but not displayed — the inbox toast says only "Decision made." (UI pass).
 5. `_simFatigued` never set (finding 13).
+
+---
+
+## 61. r56 — Timed inbox delivery + working push notifications (Session 8)
+
+**Deploys as `tfo-v2-r56`** (includes r55). Fresh team required. Harness **2303/2303** on seeds 1, 7, 13; `test-webpush.mjs` green. **The push worker must also be redeployed** from `workers/push-worker.js` (Cloudflare dashboard → Workers & Pages → baseball-gm-push → Edit code → paste → Deploy).
+
+### Root cause: push never worked
+1. Client: `_registerPushSubscription` was an empty stub — no device was ever subscribed or registered.
+2. Service worker: no `push` / `notificationclick` handler.
+3. **Worker encryption was wrong.** `encryptPayload` derived the IKM with `info = as_public ‖ ua_public`; RFC 8291 §3.4 requires `"WebPush: info" ‖ 0x00 ‖ ua_public ‖ as_public`. Browsers cannot decrypt such messages and drop them silently. Proven with an independent RFC 8291 decryptor validated on the RFC's Appendix A vector: the deployed code's output fails to decrypt; the fixed code round-trips. Now a CI step (`tools/harness/test-webpush.mjs`).
+4. Quiet hours: Settings wrote `localStorage`, nothing read it. Now `state.push.quietStart/quietEnd` is the single source.
+
+### Worker (source now in repo: `workers/push-worker.js`)
+Contract unchanged: `GET /vapid-key`; `POST /register { userId, subscription, schedule:[{ id, deliverAt, title, body, tag }] }` **replaces** the device's whole schedule; cron every minute sends due items and keeps future ones. Additions: input validation, 200-item cap, `Urgency` header, notification `data.url`, and the cron re-reads before writing so a `/register` that lands mid-send is not overwritten.
+
+### Timed delivery (LOCKED design — user-approved)
+- Cards produced at game commit (pool cards + real CPU trade offers) are **not** put in the inbox. `engine/CardScheduler.js` (pure) gives **each card its own random time**, uniform over the waking part of `[now + 4 min, next first pitch]` (default 18h span if no next game; max 30h). Independent draws → some arrive hours apart, some minutes apart. Never during quiet hours; a window entirely inside quiet hours delivers shortly after wake-up.
+- Parked in `state.scheduledCards` (new top-level field, migrated). `CardEngine.releaseDueCards()` moves due cards into the inbox (`arrivedAtMs`); called on every app tick, on app open, and when a push arrives / is tapped.
+- Capacity, once-per-season dedup and "one pending offer per CPU team" all count scheduled cards.
+- Immediate (never scheduled, never pushed): new-team seeds, compose replies, in-game injury/IL events, debug injection.
+
+### Client
+- `ui/PushClient.js`: `enablePush()` (permission → VAPID subscribe → register), `syncPushSchedule()` (debounced; sends `CardEngine.getPushSchedule()`; skips unchanged; empty when paused), `sendTestPush()` (real round trip through the worker; arrives within ~1 min, works with the app closed). Per-device id in `localStorage`; resubscribes if the VAPID key changes.
+- Sync triggers: app open, every `game:committed`, every release, toggle change.
+- `sw.js`: `push` shows the notification **always** (also while the app is open, per user request) with `tag = card instanceId`; `notificationclick` focuses the app on the Inbox (or opens `/baseball-gm/?tab=inbox`).
+- In-app: released cards update the badge and inbox; a toast shows when the user isn't on the Inbox tab.
+
+### Known limits
+- The world only advances while the app is open (live-only). If the app stays closed through a game, that game commits on next open, so the schedule covers one inter-game window at a time.
+- Notifications require the PWA installed to the home screen on Android Chrome and permission granted in Settings → Notifications → Enable.
+- Open question from user: whether to add a "first pitch in 30 minutes" reminder (not built).
+
+### Repo access
+GitHub connector is read-only for this repo; pushing needs the Claude GitHub App installed on `kokanjohn/baseball-gm`. Cloudflare connector can read worker code but not deploy.

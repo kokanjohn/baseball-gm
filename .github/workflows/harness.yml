@@ -22,3 +22,6 @@ jobs:
 
       - name: Run full-season harness (142 games)
         run: node tools/harness/sim-season.js 142
+
+      - name: Web Push encryption round trip (push worker)
+        run: node tools/harness/test-webpush.mjs

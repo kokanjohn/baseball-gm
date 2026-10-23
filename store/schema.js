@@ -176,6 +176,7 @@ export function createGameState(config = {}) {
     //   _raw:         Object,       // original card definition (for followup chaining)
     // }
     inbox: [],   // CardInstance[]
+    scheduledCards: [],  // CardInstance[] with deliverAtMs — released into inbox when due (§61)
 
     // ── Follow-up queue ────────────────────────────────────
     // Cards scheduled to fire at a future game index
@@ -531,6 +532,7 @@ function _fillDefaults(state) {
   // Fill new top-level fields
   const newTopLevel = {
     standings: null, playoffBracket: null, _offseasonGate: null, waiverPriority: [],
+    scheduledCards: [],
   };
   for (const key of Object.keys(newTopLevel)) {
     if (state[key] === undefined) state[key] = newTopLevel[key];

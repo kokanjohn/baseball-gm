@@ -16,7 +16,8 @@
 import { clock, seedRandom } from './shims.js';           // MUST be first (installs globals)
 import * as SM from '../../store/StateManager.js';
 import { startNewGame, tick, commitGame, buildCardContext } from '../../engine/GameEngine.js';
-import { HANDLED_CARD_ACTIONS } from '../../engine/CardEngine.js';
+import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule } from '../../engine/CardEngine.js';
+import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
 import * as CardPools from '../../data/cards-pool.js';
 import {
@@ -66,6 +67,7 @@ function playToFinal(idx) {
       clock.advance(60 * 60_000);
     }
     tick();
+    releaseDueCards();   // mirrors App's tick loop (§61)
   }
   return SM.get().schedule[idx]?.status === GAME_STATUS.FINAL;
 }
@@ -407,6 +409,40 @@ async function main() {
     const rpg = seasonRuns / seasonGames / 2, hpg = seasonHits / seasonGames / 2;
     check(`run environment realistic: ${rpg.toFixed(2)} R / team / game (3.5–6.0)`, rpg >= 3.5 && rpg <= 6.0);
     check(`hit environment realistic: ${hpg.toFixed(2)} H / team / game (6.5–10.5)`, hpg >= 6.5 && hpg <= 10.5);
+  }
+
+  // ── §61: timed delivery ─────────────────────────────────────────────────────
+  {
+    const st      = SM.get();
+    const arrived = (st.inbox || []).filter(c => Number.isFinite(c.arrivedAtMs));
+    check(`timed delivery: cards arrive over time (${arrived.length} released)`,
+          arrived.length > 20, `${arrived.length}`);
+    const quiet = arrived.filter(c => inQuietHours(c.arrivedAtMs, st.push?.quietStart, st.push?.quietEnd));
+    check('timed delivery: no card arrives during quiet hours', quiet.length === 0,
+          quiet.slice(0, 5).map(c => new Date(c.arrivedAtMs).toISOString()).join(','));
+    const hours = new Set(arrived.map(c => new Date(c.arrivedAtMs).getHours()));
+    check(`timed delivery: arrival times vary (${hours.size} distinct hours)`, hours.size >= 8);
+    const overdue = (st.scheduledCards || []).filter(c => c.deliverAtMs <= clock.get());
+    check('timed delivery: nothing left overdue after a tick', overdue.length === 0, `${overdue.length}`);
+    check('timed delivery: seed cards are never pushed',
+          !getPushSchedule(st, 0).some(i => (st.scheduledCards || []).find(c => c.instanceId === i.id)?._seed));
+    const ps = getPushSchedule(st, clock.get());
+    check('push schedule: only future items, each with id/title/body',
+          ps.every(i => i.deliverAt > clock.get() - 60000 && i.id && i.title && i.body), `${ps.length} items`);
+
+    // Planner unit checks (deterministic RNG)
+    let seedR = 42; const rnd = () => ((seedR = (seedR * 16807) % 2147483647) / 2147483647);
+    const base = Date.UTC(2027, 3, 10, 14, 0);            // 14:00
+    const next = Date.UTC(2027, 3, 11, 19, 5);            // next day 19:05
+    const t = planDeliveryTimes(500, { nowMs: base, windowEndMs: next, quietStart: '22:00', quietEnd: '08:00', rand: rnd });
+    check('planner: all times inside the window', t.every(x => x > base && x <= next));
+    check('planner: no time in quiet hours', t.every(x => !inQuietHours(x, '22:00', '08:00')));
+    const gaps = t.slice(1).map((x, i) => x - t[i]);
+    check('planner: some cards land within an hour of each other', gaps.some(g => g < 3600000));
+    const nightOnly = planDeliveryTimes(3, { nowMs: Date.UTC(2027, 3, 10, 23, 0),
+      windowEndMs: Date.UTC(2027, 3, 11, 7, 0), rand: rnd });
+    check('planner: a window entirely in quiet hours delivers after wake-up',
+          nightOnly.every(x => !inQuietHours(x, '22:00', '08:00')));
   }
 
   // ── §60: inbox content integrity over the whole run ─────────────────────────
