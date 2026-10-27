@@ -85,7 +85,8 @@ const ALL_POOLS = {
 // Per-phase active pools
 const PHASE_POOLS = Object.freeze({
   [PHASE.SPRING_TRAINING]:       ['DECISIONS_POOL', 'BETWEEN_GAMES_POOL'],
-  [PHASE.REGULAR_SEASON]:        ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL', 'BETWEEN_GAMES_POOL'],
+  // §74 (D2): life happens — bereavement, paternity, family emergencies.
+  [PHASE.REGULAR_SEASON]:        ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL', 'BETWEEN_GAMES_POOL', 'PERSONAL_LEAVE_POOL'],
   [PHASE.ALL_STAR_BREAK]:        ['DECISIONS_POOL', 'BETWEEN_GAMES_POOL'],
   [PHASE.TRADE_DEADLINE]:        ['DECISIONS_POOL', 'PREGAME_POOL'],
   [PHASE.WILD_CARD]:             ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL'],
@@ -164,7 +165,7 @@ export function checkAndDeliver(context) {
     for (const cardDef of selected) {
       const instance = _createInstance(cardDef, context, state);
       if (instance) {
-        delivered.push(instance);
+        delivered.push({ ...instance, _pool: poolName });
       }
     }
   }
@@ -196,6 +197,13 @@ export function resolve(instanceId, choice) {
   if (instance.resolved) return;
 
   const effects = choice === 'yes' ? (instance.yesEffect || {}) : (instance.noEffect || {});
+
+  // §74: whether the decision can still happen is judged on the world the GM
+  // tapped in — before this card's own cost is charged below. (A card's
+  // feasibility already counts its own price; re-judging after the charge
+  // would count it twice.)
+  const actionId = choice === 'yes' ? instance._raw?.onYes : choice === 'no' ? instance._raw?.onNo : null;
+  const actionOk = CARD_ACTIONS[actionId] ? CARD_ACTIONS[actionId].feasible(state, { ...instance, choice }) : null;
 
   StateManager.mutate(s => {
     // Mark resolved
@@ -265,7 +273,26 @@ export function resolve(instanceId, choice) {
   });
 
   // Handle roster actions
-  _applyRosterAction(instance, choice, StateManager.get(), { atMs: Date.now() });
+  _applyRosterAction(instance, choice, StateManager.get(), { atMs: Date.now(), feasible: actionOk });
+  _maybeChainFollowup(instance, choice, Date.now());
+}
+
+/**
+ * _maybeChainFollowup(instance, choice, atMs)
+ * §74: a card with `_followup: { on, chance, delayMin, delayMax, subtype? }`
+ * sets its FOLLOWUP_POOL card in motion when the GM's choice matches — about
+ * the same players, a few days later (delays were written in games; the
+ * league plays about one a day).
+ */
+function _maybeChainFollowup(instance, choice, atMs) {
+  const f = instance._raw?._followup;
+  if (!f || (f.on && f.on !== choice) || Math.random() >= (f.chance ?? 1)) return;
+  const options = FOLLOWUP_POOL.filter(e => e?.type === instance.cardId && e.card && !e.card._retired);
+  if (!options.length) return;
+  const pick = options[Math.floor(Math.random() * options.length)].card;
+  const days = (f.delayMin ?? 2) + Math.random() * Math.max(0, (f.delayMax ?? f.delayMin ?? 4) - (f.delayMin ?? 2));
+  const preset = Object.fromEntries(Object.entries(instance._tokenPlayers || {}).filter(([, id]) => id));
+  _deliverFollowupDef(pick.id, preset, atMs + days * 86_400_000);
 }
 
 /**
@@ -329,6 +356,10 @@ export function expire(instanceId, atMs = Date.now()) {
     }
     _applySoftEffects(s, tax, 'auto', instance);
   });
+  // §74: an unanswered card that resolves to "no" does what "no" does (e.g.
+  // a player on personal leave still goes, for the minimum).
+  const onNo = instance._raw?.onNo;
+  if (autoPath === 'no' && CARD_ACTIONS[onNo]) _applyCardAction(onNo, { ...instance, choice: 'no' }, atMs);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -758,7 +789,8 @@ function _tradeStillValid(state, card) {
 export function expireDueRosterCards(atMs) {
   const state = StateManager.get();
   const due = [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])]
-    .filter(c => c.autoResolve === 'roster' && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
+    // Roster cards, and pre-game cards (§74 — their question is moot at first pitch).
+    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL') && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   for (const c of due) expire(c.instanceId, c.expiresAtMs);
   return due.length;
@@ -889,6 +921,25 @@ function _nextGameTime(state, nowMs) {
 function _scheduleCards(instances, state) {
   if (!instances?.length) return;
   const nowMs = Date.now();
+  // §74 (D3): pre-game cards arrive in the hours before first pitch; in-game
+  // cards while the game is being played. Everything else between games.
+  const next = _nextGameTime(state, nowMs);
+  const lead = 10 * 60_000;
+  const timed = [], loose = [];
+  for (const c of instances) {
+    if (Number.isFinite(next) && c._pool === 'PREGAME_POOL') {
+      timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, next - (45 + Math.random() * 105) * 60_000), expiresAtMs: next });
+    } else if (Number.isFinite(next) && c._pool === 'INGAME_POOL') {
+      timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, next + (20 + Math.random() * 100) * 60_000) });
+    } else loose.push(c);
+  }
+  if (timed.length) {
+    StateManager.mutate(s => {
+      s.scheduledCards = [...(s.scheduledCards || []), ...timed].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+    });
+  }
+  instances = loose;
+  if (!instances.length) return;
   const times = planDeliveryTimes(instances.length, {
     nowMs,
     windowEndMs: _nextGameTime(state, nowMs),
@@ -1393,6 +1444,8 @@ function _filterEligible(pool, context, state) {
     if (card._requiresBenchSP && !_hasBenchSP(state)) return false;
     // §73: follow-up cards are only ever delivered about the player they follow.
     if (card._intlFollowupOnly) return false;
+    // §74: with the scouting budget cut (or the staff on a media tour) the leads dry up.
+    if (card.tag === 'SCOUTING' && (state.userTeam?.scoutingQuietUntil || 0) > Date.now()) return false;
     // §73: "the bullpen ERA is catastrophic" only when it is.
     if (card._requiresBullpenERA && bullpenRecentERA(state) < card._requiresBullpenERA) return false;
     if (card._requiresTargetCoverage && !_hasPositionCoverage(state)) return false;
@@ -1470,6 +1523,9 @@ function _createInstance(cardDef, context, state) {
       const pl = state.players[id];
       if (!pl) continue;
       Object.assign(values, playerTokenValues(state, role, pl));
+      if (['active_sp', 'active_bp', 'active_pitcher', 'farm_pitcher'].includes(role)) values[`${role}_name`] = `${pl.name}${_hand(pl)}`;
+      values[`${role}_name_tr`] = values[`${role}_name`];
+      values[`${role}_pos_tr`]  = values[`${role}_pos`];
       tokenPlayers[role] = id;
       if (pl._intlCountry) values.intl_country = pl._intlCountry;
       if (role === 'intl_player') values.intl_player_type = intlTypeOf(pl);
@@ -1548,6 +1604,7 @@ function _createInstance(cardDef, context, state) {
     _actionGames:     cardDef._gamesToken ? (counts?.[cardDef._gamesToken] ?? null) : null,
     _tokenPlayers:    tokenPlayers || {},
     _offer:           offer || null,
+    _amountsK:        amountsK,
     _intlCountry:     values.intl_country || null,
     _raw:             cardDef,
   };
@@ -1810,13 +1867,13 @@ function _applyOffseasonAction(action, instance, atMs) {
 // outcome varies (DevelopmentEngine).
 
 /** Carry out a registered card action (CardActions), then fix the lineup. */
-function _applyCardAction(action, instance, atMs) {
+function _applyCardAction(action, instance, atMs, feasible = null) {
   const handler = CARD_ACTIONS[action];
   if (!handler) return;
   const st = StateManager.get();
   // Things changed since the card arrived (someone got hurt, the spot is gone):
   // it can't happen any more.
-  if (!handler.feasible(st, instance)) return;
+  if (!(feasible ?? handler.feasible(st, instance))) return;
   let events = [];
   StateManager.mutate(s => {
     events = handler.apply(s, instance, atMs) || [];
@@ -1834,14 +1891,17 @@ function _applyCardAction(action, instance, atMs) {
 /** A pool card about players already named (follow-ups), parked for `atMs`. */
 function _deliverFollowupDef(defId, preset, atMs) {
   let def = null;
-  for (const pool of Object.values(ALL_POOLS)) {
+  for (const pool of [...Object.values(ALL_POOLS), FOLLOWUP_POOL]) {
     const f = pool.find(e => (e?.card || e)?.id === defId);
     if (f) { def = f.card || f; break; }
   }
-  if (!def) return null;
+  if (!def || def._retired || !_cardActionsHandled(def)) return null;
   const inst = _createInstance(def, { _preset: preset, _country: preset._country }, StateManager.get());
   if (!inst) return null;
-  inst._rosterKey = `followup:${defId}:${Object.values(preset).join(',')}`;
+  // Keyed to the players it's about; a lead about nobody yet (a scouting
+  // trip's) is its own card.
+  const who = Object.entries(preset).filter(([k]) => !k.startsWith('_')).map(([, v]) => v);
+  inst._rosterKey = `followup:${defId}:${who.length ? who.join(',') : inst.instanceId}`;
   return _deliverAt(inst, atMs);
 }
 
@@ -1922,12 +1982,12 @@ function _cardActionsHandled(card) {
  * (deadline). `atMs` is the moment of the decision — real time for a GM tap,
  * the deadline for an auto-resolve — and dates every transaction it creates.
  */
-function _applyRosterAction(instance, choice, state, { atMs = Date.now() } = {}) {
+function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasible = null } = {}) {
   const raw    = instance._raw || {};
   const action = choice === 'yes' ? raw.onYes : choice === 'no' ? raw.onNo : choice === 'auto' ? raw.onAuto : null;
   if (!action) return;
   if (action.startsWith('os_')) { _applyOffseasonAction(action, instance, atMs); return; }
-  if (CARD_ACTIONS[action]) { _applyCardAction(action, instance, atMs); return; }
+  if (CARD_ACTIONS[action]) { _applyCardAction(action, { ...instance, choice }, atMs, feasible); return; }
 
   const playerId = instance._targetPlayerId || null;
   const reconcileUser = () => {

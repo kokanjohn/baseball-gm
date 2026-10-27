@@ -21,7 +21,7 @@ import { PLAYER_GROUP, PHASE, ROSTER_LIMITS } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
 import { setUnavailable, setCondition, startPlan } from './DevelopmentEngine.js';
 import { callUp, rosterIsFull } from './TransactionEngine.js';
-import { sendToFarm, applyRosterMutation, eligibleSlotsFor, defaultActiveGroup } from './RosterEngine.js';
+import { sendToFarm, applyRosterMutation, eligibleSlotsFor, defaultActiveGroup, computePayroll } from './RosterEngine.js';
 import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { queueTrade } from './TradeEngine.js';
@@ -235,14 +235,24 @@ const sickStart = {
 // ─────────────────────────────────────────────────────────────
 
 const DAY = 86_400_000;
+const TRIP_FOLLOW_THROUGH_K = 300;   // a workout plus a typical international bonus
 const isFA = (st, id) => st.players[id]?.group === PLAYER_GROUP.FREE_AGENT;
+
+// Money is the real limit on adding players (§74): salaries must fit under the
+// payroll cap (a player optioned to make room comes off it), bonuses under the
+// operating budget that's left.
+const payrollRoom = (st) => (st.userTeam.finances?.payrollCap || 0) - computePayroll(st);
+const opRoom = (st) => (st.userTeam.finances?.operatingBudget || 0) - (st.userTeam.finances?.operatingSpent || 0);
+const salaryOf = (st, id) => st.players[id]?.contractSalary || 0;
+const affords = (st, addK, outId = null) => addK <= payrollRoom(st) + (outId && fullFor(st) ? salaryOf(st, outId) : 0);
 const fullFor = (st) => rosterIsFull(st, 'user');
 const between = (lo, hi) => lo + Math.random() * (hi - lo);
 
 /** A veteran who wants to start: signs, takes the weak starter's spot; the weakest bench bat goes down. */
 const signStarter = {
   feasible: (st, c) => isFA(st, role(c, 'acq_hitter')) && REGULAR_OR_SPRING.has(st.phase)
-    && (!fullFor(st) || ours(st, role(c, 'drop_hitter'))),
+    && (!fullFor(st) || ours(st, role(c, 'drop_hitter')))
+    && affords(st, signingTerms(st, st.players[role(c, 'acq_hitter')]).salary, role(c, 'drop_hitter')),
   apply(d, c, atMs) {
     const id = role(c, 'acq_hitter');
     const events = signToClub(d, id, 'user', atMs, { displaceId: role(c, 'drop_hitter') });
@@ -256,7 +266,8 @@ const signStarter = {
 
 /** A prospect signs a bonus and reports to the farm. */
 const signProspect = (r) => ({
-  feasible: (st, c) => isFA(st, role(c, r)),
+  feasible: (st, c) => isFA(st, role(c, r))
+    && (c.cardId === 'sc3_fail' || (signingTerms(st, st.players[role(c, r)]).bonus || 0) <= opRoom(st)),
   apply(d, c, atMs) {
     const id = role(c, r);
     const t = signingTerms(d, d.players[id]);
@@ -268,7 +279,8 @@ const signProspect = (r) => ({
 
 /** A released veteran signs a short deal and joins the active roster. */
 const signReleased = {
-  feasible: (st, c) => isFA(st, role(c, 'dfa_player')) && REGULAR_OR_SPRING.has(st.phase),
+  feasible: (st, c) => isFA(st, role(c, 'dfa_player')) && REGULAR_OR_SPRING.has(st.phase)
+    && affords(st, signingTerms(st, st.players[role(c, 'dfa_player')]).salary),
   apply: (d, c, atMs) => signToClub(d, role(c, 'dfa_player'), 'user', atMs),
 };
 
@@ -276,7 +288,8 @@ const signReleased = {
 const claimWaivers = {
   feasible: (st, c) => {
     const p = st.players[role(c, 'dfa_player')];
-    return !!p && (st.waiverPool || []).includes(p.id) && p._waivedBy !== 'user' && !p._userClaim;
+    return !!p && (st.waiverPool || []).includes(p.id) && p._waivedBy !== 'user' && !p._userClaim
+      && affords(st, p.contractSalary || 0);
   },
   apply(d, c) {
     d.players[role(c, 'dfa_player')]._userClaim = true;
@@ -290,8 +303,11 @@ const tradeFor = {
     const o = c._offer;
     if (!o || st.phase === PHASE.SPRING_TRAINING) return false;
     const team = (st.leagueTeams || []).find(t => t.id === o.proposingTeamId);
+    const inK  = o.incomingIds.reduce((a, id) => a + salaryOf(st, id), 0);
+    const outK = o.outgoingIds.filter(id => ours(st, id)).reduce((a, id) => a + salaryOf(st, id), 0);
     return !!team && o.incomingIds.every(id => team.rosterIds.includes(id) && isAvailable(st.players[id]))
-      && o.outgoingIds.every(id => (st.userTeam.farmIds || []).includes(id) || ours(st, id));
+      && o.outgoingIds.every(id => (st.userTeam.farmIds || []).includes(id) || ours(st, id))
+      && affords(st, inK - outK);
   },
   apply(d, c, atMs) {
     d.transactions = [...(d.transactions || []), queueTrade(c._offer, c._offer.proposingTeamId, atMs)];
@@ -312,7 +328,9 @@ const inviteNRI = {
 
 /** A workout: the result comes in 3–5 days — good or a disappointment. */
 const workout = {
-  feasible: (st, c) => isFA(st, role(c, 'intl_player')),
+  // Don't fly a player in we couldn't afford to sign afterwards.
+  feasible: (st, c) => isFA(st, role(c, 'intl_player'))
+    && (signingTerms(st, st.players[role(c, 'intl_player')]).bonus || 0) <= opRoom(st) - (c._budgetCost || 0),
   apply(d, c, atMs) {
     const id = role(c, 'intl_player');
     const p = d.players[id];
@@ -325,7 +343,8 @@ const workout = {
 
 /** An international scouting trip: 1–2 workout leads over the next week. */
 const intlTrip = {
-  feasible: () => true,
+  // A trip only makes sense if there'd be money left to fly a lead in and sign him.
+  feasible: (st, c) => opRoom(st) - (c._budgetCost || 0) >= TRIP_FOLLOW_THROUGH_K,
   apply(d, c, atMs) {
     const n = 1 + (Math.random() < 0.5 ? 1 : 0);
     return Array.from({ length: n }, (_, i) => ({ type: 'SCHEDULE_CARD', defId: 'sc3', preset: { _country: c._intlCountry },
@@ -340,7 +359,7 @@ const indieTip = {
 };
 
 const indieSign = {
-  feasible: (st, c) => isFA(st, c._targetPlayerId),
+  feasible: (st, c) => isFA(st, c._targetPlayerId) && (signingTerms(st, st.players[c._targetPlayerId]).bonus || 0) <= opRoom(st),
   apply(d, c, atMs) {
     const t = signingTerms(d, d.players[c._targetPlayerId]);
     d.userTeam.finances.operatingSpent = (d.userTeam.finances.operatingSpent || 0) + (t.bonus || 0);
@@ -349,6 +368,50 @@ const indieSign = {
 };
 
 const REGULAR_OR_SPRING = new Set([...REGULAR, PHASE.SPRING_TRAINING]);
+
+// ─────────────────────────────────────────────────────────────
+// LIFE, THE BALLPARK AND THE FRONT OFFICE (§74)
+// ─────────────────────────────────────────────────────────────
+
+/** Personal leave: he goes either way — the choice sets how long and how it lands. */
+const personalLeave = {
+  feasible: (st, c) => ours(st, c._targetPlayerId) && isAvailable(st.players[c._targetPlayerId]),
+  apply(d, c, atMs) {
+    const raw = c._raw || {};
+    const games = (c.choice === 'no' ? raw._leaveGamesNo : raw._leaveGamesYes) || raw.leaveGames || 3;
+    return [setUnavailable(d, c._targetPlayerId, { reason: 'leave', games }, atMs)].filter(Boolean);
+  },
+};
+
+/** Stadium staff out sick and nobody hired: how the night goes. */
+const staffShort = (what) => ({
+  feasible: () => true,
+  apply(d) {
+    const u = d.userTeam;
+    const roll = Math.random();
+    const clamp = (v) => Math.max(0, Math.min(100, v));
+    if (what === 'crew') {
+      if (roll < 0.55) { u.groundskeeperRelationship = clamp((u.groundskeeperRelationship || 50) + 2); return [{ type: 'STAFF_NIGHT', what, ok: true }]; }
+      u.atmosphere = clamp((u.atmosphere || 50) - 2); return [{ type: 'STAFF_NIGHT', what, ok: false }];
+    }
+    if (what === 'pa' && roll < 0.2) { u.atmosphere = clamp((u.atmosphere || 50) + 2); return [{ type: 'STAFF_NIGHT', what, ok: true }]; }
+    u.atmosphere = clamp((u.atmosphere || 50) - (what === 'mascot' ? 2 : 1));
+    return [{ type: 'STAFF_NIGHT', what, ok: false }];
+  },
+});
+
+/** The media tour (or a scouting budget cut) costs scouting leads for a while. */
+const scoutingQuiet = (days, refund = false) => ({
+  feasible: () => true,
+  apply(d, c, atMs) {
+    d.userTeam.scoutingQuietUntil = Math.max(d.userTeam.scoutingQuietUntil || 0, atMs + days * DAY);
+    if (refund) {
+      const saved = c._amountsK?.misc_cost_lg || 0;
+      d.userTeam.finances.operatingSpent = Math.max(0, (d.userTeam.finances.operatingSpent || 0) - saved);
+    }
+    return [{ type: 'SCOUTING_QUIET', untilMs: d.userTeam.scoutingQuietUntil }];
+  },
+});
 
 export const CARD_ACTIONS = Object.freeze({
   sign_acquire_hitter:   signStarter,
@@ -368,6 +431,13 @@ export const CARD_ACTIONS = Object.freeze({
   scouting_indie_tip:    indieTip,
   indie_sign:            indieSign,
   sr2_shakeup:           callupHitter,
+  personal_leave:        personalLeave,
+  ill5a_crew:            staffShort('crew'),
+  ill5b_mascot:          staffShort('mascot'),
+  ill5c_pa:              staffShort('pa'),
+  media_boost:           scoutingQuiet(2),
+  media_suppress:        { feasible: () => true, apply: () => [] },
+  scouting_suppress:     scoutingQuiet(8, true),
   rest_active_hitter:   away(restReason, 1),
   bench_active_pitcher: away(restReason, 1),
   bench_active_hitter:  away((raw) => raw.tag === 'DISCIPLINE' ? 'suspended' : raw.tag === 'HEALTH' ? 'illness' : 'benched', 2),

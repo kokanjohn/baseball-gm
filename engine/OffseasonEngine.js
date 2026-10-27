@@ -809,6 +809,19 @@ export function openNewSeason(draft, atMs) {
   _renewCoaches(draft);
   for (const t of _allTeams(draft)) events.push(..._signProspects(draft, t, atMs));
 
+  // Anyone who joined a club after contract day (a waiver claim, a late
+  // outright) with his deal up signs on for a year at market — the club
+  // brought him in; nobody opens a season without a contract.
+  for (const t of _allTeams(draft)) {
+    for (const id of [...(t?.rosterIds || []), ...(t?.farmIds || [])]) {
+      const p = draft.players[id];
+      if (p && contractIsUp(p, draft.seasonNum || 1)) {
+        applyContract(draft, id, { ...marketTerms(draft, p), years: 1 });
+        events.push({ type: 'RESIGNED', playerId: id, teamId: t.id || 'user', atMs, late: true });
+      }
+    }
+  }
+
   draft.seasonNum = (draft.seasonNum || 1) + 1;
   for (const t of _allTeams(draft)) {
     Object.assign(t, { wins: 0, losses: 0, ties: 0, streak: 0,

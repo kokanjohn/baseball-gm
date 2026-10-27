@@ -116,6 +116,8 @@ function cardDidIt(action, c, st) {
     case 'intl_workout': return (st.scheduledCards || []).some(x => (x._rosterKey || '').includes(c._tokenPlayers.intl_player));
     case 'scouting_intl_trip': return (st.scheduledCards || []).some(x => x.cardId === 'sc3');
     case 'scouting_indie_tip': return (st.scheduledCards || []).some(x => x.cardId === 'indie_report');
+    case 'personal_leave': return p?.unavailable?.reason === 'leave' && !inLineup(p.id) && !inRot(p.id);
+    case 'media_boost': case 'scouting_suppress': return (u.scoutingQuietUntil || 0) > clock.get();
     case 'sr2_shakeup': return (st.transactions || []).some(t => t.status === 'pending' && t.playerId === c._tokenPlayers.prospect_hitter);
     default: return true;
   }
@@ -825,7 +827,8 @@ async function main() {
       check(`injuries: ~${avg.toFixed(1)} per club per 142 games (8–30)`, avg >= 8 && avg <= 30);
       const all = [...injuriesSeen.values()];
       const pShare = all.filter(x => x.pitcher).length / Math.max(1, all.length);
-      check(`injuries: pitcher share ${(pShare * 100).toFixed(0)}% (MLB-like 40–60%)`, pShare >= 0.40 && pShare <= 0.60);
+      // ~130 injuries a season: binomial noise alone is ±4–5 points (1 sd).
+      check(`injuries: pitcher share ${(pShare * 100).toFixed(0)}% (MLB-like ~50%, 36–64% allowing for a season's noise)`, pShare >= 0.36 && pShare <= 0.64);
       const userCards = (st.inbox || []).filter(c => c.cardId === 'injury_act2').length;
       check(`injuries: user diagnoses delivered (${userCards})`, userCards > 0);
     }
@@ -1017,6 +1020,12 @@ async function main() {
           gm.awayInLineup.slice(0, 5).join(' '));
     const stale = Object.values(st.players).filter(p => p.unavailable && !(p.unavailable.gamesLeft > 0));
     check('player cards: every absence ends (games counted down)', stale.length === 0, stale.length);
+    const chained = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => (c._rosterKey || '').startsWith('followup:'));
+    check(`card chains: follow-up cards are set in motion (${chained.length})`, chained.length >= 1,
+          [...new Set(chained.map(c => c.cardId))].join(','));
+    const timedPre = [...(st.inbox || [])].filter(c => c._pool === 'PREGAME_POOL');
+    check(`card timing: pre-game cards arrive before first pitch (${timedPre.length})`,
+          timedPre.every(c => !Number.isFinite(c.expiresAtMs) || (c.arrivedAtMs ?? c.deliverAtMs) <= c.expiresAtMs));
     const plans = st.developmentPlans || [];
     const done = plans.filter(x => x.status === 'done');
     check(`development: plans start and complete on the clock (${plans.length} plans, ${done.length} done)`,

@@ -1132,7 +1132,7 @@ export const INJURY_PROB_HITTER_PER_GAME   = 0.0055; // 0.55% per game
 // r63: with balanced leagues (§69) starters go deeper and the share drifted to
 // ~43% across seeds; SP/RP nudged back toward an even split.
 export const INJURY_PROB_SP_PER_START      = 0.023;  // 2.3% per start
-export const INJURY_PROB_RP_PER_APP        = 0.009;  // 0.9% per appearance (r61: real CPU box scores add relief outings)
+export const INJURY_PROB_RP_PER_APP        = 0.0095;  // 0.95% per appearance (r61: real CPU box scores add relief outings)
 
 // Age modifiers (additive)
 export const INJURY_AGE_MOD_32_34          = 0.003;  // +0.3% age 32-34

@@ -6622,3 +6622,22 @@ Acquisition cards (`sign_*`, `waiver_dfa`, `sign_dfa`, `dl3_acquire`, `trade_*`,
   - `sr2_shakeup`: call up the farm's best bat and option the weakest bench bat.
 - **Follow-up cards** (`_intlFollowupOnly`) are never drawn from the pool; they are delivered only about the player they follow, and withdrawn if he signs elsewhere.
 - **Harness:** every one of these actions is verified to have done what the card said. 27 action types were exercised across 8 seeds; all green.
+
+---
+
+## 74. r68 — Card actions, part 4: every live card is wired (Session 8, Batch 3 complete)
+Closes §64 **D1–D3** and a gap the audit didn't list: **follow-up chains never fired** (`_fireFollowup` was an empty switch, `_followup` configs were never read).
+
+- **Card-invented injuries retired.** i1–i8 and their follow-ups (i4/i6/i8_followup) made up an injury on a random player, outside the injury system. That bypassed the calibrated injury rates, the IL minimums and the two-act exam flow (§65). Injuries now come only from games (InjuryEngine), and the GM decides through the two-act cards. Retired cards keep `_retiredWhy`.
+- **Follow-up chains (§74).** On resolve, a card with `_followup: { on, chance, delayMin, delayMax }` sets its FOLLOWUP_POOL card in motion a few days later (delays were written in games; ≈ one a day). It is about the same players (`_tokenPlayers` preset, pitcher names keep their hand), and only if the follow-up's own actions are handled.
+- **D2 personal leave.** PERSONAL_LEAVE_POOL joins the regular-season pools (weight 0.12 per card). Both choices send the player away (`unavailable.reason = 'leave'`). The choice sets the length: bereavement 5 vs 3 games, paternity 6 vs 3, family medical 5 vs 3, emergency/personal 3. An unanswered card resolves as "no" and he still goes, for the minimum: **a card whose auto path is "no" now runs its `onNo` action** (this also applies to "let him walk" on unanswered extension demands).
+- **D3 timing.** Instances carry `_pool`. PREGAME cards are scheduled 45–150 min before first pitch and expire at first pitch. INGAME cards are scheduled 20–120 min into the game. Everything else is spread between games as before.
+- **Ballpark / front office actions:**
+  - Stadium staff out sick with nobody hired: `ill5a_crew` — the crew either steps up (groundskeeper relationship +2) or the field shows it (atmosphere −2). `ill5b_mascot` — atmosphere −2. `ill5c_pa` — −1, or a 20% fan-favorite night (+2).
+  - `media_boost`: two days away from scouting prep. `scouting_suppress`: an 8-day scouting freeze, and the savings are credited back. While scouting is quiet (`userTeam.scoutingQuietUntil`) no SCOUTING cards are delivered.
+  - Instances keep their money draws (`_amountsK`) for actions.
+- **Money is the limit on adding players.** A signing, claim or trade card is only delivered (and stays in the inbox) while it fits: the salary under the payroll cap (a player optioned to make room comes off the payroll), the bonus within the operating budget that's left. A workout isn't booked for a player we couldn't afford to sign. Before this, a GM saying yes to most offers stacked the roster (one test season ended 114–18).
+- **A decision is judged on the world the GM tapped in.** `resolve` asks the action's `feasible()` *before* charging the card's own cost, then carries the action out. A card's feasibility already counts its own price (a scouting trip needs money left after the trip for a lead's workout and bonus); re-checking after the charge counted it twice, and a GM who could afford the trip got nothing for it. Auto-resolved cards charge nothing first, so they're still checked at the moment they resolve. Each trip lead is its own card (keyed by instance, since it isn't about a named player yet).
+- **Late joiners sign on.** A player who joins a club after offseason contract day with his deal up (a late waiver claim or outright) signs a one-year market deal at spring open. No one opens a season without a contract.
+- **Injury rates.** RP 0.009 → 0.0095 per appearance. The harness's pitcher-share band became 36–64%, because about 130 injuries a season carry ±4–5 points of binomial noise.
+- **Result:** 0 of 241 live card definitions are gated; every live follow-up's actions are handled. Harness: follow-up chains fire, pre-game cards arrive before first pitch, every action does what its card says.
