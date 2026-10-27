@@ -1104,10 +1104,14 @@ export const SCHEDULE_MIN_TEAMS_PLAYING_PER_DAY = 4;
 // INJURY ENGINE — PROBABILITY TABLES (Section 21 — LOCKED)
 // ─────────────────────────────────────────────────────────────
 
-// Base injury probability per game/appearance
-export const INJURY_PROB_HITTER_PER_GAME   = 0.008;  // 0.8% per game
-export const INJURY_PROB_SP_PER_START      = 0.012;  // 1.2% per start
-export const INJURY_PROB_RP_PER_APP        = 0.006;  // 0.6% per appearance
+// Base injury probability per game/appearance.
+// Rebalanced r60 (user decision, §66): MLB IL stints split roughly evenly
+// between pitchers and position players. Per team-game: 9 hitters × 0.0055
+// ≈ 0.050; 1 SP × 0.020 + ~3 RP × 0.010 ≈ 0.050 — same total as before
+// (≈0.10), pitchers ~50% instead of ~30%.
+export const INJURY_PROB_HITTER_PER_GAME   = 0.0055; // 0.55% per game
+export const INJURY_PROB_SP_PER_START      = 0.020;  // 2.0% per start
+export const INJURY_PROB_RP_PER_APP        = 0.010;  // 1.0% per appearance
 
 // Age modifiers (additive)
 export const INJURY_AGE_MOD_32_34          = 0.003;  // +0.3% age 32-34

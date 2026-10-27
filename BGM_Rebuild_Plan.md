@@ -6463,3 +6463,7 @@ New invariants every game: active + arriving = 28 for the user **and every CPU c
 - User waiver claims and free-agent signings by the GM (B7-adjacent) — Batch 4.
 - In-game injuries (a player leaving mid-game in the play-by-play) — later; injuries are currently discovered after the final out.
 - Pitcher/hitter injury share is ~30/70 under the locked rates (MLB is closer to 55/45) — flag for the user before changing locked constants.
+
+## 66. r60 — Injury split rebalanced (Session 8)
+User decision: move the injury split toward MLB's ~50/50 pitchers vs position players (Section 21 rates were ~30/70). Total injury volume unchanged (~0.10 per team-game):
+`INJURY_PROB_HITTER_PER_GAME 0.008 → 0.0055`, `INJURY_PROB_SP_PER_START 0.012 → 0.020`, `INJURY_PROB_RP_PER_APP 0.006 → 0.010`. Harness: pitcher share 44–57% across seeds (new check, 40–60%), ~10–12 injuries per club per 142 games, run environment 4.25–4.98 R/team/game.

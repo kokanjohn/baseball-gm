@@ -513,7 +513,7 @@ async function main() {
     }
     assertNoGhosts(`after game ${idx}`);
     for (const pl of Object.values(post.players)) {
-      if (pl.injury) injuriesSeen.set(`${pl.id}:${pl.injury.injuredAt}`, { team: pl.teamId, status: pl.injury.status });
+      if (pl.injury) injuriesSeen.set(`${pl.id}:${pl.injury.injuredAt}`, { team: pl.teamId, status: pl.injury.status, pitcher: ['SP', 'RP'].includes(pl.pos) });
     }
 
     // phase-transition canary: once the NEXT game is a regular-season game,
@@ -559,6 +559,9 @@ async function main() {
       check(`injuries: clubs get hurt (${counts.join('/')})`, counts.filter(c => c > 0).length >= 8);
       const avg = scaled.reduce((a, b) => a + b, 0) / scaled.length;
       check(`injuries: ~${avg.toFixed(1)} per club per 142 games (8–30)`, avg >= 8 && avg <= 30);
+      const all = [...injuriesSeen.values()];
+      const pShare = all.filter(x => x.pitcher).length / Math.max(1, all.length);
+      check(`injuries: pitcher share ${(pShare * 100).toFixed(0)}% (MLB-like 40–60%)`, pShare >= 0.40 && pShare <= 0.60);
       const userCards = (st.inbox || []).filter(c => c.cardId === 'injury_act2').length;
       check(`injuries: user diagnoses delivered (${userCards})`, userCards > 0);
     }
