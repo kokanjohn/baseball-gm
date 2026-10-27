@@ -6319,3 +6319,28 @@ The worker code was proven correct offline, so the failure is in deployment stat
 - `test-webpush.mjs` now runs the whole worker in Node against a fake KV and fake push service: register → test-send → cron → status, decrypts what the push service received and verifies the VAPID JWT; also proves `/status` flags a key mismatch.
 
 **Requires redeploying `workers/push-worker.js`** to Cloudflare.
+
+---
+
+## 63. r58 — Completed-tab delete/undo, decision effects panel, card rating fix (Session 8)
+
+**User-reported regressions vs v1** (`Baseball_GM.html`, verified in git history):
+
+### Completed tab: Delete All / per-card × / ↩ Undo (restored)
+- `CardEngine.clearHistory(ids | 'all')` → returns cleared ids; `restoreHistory(ids)` undoes. `getHistory` hides `_cleared` cards.
+- Cleared cards stay in `state.inbox` for the current season because once-per-season dedup reads card ids from the inbox; cleared cards from earlier seasons are dropped on the next clear (keeps saves small).
+- Undo is session-only (as in v1). Completed list now shows up to 100.
+
+### Decision effects panel (restored v1 "effects toast")
+- `App.showDecisionEffects({ title, before, after, positive })`: headline = the card's outcome line (`yesMsg`/`noMsg`, falls back to the button label); then one bar per metric that moved — **Team Rating, Team Morale, Atmosphere, Owner Trust, Budget** — each animating from old to new value one after another (v1 timing: 60 ms settle, 750 ms stagger, 0.7 s transition) with a +/- delta; auto-dismisses ~2.2 s after the last bar; tap to dismiss. Card revenue shows as a text row ("Counts toward ownership's season review") — per §4.2 revenue does not enter the operating budget.
+- Only one pop-up: if nothing measurable moved, a plain toast shows the outcome line instead (v1 rule — no overlapping toasts).
+- Shared helpers moved to `formatters.js`: `metricBarColor`, `computeRosterOvr`, `snapshotMetrics`. The Dashboard bars and the panel use the same functions, so numbers and colours always match.
+
+### Bug: card rating effects never changed any rating
+`_applySoftEffects` nudged a player's primary sub-rating for `ovr` effects but never recomputed `player.ovr` (the comment claimed GameEngine did; it does not). Now recomputed immediately via `PlayerFactory.computeOVR`.
+
+### Harness
+New checks: each seed decision moves a dashboard metric; delete one / undo / delete all / undo; cleared cards still count for dedup. **2309/2309** on seeds 1, 7, 13.
+
+### Push status at r58
+The deployed worker was still the r56 build (no `/test-send`), which is why Send Test reported "worker answered 404". Deploy `workers/push-worker.js` (r57+).

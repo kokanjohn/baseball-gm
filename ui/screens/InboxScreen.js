@@ -19,14 +19,16 @@
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
-import { getInbox, getHistory } from '../../engine/CardEngine.js';
+import { getInbox, getHistory, clearHistory, restoreHistory } from '../../engine/CardEngine.js';
 import { openCardModal, shouldUseModal } from '../components/CardModal.js';
+import { snapshotMetrics } from '../formatters.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
 // ─────────────────────────────────────────────────────────────
 
 let _activeTab      = 'todo';   // 'todo' | 'completed' | 'compose'
+let _undoCleared    = null;     // instanceIds from the last Delete / Delete All (session only)
 let _expandedCard   = null;     // instanceId of expanded card
 let _composeChannel = null;     // currently selected compose channel id
 let _composeTopic   = null;     // currently selected compose topic id
@@ -346,12 +348,22 @@ function _renderTTL(card, gameIdx) {
 // ─────────────────────────────────────────────────────────────
 
 function _renderCompleted(state) {
-  const history = getHistory(20);
+  const history = getHistory(100);
+
+  // Undo (left) appears after a delete; Delete All (right) when there is history.
+  const undoBtn = _undoCleared?.length
+    ? `<button class="completed-tool" id="completed-undo">↩ Undo</button>` : '<span></span>';
+  const toolbar = (history.length || _undoCleared?.length) ? `
+    <div class="completed-toolbar">
+      ${undoBtn}
+      ${history.length ? `<button class="completed-tool muted" id="completed-delete-all">Delete All</button>` : ''}
+    </div>` : '';
 
   if (history.length === 0) {
-    return `<div class="empty-completed">
+    return `<div style="padding:8px 16px 0;">${toolbar}</div>
+    <div class="empty-completed">
       <div style="font-size:40px;margin-bottom:10px;">✅</div>
-      <div style="font-size:14px;color:var(--muted);">No decisions yet</div>
+      <div style="font-size:14px;color:var(--muted);">No completed messages</div>
     </div>`;
   }
 
@@ -376,11 +388,12 @@ function _renderCompleted(state) {
           <span class="completed-action ${choiceCls}">${_escape(choiceLabel)}</span>
           ${gameRef ? `<div class="completed-game">${gameRef}</div>` : ''}
         </div>
+        <button class="completed-del" data-clear="${card.instanceId}" title="Delete" aria-label="Delete">×</button>
       </div>
     `;
   }).join('');
 
-  return `<div style="padding:8px 16px 16px;">${cards}</div>`;
+  return `<div style="padding:8px 16px 16px;">${toolbar}${cards}</div>`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -524,6 +537,24 @@ function _attachTabListeners(state) {
     });
   });
 
+  // Completed tab: delete one / delete all / undo (§63)
+  document.querySelectorAll('[data-clear]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _undoCleared = clearHistory([btn.dataset.clear]);
+      refresh();
+    });
+  });
+  document.getElementById('completed-delete-all')?.addEventListener('click', () => {
+    _undoCleared = clearHistory('all');
+    refresh();
+  });
+  document.getElementById('completed-undo')?.addEventListener('click', () => {
+    restoreHistory(_undoCleared);
+    _undoCleared = null;
+    refresh();
+  });
+
   // Compose channel selection
   document.querySelectorAll('[data-channel]').forEach(el => {
     el.addEventListener('click', () => {
@@ -568,13 +599,19 @@ async function _resolveCard(instanceId, choice) {
   try {
     const card = getInbox().find(c => c.instanceId === instanceId);
     const { resolve } = await import('../../engine/CardEngine.js');
+    const before = snapshotMetrics(StateManager.get());
     resolve(instanceId, choice);
+    const after  = snapshotMetrics(StateManager.get());
     EventBus.emit('card:resolved', { instanceId, choice });
     _expandedCard = null;
-    // Show the card's own outcome line ("Upgrades complete. Players will notice.")
-    const msg = choice === 'yes' ? card?.yesMsg : card?.noMsg;
-    App.showToast(msg || (choice === 'yes' ? 'Decision made.' : 'Declined.'),
-                  choice === 'yes' ? 'positive' : 'neutral', msg ? 3500 : 2000);
+    // Outcome line ("Upgrades complete. Players will notice.") as the headline,
+    // with animated bars for every metric the decision moved (§63). Falls back
+    // to a plain toast when nothing measurable changed.
+    const msg   = (choice === 'yes' ? card?.yesMsg : card?.noMsg)
+               || (choice === 'yes' ? (card?.yesLabel || 'Decision made.') : (card?.noLabel || 'Declined.'));
+    const shown = App.showDecisionEffects({ title: msg, before, after, positive: choice === 'yes' });
+    if (!shown) App.showToast(msg, choice === 'yes' ? 'positive' : 'neutral', 3500);
+    App.updateHeader(StateManager.get());   // budget in the header
   } catch (err) {
     console.error('InboxScreen._resolveCard:', err);
     App.showToast('That decision could not be saved. Please try again.', 'negative', 3000);
@@ -632,6 +669,11 @@ function _injectCSS() {
   style.textContent = `
     /* Compose topic panel slide */
     #compose-topic-panel{animation:slideUp .2s ease;}
+    .completed-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;min-height:28px;}
+    .completed-tool{font-size:11px;font-weight:700;padding:5px 10px;border-radius:8px;border:1px solid var(--accent);color:var(--accent);background:transparent;cursor:pointer;}
+    .completed-tool.muted{border-color:var(--border);color:var(--muted);}
+    .completed-card{position:relative;}
+    .completed-del{margin-left:auto;align-self:flex-start;flex-shrink:0;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;}
     @keyframes slideUp{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
   `;
   document.head.appendChild(style);

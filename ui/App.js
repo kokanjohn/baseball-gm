@@ -25,7 +25,7 @@
 
 import * as EventBus  from './EventBus.js';
 import * as StateManager from '../store/StateManager.js';
-import { applyTheme, applyTeamColors } from './formatters.js';
+import { applyTheme, applyTeamColors, metricBarColor } from './formatters.js';
 import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r57';
+export const APP_VERSION = 'tfo-v2-r58';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -562,6 +562,116 @@ export function showToast(message, type = 'neutral', duration = 3500) {
     toast.textContent = '';
     toast.onclick     = null;
   };
+}
+
+// ─────────────────────────────────────────────────────────────
+// DECISION EFFECTS PANEL (§63 — restores the v1 "effects toast")
+// After an inbox decision, show what it did: the outcome line as a headline,
+// then one bar per metric that moved, animating one after another from the old
+// value to the new one with a +/- delta. Same colours as the Dashboard bars.
+// ─────────────────────────────────────────────────────────────
+
+const _EFFECT_METRICS = [
+  { key: 'rating',     label: 'Team Rating' },
+  { key: 'morale',     label: 'Team Morale' },
+  { key: 'atmosphere', label: 'Atmosphere'  },
+  { key: 'ownerTrust', label: 'Owner Trust' },
+  { key: 'budgetLeft', label: 'Budget'      },
+];
+let _effectsTimer = null;
+const _effectsAnimTimers = [];
+
+/**
+ * showDecisionEffects({ title, before, after, positive })
+ * before/after are formatters.snapshotMetrics(state) results.
+ * @returns {Boolean} true if anything changed (panel shown); false → caller
+ *          should fall back to a plain toast.
+ */
+export function showDecisionEffects({ title, before, after, positive = true }) {
+  if (!before || !after) return false;
+  const rows = _EFFECT_METRICS.filter(m => Math.abs((after[m.key] ?? 0) - (before[m.key] ?? 0)) >= 0.5);
+  const revenueDelta = (after.revenue ?? 0) - (before.revenue ?? 0);
+  if (!rows.length && revenueDelta < 0.5) return false;
+
+  let panel = document.getElementById('effects-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'effects-panel';
+    panel.setAttribute('role', 'status');
+    panel.setAttribute('aria-live', 'polite');
+    document.body.appendChild(panel);
+    _injectEffectsCSS();
+  }
+
+  const pctOf = (m, v, snap) => {
+    if (m.key === 'budgetLeft') {
+      const total = snap.budgetTotal || before.budgetTotal || 1;
+      return Math.max(0, Math.min(100, Math.round((v / total) * 100)));
+    }
+    return Math.max(0, Math.min(100, Math.round(v)));   // 0–100 metrics; rating is 0–99
+  };
+  const deltaText = (m, d) => m.key === 'budgetLeft'
+    ? `${d > 0 ? '+' : '−'}${formatMoney(Math.abs(d))}`
+    : `${d > 0 ? '+' : ''}${Math.round(d)}`;
+
+  const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  panel.innerHTML = `
+    <div class="ep-title ${positive ? 'pos' : ''}">${esc(title)}</div>
+    ${rows.map(m => {
+      const b = before[m.key] ?? 0, a = after[m.key] ?? 0, d = a - b;
+      const aPct = pctOf(m, a, after);
+      return `<div class="ep-row">
+        <div class="ep-label">${m.label}</div>
+        <div class="ep-track"><div class="ep-fill" data-key="${m.key}" data-to="${aPct}"
+             style="width:${pctOf(m, b, before)}%;background:${metricBarColor(aPct)}"></div></div>
+        <div class="ep-delta ${d > 0 ? 'pos' : 'neg'}">${deltaText(m, d)}</div>
+      </div>`;
+    }).join('')}
+    ${revenueDelta >= 0.5 ? `<div class="ep-row ep-rev">
+        <div class="ep-label">Revenue</div>
+        <div class="ep-revtext">Counts toward ownership's season review</div>
+        <div class="ep-delta pos">+${formatMoney(revenueDelta)}</div>
+      </div>` : ''}
+  `;
+
+  // Animate bars one at a time (v1 timing: 60ms settle, 750ms stagger, .7s transition)
+  _effectsAnimTimers.splice(0).forEach(clearTimeout);
+  clearTimeout(_effectsTimer);
+  panel.classList.remove('show');
+  void panel.offsetWidth;
+  panel.classList.add('show');
+  const fills = [...panel.querySelectorAll('.ep-fill')];
+  fills.forEach((el, i) => {
+    _effectsAnimTimers.push(setTimeout(() => { el.style.width = el.dataset.to + '%'; }, 60 + i * 750));
+  });
+  const total = 60 + fills.length * 750 + 700;
+  _effectsTimer = setTimeout(() => panel.classList.remove('show'), total + 2200);
+  panel.onclick = () => { clearTimeout(_effectsTimer); panel.classList.remove('show'); };
+  return true;
+}
+
+function _injectEffectsCSS() {
+  if (document.getElementById('effects-panel-css')) return;
+  const st = document.createElement('style');
+  st.id = 'effects-panel-css';
+  st.textContent = `
+    #effects-panel{position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(20px);
+      background:var(--surface);border:2px solid var(--border);padding:14px 18px;border-radius:16px;
+      width:min(92vw,380px);box-shadow:0 8px 28px var(--shadow, rgba(0,0,0,.35));z-index:1001;
+      display:flex;flex-direction:column;gap:9px;opacity:0;pointer-events:none;transition:all .3s;}
+    #effects-panel.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto;cursor:pointer;}
+    #effects-panel .ep-title{font-size:13px;font-weight:700;color:var(--text);text-align:center;line-height:1.4;margin-bottom:2px;}
+    #effects-panel .ep-title.pos{color:var(--accent2, #22C55E);}
+    #effects-panel .ep-row{display:flex;align-items:center;gap:8px;}
+    #effects-panel .ep-label{width:84px;font-size:11px;color:var(--muted);text-align:right;flex-shrink:0;}
+    #effects-panel .ep-track{flex:1;height:7px;background:var(--border);border-radius:4px;overflow:hidden;}
+    #effects-panel .ep-fill{height:100%;border-radius:4px;transition:width .7s cubic-bezier(.4,0,.2,1);}
+    #effects-panel .ep-revtext{flex:1;font-size:10px;color:var(--muted);}
+    #effects-panel .ep-delta{font-size:11px;font-weight:700;min-width:40px;text-align:left;flex-shrink:0;}
+    #effects-panel .ep-delta.pos{color:#4ade80;}
+    #effects-panel .ep-delta.neg{color:#f87171;}
+  `;
+  document.head.appendChild(st);
 }
 
 // ─────────────────────────────────────────────────────────────

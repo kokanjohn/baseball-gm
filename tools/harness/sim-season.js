@@ -16,7 +16,8 @@
 import { clock, seedRandom } from './shims.js';           // MUST be first (installs globals)
 import * as SM from '../../store/StateManager.js';
 import { startNewGame, tick, commitGame, buildCardContext } from '../../engine/GameEngine.js';
-import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule } from '../../engine/CardEngine.js';
+import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
+import { snapshotMetrics } from '../../ui/formatters.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
 import * as CardPools from '../../data/cards-pool.js';
@@ -245,6 +246,31 @@ async function main() {
     check('new team: no unresolved {tokens} in seed text',
           seeds.every(c => !/\{[a-z0-9_]+\}/i.test(`${c.subject} ${c.body} ${c.sender}`)),
           seeds.filter(c => /\{[a-z0-9_]+\}/i.test(`${c.subject} ${c.body}`)).map(c => c.cardId).join(','));
+  }
+
+  // ── §63: deciding seed cards moves the metrics; Completed tab clear/undo ──
+  {
+    const seeds = (SM.get().inbox || []).filter(c => c._seed && !c._tradeOffer);
+    let moved = 0;
+    for (const c of seeds) {
+      const before = snapshotMetrics(SM.get());
+      resolveCard(c.instanceId, 'yes');
+      const after = snapshotMetrics(SM.get());
+      if (['rating','morale','atmosphere','ownerTrust','budgetLeft'].some(k => after[k] !== before[k])) moved++;
+    }
+    check(`decisions: every seed decision moves a dashboard metric (${moved}/${seeds.length})`,
+          seeds.length > 0 && moved === seeds.length);
+    const hist = getHistory(100).length;
+    const one  = clearHistory([getHistory(100)[0].instanceId]);
+    check('completed: delete one removes exactly one', one.length === 1 && getHistory(100).length === hist - 1);
+    restoreHistory(one);
+    check('completed: undo restores it', getHistory(100).length === hist);
+    const all = clearHistory('all');
+    check('completed: delete all empties the tab', all.length === hist && getHistory(100).length === 0);
+    check('completed: cleared cards still count for once-per-season dedup',
+          seeds.every(c => (SM.get().inbox || []).some(x => x.cardId === c.cardId)));
+    restoreHistory(all);
+    check('completed: undo after delete all restores everything', getHistory(100).length === hist);
   }
 
   const s0 = SM.get();

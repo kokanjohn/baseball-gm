@@ -45,6 +45,7 @@ import { evaluateTrade, executeTrade, recordDeclinedOffer, generateCPUTradeOffer
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens } from './CardTokens.js';
 import { planDeliveryTimes } from './CardScheduler.js';
+import { computeOVR } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -952,9 +953,43 @@ export function getInbox() {
 export function getHistory(limit = 20) {
   const state = StateManager.get();
   return (state.inbox || [])
-    .filter(c => c.resolved)
+    .filter(c => c.resolved && !c._cleared)
     .sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0))
     .slice(0, limit);
+}
+
+/**
+ * clearHistory(instanceIds | 'all')
+ * Removes completed cards from the Completed tab (§63). Cleared cards stay in
+ * state for the rest of the season — once-per-season dedup reads them — and
+ * cleared cards from earlier seasons are dropped entirely to keep saves small.
+ * @returns {String[]} the instanceIds cleared (for undo)
+ */
+export function clearHistory(instanceIds) {
+  const state  = StateManager.get();
+  const season = state.seasonNum || 1;
+  const all    = instanceIds === 'all';
+  const ids    = new Set(all ? [] : (instanceIds || []));
+  const cleared = (state.inbox || [])
+    .filter(c => c.resolved && !c._cleared && (all || ids.has(c.instanceId)))
+    .map(c => c.instanceId);
+  if (!cleared.length) return [];
+  const clearedSet = new Set(cleared);
+  StateManager.mutate(s => {
+    s.inbox = (s.inbox || [])
+      .map(c => (clearedSet.has(c.instanceId) ? { ...c, _cleared: true } : c))
+      .filter(c => !(c._cleared && (c._expiredSeason ?? season) < season));
+  });
+  return cleared;
+}
+
+/** Undo for clearHistory — puts the given cards back on the Completed tab. */
+export function restoreHistory(instanceIds) {
+  const ids = new Set(instanceIds || []);
+  if (!ids.size) return;
+  StateManager.mutate(s => {
+    s.inbox = (s.inbox || []).map(c => (ids.has(c.instanceId) ? { ...c, _cleared: false } : c));
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1229,7 +1264,9 @@ function _applySoftEffects(state, effects, choice, instance) {
           const primaryKey = isPitcher ? 'control' : 'contact';
           if (sr[primaryKey] !== null && sr[primaryKey] !== undefined) {
             sr[primaryKey] = Math.max(40, Math.min(99, sr[primaryKey] + nudge));
-            // Recompute OVR is done outside mutate by GameEngine
+            // Recompute OVR here — nothing else does (§63: card rating
+            // effects previously never moved player or team rating).
+            player.ovr = computeOVR(sr, player.injuryPenalty || null);
           }
         }
       }

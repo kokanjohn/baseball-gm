@@ -31,7 +31,7 @@ import { accumulateBox } from '../../engine/SimEngine.js';
 import { renderBoxScore } from '../components/BoxScore.js';
 import { GAME_STATUS, PLAYER_GROUP } from '../../data/constants.js';
 import {
-  formatRecord, formatStreak, formatDate,
+  formatRecord, formatStreak, formatDate, metricBarColor, computeRosterOvr,
   formatPhaseLabel, formatMoney, formatOVR, formatGameLabel,
 } from '../formatters.js';
 import { renderRadarWidget } from '../components/RadarWidget.js';
@@ -510,7 +510,7 @@ function _renderDashboard(state) {
   const ownerTrust = team.ownerTrust || 60;
   const phase      = state.phase;
 
-  const rosterOvr   = _computeRosterOvr(state);
+  const rosterOvr   = computeRosterOvr(state);
   const divStanding = _getDivStanding(state);
   const nextGame    = _getNextGame(state);
 
@@ -568,21 +568,21 @@ function _renderDashboard(state) {
           <span class="morale-val">${morale}</span>
         </div>
         <div class="progress-bar">
-          <div class="progress-fill" style="width:${morale}%;background:${_barColor(morale)};"></div>
+          <div class="progress-fill" style="width:${morale}%;background:${metricBarColor(morale)};"></div>
         </div>
         <div class="morale-row" style="margin-top:10px">
           <span class="morale-label">Stadium Atmosphere</span>
           <span class="morale-val">${atmosphere}</span>
         </div>
         <div class="progress-bar">
-          <div class="progress-fill" style="width:${atmosphere}%;background:${_barColor(atmosphere)};"></div>
+          <div class="progress-fill" style="width:${atmosphere}%;background:${metricBarColor(atmosphere)};"></div>
         </div>
         <div class="morale-row" style="margin-top:10px">
           <span class="morale-label">Owner Trust</span>
           <span class="morale-val">${ownerTrust}</span>
         </div>
         <div class="progress-bar">
-          <div class="progress-fill" style="width:${ownerTrust}%;background:${_barColor(ownerTrust)};"></div>
+          <div class="progress-fill" style="width:${ownerTrust}%;background:${metricBarColor(ownerTrust)};"></div>
         </div>
       </div>
     </div>
@@ -1184,20 +1184,7 @@ function _attachListeners(state) {
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _barColor(val) {
-  if (val >= 70) return '#22C55E';
-  if (val >= 50) return '#F5D253';
-  if (val >= 35) return '#f97316';
-  return '#EF4444';
-}
 
-function _computeRosterOvr(state) {
-  const ids = state.userTeam?.rosterIds || [];
-  if (!ids.length) return 0;
-  const active = ids.map(id => state.players[id]).filter(p => p && !p.isInjured && p.group !== 'IL');
-  if (!active.length) return 0;
-  return Math.round(active.reduce((s,p) => s + (p.ovr||0), 0) / active.length);
-}
 
 function _getDivStanding(state) {
   const standings = state.standings;

@@ -49,6 +49,43 @@ export function formatMoney(amountK) {
   return `$${Math.round(amountK)}K`;
 }
 
+// ─────────────────────────────────────────────────────────────
+// TEAM METRICS — shared by the Dashboard bars and the decision effects panel
+// (§63) so both always show identical numbers and colours.
+// ─────────────────────────────────────────────────────────────
+
+/** Bar colour for a 0–100 metric (Dashboard thresholds). */
+export function metricBarColor(val) {
+  if (val >= 70) return '#22C55E';
+  if (val >= 50) return '#F5D253';
+  if (val >= 35) return '#f97316';
+  return '#EF4444';
+}
+
+/** Team rating shown on the Dashboard: mean OVR of healthy rostered players. */
+export function computeRosterOvr(state) {
+  const ids = state?.userTeam?.rosterIds || [];
+  if (!ids.length) return 0;
+  const active = ids.map(id => state.players?.[id]).filter(p => p && !p.isInjured && p.group !== 'IL');
+  if (!active.length) return 0;
+  return Math.round(active.reduce((s, p) => s + (p.ovr || 0), 0) / active.length);
+}
+
+/** Snapshot of every metric a card decision can move. */
+export function snapshotMetrics(state) {
+  const t   = state?.userTeam || {};
+  const fin = t.finances || {};
+  return {
+    rating:      computeRosterOvr(state),
+    morale:      t.morale     ?? 50,
+    atmosphere:  t.atmosphere ?? 50,
+    ownerTrust:  t.ownerTrust ?? 60,
+    budgetLeft:  (fin.operatingBudget || 0) - (fin.operatingSpent || 0),
+    budgetTotal: fin.operatingBudget || 0,
+    revenue:     fin.revenue || 0,
+  };
+}
+
 /**
  * formatMoneySigned(amountK)
  * Like formatMoney but prefixes + for positive values.
