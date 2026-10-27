@@ -6350,3 +6350,53 @@ The deployed worker was still the r56 build (no `/test-send`), which is why Send
 - The app fetches the public key from the worker's `/vapid-key` and re-subscribes automatically when it changes. `data/constants.js` `VAPID_PUBLIC_KEY` is now only an offline fallback and still holds the OLD key — update it when convenient (the public key is safe to commit).
 - Closed-app delivery confirmed on Android: test notification arrived ~3 min after Send Test (queued +90 s, then up to 60 s for the next cron tick, then FCM `Urgency: normal` batching while the phone is idle).
 - Wrangler "update your configuration" notice in the dashboard can be ignored — the worker is deployed by pasting into the dashboard, not via a local wrangler config.
+
+---
+
+## 64. Gap register — what is designed but not wired (audit, Oct 26 2026, at r58)
+
+Every item below was verified against the code or by a headless probe (full-season runs, forced trades). Severity: **S1** = breaks the season / corrupts data, **S2** = a designed system that never runs, **S3** = polish.
+
+### A. Season integrity
+- **A1 (S1) Season dead-ends after game 142.** Phase moves to `PLAYOFF_BRACKET_BUILD`, the bracket is built, but no playoff games are ever scheduled; phase transitions only happen inside `commitGame`, so nothing advances again. Playoffs, `SEASON_SUMMARY`, prestige, offseason and season 2 are unreachable. (Probe: 30 simulated days after game 142 — phase unchanged.)
+- **A2 (S1) CPU teams play 41–104 games vs the user's 142.** The CPU league schedule is a separate sparse round-robin (avg 2.4 games/day for 9 teams); r50/r53 then drop every game involving the user's opponent, idling its partner. Standings, seeding and win% are not comparable. Root fix: one unified league schedule (user included, every team one game per scheduled day, equal totals).
+- **A3 (S1) Spring games count in the regular-season record and standings** (user and mirror-credited opponent). §Spring Training Rules (LOCKED): spring W/L is a separate "ST" record.
+- **A4 (S2) Milestones `SEASON_OVER`, `CHAMPIONS`, `FRANCHISE_TURNING_POINT` never fire** (generic trigger removed in r53; explicit triggers never added). Depends on A1.
+
+### B. Trades / pending transactions
+- **B1 (S1) A traded-away player keeps playing for you until the next game commit — including against the team that just acquired him.** (Probe: SS traded to that day's opponent batted 5× for us vs them.)
+- **B2 (S1) He is on both rosters in that window** (`executeTrade` adds him to the CPU roster immediately; the user side is deferred).
+- **B3 (S1) After the drain he is stranded on the CPU roster**: `drainPendingTrades` overwrites `teamId: null, group: 'traded'` → CPU team has a dead roster spot and an invalid group.
+- **B4 (S2) Pending Transactions never display**: engines write `state._pendingAcquisitions`; TeamScreen reads `userTeam._pendingAcquisitions` (always empty). Departures are not listed at all.
+- **B5 (S2) Timing is "next game commit", not time.** Accept after tonight's game → the new player also misses tomorrow's game; accept before first pitch → the departing player still plays today. Needs a time-based transaction model (user decision).
+- **B6 (S2) Incoming player is on no roster during the window.**
+- **B7 (S3) User-initiated trades**: `TradeEngine.evaluateCPUResponse` exists; no UI calls it.
+
+### C. Injuries, vacancies, call-ups, ghost messages
+- **C1 (S2) Injuries never happen.** `InjuryEngine.runDailyInjuryCheck` / `injurePlayer` are never called (0 injuries across a full season, all teams). This is why roster counts currently look correct — nothing ever opens a vacancy, so none of the vacancy machinery has run in real play.
+- **C2 (S2) Two-act injury chain unwired**: Act 1 is only reachable from the Debug menu, which calls `deliverInjuryAct1(target.id)` with the wrong arguments (no-op); Act 2's `il_placement` / `day_to_day` actions have no handler, so choosing the IL does nothing.
+- **C3 (S2) Roster-level vacancy has no UI.** The Team screen's dashed "Slot empty — tap to fill" card exists only for an empty *lineup slot* and only fills from the bench. No dashed card for an open 28-man spot, no pitching vacancy card, no farm call-up from a vacancy.
+- **C4 (S2) No single source for a "transaction need".** `reconcileRoster` reports `pendingCallups` / `pendingSurplus`, but nothing stores or consumes them; the inbox and Team screen cannot share state.
+- **C5 (S2) Ghost messages.** TeamScreen never touches the inbox and cards have no validity check, so a call-up handled on the Team screen leaves its card behind; trade offers naming players who have since moved also stay live. Root fix: actionable cards declare a validity condition re-checked on render/tick and auto-withdraw when the need is gone.
+- **C6 (S2) §52 Batch 2.5 never built**: grace window → auto call-up of a sub-optimal player + "didn't act" metric penalty; "who comes off the roster?" surplus card on IL activation.
+
+### D. Card actions
+- **D1 (S2) 42 card action types have no handler** (signings, call-ups, benching, training, DFA claims, rest, intl scouting…). Gated since r55 — 60 cards are withheld until wired (`HANDLED_CARD_ACTIONS`). Many depend on C's roster operations.
+- **D2 (S2) Personal leave never happens**: `PERSONAL_LEAVE_POOL` is not in any phase's pool list; `onPersonalLeave` is never set.
+- **D3 (S3) Pre-game and in-game cards arrive at random times** (they go through the between-games scheduler), not before first pitch / during a live game.
+
+### E. Other designed systems
+- **E1 (S2) All-Star hosting score never accumulates; announcement card never sent** (§17). Only the spring hint cards move atmosphere.
+- **E2 (S2) Weather + radar unwired**: every game is hardcoded "Clear"; `WeatherEngine` is never called; `RadarWidget` is imported by the Dashboard but never rendered; postponement/delay paths exist but nothing triggers them. (Planned flagship phase.)
+- **E3 (S3) `_simFatigued` is never set**, so in-at-bat fatigue modifiers never apply (the innings-based hook still pulls tired pitchers).
+- **E4 (S3) `constants.VAPID_PUBLIC_KEY`** offline fallback still holds the pre-rotation key.
+
+### Verified working (no action)
+Opening Day keeper cut to 28; reconcile keeps lineup/rotation valid after roster changes (fault-injection checks); CPU teams hold 28 usable players absent trades; pitching changes; box score = plays; timed inbox + push.
+
+### Proposed batch order (pending user decision)
+1. **Transactions & vacancies** (B1–B6, C1–C6): one transaction model shared by inbox + Team screen; time-based trades; injuries on; dashed vacancy cards with farm call-up; ghost-card withdrawal; grace window + penalty.
+2. **Season integrity** (A1–A4): unified schedule, separate spring record, playable playoffs → offseason → season 2.
+3. **Card actions** (D1–D3).
+4. **All-Star hosting, fatigue, user-initiated trades** (E1, E3, B7).
+5. **Weather + radar** (E2).
