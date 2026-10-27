@@ -107,6 +107,10 @@ export function createPlayer(config) {
     seasonNum = 1,
     contractLengthOverride = null,
     teamId = null,
+    // The league's talent level around the user (§69). Ratings are absolute,
+    // but pay, contract length and clubhouse standing are relative to the
+    // league a player plays in — a league-average regular is paid like one.
+    leagueLevel = 0,
   } = config;
 
   // Position decides hitter vs pitcher. (Deciding by group made every farm
@@ -115,7 +119,7 @@ export function createPlayer(config) {
   const isPitcher = pos ? ['SP', 'RP'].includes(pos) : _isPitcherGroup(group);
   const dob       = _generateDob(ageMin, ageMax);
   const age       = computeAge(dob);
-  const trait     = _generateTrait(age, targetOvr);
+  const trait     = _generateTrait(age, targetOvr - leagueLevel);
 
   // Generate sub-ratings around targetOvr
   const subRatings = _generateSubRatings(targetOvr, isPitcher);
@@ -123,8 +127,8 @@ export function createPlayer(config) {
   // OVR derived from sub-ratings — never set directly
   const ovr = computeOVR(subRatings);
 
-  const contractLength = contractLengthOverride ?? _generateContractLength(ovr, group);
-  const contractSalary = _generateSalary(ovr);
+  const contractLength = contractLengthOverride ?? _generateContractLength(ovr - leagueLevel, group);
+  const contractSalary = _generateSalary(ovr - leagueLevel);
 
   const stats       = _freshStats(isPitcher);
   const springStats = _freshStats(isPitcher);

@@ -27,7 +27,7 @@ import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
-import { accumulateBox } from '../../engine/SimEngine.js';
+import { accumulateBox, liveSituation } from '../../engine/SimEngine.js';
 import { renderBoxScore } from '../components/BoxScore.js';
 import { renderLeagueLiveRow, wireLeagueGameTaps } from '../components/LiveGame.js';
 import { GAME_STATUS, PLAYER_GROUP } from '../../data/constants.js';
@@ -364,28 +364,11 @@ function _deriveGameState(game) {
   const awayScore = isHome ? theirScore : ourScore;
   const homeScore = isHome ? ourScore   : theirScore;
 
-  // ── Outs: from last play with outsAfter ──────────────────────
-  let outs = 0;
-  for (let i = revealedPlays.length - 1; i >= 0; i--) {
-    if (revealedPlays[i].outsAfter !== undefined) { outs = revealedPlays[i].outsAfter; break; }
-  }
-
-  // ── Bases: from last play with _basesAfter ───────────────────
-  let bases = { first: null, second: null, third: null };
-  for (let i = revealedPlays.length - 1; i >= 0; i--) {
-    if (revealedPlays[i]._basesAfter) { bases = revealedPlays[i]._basesAfter; break; }
-  }
-
-  // ── Current inning/half ──────────────────────────────────────
-  let curInning = 1, curHalf = 'TOP';
-  for (let i = revealedPlays.length - 1; i >= 0; i--) {
-    const p = revealedPlays[i];
-    if (p.inning && p.half && p.type !== 'game_end') {
-      curInning = p.inning;
-      curHalf   = p.half;
-      break;
-    }
-  }
+  // ── Situation (inning / half / outs / bases): the shared derivation ──
+  const sit = liveSituation(revealedPlays, plays[liveIdx] ?? null);
+  let outs = sit.outs;
+  const bases = sit.bases;
+  const curInning = sit.inning, curHalf = sit.half;
 
   // ── Linescore accumulation: runs per half, H/E totals, halves seen ──
   const runsByHalf   = {};
@@ -423,30 +406,20 @@ function _deriveGameState(game) {
   const isFinal = game.status === GAME_STATUS.FINAL || game._committed
     || revealedPlays.some(p => p.type === 'game_end');
 
-  // When outs = 3 the half is over — advance the current half/inning so the
-  // highlight and the score post together. BUT if the very next (unrevealed) play
-  // is game_end, the game is over after this half: don't advance, so we never
-  // flash "TOP 10th" (or the next inning) before the FINAL label appears.
-  const endingNext = plays[liveIdx]?.type === 'game_end';
-  if (outs >= 3 && !isFinal && !endingNext) {
-    if (curHalf === 'TOP') {
-      curHalf = 'BOT';
-    } else {
-      curHalf   = 'TOP';
-      curInning = curInning + 1;
-    }
-    outs = 0;
-  }
+  // (liveSituation already advanced past a completed half — and holds the
+  //  final half when game_end is next — so the highlight and the posted
+  //  score move together.)
 
   // ── Linescore cells by PROGRESSION, not inning_end plays ─────────────
-  // A half's runs post once we've moved past it (its ordinal is before the
-  // current position), or at game end for any half that was played. This keeps
-  // the posted score in lockstep with the current-inning highlight.
+  // Every half we've moved past posts its runs; the half in progress shows
+  // its runs so far (as on a broadcast), once it has had a pitch. The running
+  // score (cumOurScore) is stamped per play, so the R column and the cells
+  // always add up.
   const ord     = (half, inn) => (inn - 1) * 2 + (half === 'TOP' ? 0 : 1);
   const curOrd  = ord(curHalf, curInning);
   const done    = (half, inn) => {
     const key = `${half}_${inn}`;
-    return ord(half, inn) < curOrd || (isFinal && halvesSeen.has(key));
+    return ord(half, inn) < curOrd || (halvesSeen.has(key) && (isFinal || ord(half, inn) === curOrd));
   };
 
   const maxInning = Math.max(9, curInning);

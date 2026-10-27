@@ -24,6 +24,9 @@ import {
   LINEUP_SLOTS,
   ARCHETYPE,
   ARCHETYPE_GM_REL_ADJUSTMENTS,
+  LEAGUE_TALENT_OFFSET_BY_ARCHETYPE,
+  CPU_STR_CENTER,
+  CPU_STR_SPREAD,
   ROSTER_LIMITS,
   GM_RELATIONSHIP_DEFAULT,
   SUB_RATING_MIN,
@@ -155,7 +158,7 @@ export function initNameRegistry() {
  * @param {Function} uuidFn      — () => String UUID
  * @returns {{ players: Object, leagueTeams: Object[] }}
  */
-export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamDefs) {
+export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamDefs, leagueOffset = 0) {
   const teamsToUse = teamDefs || LEAGUE_TEAMS;
   const players    = {};
   const leagueTeams = [];
@@ -171,7 +174,7 @@ export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamD
     farmNameIdx += 20;
 
     const { rosterIds, farmIds, lineupSlots } = _buildCPURoster(
-      teamDef, teamNames, teamFarmNames, seasonNum, uuidFn, players
+      teamDef, teamNames, teamFarmNames, seasonNum, uuidFn, players, leagueOffset
     );
 
     // Build initial rotation order from SP playerIds
@@ -204,9 +207,30 @@ export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamD
   return { players, leagueTeams };
 }
 
-function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playersOut) {
+/**
+ * _spreadTargets(n, min, max)
+ * n target OVRs covering [min, max] evenly (one per stratum, jittered within
+ * it), shuffled. A club still has its star and its weak spot, but its
+ * starting lineup / rotation / bullpen average sits at the club's intended
+ * level — iid draws let random roster luck swing a club ±15 wins before a
+ * pitch was thrown.
+ */
+function _spreadTargets(n, min, max) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(Math.round(min + ((i + Math.random()) / n) * (max - min)));
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playersOut, leagueOffset = 0) {
   const str      = teamDef.str;
-  const baseOvr  = Math.round(str * 100);
+  // League talent is set relative to the user's archetype (§69): `str` keeps
+  // each club's place in the pecking order (compressed into a realistic band),
+  // the offset sets how good the league is around the user.
+  const baseOvr  = Math.round(CPU_STR_CENTER * 100 + (str - CPU_STR_CENTER) * 100 * CPU_STR_SPREAD) + leagueOffset;
   const rosterIds = [];
   const farmIds   = [];
   let ni = 0;
@@ -218,6 +242,7 @@ function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playe
       id, name, pos, group, hand,
       targetOvr, ageMin, ageMax,
       seasonNum, teamId: teamDef.id,
+      leagueLevel: leagueOffset,
     });
     playersOut[id] = p;
     return id;
@@ -227,8 +252,10 @@ function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playe
   const activeHitterIds = [];
   const hOvrMin = clamp(baseOvr - 12, SUB_RATING_MIN, SUB_RATING_MAX);
   const hOvrMax = clamp(baseOvr + 10, SUB_RATING_MIN, SUB_RATING_MAX);
+  const hTargets = _spreadTargets(ACTIVE_HITTER_POSITIONS.length, hOvrMin, hOvrMax);
   for (const pos of ACTIVE_HITTER_POSITIONS) {
-    const id = _make(teamNames[ni++], pos, PLAYER_GROUP.BENCH_HITTERS, null, hOvrMin, hOvrMax, 23, 33);
+    const t  = hTargets.pop();
+    const id = _make(teamNames[ni++], pos, PLAYER_GROUP.BENCH_HITTERS, null, t, t, 23, 33);
     rosterIds.push(id);
     activeHitterIds.push(id);
   }
@@ -243,15 +270,19 @@ function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playe
   // Starting pitchers
   const spOvrMin = clamp(baseOvr - 10, SUB_RATING_MIN, SUB_RATING_MAX);
   const spOvrMax = clamp(baseOvr + 12, SUB_RATING_MIN, SUB_RATING_MAX);
+  const spTargets = _spreadTargets(SP_COUNT, spOvrMin, spOvrMax);
   for (let i = 0; i < SP_COUNT; i++) {
-    rosterIds.push(_make(teamNames[ni++], 'SP', PLAYER_GROUP.STARTING_PITCHERS, SP_HANDS[i], spOvrMin, spOvrMax, 23, 35));
+    const t = spTargets.pop();
+    rosterIds.push(_make(teamNames[ni++], 'SP', PLAYER_GROUP.STARTING_PITCHERS, SP_HANDS[i], t, t, 23, 35));
   }
 
   // Bullpen (5 active RP)
   const bpOvrMin = clamp(baseOvr - 15, SUB_RATING_MIN, SUB_RATING_MAX);
   const bpOvrMax = clamp(baseOvr + 5,  SUB_RATING_MIN, SUB_RATING_MAX);
+  const bpTargets = _spreadTargets(BP_COUNT, bpOvrMin, bpOvrMax);
   for (let i = 0; i < BP_COUNT; i++) {
-    rosterIds.push(_make(teamNames[ni++], 'RP', PLAYER_GROUP.BULLPEN, BP_HANDS[i], bpOvrMin, bpOvrMax, 22, 34));
+    const t = bpTargets.pop();
+    rosterIds.push(_make(teamNames[ni++], 'RP', PLAYER_GROUP.BULLPEN, BP_HANDS[i], t, t, 22, 34));
   }
 
   // Pitcher bench (2 SP bench + 2 RP bench)
@@ -532,7 +563,7 @@ export function applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams) {
  *   payroll:    Number,
  * }}
  */
-export function buildFullLeague({ archetypeId, seasonNum, uuidFn, userTeam, region }) {
+export function buildFullLeague({ archetypeId, seasonNum, uuidFn, userTeam, region, leagueOffsetOverride = null }) {
   const { userNames, cpuNames, farmNames } = initNameRegistry();
 
   // Split farmNames: first 180 for CPU teams (9×20), next 20 for user team
@@ -543,8 +574,13 @@ export function buildFullLeague({ archetypeId, seasonNum, uuidFn, userTeam, regi
   const regionTeams = LEAGUE_TEAMS_BY_REGION[region] || LEAGUE_TEAMS_BY_REGION.north;
 
   // Build CPU rosters using region-specific team definitions
+  // CPU talent around this archetype (§69). leagueOffsetOverride is a
+  // calibration hook for the test harness only.
+  const leagueOffset = Number.isFinite(leagueOffsetOverride)
+    ? leagueOffsetOverride
+    : (LEAGUE_TALENT_OFFSET_BY_ARCHETYPE[archetypeId] ?? 0);
   const { players: cpuPlayers, leagueTeams } = buildLeagueRosters(
-    cpuNames, cpuFarmNames, seasonNum, uuidFn, regionTeams
+    cpuNames, cpuFarmNames, seasonNum, uuidFn, regionTeams, leagueOffset
   );
 
   // Build user roster
@@ -559,7 +595,7 @@ export function buildFullLeague({ archetypeId, seasonNum, uuidFn, userTeam, regi
   applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams);
   userTeam.finances.payroll = payroll;
 
-  return { players, leagueTeams, rosterIds, farmIds, payroll, lineupSlots };
+  return { players, leagueTeams, rosterIds, farmIds, payroll, lineupSlots, leagueOffset };
 }
 
 // ─────────────────────────────────────────────────────────────

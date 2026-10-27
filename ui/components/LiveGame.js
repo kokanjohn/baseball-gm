@@ -15,7 +15,7 @@
 
 import * as StateManager from '../../store/StateManager.js';
 import { GAME_STATUS } from '../../data/constants.js';
-import { accumulateBox } from '../../engine/SimEngine.js';
+import { accumulateBox, liveSituation } from '../../engine/SimEngine.js';
 import { renderBoxScore } from './BoxScore.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -45,18 +45,8 @@ export function leagueGameState(g, nowMs = Date.now()) {
   const last = revealed[revealed.length - 1];
   let homeScore = final ? (g.homeScore ?? 0) : (last?.cumOurScore ?? 0);
   let awayScore = final ? (g.awayScore ?? 0) : (last?.cumTheirScore ?? 0);
-  let inning = 1, half = 'TOP', outs = 0, bases = { first: null, second: null, third: null };
-  for (let i = revealed.length - 1; i >= 0; i--) {
-    const p = revealed[i];
-    if (p.inning && p.half && p.type !== 'game_end') { inning = p.inning; half = p.half; break; }
-  }
-  for (let i = revealed.length - 1; i >= 0; i--) {
-    if (revealed[i].outsAfter !== undefined) { outs = revealed[i].outsAfter; break; }
-  }
-  for (let i = revealed.length - 1; i >= 0; i--) {
-    if (revealed[i]._basesAfter) { bases = revealed[i]._basesAfter; break; }
-  }
-  if (outs >= 3) outs = 0;
+  const next = final ? null : plays[revealed.length] ?? null;
+  const { inning, half, outs, bases } = liveSituation(revealed, next);
 
   // Linescore (from the box once final, else from revealed plays).
   const runs = {};

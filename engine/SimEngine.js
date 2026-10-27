@@ -308,11 +308,10 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     );
     plays.push(...topPlays);
 
+    _stampRunningScore(topPlays, gs.userScore, gs.oppScore, topIsUser);
     const topRuns = topPlays.reduce((s, p) => s + (p.rbi || 0), 0);
     if (userBatsBottom) gs.oppScore += topRuns;
     else                gs.userScore += topRuns;
-
-    _updateCumulativeScores(topPlays, gs.userScore, gs.oppScore, isHome);
 
     _accrueInningAndFatigue(gs, players, userBatsBottom ? 'user' : 'opp');
     _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning);
@@ -339,11 +338,10 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     );
     plays.push(...botPlays);
 
+    _stampRunningScore(botPlays, gs.userScore, gs.oppScore, botIsUser);
     const botRuns = botPlays.reduce((s, p) => s + (p.rbi || 0), 0);
     if (userBatsBottom) gs.userScore += botRuns;
     else                gs.oppScore  += botRuns;
-
-    _updateCumulativeScores(botPlays, gs.userScore, gs.oppScore, isHome);
 
     // Walk-off: home team leads after its half of the 9th or later — game over.
     if (gs.inning >= 9 && homeScore() > awayScore()) break;
@@ -516,6 +514,11 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
         sbPlay._halfInning   = halfKey;
         sbPlay.inning        = parseInt(halfKey.split('_')[1]) || 1;
         sbPlay.half          = halfKey.startsWith('TOP') ? 'TOP' : 'BOT';
+        if (sbPlay.type === 'caught_stealing' && pitcher) {
+          // The out is the pitcher's: charge it to him like any other.
+          sbPlay.pitcherId = pitcher.id;
+          (sbPlay._statDeltas[pitcher.id] ||= []).push({ stat: 'ip', delta: 0.333 });
+        }
         plays.push(sbPlay);
         bases = sbPlay._basesAfter;
         if (sbPlay.type === 'caught_stealing') {
@@ -549,6 +552,8 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       subPlay._halfInning   = halfKey;
       subPlay.inning        = parseInt(halfKey.split('_')[1]) || 1;
       subPlay.half          = halfKey.startsWith('TOP') ? 'TOP' : 'BOT';
+      subPlay.outsAfter     = outs;          // a substitution changes neither
+      subPlay._basesAfter   = { ...bases };
       plays.push(subPlay);
       slot = slots[slotIdx];
     }
@@ -588,16 +593,16 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       || (isScoring && Math.abs((gs.userScore + (isUserBatting ? runsScored : 0)) -
                                  (gs.oppScore  + (isUserBatting ? 0 : runsScored))) <= 1);
 
-    const deltas = _buildStatDeltas(atBat, activeBatter, pitcher, rbi, runsScored,
-      runnerIds, effectiveType);
-
     // Errors and fielder's choice: batter reaches safely (no out on batter)
     const batterIsOut = effectiveType !== 'error'
       && effectiveType !== 'fielders_choice'
       && _isOut(atBat.type);
-
+    const outsBefore = outs;
     if (batterIsOut) outs++;
     if (extraOuts > 0) outs = Math.min(3, outs + extraOuts);
+
+    const deltas = _buildStatDeltas(atBat, activeBatter, pitcher, rbi, runsScored,
+      runnerIds, effectiveType, outs - outsBefore);
 
     plays.push({
       playIndex:    0,
@@ -612,7 +617,8 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       isScoring,
       isBigPlay,
       outsAfter:    outs,
-      _basesAfter:  { ...bases },
+      // The half is over on the third out: the runners are stranded, not on base.
+      _basesAfter:  outs >= 3 ? { first: null, second: null, third: null } : { ...bases },
       cumOurScore:   0,
       cumTheirScore: 0,
       _timestamp:   0,
@@ -660,6 +666,42 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
  * @param {Object}   players — registry
  * @returns {{ contact, power, speed, stuff, control }}
  */
+/**
+ * liveSituation(revealed, nextPlay)
+ * The on-field situation after the last revealed play — the single derivation
+ * behind every live diamond (the user's game and the league viewer).
+ *   - inning/half: from the last play that carries them (not game_end)
+ *   - outs/bases:  from the last play's outsAfter / _basesAfter
+ *   - once the third out is revealed the half is over: the next half is shown
+ *     with 0 outs and empty bases — unless the game ends instead.
+ * @param {Object[]} revealed — plays revealed so far, in order
+ * @param {Object|null} nextPlay — the first unrevealed play, if any
+ * @returns {{ inning, half, outs, bases, final }}
+ */
+export function liveSituation(revealed, nextPlay = null) {
+  const EMPTY = { first: null, second: null, third: null };
+  let inning = 1, half = 'TOP', outs = 0, bases = EMPTY;
+  for (let i = revealed.length - 1; i >= 0; i--) {
+    const p = revealed[i];
+    if (p.inning && p.half && p.type !== 'game_end') { inning = p.inning; half = p.half; break; }
+  }
+  for (let i = revealed.length - 1; i >= 0; i--) {
+    if (Number.isFinite(revealed[i].outsAfter)) { outs = revealed[i].outsAfter; break; }
+  }
+  for (let i = revealed.length - 1; i >= 0; i--) {
+    if (revealed[i]._basesAfter) { bases = revealed[i]._basesAfter; break; }
+  }
+  const final = revealed.some(p => p.type === 'game_end');
+  if (outs >= 3) {
+    bases = EMPTY;
+    if (!final && nextPlay?.type !== 'game_end') {
+      if (half === 'TOP') half = 'BOT'; else { half = 'TOP'; inning += 1; }
+    }
+    outs = final || nextPlay?.type === 'game_end' ? 3 : 0;
+  }
+  return { inning, half, outs, bases: { ...EMPTY, ...bases }, final };
+}
+
 export function leagueNorms(teams, players) {
   const sum = { contact: 0, power: 0, speed: 0, stuff: 0, control: 0 };
   let nh = 0, np = 0;
@@ -990,25 +1032,26 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
           }
           playMod = 'double_play';
         } else if (_roll() < SIM_FC_PROB) {
-          // Fielder's choice — lead runner (on first) thrown out at second, batter reaches first
-          playMod = 'fielders_choice';
-          // Runner on third scores
+          // Fielder's choice — the runner from first is forced out at second,
+          // the batter reaches first. The batter is not out (playMod tells the
+          // half-inning loop), but the play records ONE out: the runner's.
+          // Runners ahead move up on the force; the runner on third scores
+          // (fewer than two outs here).
+          playMod   = 'fielders_choice';
+          extraOuts = 1;
           if (bases.third) { runsScored++; runnerIds.push(bases.third); }
           newBases = {
             first:  batter.id,
-            second: bases.second || null,
-            third:  null,
+            second: null,
+            third:  bases.second || null,
           };
-          // Batter is NOT out on FC — signal via playMod (no primary out either)
-          // We use the trick: return extraOuts = 0, playMod = 'fielders_choice'
-          // The half-inning loop checks playMod to know not to increment outs for batter
           break;
         } else {
-          // Standard groundout — force lead runner to second, batter out
+          // Standard groundout — batter out at first, every runner moves up a base
           if (bases.third) { runsScored++; runnerIds.push(bases.third); }
           newBases = {
             first:  null,
-            second: batter.id || bases.first,
+            second: bases.first,
             third:  bases.second || null,
           };
         }
@@ -1372,8 +1415,7 @@ function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
     rbi:          0,
     isScoring:    false,
     isBigPlay:    false,
-    outsAfter:    0,   // will be overwritten from previous play context
-    _basesAfter:  null,
+    // outsAfter / _basesAfter are stamped by the caller from the live half-inning.
     cumOurScore:   0,
     cumTheirScore: 0,
     _timestamp:   0,
@@ -1584,10 +1626,19 @@ function _assignTimestamps(plays, gameTime, tickOffset) {
 // CUMULATIVE SCORE UPDATE
 // ─────────────────────────────────────────────────────────────
 
-function _updateCumulativeScores(plays, userScore, oppScore, isHome) {
+/**
+ * _stampRunningScore(plays, userStart, oppStart, battingIsUser)
+ * The score AFTER each play of a half-inning: the score entering the half plus
+ * the runs scored so far in it. The live scoreboard reads the last revealed
+ * play's running score, so a run appears the moment it scores — never at the
+ * first pitch of the half.
+ */
+function _stampRunningScore(plays, userStart, oppStart, battingIsUser) {
+  let user = userStart, opp = oppStart;
   for (const play of plays) {
-    play.cumOurScore   = userScore;
-    play.cumTheirScore = oppScore;
+    if (battingIsUser) user += play.rbi || 0; else opp += play.rbi || 0;
+    play.cumOurScore   = user;
+    play.cumTheirScore = opp;
   }
 }
 
@@ -1788,7 +1839,7 @@ function _findHealthySP(rosterIds, players) {
 // STAT DELTA BUILDER
 // ─────────────────────────────────────────────────────────────
 
-function _buildStatDeltas(atBat, batter, pitcher, rbi, runsScored, runnerIds, effectiveType = null) {
+function _buildStatDeltas(atBat, batter, pitcher, rbi, runsScored, runnerIds, effectiveType = null, outsRecorded = null) {
   const deltas = {};
   const type   = effectiveType || atBat.type;
 
@@ -1839,10 +1890,13 @@ function _buildStatDeltas(atBat, batter, pitcher, rbi, runsScored, runnerIds, ef
   }
 
   // ── Pitcher stats ────────────────────────────────────────────
-  // IP: charged for all outs including ones created by runner advancement
-  // (extraOuts are handled elsewhere — pitcher only charged for batter outs here)
+  // IP: every out recorded on the play is charged to the pitcher — the
+  // batter's, a double play's second out, the runner forced on a fielder's
+  // choice. The caller passes the play's total; the batter's out alone is
+  // the fallback.
   const batterOut = type !== 'error' && type !== 'fielders_choice' && _isOut(atBat.type);
-  if (batterOut) addDelta(pitcher.id, 'ip', 0.333);
+  const outsOnPlay = Number.isFinite(outsRecorded) ? outsRecorded : (batterOut ? 1 : 0);
+  if (outsOnPlay > 0) addDelta(pitcher.id, 'ip', +(0.333 * outsOnPlay).toFixed(3));
   if (['single','double','triple','hr'].includes(atBat.type)) addDelta(pitcher.id, 'h_allowed', 1);
   if (atBat.type === 'hr') addDelta(pitcher.id, 'hr_allowed', 1);
   if (atBat.type === 'walk' || atBat.type === 'hbp') addDelta(pitcher.id, 'bb', 1);

@@ -19,6 +19,7 @@ import { startNewGame, tick, commitGame, buildCardContext, advanceClock, gmCallU
 import { getRosterNeeds, auditRosters, rankCallupCandidates } from '../../engine/TransactionEngine.js';
 import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
+import { liveSituation } from '../../engine/SimEngine.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
 import * as CardPools from '../../data/cards-pool.js';
@@ -482,6 +483,32 @@ async function main() {
       check(`game ${idx}: bottom half skipped only when home leads`,
             halves.has(`BOT${maxInn}`) || homeR > awayR, `home ${homeR} away ${awayR}`);
       if (!pre.isSpring) check(`game ${idx}: regular season never ties`, homeR !== awayR, `${homeR}-${awayR}`);
+      // §69 live correctness at every reveal: the running score equals the runs
+      // scored so far; the diamond never shows runners after a third out; every
+      // out in a half is charged to a pitcher as IP.
+      {
+        let ours = 0, theirs = 0, scoreBad = null, outBad = null;
+        const userHalf = pre.isHome ? 'BOT' : 'TOP';
+        const halfIp = {}, halfOuts = {};
+        for (let k = 0; k < ps.length; k++) {
+          const p = ps[k];
+          if (p.half === userHalf) ours += p.rbi || 0; else if (p.half === 'TOP' || p.half === 'BOT') theirs += p.rbi || 0;
+          if (!scoreBad && p.type !== 'game_end' && (p.cumOurScore !== ours || p.cumTheirScore !== theirs))
+            scoreBad = `play ${k} ${p.type} ${p.cumOurScore}-${p.cumTheirScore} vs ${ours}-${theirs}`;
+          const sit = liveSituation(ps.slice(0, k + 1), ps[k + 1] ?? null);
+          if (!outBad && p.outsAfter >= 3 && (sit.bases.first || sit.bases.second || sit.bases.third)) outBad = `play ${k}`;
+          if (p._halfInning && p.type !== 'game_end') {
+            if (Number.isFinite(p.outsAfter) && p.type !== 'inning_end') halfOuts[p._halfInning] = Math.max(halfOuts[p._halfInning] || 0, p.outsAfter);
+            for (const ds of Object.values(p._statDeltas || {})) for (const d of ds)
+              if (d.stat === 'ip') halfIp[p._halfInning] = (halfIp[p._halfInning] || 0) + Math.round(d.delta / 0.333);
+          }
+        }
+        const ipBad = Object.keys(halfOuts).filter(h => (halfIp[h] || 0) !== halfOuts[h]);
+        check(`game ${idx}: running score equals runs scored at every play`, !scoreBad, scoreBad || '');
+        check(`game ${idx}: bases empty once the third out is revealed`, !outBad, outBad || '');
+        check(`game ${idx}: every out charged to a pitcher (IP = outs, each half)`, ipBad.length === 0,
+              ipBad.map(h => `${h} ${halfIp[h] || 0}/${halfOuts[h]}`).join(' '));
+      }
       seasonRuns += runs; seasonHits += ps.filter(p => ['single','double','triple','hr'].includes(p.type)).length;
       seasonGames++;
     }
@@ -828,6 +855,13 @@ async function main() {
       const pct = (t) => `${t.abbr || 'USR'} ${t.wins}-${t.losses}`;
       check('season: final standings (info)', true,
             [...b.divA.seeds, ...b.divB.seeds].map(t => `${t.abbr} ${t.wins}-${t.losses}`).join(' | '));
+      // §69 league balance: the contender lands in a plausible band around its
+      // 88-win target and no CPU club is historically awful or dominant.
+      const cpuW = st.leagueTeams.map(t => t.wins || 0);
+      check('balance: contender wins plausible around the 88-win target (60–112)',
+            st.userTeam.wins >= 60 && st.userTeam.wins <= 112, `${st.userTeam.wins}-${st.userTeam.losses}`);
+      check('balance: CPU clubs inside a realistic band (≥ 35 and ≤ 100 wins of 132)',
+            Math.min(...cpuW) >= 35 && Math.max(...cpuW) <= 100, cpuW.sort((x, y) => x - y).join(','));
       const regBad = [st.userTeam, ...st.leagueTeams].filter(t => (t.wins || 0) + (t.losses || 0) !== REGULAR_SEASON_GAME_COUNT);
       check('postseason: playoff games never touch the regular-season record', regBad.length === 0,
             regBad.map(t => `${t.abbr} ${t.wins}-${t.losses}`).join(', '));

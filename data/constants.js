@@ -660,6 +660,21 @@ export const ALLSTAR_HOSTING_GM_REL_BUMP         =  5;  // with all league teams
 
 // All monetary values in $K (thousands).
 // Display formatter: formatMoney(amountK) in ui/formatters.js handles $K vs $M display.
+// League talent around the user's archetype (§69). A CPU club's base OVR is
+//   CPU_STR_CENTER×100 + (str − CPU_STR_CENTER)×100×CPU_STR_SPREAD + offset
+// `str` keeps each club's place in the pecking order; the spread keeps the
+// league's best and worst clubs inside a realistic band (~.350–.640); the
+// offset sets how good the league is around the user, so typical season-1
+// records land near the owner's win target (ember 68, contender 88, empire 95,
+// gambler 72–88, lab 78, institution 82 — of 132). Calibrated with full
+// simulated seasons (≈2.75 user wins per point of strength gap; one offset
+// point ≈ 0.85 points of CPU lineup/rotation strength).
+export const CPU_STR_CENTER  = 0.52;
+export const CPU_STR_SPREAD  = 0.5;
+export const LEAGUE_TALENT_OFFSET_BY_ARCHETYPE = Object.freeze({
+  ember: 8, contender: 11, empire: 17, gambler: 14, lab: 11, institution: 16,
+});
+
 export const ARCHETYPE = Object.freeze({
   ember: {
     id: 'ember',
@@ -1110,8 +1125,10 @@ export const SCHEDULE_MIN_TEAMS_PLAYING_PER_DAY = 4;
 // ≈ 0.050; 1 SP × 0.020 + ~3 RP × 0.010 ≈ 0.050 — same total as before
 // (≈0.10), pitchers ~50% instead of ~30%.
 export const INJURY_PROB_HITTER_PER_GAME   = 0.0055; // 0.55% per game
-export const INJURY_PROB_SP_PER_START      = 0.020;  // 2.0% per start
-export const INJURY_PROB_RP_PER_APP        = 0.008;  // 0.8% per appearance (r61: real CPU box scores add relief outings)
+// r63: with balanced leagues (§69) starters go deeper and the share drifted to
+// ~43% across seeds; SP/RP nudged back toward an even split.
+export const INJURY_PROB_SP_PER_START      = 0.023;  // 2.3% per start
+export const INJURY_PROB_RP_PER_APP        = 0.009;  // 0.9% per appearance (r61: real CPU box scores add relief outings)
 
 // Age modifiers (additive)
 export const INJURY_AGE_MOD_32_34          = 0.003;  // +0.3% age 32-34

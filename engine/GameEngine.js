@@ -389,6 +389,7 @@ export async function startNewGame(config) {
     uuidFn,
     userTeam:    state.userTeam,
     region:      config.region || 'north',
+    leagueOffsetOverride: config.leagueOffsetOverride ?? null,   // harness calibration only
   });
 
   // Generate schedules
@@ -421,6 +422,7 @@ export async function startNewGame(config) {
     s.userTeam.rosterIds   = league.rosterIds;
     s.userTeam.farmIds     = league.farmIds;
     s.userTeam.lineupSlots = league.lineupSlots;
+    s.leagueTalentOffset   = league.leagueOffset ?? 0;   // §69 — league talent level
     s.userTeam.finances.payroll = league.payroll;
 
     // Populate SP rotation order from the generated roster, sorted by OVR so the

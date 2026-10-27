@@ -123,6 +123,7 @@ export function createGameState(config = {}) {
     // ── League teams ───────────────────────────────────────
     // LeagueTeamObject[] — populated by LeagueEngine in Phase 4
     leagueTeams: [],
+    leagueTalentOffset: 0,      // §69 — league talent level around the user's archetype
 
     // ── Schedule ───────────────────────────────────────────
     // GameObject[] — user team's full season schedule.

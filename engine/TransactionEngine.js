@@ -610,12 +610,14 @@ function _depthSigning(draft, want, pos) {
     pos:       position,
     group:     PLAYER_GROUP.PRACTICE_SQUAD,
     hand:      ['SP', 'RP'].includes(position) ? (Math.random() < 0.28 ? 'L' : 'R') : null,
-    targetOvr: 42 + Math.floor(Math.random() * 9),
+    // Independent-league talent sits below the league's level (§69).
+    targetOvr: 42 + (draft.leagueTalentOffset || 0) + Math.floor(Math.random() * 9),
     ageMin:    24,
     ageMax:    31,
     seasonNum: draft.seasonNum || 1,
     contractLengthOverride: 1,
     teamId:    null,
+    leagueLevel: draft.leagueTalentOffset || 0,
   });
   draft.players[p.id] = p;
   return p;
