@@ -6567,3 +6567,23 @@ User decision: **ratings gains are gradual and varied — sometimes an immediate
 
 ### 71.1 Remaining card-action families
 Roster moves (call-ups incl. spring, audition, move to DH, bullpen → rotation, in-season extension/release), acquisitions (sign_*, waiver/DFA claims, trade_* cards — need acquisition tokens bound to real players), health (`injurePlayer_*`), org/media (scouting trips, media boost/suppress, crew/mascot/PA illness), then D2 personal leave and D3 pre-game / in-game card timing.
+
+---
+
+## 72. r66 — Card actions, part 2: the action registry and roster moves (Session 8, Batch 3)
+
+- **`engine/CardActions.js` (pure) — one registry for what cards do.** Each action is `{ feasible(state, card), apply(draft, card, atMs) }`. CardEngine never delivers a card whose action can't happen (`cardFeasible` at instance creation), withdraws a card the moment it no longer can (clock-step sync), re-checks on the tap, applies through the owning engines and reconciles the lineup. `HANDLED_CARD_ACTIONS` is built from the registry. The §71 player actions moved here (`canSpare` too).
+- **Cards name real players for every role they use.** `buildTokenMap` is card-aware (`_cardFit`): a contract-year card picks a player in his contract year (and above `_minRating` relative to the league level), a bullpen-to-rotation card a reliever with ≥55 stamina, a DH card a fielder in the lineup, an audition card a starter with a bench alternative. New roles: `prospect_hitter` / `prospect_pitcher` (the farm's best), `drop_hitter` (the weakest bench bat — who loses his spot), `audition_hitter` (the best bench bat who can play the named starter's position). Cards r2 and r5 were corrected to use them (r5 used `drop_hitter` for the auditioner, while every other card uses it for the man displaced). The instance keeps `_tokenPlayers` for multi-player actions.
+- **Actions wired:**
+  - `callup_hitter`: the farm's best bat is called up through the transaction ledger (reports next day). If the 28 is full, the weakest bench bat is optioned first.
+  - `sp11_callup` / `sp11b_callup`: spring. The farm player joins camp as a keeper for Opening Day.
+  - `audition_promote`: the bench bat takes the starter's lineup spot.
+  - `move_to_dh`: the fielder moves to DH. The DH (if eligible) or the best bench option takes his spot.
+  - `move_bp_to_rotation`: the reliever becomes a starter; the weakest starter goes to the pen; roles and positions are updated.
+  - `retain_active_*`: in-season extension. `player.pendingContract` takes effect on offseason contract day, with no re-sign card.
+  - `release_active_*`: "let him walk." `player._willWalk` — he plays out the season and leaves as a free agent on contract day.
+- **Team screen:** "extended" / "leaving after season" notes.
+- **Harness:** the simulated GM acts on every registered action and verifies each "yes" did exactly what the card said, immediately (`cardDidIt`). Also checks that in-season extensions take effect in the offseason. The roster canary accepts a spot that is open while its decision deadline is still ahead (§65 design). 8 seeds green; ~50–85 card actions per season across 12 action types.
+
+### 72.1 Next: acquisitions and the rest
+Acquisition cards (`sign_*`, `waiver_dfa`, `sign_dfa`, `dl3_acquire`, `trade_*`, NRI, international/indie scouting) still use flavor names (`{acq_*}`, `{dfa_*}`, `{intl_*}`, `{nri_*}`) that never resolved, so these cards could never be delivered. They need real players bound to them: the free-agent pool or generated players, the waiver wire, and CPU rosters through TradeEngine. Then health (`injurePlayer_*`), org/media, D2 personal leave, and D3 card timing.

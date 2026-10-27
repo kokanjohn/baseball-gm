@@ -530,9 +530,10 @@ export function nextWinTarget(draft) {
 /** The user's active players whose deals are up, with their asking terms. */
 export function userExpiring(draft) {
   const season = draft.seasonNum || 1;
+  // A player extended during the season (§72) or told he can walk is decided.
   return (draft.userTeam.rosterIds || [])
     .map(id => draft.players[id])
-    .filter(p => p && contractIsUp(p, season))
+    .filter(p => p && contractIsUp(p, season) && !p.pendingContract && !p._willWalk)
     .map(p => ({ player: p, terms: p._ask || marketTerms(draft, p) }));
 }
 
@@ -579,7 +580,24 @@ export function contractDay(draft, atMs) {
       events.push(abroad ? departLeague(draft, id, atMs, 'abroad') : releaseToFreeAgency(draft, id, atMs));
     }
   }
+  // In-season decisions (§72): an extension starts now; a player we let go walks.
+  for (const id of [...(draft.userTeam.rosterIds || [])]) {
+    const p = draft.players[id];
+    if (!p) continue;
+    if (p.pendingContract && contractIsUp(p, season)) {
+      applyContract(draft, id, p.pendingContract);
+      p.pendingContract = null;
+      events.push({ type: 'RESIGNED', playerId: id, teamId: 'user', atMs });
+    } else if (p._willWalk && contractIsUp(p, season)) {
+      p._willWalk = false;
+      events.push(releaseToFreeAgency(draft, id, atMs));
+    }
+  }
   for (const { player, terms } of userExpiring(draft)) player._ask = terms;
+  // Anyone else carrying an in-season decision (traded away since) starts clean.
+  for (const p of Object.values(draft.players || {})) {
+    if (p && (p.pendingContract || p._willWalk) && p.teamId !== 'user') { p.pendingContract = null; p._willWalk = false; }
+  }
   return events.filter(Boolean);
 }
 

@@ -61,6 +61,7 @@ import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Development from './DevelopmentEngine.js';
+import { CARD_ACTIONS, cardFeasible } from './CardActions.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
 import { computeOVR } from './PlayerFactory.js';
@@ -714,11 +715,7 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     if (key.startsWith('os:resign:')) return players[c._targetPlayerId]?.teamId !== 'user';
     // §71: a card about one of our players that can no longer apply (he left,
     // got hurt, or is already away) is withdrawn rather than left as a ghost.
-    if (!key && c._targetPlayerId && [c._raw?.onYes, c._raw?.onNo].some(a => a && _needsTarget(a))) {
-      const p = players[c._targetPlayerId];
-      return !p || p.teamId !== 'user' || !(state.userTeam.rosterIds || []).includes(p.id) || p.isInjured || !!p.unavailable
-        || (c._raw?.onYes && PLAYER_ACTIONS.has(c._raw.onYes) && c._raw.onYes !== 'ill2_sick_start' && !_canSpare(state, p.id));
-    }
+    if (!key && CARD_ACTIONS[c._raw?.onYes]) return !cardFeasible(state, c);
     if (c._tradeOffer)               return !_tradeStillValid(state, c);
     return false;
   });
@@ -1470,11 +1467,6 @@ function _createInstance(cardDef, context, state) {
     return null;
   }
 
-  // §71: a card that acts on a player is only delivered when its text names one.
-  // …and only when we can spare him (someone healthy to cover his spot).
-  if ([cardDef.onYes, cardDef.onNo].some(a => a && _needsTarget(a))
-      && (!target.playerId || !_canSpare(state, target.playerId))) return null;
-
   // Money — the SAME draw the text shows. _budgetCost may be a token (charged on
   // yes), a { yes, no } object, or a number; _rawBudgetCostNo is a flat no-cost.
   const costOf = (tok) => (typeof tok === 'number' ? tok : (amountsK[tok] ?? 0));
@@ -1485,7 +1477,7 @@ function _createInstance(cardDef, context, state) {
                       : (typeof cardDef._rawBudgetCostNo === 'number' ? cardDef._rawBudgetCostNo : null);
   const revenueK      = cardDef._revenueToken ? (amountsK[cardDef._revenueToken] ?? null) : null;
 
-  return {
+  const instance = {
     instanceId:       _uuid(),
     cardId:           cardDef.id,
     deliveredAt:      gameIdx,
@@ -1519,8 +1511,13 @@ function _createInstance(cardDef, context, state) {
     _targetRole:      target.role,
     // §71: the number of games the card's text promises (e.g. a suspension).
     _actionGames:     cardDef._gamesToken ? (counts?.[cardDef._gamesToken] ?? null) : null,
+    _tokenPlayers:    tokenPlayers || {},
     _raw:             cardDef,
   };
+  // §71–72: a card whose action can't happen (nobody to cover, wrong player,
+  // no room) is never delivered.
+  if (!cardFeasible(state, instance)) return null;
+  return instance;
 }
 
 /**
@@ -1768,48 +1765,18 @@ function _applyOffseasonAction(action, instance, atMs) {
 // counted in the club's games; training starts a development plan whose
 // outcome varies (DevelopmentEngine).
 
-const PLAYER_ACTIONS = new Set([
-  'rest_active_hitter', 'bench_active_pitcher', 'bench_active_hitter',
-  'train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'ill2_sick_start',
-]);
-
-/** Actions that need the card's player to exist and be ours to act on. */
-function _needsTarget(action) {
-  return PLAYER_ACTIONS.has(action);
-}
-
-function _applyPlayerAction(action, instance, atMs) {
-  const raw = instance._raw || {};
-  const id  = instance._targetPlayerId;
-  const st  = StateManager.get();
-  const p   = st.players[id];
-  if (!p || !(st.userTeam.rosterIds || []).includes(id)) return;
-  // Nobody left to cover him (others went down since the card arrived): the
-  // club can't spare him — he plays.
-  if (action !== 'ill2_sick_start' && !_canSpare(st, id)) return;
-  const sick = raw.tag === 'HEALTH';
+/** Carry out a registered card action (CardActions), then fix the lineup. */
+function _applyCardAction(action, instance, atMs) {
+  const handler = CARD_ACTIONS[action];
+  if (!handler) return;
+  const st = StateManager.get();
+  // Things changed since the card arrived (someone got hurt, the spot is gone):
+  // it can't happen any more.
+  if (!handler.feasible(st, instance)) return;
   StateManager.mutate(s => {
-    switch (action) {
-      case 'rest_active_hitter':
-      case 'bench_active_pitcher':
-      case 'bench_active_hitter': {
-        const reason = raw.tag === 'DISCIPLINE' ? 'suspended' : sick ? 'illness'
-          : action === 'bench_active_hitter' ? 'benched' : 'rest';
-        const games = instance._actionGames || raw._restGames || (action === 'bench_active_hitter' ? 2 : 1);
-        Development.setUnavailable(s, id, { reason, games }, atMs);
-        break;
-      }
-      case 'train_hitter':
-      case 'train_pitcher_sp':
-      case 'train_pitcher_bp':
-        Development.setUnavailable(s, id, { reason: 'training', games: raw._trainGames || 3 }, atMs);
-        Development.startPlan(s, id, { gain: raw._trainGain || 2, focus: raw._trainFocus || null, source: instance.cardId }, atMs);
-        break;
-      case 'ill2_sick_start':
-        Development.setCondition(s, id, { subRating: 'stuff', amount: 5, games: 1, reason: 'sick' });
-        break;
-    }
+    handler.apply(s, instance, atMs);
     applyRosterMutation(s, reconcileRoster(s, 'user'));
+    s.userTeam.finances.payroll = computePayroll(s);
   });
 }
 
@@ -1849,9 +1816,8 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'need_callup',
   'need_defer',
   'need_auto',
-  // §71 player cards
-  'rest_active_hitter', 'bench_active_pitcher', 'bench_active_hitter',
-  'train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'ill2_sick_start',
+  // §71–72 card actions (CardActions registry)
+  ...Object.keys(CARD_ACTIONS),
   // §70 offseason
   'os_owner_accept', 'os_owner_push', 'os_owner_auto',
   'os_resign', 'os_walk', 'os_walk_auto',
@@ -1874,7 +1840,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now() } = {})
   const action = choice === 'yes' ? raw.onYes : choice === 'no' ? raw.onNo : choice === 'auto' ? raw.onAuto : null;
   if (!action) return;
   if (action.startsWith('os_')) { _applyOffseasonAction(action, instance, atMs); return; }
-  if (PLAYER_ACTIONS.has(action)) { _applyPlayerAction(action, instance, atMs); return; }
+  if (CARD_ACTIONS[action]) { _applyCardAction(action, instance, atMs); return; }
 
   const playerId = instance._targetPlayerId || null;
   const reconcileUser = () => {
@@ -2082,27 +2048,6 @@ function _fireFollowup(followup) {
 
 
 
-
-/**
- * _canSpare(state, playerId)
- * Could the club play without him for a few games (§71)? A hitter needs a
- * healthy bench bat to take his spot; a starter needs a fifth healthy starter
- * (rotation or bench); a reliever needs four other healthy arms in the pen.
- */
-function _canSpare(state, playerId) {
-  const u = state.userTeam;
-  const p = state.players[playerId];
-  if (!p) return false;
-  const mine = (u.rosterIds || []).map(id => state.players[id]).filter(x => x && x.id !== playerId && isAvailable(x));
-  if (!['SP', 'RP'].includes(p.pos)) {
-    const starting = new Set((u.lineupSlots || []).map(sl => sl.playerId));
-    return mine.some(x => x.group === PLAYER_GROUP.BENCH_HITTERS && !starting.has(x.id));
-  }
-  if (p.pos === 'SP' && p.group === PLAYER_GROUP.STARTING_PITCHERS) {
-    return mine.filter(x => x.pos === 'SP' && [PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.PITCHER_BENCH].includes(x.group)).length >= 5;
-  }
-  return mine.filter(x => [PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(x.group)).length >= 4;
-}
 
 function _hasBenchSP(state) {
   return (state.userTeam?.rosterIds || []).some(id => {

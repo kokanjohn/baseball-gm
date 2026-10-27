@@ -17,6 +17,7 @@ import { clock, seedRandom } from './shims.js';           // MUST be first (inst
 import * as SM from '../../store/StateManager.js';
 import { startNewGame, tick, commitGame, buildCardContext, advanceClock, gmCallUp } from '../../engine/GameEngine.js';
 import { getRosterNeeds, auditRosters, rankCallupCandidates } from '../../engine/TransactionEngine.js';
+import { CARD_ACTIONS } from '../../engine/CardActions.js';
 import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation } from '../../engine/SimEngine.js';
@@ -82,8 +83,29 @@ function assertNoGhosts(where) {
   const g = ghostCards(SM.get());
   if (g.length) gm.ghostFails.push(`${where}: ${g.map(c => c.cardId).join(',')}`);
 }
-const PLAYER_CARD_ACTIONS = new Set(['rest_active_hitter', 'bench_active_pitcher', 'bench_active_hitter',
-  'train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'ill2_sick_start']);
+const PLAYER_CARD_ACTIONS = new Set(Object.keys(CARD_ACTIONS));
+const AWAY_ACTIONS = new Set(['rest_active_hitter', 'bench_active_pitcher', 'bench_active_hitter',
+  'train_hitter', 'train_pitcher_sp', 'train_pitcher_bp']);
+/** Did the card do what it said? (checked right after a "yes") */
+function cardDidIt(action, c, st) {
+  const u = st.userTeam, p = st.players[c._targetPlayerId];
+  const tp = (r) => st.players[c._tokenPlayers?.[r]];
+  const inLineup = (id) => (u.lineupSlots || []).some(sl => sl.playerId === id);
+  const inRot = (id) => (u.rotation?.order || []).includes(id);
+  if (AWAY_ACTIONS.has(action)) return !!p?.unavailable && !inLineup(p.id) && !inRot(p.id);
+  switch (action) {
+    case 'ill2_sick_start': return !!p?.condition;
+    case 'retain_active_pitcher': case 'retain_active_hitter': return !!p?.pendingContract;
+    case 'release_active_pitcher': case 'release_active_hitter': return !!p?._willWalk;
+    case 'sp11_callup': return !!tp('farm_pitcher')?._isKeeper && u.rosterIds.includes(tp('farm_pitcher').id);
+    case 'sp11b_callup': return !!tp('farm_hitter')?._isKeeper && u.rosterIds.includes(tp('farm_hitter').id);
+    case 'callup_hitter': return (st.transactions || []).some(t => t.status === 'pending' && t.playerId === c._tokenPlayers.prospect_hitter);
+    case 'audition_promote': return inLineup(c._tokenPlayers.audition_hitter);
+    case 'move_to_dh': return (u.lineupSlots || []).find(sl => sl.slot === 'DH')?.playerId === p?.id;
+    case 'move_bp_to_rotation': return inRot(p?.id) && p.group === 'sp';
+    default: return true;
+  }
+}
 function gmActs() {
   // Re-read the inbox after every action: one decision can withdraw others.
   for (let guard = 0; guard < 50; guard++) {
@@ -96,13 +118,7 @@ function gmActs() {
       gm.seen.add(c.instanceId);
       const yes = Math.random() < 0.7;
       resolveCard(c.instanceId, yes ? 'yes' : 'no');
-      if (yes && c._targetPlayerId) {
-        const st = SM.get(), p = st.players[c._targetPlayerId];
-        const away = c._raw.onYes !== 'ill2_sick_start';
-        const inLineup = (st.userTeam.lineupSlots || []).some(sl => sl.playerId === p?.id)
-          || (st.userTeam.rotation?.order || []).includes(p?.id);
-        gm.playerCards.push({ action: c._raw.onYes, ok: !away || (!!p?.unavailable && !inLineup), id: p?.id });
-      }
+      if (yes) gm.playerCards.push({ action: c._raw.onYes, ok: cardDidIt(c._raw.onYes, c, SM.get()), id: c._targetPlayerId });
       continue;
     }
     const isTrade  = !!c._tradeOffer && !c._seed;
@@ -187,7 +203,10 @@ async function runOffseasonChecks() {
   for (const p of Object.values(pre.players)) before[p.id] = { ovr: p.ovr, g: p.stats?.g || 0, careerG: p.careerStats?.g || 0, teamId: p.teamId,
                                                                age: computeAge(p.dob, year1), group: p.group };
   const userWins = pre.userTeam.wins, userLosses = pre.userTeam.losses;
-  const expiringUser = (pre.userTeam.rosterIds || []).filter(id => Offseason.contractIsUp(pre.players[id], pre.seasonNum));
+  // Players extended or let go during the season (§72) were already decided.
+  const expiringUser = (pre.userTeam.rosterIds || []).filter(id => Offseason.contractIsUp(pre.players[id], pre.seasonNum)
+    && !pre.players[id].pendingContract && !pre.players[id]._willWalk);
+  const extendedUser = (pre.userTeam.rosterIds || []).filter(id => pre.players[id].pendingContract);
   const sched1Len = pre.schedule.filter(g => !g.isPlayoff).length;
   const phases = []; let lastPhase = pre.phase; let offseasonAt = null, springAt = null;
   const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0;
@@ -251,6 +270,8 @@ async function runOffseasonChecks() {
         (st.freeAgentPool || []).length === 0 && !Object.values(st.players).some(p => p.group === PLAYER_GROUP.FREE_AGENT));
   check(`offseason: one re-sign card per expiring user player (${resignCards.size}/${expiringUser.filter(id => SM.get().players[id]?.group !== PLAYER_GROUP.RETIRED).length})`,
         expiringUser.filter(id => st.players[id]?.retiredSeason !== 1).every(id => resignCards.has(id)));
+  check(`offseason: in-season extensions take effect (${extendedUser.length})`,
+        extendedUser.every(id => !st.players[id].pendingContract && (st.players[id].teamId !== 'user' || Offseason.yearsLeft(st.players[id], st.seasonNum) >= 1)));
   check('offseason: ownership evaluation card delivered and decided',
         ownershipCard === 1 && (st.userTeam.finances.payrollCapHistory || []).some(h => h.seasonNum === 2));
   check('offseason: every required decision resolved by spring', Offseason.hardGates(st).open.length === 0);
@@ -706,7 +727,10 @@ async function main() {
       check(`game ${idx} (spring): active roster 28–38`, ac >= ROSTER_LIMITS.ACTIVE_TOTAL && ac <= ROSTER_LIMITS.SPRING_TOTAL, `got ${ac}`);
     } else {
       const held = rosterSpotsHeld(post, 'user');
-      check(`game ${idx} (${post.phase}): active + arriving = ${ROSTER_LIMITS.ACTIVE_TOTAL}`, held === ROSTER_LIMITS.ACTIVE_TOTAL,
+      // A spot can be open while its decision deadline is still ahead (§65).
+      const openWithDeadline = held < ROSTER_LIMITS.ACTIVE_TOTAL && post.userTeam.vacancyDeadlineAt > clock.get();
+      check(`game ${idx} (${post.phase}): active + arriving = ${ROSTER_LIMITS.ACTIVE_TOTAL} (or a spot open before its deadline)`,
+            held === ROSTER_LIMITS.ACTIVE_TOTAL || openWithDeadline,
             `active ${ac} + arriving ${held - ac}; dl ${post.userTeam.vacancyDeadlineAt}; farm ${post.userTeam.farmIds.map(id => post.players[id]?.pos).join('')}; phase ${post.phase}; clock ${clock.get()} next ${post.schedule[post.currentGameIndex]?.gameTime}`);
       const cpuBad = post.leagueTeams.filter(t => rosterSpotsHeld(post, t.id) !== ROSTER_LIMITS.ACTIVE_TOTAL);
       check(`game ${idx}: every CPU club active + arriving = 28`, cpuBad.length === 0,
@@ -967,9 +991,8 @@ async function main() {
   {
     const st = SM.get();
     const pc = gm.playerCards;
-    check(`player cards: rest / sick / training / benching cards are delivered and acted on (${pc.length})`, pc.length >= 3,
-          [...new Set(pc.map(x => x.action))].join(','));
-    check('player cards: a "yes" takes the named player out of the lineup / rotation at once',
+    check(`card actions: delivered and acted on (${pc.length}: ${[...new Set(pc.map(x => x.action))].join(',')})`, pc.length >= 3);
+    check('card actions: every "yes" does what the card said, at once',
           pc.every(x => x.ok), pc.filter(x => !x.ok).map(x => x.action).join(','));
     check('player cards: nobody away is ever in the lineup or rotation after a game', gm.awayInLineup.length === 0,
           gm.awayInLineup.slice(0, 5).join(' '));

@@ -28,6 +28,7 @@ import {
 } from '../data/constants.js';
 import { STAFF_NAMES } from '../data/player-names.js';
 import { isAvailable } from './PlayerFactory.js';
+import { eligibleSlotsFor } from './RosterEngine.js';
 import {
   CARD_TOKEN_POOLS,
   CARD_TOKEN_MONEY,
@@ -115,10 +116,14 @@ export function buildTokenMap(cardDef, context, state) {
   const used = new Set();
   const take = (p) => { if (p) used.add(p.id); return p; };
 
-  const activeSP      = take(_pickActivePitcher(state, 'SP', used));
-  const activeBP      = take(_pickActivePitcher(state, 'RP', used));
-  const anyPitcher    = take(_pickAnyActivePitcher(state, used));
-  const activeHitter  = take(_pickActiveHitter(state, used));
+  // A card that only makes sense for certain players picks among them (§72):
+  // an extension demand from a player in his contract year, a reliever with
+  // a starter's stamina, a fielder who could DH, a starter with a bench option.
+  const fit = _cardFit(cardDef, state);
+  const activeSP      = take(_pickActivePitcher(state, 'SP', used, fit.pitcher));
+  const activeBP      = take(_pickActivePitcher(state, 'RP', used, fit.bp || fit.pitcher));
+  const anyPitcher    = take(_pickAnyActivePitcher(state, used, fit.pitcher));
+  const activeHitter  = take(_pickActiveHitter(state, used, fit.hitter));
   const secondHitter  = take(_pickActiveHitter(state, used));
   const thirdHitter   = take(_pickActiveHitter(state, used));
   const veteran       = take(_pickVeteranHitter(state, used));
@@ -144,6 +149,21 @@ export function buildTokenMap(cardDef, context, state) {
   values.bg12_player          = thirdHitter?.name  || values.active_hitter_name;
   values.pl_player_name       = plPlayer?.name || 'One of our players';
 
+  // Roster-move roles (§72): the farm's best bat / arm, the bench bat who'd
+  // lose his spot (drop), and the bench bat who could take the named
+  // starter's place (audition).
+  const prospectHitter = _bestFarm(state, false);
+  const prospectPitcher = _bestFarm(state, true);
+  const dropHitter     = _weakestBenchHitter(state, used);
+  const auditionHitter = _benchAlternative(state, activeHitter, used);
+  _setHitter(values,  'prospect_hitter',  prospectHitter,  'our top prospect');
+  _setPitcher(values, 'prospect_pitcher', prospectPitcher, 'our top pitching prospect');
+  _setHitter(values,  'drop_hitter',      dropHitter,      'our last bench bat');
+  _setHitter(values,  'audition_hitter',  auditionHitter,  'a bench player');
+  for (const [k, pl] of [['prospect_hitter', prospectHitter], ['drop_hitter', dropHitter], ['audition_hitter', auditionHitter]]) {
+    values[`${k}_desc`] = pl ? `${pl.name} (${pl.nativePos || pl.pos}, OVR ${pl.ovr})` : values[`${k}_name`];
+  }
+
   // ── Phrase pools (one pick per token per card) ────────────────────────
   for (const [key, pool] of Object.entries(CARD_TOKEN_POOLS)) {
     if (key === 'person_name') continue;
@@ -158,6 +178,8 @@ export function buildTokenMap(cardDef, context, state) {
     active_catcher: activeCatcher?.id || null, farm_pitcher: farmPitcher?.id || null,
     farm_hitter: farmHitter?.id || null, leader_player: leader?.id || null,
     pl_player: plPlayer?.id || null,
+    prospect_hitter: prospectHitter?.id || null, prospect_pitcher: prospectPitcher?.id || null,
+    drop_hitter: dropHitter?.id || null, audition_hitter: auditionHitter?.id || null,
   };
 
   return { values, amountsK, players, counts };
@@ -279,14 +301,64 @@ function _roster(state, used) {
     .filter(p => p && isAvailable(p) && !used?.has(p.id));
 }
 
-function _pickActivePitcher(state, role, used) {
-  return _pick(_roster(state, used).filter(p => p.pos === role && PITCHER_GROUPS.includes(p.group)));
+const _all = () => true;
+function _pickActivePitcher(state, role, used, ok = _all) {
+  return _pick(_roster(state, used).filter(p => p.pos === role && PITCHER_GROUPS.includes(p.group) && ok(p)));
 }
-function _pickAnyActivePitcher(state, used) {
-  return _pick(_roster(state, used).filter(p => PITCHER_GROUPS.includes(p.group)));
+function _pickAnyActivePitcher(state, used, ok = _all) {
+  return _pick(_roster(state, used).filter(p => PITCHER_GROUPS.includes(p.group) && ok(p)));
 }
-function _pickActiveHitter(state, used) {
-  return _pick(_roster(state, used).filter(p => HITTER_GROUPS.includes(p.group)));
+function _pickActiveHitter(state, used, ok = _all) {
+  return _pick(_roster(state, used).filter(p => HITTER_GROUPS.includes(p.group) && ok(p)));
+}
+
+/** Which players a card can be about (§72). Unflagged cards: anyone. */
+function _cardFit(cardDef, state) {
+  const d = cardDef || {};
+  const u = state.userTeam || {};
+  const season = state.seasonNum || 1;
+  const starting = new Set((u.lineupSlots || []).map(s => s.playerId).filter(Boolean));
+  const out = {};
+  if (d._requiresContractYear) {
+    const ok = (p) => (p.contractExpiry ?? season + 2) - season <= 1 && !p.pendingContract && !p._willWalk
+      && (!d._minRating || (p.ovr || 0) - (state.leagueTalentOffset || 0) >= d._minRating);
+    out.hitter = ok; out.pitcher = ok;
+  }
+  if (d._requiresBPtoSP) out.bp = (p) => p.group === PLAYER_GROUP.BULLPEN && (p.subRatings?.stamina || 0) >= 55;
+  if (d._requiresDHSwap) {
+    const dh = (u.lineupSlots || []).find(s => s.slot === 'DH');
+    out.hitter = (p) => starting.has(p.id) && dh?.playerId !== p.id;
+  }
+  if (d._requiresPositionMatch) {
+    out.hitter = (p) => starting.has(p.id) && !!_benchAlternative(state, p, new Set());
+  }
+  return out;
+}
+
+/** The farm's best healthy player on one side. */
+function _bestFarm(state, pitchers) {
+  return (state.userTeam?.farmIds || []).map(id => state.players?.[id])
+    .filter(p => p && isAvailable(p) && ['SP', 'RP'].includes(p.pos) === pitchers)
+    .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0] || null;
+}
+
+/** The weakest healthy bench bat (not in the lineup). */
+function _weakestBenchHitter(state, used) {
+  const starting = new Set((state.userTeam?.lineupSlots || []).map(s => s.playerId));
+  return _roster(state, used).filter(p => HITTER_GROUPS.includes(p.group) && !starting.has(p.id))
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0] || null;
+}
+
+/** The best healthy bench bat who can play `starter`'s lineup spot. */
+function _benchAlternative(state, starter, used) {
+  if (!starter) return null;
+  const u = state.userTeam || {};
+  const slot = (u.lineupSlots || []).find(s => s.playerId === starter.id)?.slot;
+  if (!slot) return null;
+  const starting = new Set((u.lineupSlots || []).map(s => s.playerId));
+  return _roster(state, used).filter(p => HITTER_GROUPS.includes(p.group) && !starting.has(p.id)
+      && p.id !== starter.id && eligibleSlotsFor(p).includes(slot))
+    .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0] || null;
 }
 function _pickActivePlayer(state, used) {
   return _pick(_roster(state, used).filter(p =>

@@ -697,7 +697,10 @@ function _dayText(ms) {
 /** Between seasons (§70): flag a player whose deal is up — a decision is due. */
 function _contractNote(player) {
   const st = StateManager.get();
-  if (!st?.offseason || player.teamId !== 'user' || !contractIsUp(player, st.seasonNum)) return '';
+  if (player.teamId !== 'user') return '';
+  if (player.pendingContract) return ' · <span class="contract-note">extended</span>';
+  if (player._willWalk) return ' · <span class="contract-note">leaving after season</span>';
+  if (!st?.offseason || !contractIsUp(player, st.seasonNum)) return '';
   return ' · <span class="contract-note">contract up</span>';
 }
 
