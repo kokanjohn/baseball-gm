@@ -66,7 +66,7 @@ import {
 } from './PlayoffEngine.js';
 import { rollGameInjuries, beginInjury, clearInjuryUpdate } from './InjuryEngine.js';
 
-import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
+import { computeOVR, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { STAFF_NAMES } from '../data/player-names.js';
 import {
   generatePlays,
@@ -78,6 +78,7 @@ import * as CardEngine from './CardEngine.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint, evaluateAllStarHostingEligibility } from './PrestigeEngine.js';
 import * as Offseason from './OffseasonEngine.js';
+import * as Development from './DevelopmentEngine.js';
 
 import {
   PHASE,
@@ -670,7 +671,7 @@ function _activateGame(game) {
   // Compute win probability for context (used by SimEngine for variance tuning)
   const healthyRosterIds = (userTeam.rosterIds || []).filter(id => {
     const p = players[id];
-    return p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave;
+    return p && isAvailable(p);
   });
 
   const winProb = computeWinProbability(
@@ -730,7 +731,7 @@ function _silentlyCommitGame(game) {
 
   const healthyIds = (userTeam.rosterIds || []).filter(id => {
     const p = players[id];
-    return p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave;
+    return p && isAvailable(p);
   });
 
   const winProb = computeWinProbability(
@@ -923,6 +924,11 @@ export async function commitGame(gameIndex) {
     // The opponent's rotation turns over too (it used to stand still, so the
     // user always faced the same starter).
     _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent));
+    // §71: players away (rest, illness, training, benched) and playing-hurt
+    // conditions count down one game; whoever is back gets his spot back.
+    Development.countGame(s, 'user');
+    const oppTeam = s.leagueTeams.find(t => t.name === g.opponent);
+    if (oppTeam) Development.countGame(s, oppTeam.id);
 
     // (Trades, arrivals and IL clearances are no longer tied to a commit —
     //  they run on the real-time roster clock: advanceClock(), §65.)
@@ -1814,6 +1820,8 @@ function _finishLeagueGame(date, i) {
     }
     _advanceRotation(home);
     _advanceRotation(away);
+    if (home) Development.countGame(s, home.id);
+    if (away) Development.countGame(s, away.id);
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
     for (const [pid, d] of Object.entries(perGame)) {
       if (s.players[pid]) s.players[pid]._impGameLog = appendGameLog(s.players[pid], s.currentGameIndex || 0, date, d)._impGameLog;
@@ -2245,6 +2253,12 @@ function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
       applied = applyDue(s, atMs, { reconcileAll });
       if (applied.changed || reconcileAll) s.userTeam.finances.payroll = computePayroll(s);
     });
+  }
+  // §71: development increments due on the clock.
+  if (Development.developmentDue(StateManager.get(), atMs)) {
+    let dev = [];
+    StateManager.mutate(s => { dev = Development.applyDevelopment(s, atMs); });
+    applied = { changed: true, events: [...applied.events, ...dev] };
   }
   const cards = CardEngine.syncRosterCards([...extra, ...applied.events], atMs);
   return {

@@ -29,6 +29,7 @@ import {
   FARM_PITCHER_MIN_SP,
   FARM_PITCHER_MIN_RP,
 } from '../data/constants.js';
+import { isAvailable } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // POSITION COMPATIBILITY MAP
@@ -470,7 +471,7 @@ export function checkDepth(state, teamId) {
   // as coverage, otherwise a CRITICAL gap is masked and auto-backfill never fires).
   const activePlayers = rosterIds
     .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended
+    .filter(p => p && isAvailable(p)
                   && p.group !== PLAYER_GROUP.IL
                   && p.group !== PLAYER_GROUP.PRACTICE_SQUAD);
 
@@ -588,7 +589,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     : players[id]?.group;
   const isHealthy = (id) => {
     const p = players[id];
-    return !!p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave;
+    return !!p && isAvailable(p);
   };
   const setPatch = (id, upd) => { patch[id] = { ...(patch[id] || {}), ...upd }; };
   const isP = (p) => ['SP', 'RP'].includes(p?.pos);

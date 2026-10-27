@@ -173,6 +173,11 @@ export function createPlayer(config) {
     isResting:        false,
     isTraining:       false,
     onPersonalLeave:  false,
+    // §71: away from the club for a number of its games — { reason, gamesLeft, since, slot }
+    unavailable:      null,
+    // §71: playing sick / hurt — { subRating, amount, gamesLeft, reason }
+    condition:        null,
+    // §71: development plans in progress live in state.developmentPlans
     onWaivers:        false,
 
     // Injury timeline on the real clock (§65) — null when healthy.
@@ -365,6 +370,16 @@ function _generateDob(ageMin, ageMax, seasonYear) {
 
 function _afterJuly1(month, day) {
   return month > 7 || (month === 7 && day > 1);
+}
+
+/**
+ * isAvailable(player)
+ * The single test for "can play today" (§71): not injured, not suspended, and
+ * not away — resting, sick, at a training program, on leave
+ * (`player.unavailable`, counted down in the club's games).
+ */
+export function isAvailable(player) {
+  return !!player && !player.isInjured && !player.isSuspended && !player.unavailable && !player.onPersonalLeave;
 }
 
 /**

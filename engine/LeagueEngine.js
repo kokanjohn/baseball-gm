@@ -32,7 +32,7 @@ import {
   reconcileRoster,
 } from './RosterEngine.js';
 
-import { computeOVR } from './PlayerFactory.js';
+import { computeOVR, isAvailable } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // CPU GAME SIMULATION
@@ -165,9 +165,9 @@ export function getActivityFeed(state, since) {
 function _teamOvr(team, players) {
   const roster = (team.rosterIds || []).map(id => players[id]).filter(Boolean);
 
-  const hitters  = roster.filter(p => [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS].includes(p.group) && !p.isInjured && !p.isSuspended);
-  const starters = roster.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS && !p.isInjured && !p.isSuspended);
-  const bullpen  = roster.filter(p => p.group === PLAYER_GROUP.BULLPEN && !p.isInjured && !p.isSuspended);
+  const hitters  = roster.filter(p => [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS].includes(p.group) && isAvailable(p));
+  const starters = roster.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS && isAvailable(p));
+  const bullpen  = roster.filter(p => p.group === PLAYER_GROUP.BULLPEN && isAvailable(p));
 
   const avgOvr = arr => arr.length === 0 ? 55 : arr.reduce((s, p) => s + (p.ovr || 55), 0) / arr.length;
 

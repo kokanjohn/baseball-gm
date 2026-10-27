@@ -23,6 +23,7 @@ export const CARD_TOKEN_MONEY = Object.freeze({
   camp_revenue:     { min:  35, max:  90 },
   pipe_repair_cost: { min:  15, max:  40 },
   captain_bonus:    { min:  25, max:  60 },
+  plate_disc_cost:  { min:  10, max:  30 },   // §71 plate-discipline camp
 });
 
 // Broadcast renewal: full market value = rev_amount × this range

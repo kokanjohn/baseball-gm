@@ -68,7 +68,7 @@ import {
   REGION_DEFAULT,
 } from '../data/constants.js';
 
-import { computeOVR } from './PlayerFactory.js';
+import { computeOVR, isAvailable } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -705,7 +705,7 @@ export function liveSituation(revealed, nextPlay = null) {
 export function leagueNorms(teams, players) {
   const sum = { contact: 0, power: 0, speed: 0, stuff: 0, control: 0 };
   let nh = 0, np = 0;
-  const ok = (p) => p && !p.isInjured && !p.isSuspended;
+  const ok = (p) => p && isAvailable(p);
   for (const t of teams || []) {
     for (const sl of t.lineupSlots || []) {
       const p = players[sl.playerId];
@@ -1656,7 +1656,7 @@ function _buildSyntheticCPUTeam(players) {
   // (heuristic: not in user roster — we don't have that info here,
   //  so just grab a reasonable set of players sorted by OVR)
   const allPlayers = Object.values(players).filter(p =>
-    p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave
+    p && isAvailable(p)
   );
 
   // Active hitters carry BENCH_HITTERS under the lineupSlots model (STARTING_HITTERS
@@ -1719,16 +1719,14 @@ function _buildLineup(team, players, isCPU) {
     // New model — read directly from lineupSlots
     starterPlayers = lineupSlots
       .map(s => s.playerId ? players[s.playerId] : null)
-      .filter(p => p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave);
+      .filter(p => p && isAvailable(p));
   } else {
     // Fallback: old saves that haven't migrated yet
     starterPlayers = rosterIds
       .map(id => players[id])
       .filter(p =>
         p &&
-        !p.isInjured &&
-        !p.isSuspended &&
-        !p.onPersonalLeave &&
+        isAvailable(p) &&
         p.group === PLAYER_GROUP.STARTING_HITTERS
       );
   }
@@ -1743,9 +1741,7 @@ function _buildLineup(team, players, isCPU) {
     .map(id => players[id])
     .filter(p =>
       p &&
-      !p.isInjured &&
-      !p.isSuspended &&
-      !p.onPersonalLeave &&
+      isAvailable(p) &&
       p.group === PLAYER_GROUP.BENCH_HITTERS
     )
     .sort((a, b) => b.ovr - a.ovr);
@@ -1757,9 +1753,7 @@ function _buildLineup(team, players, isCPU) {
     .map(id => players[id])
     .filter(p =>
       p &&
-      !p.isInjured &&
-      !p.isSuspended &&
-      !p.onPersonalLeave &&
+      isAvailable(p) &&
       (p.group === PLAYER_GROUP.BULLPEN || p.group === PLAYER_GROUP.PITCHER_BENCH)
     )
     .sort((a, b) => a.ovr - b.ovr);
@@ -1816,7 +1810,7 @@ function _getRotationSP(team, players) {
   }
   const spId = rotation.order[rotation.currentIndex % rotation.order.length];
   const sp   = players[spId];
-  if (!sp || sp.isInjured || sp.isSuspended) {
+  if (!sp || !isAvailable(sp)) {
     return _findHealthySP(team.rosterIds || [], players);
   }
   return { id: spId };
@@ -1830,7 +1824,7 @@ function _getCPUSP(team, players) {
 function _findHealthySP(rosterIds, players) {
   const sp = rosterIds
     .map(id => players[id])
-    .filter(p => p && p.group === PLAYER_GROUP.STARTING_PITCHERS && !p.isInjured && !p.isSuspended)
+    .filter(p => p && p.group === PLAYER_GROUP.STARTING_PITCHERS && isAvailable(p))
     .sort((a, b) => b.ovr - a.ovr)[0];
   return sp ? { id: sp.id } : null;
 }
@@ -1972,7 +1966,7 @@ function _computeTravelFatigue(isHome, consecutiveRoadGames, regionCfg) {
 function _teamOvr(rosterIds, players) {
   const active = rosterIds
     .map(id => players[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended);
+    .filter(p => p && isAvailable(p));
 
   const hitters  = active.filter(p => [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS].includes(p.group));
   const starters = active.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS);
@@ -2031,10 +2025,11 @@ function _gmRelVariance(gmRel) {
 
 function _effectiveSR(player, subRatingKey, baseValue) {
   if (baseValue === null || baseValue === undefined) return 55; // neutral fallback
-  if (player?.injuryPenalty?.subRating === subRatingKey) {
-    return Math.max(40, baseValue - (player.injuryPenalty.amount || 0));
-  }
-  return baseValue;
+  let v = baseValue;
+  if (player?.injuryPenalty?.subRating === subRatingKey) v -= player.injuryPenalty.amount || 0;
+  // §71: playing sick or hurt — a temporary dip for a few games.
+  if (player?.condition?.subRating === subRatingKey) v -= player.condition.amount || 0;
+  return Math.max(40, v);
 }
 
 // ─────────────────────────────────────────────────────────────

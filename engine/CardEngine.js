@@ -60,7 +60,8 @@ import {
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
-import { baseballYear, computeAge } from './PlayerFactory.js';
+import * as Development from './DevelopmentEngine.js';
+import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
 import { computeOVR } from './PlayerFactory.js';
 
@@ -660,6 +661,8 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
         preview: `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) joins the farm system.`,
         body:    `Our farm system was getting thin, so I signed ${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) to a minor-league deal. He's available as a call-up if we need him.`,
       }, ev.atMs)) delivered++;
+    } else if (ev.type === 'DEV_DONE' && ev.teamId === 'user') {
+      if (_deliverDevelopmentReport(ev, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'TRADE_VOIDED') {
       const st = StateManager.get();
       const team = (st.leagueTeams || []).find(t => t.id === ev.tx?.fromTeamId);
@@ -709,6 +712,13 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     // player no longer ours (retired, traded).
     if (key.startsWith('os:fa:'))     return players[c._targetPlayerId]?.group !== PLAYER_GROUP.FREE_AGENT;
     if (key.startsWith('os:resign:')) return players[c._targetPlayerId]?.teamId !== 'user';
+    // §71: a card about one of our players that can no longer apply (he left,
+    // got hurt, or is already away) is withdrawn rather than left as a ghost.
+    if (!key && c._targetPlayerId && [c._raw?.onYes, c._raw?.onNo].some(a => a && _needsTarget(a))) {
+      const p = players[c._targetPlayerId];
+      return !p || p.teamId !== 'user' || !(state.userTeam.rosterIds || []).includes(p.id) || p.isInjured || !!p.unavailable
+        || (c._raw?.onYes && PLAYER_ACTIONS.has(c._raw.onYes) && c._raw.onYes !== 'ill2_sick_start' && !_canSpare(state, p.id));
+    }
     if (c._tradeOffer)               return !_tradeStillValid(state, c);
     return false;
   });
@@ -1434,8 +1444,9 @@ function _createInstance(cardDef, context, state) {
 
   // ONE token map for every field of this card (§60): same player, same
   // sponsor, same dollar amounts in subject, body, labels and outcome messages.
-  const { values, amountsK } = buildTokenMap(cardDef, context, state);
+  const { values, amountsK, players: tokenPlayers, counts } = buildTokenMap(cardDef, context, state);
   const t = (text) => applyTokens(text || '', values);
+  const target = _cardTarget(cardDef, tokenPlayers);
 
   // Select variant body first (Section 34 — LOCKED), then resolve tokens in it.
   // selectCardVariant() returns the default body if no variant condition matches.
@@ -1458,6 +1469,11 @@ function _createInstance(cardDef, context, state) {
                  unresolved.map(([k, v]) => `${k}: ${v.match(/\{[a-z0-9_]+\}/gi).join(' ')}`).join('; '));
     return null;
   }
+
+  // §71: a card that acts on a player is only delivered when its text names one.
+  // …and only when we can spare him (someone healthy to cover his spot).
+  if ([cardDef.onYes, cardDef.onNo].some(a => a && _needsTarget(a))
+      && (!target.playerId || !_canSpare(state, target.playerId))) return null;
 
   // Money — the SAME draw the text shows. _budgetCost may be a token (charged on
   // yes), a { yes, no } object, or a number; _rawBudgetCostNo is a flat no-cost.
@@ -1499,8 +1515,28 @@ function _createInstance(cardDef, context, state) {
     _budgetCostNo:    budgetCostNoK,
     _revenueK:        revenueK,
     _expiredSeason:   state.seasonNum,
+    _targetPlayerId:  target.playerId,
+    _targetRole:      target.role,
+    // §71: the number of games the card's text promises (e.g. a suspension).
+    _actionGames:     cardDef._gamesToken ? (counts?.[cardDef._gamesToken] ?? null) : null,
     _raw:             cardDef,
   };
+}
+
+/**
+ * _cardTarget(cardDef, tokenPlayers)
+ * The player a pool card is about (§71): the first player-role token its text
+ * names. Its action, its OVR effect and its withdrawal all follow that man.
+ */
+const _ROLE_TOKEN = /\{(active_sp|active_bp|active_pitcher|active_hitter|active_catcher|farm_pitcher|farm_hitter|leader_player|act_hi|pl_player|active_farm)_(?:name|pos)?(?:_tr)?\}|\{(act_hi)\}/;
+function _cardTarget(cardDef, tokenPlayers = {}) {
+  const text = [cardDef.subject, cardDef.preview, cardDef.body].filter(Boolean).join(' ');
+  const m = text.match(_ROLE_TOKEN);
+  if (!m) return { role: null, playerId: null };
+  let role = m[1] || m[2];
+  if (role === 'act_hi') role = 'active_hitter';
+  const id = role === 'active_farm' ? (tokenPlayers.farm_hitter || tokenPlayers.farm_pitcher) : tokenPlayers[role];
+  return { role, playerId: id || null };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1518,27 +1554,18 @@ function _applySoftEffects(state, effects, choice, instance) {
   if (effects.ownerTrust !== undefined) state.userTeam.ownerTrust       = clamp((state.userTeam.ownerTrust || 60) + effects.ownerTrust, 0, 100);
   if (effects.manConf    !== undefined) state.userTeam.managerConfidence = clamp((state.userTeam.managerConfidence || 60) + effects.manConf, 0, 100);
 
-  // OVR effect — applies a temporary modifier to a random active player
+  // OVR effect (§71) — on the player the card is about (else one of ours):
+  // a gain is a development plan that lands over time; a loss is a temporary
+  // dip in condition (playing hurt / out of sorts) for a few games.
   if (effects.ovr !== undefined && effects.ovr !== 0) {
     const rosterIds = state.userTeam.rosterIds || [];
-    if (rosterIds.length > 0) {
-      const targetId = rosterIds[Math.floor(Math.random() * rosterIds.length)];
-      const player   = state.players[targetId];
-      if (player) {
-        // Apply as a small permanent sub-rating nudge (±1 per 2 OVR effect)
-        const nudge = Math.round(effects.ovr / 2);
-        const sr    = player.subRatings;
-        if (sr) {
-          const isPitcher  = sr.stuff !== null && sr.stuff !== undefined;
-          const primaryKey = isPitcher ? 'control' : 'contact';
-          if (sr[primaryKey] !== null && sr[primaryKey] !== undefined) {
-            sr[primaryKey] = Math.max(40, Math.min(99, sr[primaryKey] + nudge));
-            // Recompute OVR here — nothing else does (§63: card rating
-            // effects previously never moved player or team rating).
-            player.ovr = computeOVR(sr, player.injuryPenalty || null);
-          }
-        }
-      }
+    const targetId = (instance?._targetPlayerId && rosterIds.includes(instance._targetPlayerId))
+      ? instance._targetPlayerId
+      : rosterIds[Math.floor(Math.random() * rosterIds.length)];
+    if (targetId) {
+      const atMs = Date.now();
+      if (effects.ovr > 0) Development.startPlan(state, targetId, { gain: effects.ovr, source: instance?.cardId || 'card' }, atMs);
+      else Development.setCondition(state, targetId, { amount: Math.abs(effects.ovr) * 2, games: 2 + Math.floor(Math.random() * 4), reason: instance?.cardId || 'card' });
     }
   }
 }
@@ -1734,6 +1761,78 @@ function _applyOffseasonAction(action, instance, atMs) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// PLAYER CARDS — rest, illness, benching, training (§71)
+// ─────────────────────────────────────────────────────────────
+// The card acts on the player its text names (_targetPlayerId). Time away is
+// counted in the club's games; training starts a development plan whose
+// outcome varies (DevelopmentEngine).
+
+const PLAYER_ACTIONS = new Set([
+  'rest_active_hitter', 'bench_active_pitcher', 'bench_active_hitter',
+  'train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'ill2_sick_start',
+]);
+
+/** Actions that need the card's player to exist and be ours to act on. */
+function _needsTarget(action) {
+  return PLAYER_ACTIONS.has(action);
+}
+
+function _applyPlayerAction(action, instance, atMs) {
+  const raw = instance._raw || {};
+  const id  = instance._targetPlayerId;
+  const st  = StateManager.get();
+  const p   = st.players[id];
+  if (!p || !(st.userTeam.rosterIds || []).includes(id)) return;
+  // Nobody left to cover him (others went down since the card arrived): the
+  // club can't spare him — he plays.
+  if (action !== 'ill2_sick_start' && !_canSpare(st, id)) return;
+  const sick = raw.tag === 'HEALTH';
+  StateManager.mutate(s => {
+    switch (action) {
+      case 'rest_active_hitter':
+      case 'bench_active_pitcher':
+      case 'bench_active_hitter': {
+        const reason = raw.tag === 'DISCIPLINE' ? 'suspended' : sick ? 'illness'
+          : action === 'bench_active_hitter' ? 'benched' : 'rest';
+        const games = instance._actionGames || raw._restGames || (action === 'bench_active_hitter' ? 2 : 1);
+        Development.setUnavailable(s, id, { reason, games }, atMs);
+        break;
+      }
+      case 'train_hitter':
+      case 'train_pitcher_sp':
+      case 'train_pitcher_bp':
+        Development.setUnavailable(s, id, { reason: 'training', games: raw._trainGames || 3 }, atMs);
+        Development.startPlan(s, id, { gain: raw._trainGain || 2, focus: raw._trainFocus || null, source: instance.cardId }, atMs);
+        break;
+      case 'ill2_sick_start':
+        Development.setCondition(s, id, { subRating: 'stuff', amount: 5, games: 1, reason: 'sick' });
+        break;
+    }
+    applyRosterMutation(s, reconcileRoster(s, 'user'));
+  });
+}
+
+/** A development plan finished: the coach reports how it went. */
+function _deliverDevelopmentReport(ev, atMs) {
+  const st = StateManager.get();
+  const p  = st.players[ev.playerId];
+  if (!p || ev.teamId !== 'user') return null;
+  const coach = st.userTeam.coachingStaff?.[['SP', 'RP'].includes(p.pos) ? 'pitchingCoach' : 'hittingCoach']?.name || 'Player Development';
+  const r = ev.realized, plan = ev.planned;
+  const verdict = ev.profile === 'flop' || r < plan * 0.4 ? 'It didn\'t take the way we hoped'
+    : r >= plan * 1.15 ? 'It went better than we hoped'
+    : ev.profile === 'quick' ? 'It clicked right away'
+    : ev.profile === 'slow' ? 'It took a while, but it came'
+    : 'Steady progress, about what we expected';
+  return _deliverNotice(`dev:${ev.planId}`, {
+    sender: coach, avatar: '🏋️', tag: 'TRAINING', type: r >= plan * 0.8 ? 'good' : 'normal',
+    subject: `${p.name} — development update`,
+    preview: `${verdict}. Now OVR ${p.ovr}.`,
+    body: `${verdict} with ${_who(p)}. The work is done for now — he's at OVR ${p.ovr}.`,
+  }, atMs);
+}
+
 export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'il_return_activate',
   'il_return_waive',
@@ -1750,6 +1849,9 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'need_callup',
   'need_defer',
   'need_auto',
+  // §71 player cards
+  'rest_active_hitter', 'bench_active_pitcher', 'bench_active_hitter',
+  'train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'ill2_sick_start',
   // §70 offseason
   'os_owner_accept', 'os_owner_push', 'os_owner_auto',
   'os_resign', 'os_walk', 'os_walk_auto',
@@ -1772,6 +1874,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now() } = {})
   const action = choice === 'yes' ? raw.onYes : choice === 'no' ? raw.onNo : choice === 'auto' ? raw.onAuto : null;
   if (!action) return;
   if (action.startsWith('os_')) { _applyOffseasonAction(action, instance, atMs); return; }
+  if (PLAYER_ACTIONS.has(action)) { _applyPlayerAction(action, instance, atMs); return; }
 
   const playerId = instance._targetPlayerId || null;
   const reconcileUser = () => {
@@ -1979,6 +2082,27 @@ function _fireFollowup(followup) {
 
 
 
+
+/**
+ * _canSpare(state, playerId)
+ * Could the club play without him for a few games (§71)? A hitter needs a
+ * healthy bench bat to take his spot; a starter needs a fifth healthy starter
+ * (rotation or bench); a reliever needs four other healthy arms in the pen.
+ */
+function _canSpare(state, playerId) {
+  const u = state.userTeam;
+  const p = state.players[playerId];
+  if (!p) return false;
+  const mine = (u.rosterIds || []).map(id => state.players[id]).filter(x => x && x.id !== playerId && isAvailable(x));
+  if (!['SP', 'RP'].includes(p.pos)) {
+    const starting = new Set((u.lineupSlots || []).map(sl => sl.playerId));
+    return mine.some(x => x.group === PLAYER_GROUP.BENCH_HITTERS && !starting.has(x.id));
+  }
+  if (p.pos === 'SP' && p.group === PLAYER_GROUP.STARTING_PITCHERS) {
+    return mine.filter(x => x.pos === 'SP' && [PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.PITCHER_BENCH].includes(x.group)).length >= 5;
+  }
+  return mine.filter(x => [PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(x.group)).length >= 4;
+}
 
 function _hasBenchSP(state) {
   return (state.userTeam?.rosterIds || []).some(id => {

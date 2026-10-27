@@ -27,8 +27,9 @@
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
-import { baseballYear } from '../../engine/PlayerFactory.js';
+import { baseballYear, isAvailable } from '../../engine/PlayerFactory.js';
 import { contractIsUp } from '../../engine/OffseasonEngine.js';
+import { developmentStatus } from '../../engine/DevelopmentEngine.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
@@ -109,14 +110,14 @@ function _calcRopt(state) {
   // both already starting.
   const starterIdSet = new Set(lineupSlots.map(s => s.playerId).filter(Boolean));
   const benchH     = rosterIds.map(id => players[id]).filter(p =>
-    p && p.group === PLAYER_GROUP.BENCH_HITTERS && !p.isInjured && !p.isSuspended
+    p && p.group === PLAYER_GROUP.BENCH_HITTERS && isAvailable(p)
     && !starterIdSet.has(p.id));
   const rotation   = rosterIds.map(id => players[id]).filter(p =>
     p && p.group === PLAYER_GROUP.STARTING_PITCHERS);
   const bullpen    = rosterIds.map(id => players[id]).filter(p =>
     p && p.group === PLAYER_GROUP.BULLPEN);
   const benchP     = rosterIds.map(id => players[id]).filter(p =>
-    p && p.group === PLAYER_GROUP.PITCHER_BENCH && !p.isInjured && !p.isSuspended);
+    p && p.group === PLAYER_GROUP.PITCHER_BENCH && isAvailable(p));
   const benchSP    = benchP.filter(p => p.pos === 'SP');
   const benchRP    = benchP.filter(p => p.pos === 'RP');
 
@@ -424,11 +425,11 @@ function _renderHitterRow(player, imp, role, slot, gameIdx, isSpring = false, al
     : '';
 
   let swapBtn = '';
-  if (!player.isInjured && !player.isSuspended) {
+  if (isAvailable(player)) {
     if (role === 'starter') {
       // Bench button: disabled if no bench player is eligible for this slot
       const bench = rosterIds.map(id => allPlayers[id])
-        .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS && !p.isInjured && !p.isSuspended);
+        .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS && isAvailable(p));
       const hasReplacement = bench.some(b => _eligibleSlots(b).includes(slotLabel));
       swapBtn = `<button class="swap-btn demote" data-swap="${player.id}" data-role="starter"${hasReplacement ? '' : ' disabled title="No eligible bench player"'}>Bench</button>`;
     } else if (role === 'bench') {
@@ -515,13 +516,13 @@ function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [],
     : '';
 
   let swapBtn = '';
-  if (!player.isInjured && !player.isSuspended) {
+  if (isAvailable(player)) {
     if (role === 'rotation' || role === 'bullpen') {
       // Bench button disabled if no pitcher bench player of same type exists
       const sameType = role === 'rotation' ? 'SP' : 'RP';
       const benchPool = rosterIds.map(id => allPlayers[id])
         .filter(p => p && p.group === PLAYER_GROUP.PITCHER_BENCH
-          && p.pos === sameType && !p.isInjured && !p.isSuspended);
+          && p.pos === sameType && isAvailable(p));
       const disabled = benchPool.length === 0 ? ' disabled title="No bench pitcher available"' : '';
       swapBtn = `<button class="swap-btn demote" data-swap="${player.id}" data-role="${role}"${disabled}>Bench</button>`;
     } else if (role === 'pbench') {
@@ -942,7 +943,7 @@ function _attachListeners(state) {
       const slotIdx    = lineupSlots.findIndex(ls => ls.slot === slotLabel && !ls.playerId);
       const bench      = (s.userTeam.rosterIds || []).map(id => s.players[id])
         .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS
-          && !p.isInjured && !p.isSuspended
+          && isAvailable(p)
           && _eligibleSlots(p).includes(slotLabel))
         .sort((a, b) => a.ovr - b.ovr);
       if (bench.length === 0) {
@@ -1020,7 +1021,7 @@ async function _handleCallUp(playerId, state) {
 async function _handleSwap(playerId, role, state) {
   const player = state.players[playerId];
   if (!player) return;
-  if (player.isInjured || player.isSuspended) {
+  if (!isAvailable(player)) {
     App.showToast(`${player.name} can't be moved right now.`, 'negative');
     return;
   }
@@ -1074,7 +1075,7 @@ async function _handleSwap(playerId, role, state) {
 
     const bench = rosterIds.map(id => players[id])
       .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS
-        && !p.isInjured && !p.isSuspended
+        && isAvailable(p)
         && _eligibleSlots(p).includes(slotLabel));
 
     if (bench.length === 0) {
@@ -1120,7 +1121,7 @@ async function _handleSwap(playerId, role, state) {
     const isSP   = player.pos === 'SP';
     const benchP = rosterIds.map(id => players[id])
       .filter(p => p && p.group === PLAYER_GROUP.PITCHER_BENCH
-        && p.pos === player.pos && !p.isInjured && !p.isSuspended);
+        && p.pos === player.pos && isAvailable(p));
 
     if (benchP.length === 0) {
       App.showToast('No bench pitcher available.', 'negative');
@@ -1293,6 +1294,12 @@ function _playerStatusEl(player) {
   if (st === 'dtd')        return '<div class="player-status status-il" title="Day-to-day">DTD</div>';
   if (player.isInjured)   return '<div class="player-status status-il">IL</div>';
   if (player.isSuspended) return '<div class="player-status status-inactive">Susp</div>';
+  // §71: away for a few games — rest, illness, training, benched, leave.
+  const away = player.unavailable;
+  if (away) {
+    const label = { rest: 'Rest', illness: 'Sick', training: 'Train', benched: 'Sat', suspended: 'Susp', leave: 'Leave' }[away.reason] || 'Away';
+    return `<div class="player-status status-inactive" title="${label} — ${away.gamesLeft} game${away.gamesLeft === 1 ? '' : 's'}">${label} ${away.gamesLeft}</div>`;
+  }
   if (player.group === PLAYER_GROUP.STARTING_HITTERS || player.group === PLAYER_GROUP.STARTING_PITCHERS) {
     return '<div class="player-status status-active">Active</div>';
   }
@@ -1302,8 +1309,10 @@ function _playerStatusEl(player) {
 function _dotIndicator(player) {
   if (player._isNewAcquisition) return '<span class="new-player-dot" title="New"></span>';
   if (player.isSuspended)       return '<span class="suspended-dot" title="Suspended"></span>';
-  if (player._isResting)        return '<span class="resting-dot" title="Resting"></span>';
-  if (player._isOnLeave)        return '<span class="leave-dot" title="Personal Leave"></span>';
+  if (player.condition)         return '<span class="suspended-dot" title="Playing through it"></span>';
+  // §71: development in progress — a small arrow with what has landed so far.
+  const dev = developmentStatus(StateManager.get(), player.id);
+  if (dev.active) return `<span class="dev-arrow" title="In development">▲${dev.appliedActive >= 0.5 ? Math.round(dev.appliedActive) : ''}</span>`;
   return '';
 }
 
@@ -1406,6 +1415,7 @@ function _injectCSS() {
     .pending-tag.out{color:var(--muted);}
     .oop-note{color:var(--danger);}
     .contract-note{color:var(--warning, #f5a524);font-weight:600;}
+    .dev-arrow{font-size:9px;font-weight:800;color:var(--success, #22c55e);margin-left:4px;}
     .player-pos-badge.oop{border-color:var(--danger);color:var(--danger);}
     .swap-btn.full{opacity:.45;}
     .vacancy-row{border:1.5px dashed var(--border);border-radius:8px;margin:4px 12px;

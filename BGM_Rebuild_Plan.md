@@ -6549,3 +6549,21 @@ Closes §64 **A1 (season-to-season)**. User decisions: **unsigned players mostly
 ### 70.1 Open / next
 - §23.3 offseason push cadence (one daily summary push instead of per-card pushes) not yet done.
 - A Free Agents view (League tab) beyond the inbox cards.
+
+---
+
+## 71. r65 — Card actions, part 1: player availability & development (Session 8, Batch 3)
+User decision: **ratings gains are gradual and varied — sometimes an immediate bump, other times slower.**
+
+- **One availability test.** `PlayerFactory.isAvailable(p)` (not injured, suspended, or away) replaces ~30 ad-hoc checks across SimEngine, RosterEngine, GameEngine, LeagueEngine, TradeEngine, CardTokens and the Team screen (several missed personal leave).
+- **`engine/DevelopmentEngine.js` (pure).**
+  - *Availability:* `player.unavailable = { reason: rest|illness|training|benched|suspended|leave, gamesLeft, slot, rotationIndex }`, counted down after each of the club's games (`countGame`, user and CPU); when it ends he gets his lineup spot / rotation turn back.
+  - *Condition:* `player.condition = { subRating, amount, gamesLeft }` — playing sick or hurt; the sim applies it through `_effectiveSR` alongside injury penalties.
+  - *Development plans* (`state.developmentPlans`): each plan rolls an outcome — quick (20%: most the next day), gradual (55%: over 1–3 weeks), slow (15%: starts after 10–20 days), flop (10%: a fraction). Size × age (1.3 ≤24 … 0.4 at 34+), × trait (young gun, volatile/consistent spread), × the hitting/pitching coach relationship. Increments land on the clock (GameEngine roster step); an injury pauses the plan; a player not getting into games has each increment wait a day (up to 3). Gains spread over the focus skills by OVR weight. A finished plan sends a coach report card.
+- **Cards act on the player they name.** `buildTokenMap` now returns which player each role token picked; `_createInstance` binds `_targetPlayerId` from the first player token in the card's text. Card OVR effects land on that player: a gain is a development plan, a loss is a temporary condition dip for 2–5 games (they used to nudge a random player's rating permanently). Suspension cards carry their game count (`_gamesToken` → the same number the text shows).
+- **Actions wired:** `rest_active_hitter`, `bench_active_pitcher`, `bench_active_hitter` (rest / illness / benched / suspended by tag), `train_hitter`, `train_pitcher_sp`, `train_pitcher_bp` (away N games + development plan), `ill2_sick_start` (starts sick: −5 stuff for one game). A player card is only delivered — and stays in the inbox — while the club can spare him (`_canSpare`: a healthy bench bat; five healthy starters; four other relievers) and he is ours, healthy and not already away.
+- **UI.** Team screen status chip "Rest 1 / Sick 2 / Train 3 / Sat 2 / Susp 4"; ▲ development marker (with OVR landed so far).
+- **Harness.** The simulated GM acts on player cards; checks: cards delivered and acted on (~50/season), a "yes" takes the named player out of lineup/rotation at once, nobody away is ever in the lineup/rotation after a game, every absence ends, plans complete with exactly their realized gain, outcomes vary.
+
+### 71.1 Remaining card-action families
+Roster moves (call-ups incl. spring, audition, move to DH, bullpen → rotation, in-season extension/release), acquisitions (sign_*, waiver/DFA claims, trade_* cards — need acquisition tokens bound to real players), health (`injurePlayer_*`), org/media (scouting trips, media boost/suppress, crew/mascot/PA illness), then D2 personal leave and D3 pre-game / in-game card timing.

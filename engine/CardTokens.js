@@ -27,6 +27,7 @@ import {
   PHASE,
 } from '../data/constants.js';
 import { STAFF_NAMES } from '../data/player-names.js';
+import { isAvailable } from './PlayerFactory.js';
 import {
   CARD_TOKEN_POOLS,
   CARD_TOKEN_MONEY,
@@ -74,6 +75,9 @@ export function buildTokenMap(cardDef, context, state) {
   values.broadcast_market   = formatK(market);
   values.broadcast_gap      = formatK(amountsK.broadcast_gap);
   values.payroll_count      = String(_randInt(2, 6));
+  // Game counts a card's action uses (§71) — the text and the absence agree.
+  const counts = { susp_hitter_games: _randInt(2, 5), susp_pitcher_games: _randInt(3, 7) };
+  for (const [k, v] of Object.entries(counts)) values[k] = String(v);
 
   // ── Staff and front office ─────────────────────────────────────────────
   values.manager_name        = staff.manager?.name       || 'The manager';
@@ -146,7 +150,17 @@ export function buildTokenMap(cardDef, context, state) {
     values[key] = _pick(pool) ?? '';
   }
 
-  return { values, amountsK };
+  // Which player each role token names (§71) — a card's action acts on the
+  // same man its text is about.
+  const players = {
+    active_sp: activeSP?.id || null, active_bp: activeBP?.id || null,
+    active_pitcher: anyPitcher?.id || null, active_hitter: activeHitter?.id || null,
+    active_catcher: activeCatcher?.id || null, farm_pitcher: farmPitcher?.id || null,
+    farm_hitter: farmHitter?.id || null, leader_player: leader?.id || null,
+    pl_player: plPlayer?.id || null,
+  };
+
+  return { values, amountsK, players, counts };
 }
 
 /**
@@ -262,7 +276,7 @@ const HITTER_GROUPS  = [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTER
 function _roster(state, used) {
   return (state.userTeam?.rosterIds || [])
     .map(id => state.players?.[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave && !used?.has(p.id));
+    .filter(p => p && isAvailable(p) && !used?.has(p.id));
 }
 
 function _pickActivePitcher(state, role, used) {

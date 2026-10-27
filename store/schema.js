@@ -260,6 +260,12 @@ export function createGameState(config = {}) {
     // only code that carries them out.
     transactions: [],
 
+    // ── Player development plans (§71) ─────────────────────────
+    // { id, playerId, source, keys, profile: 'quick'|'gradual'|'slow'|'flop',
+    //   planned, realized, applied, steps: [{ atMs, amount, done }], status }
+    // DevelopmentEngine.applyDevelopment lands increments on the clock.
+    developmentPlans: [],
+
     // ── Trade cooldowns ────────────────────────────────────
     // { [teamId]: gameIndex } — 15-game cooldown after declined offer
     _tradeDeclinedAt: {},

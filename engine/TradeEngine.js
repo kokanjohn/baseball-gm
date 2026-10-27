@@ -23,7 +23,7 @@ import {
   TRADE_CASH_ENABLED,
 } from '../data/constants.js';
 
-import { computeAge, baseballYear } from './PlayerFactory.js';
+import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // TRADE VALUE CALCULATION
@@ -203,7 +203,7 @@ function _assessDepthImpact(outgoing, incoming, state) {
   // Check if outgoing player is irreplaceable at their position
   const userRoster = state.userTeam.rosterIds
     .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended);
+    .filter(p => p && isAvailable(p));
 
   for (const player of outgoing) {
     const pos      = player.nativePos || player.pos;
@@ -439,7 +439,7 @@ function _isRentalPlayer(player, state) {
 function _identifyCPUNeed(team, state) {
   const roster = (team.rosterIds || [])
     .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended);
+    .filter(p => p && isAvailable(p));
 
   // Find weakest position group by average OVR
   const groups = {
@@ -483,7 +483,7 @@ function _assembleCPUOffer(team, target, state, gmRel, isDeadlineWindow) {
   const targetValue = _playerValue(target, state);
   const roster      = (team.rosterIds || [])
     .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended);
+    .filter(p => p && isAvailable(p));
 
   // Find tradeable CPU players — bench/final-year players, or 15% chance of any
   const tradeable = roster.filter(p => {

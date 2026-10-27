@@ -58,7 +58,7 @@ const summarize = () => {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [] };
+const gm = { seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -82,12 +82,29 @@ function assertNoGhosts(where) {
   const g = ghostCards(SM.get());
   if (g.length) gm.ghostFails.push(`${where}: ${g.map(c => c.cardId).join(',')}`);
 }
+const PLAYER_CARD_ACTIONS = new Set(['rest_active_hitter', 'bench_active_pitcher', 'bench_active_hitter',
+  'train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'ill2_sick_start']);
 function gmActs() {
   // Re-read the inbox after every action: one decision can withdraw others.
   for (let guard = 0; guard < 50; guard++) {
     const c = getInbox().find(x => !gm.seen.has(x.instanceId)
-      && (x.autoResolve === 'roster' || !!x._rosterKey || (!!x._tradeOffer && !x._seed)));
+      && (x.autoResolve === 'roster' || !!x._rosterKey || (!!x._tradeOffer && !x._seed)
+          || PLAYER_CARD_ACTIONS.has(x._raw?.onYes)));
     if (!c) break;
+    // §71 player cards: the action lands on the player the card names.
+    if (PLAYER_CARD_ACTIONS.has(c._raw?.onYes)) {
+      gm.seen.add(c.instanceId);
+      const yes = Math.random() < 0.7;
+      resolveCard(c.instanceId, yes ? 'yes' : 'no');
+      if (yes && c._targetPlayerId) {
+        const st = SM.get(), p = st.players[c._targetPlayerId];
+        const away = c._raw.onYes !== 'ill2_sick_start';
+        const inLineup = (st.userTeam.lineupSlots || []).some(sl => sl.playerId === p?.id)
+          || (st.userTeam.rotation?.order || []).includes(p?.id);
+        gm.playerCards.push({ action: c._raw.onYes, ok: !away || (!!p?.unavailable && !inLineup), id: p?.id });
+      }
+      continue;
+    }
     const isTrade  = !!c._tradeOffer && !c._seed;
     gm.seen.add(c.instanceId);
     if (c.autoResolve === 'skip') { resolveCard(c.instanceId, 'yes'); continue; }   // notices
@@ -626,6 +643,13 @@ async function main() {
 
     await commitGame(idx);
     releaseDueCards();   // the App's next tick
+    {
+      // §71: nobody away (rest / sick / training / benched) is in the lineup or rotation.
+      const st = SM.get();
+      const awayIds = [...(st.userTeam.lineupSlots || []).map(sl => sl.playerId), ...(st.userTeam.rotation?.order || [])]
+        .filter(id => id && st.players[id]?.unavailable);
+      if (awayIds.length) gm.awayInLineup.push(`g${idx}:${awayIds.map(id => st.players[id].name).join('/')}`);
+    }
     const post = SM.get();
     const g = post.schedule[idx];
     check(`game ${idx} committed (result+score)`,
@@ -937,6 +961,29 @@ async function main() {
     const starters = new Set(st.schedule.filter(g => !g.isSpring && g.boxScore)
       .map(g => (g.boxScore.userIsHome ? g.boxScore.away : g.boxScore.home).pitchers[0]?.id));
     check(`league: opponents' rotations turn over (${starters.size} different starters faced)`, starters.size >= 20);
+  }
+
+  // ── §71: player cards and development ──────────────────────────
+  {
+    const st = SM.get();
+    const pc = gm.playerCards;
+    check(`player cards: rest / sick / training / benching cards are delivered and acted on (${pc.length})`, pc.length >= 3,
+          [...new Set(pc.map(x => x.action))].join(','));
+    check('player cards: a "yes" takes the named player out of the lineup / rotation at once',
+          pc.every(x => x.ok), pc.filter(x => !x.ok).map(x => x.action).join(','));
+    check('player cards: nobody away is ever in the lineup or rotation after a game', gm.awayInLineup.length === 0,
+          gm.awayInLineup.slice(0, 5).join(' '));
+    const stale = Object.values(st.players).filter(p => p.unavailable && !(p.unavailable.gamesLeft > 0));
+    check('player cards: every absence ends (games counted down)', stale.length === 0, stale.length);
+    const plans = st.developmentPlans || [];
+    const done = plans.filter(x => x.status === 'done');
+    check(`development: plans start and complete on the clock (${plans.length} plans, ${done.length} done)`,
+          plans.length === 0 || done.length >= 1 || plans.every(x => x.createdAt > clock.get() - 21 * 86_400_000));
+    check('development: every finished plan landed exactly its realized gain',
+          done.every(x => Math.abs(x.applied - x.realized) <= 0.15),
+          done.filter(x => Math.abs(x.applied - x.realized) > 0.15).map(x => `${x.applied}/${x.realized}`).join(','));
+    check(`development: outcomes vary (${[...new Set(done.map(x => x.profile))].join(',') || 'none yet'})`,
+          done.length < 4 || new Set(done.map(x => x.profile)).size >= 2);
   }
 
   // If we simulated the entire regular season, the playoffs must have started
