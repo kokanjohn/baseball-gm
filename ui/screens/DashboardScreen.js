@@ -29,6 +29,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
 import { accumulateBox } from '../../engine/SimEngine.js';
 import { renderBoxScore } from '../components/BoxScore.js';
+import { renderLeagueLiveRow, wireLeagueGameTaps } from '../components/LiveGame.js';
 import { GAME_STATUS, PLAYER_GROUP } from '../../data/constants.js';
 import {
   formatRecord, formatStreak, formatDate, metricBarColor, computeRosterOvr,
@@ -71,6 +72,10 @@ export function mount() {
   wire('roster:changed',    () => refresh());
   wire('app:ready',         () => refresh());
 
+  // League games in progress (§67): the small cards update on the same
+  // 5-second cadence as the app tick, without re-rendering the dashboard.
+  _leagueTimer = setInterval(_refreshLeagueRow, 5000);
+
   // Android Chrome throttles setInterval when the tab/app is in the background.
   // When the user returns to the app or navigates back to the dashboard tab,
   // restart the countdown so it immediately shows the correct remaining time.
@@ -93,6 +98,8 @@ export function mount() {
 export function unmount() {
   _listeners.forEach(({ event, handler }) => EventBus.off(event, handler));
   _listeners = [];
+  clearInterval(_leagueTimer);
+  _leagueTimer = null;
   _stopCountdown();
   if (_visibilityHandler) {
     document.removeEventListener('visibilitychange', _visibilityHandler);
@@ -589,6 +596,7 @@ function _renderDashboard(state) {
 
     <div class="advance-section">
       ${_renderGameArea(nextGame, state)}
+      <div id="dash-league-live">${renderLeagueLiveRow(state)}</div>
     </div>
 
     ${gamesPlayed >= 3 ? _renderHotColdStrip(state) : ''}
@@ -911,6 +919,7 @@ function _renderBoxScore(ds, game, state) {
       awayOrder:  game.liveLineups?.away || [],
       homeOrder:  game.liveLineups?.home || [],
       userIsHome: !!game.isHome,
+      homeIds:    game.liveLineups?.homeIds || null,
     });
   }
   if (!box || !box.away || !box.home) {
@@ -1149,7 +1158,17 @@ function _openGameLogModal(state, filter) {
 // EVENT LISTENERS
 // ─────────────────────────────────────────────────────────────
 
+let _leagueTimer = null;
+function _refreshLeagueRow() {
+  const el = document.getElementById('dash-league-live');
+  const st = StateManager.get();
+  if (!el || !st) return;
+  el.innerHTML = renderLeagueLiveRow(st);
+  wireLeagueGameTaps(el);
+}
+
 function _attachListeners(state) {
+  wireLeagueGameTaps(document.getElementById('dash-league-live'));
   document.getElementById('dash-wins-card')?.addEventListener('click', () => {
     App.playClick();
     _openGameLogModal(state, 'wins');

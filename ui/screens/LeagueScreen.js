@@ -575,7 +575,7 @@ function _playerStatVal(player, key) {
       return ip > 0 ? `${Math.floor(ip)}.${Math.round((ip % 1) * 3)}` : '—';
     }
     case 'bb':   return String(s.bb  || 0);
-    case 'svhd': return String((s.sv || 0) + (s.hd || 0));
+    case 'svhd': return String((s.sv || 0) + (s.hld || 0));
     case 'w':    return String(s.w   || s.wins || 0);
     case 'k':    return String(s.k   || 0);
     case 'sv':   return String(s.sv  || 0);
@@ -611,7 +611,7 @@ function _sortVal(player, col) {
     case 'era':  return s.outs > 0 ? (s.er||0)/(s.outs/3)*9 : s.ip ? (s.er||0)/s.ip*9 : 99;
     case 'ip':   return s.outs ? s.outs/3 : s.ip || 0;
     case 'bb':   return s.bb   || 0;
-    case 'svhd': return (s.sv || 0) + (s.hd || 0);
+    case 'svhd': return (s.sv || 0) + (s.hld || 0);
     case 'w':    return s.w    || s.wins || 0;
     case 'k':    return s.k    || 0;
     case 'sv':   return s.sv   || 0;

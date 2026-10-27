@@ -1111,7 +1111,7 @@ export const SCHEDULE_MIN_TEAMS_PLAYING_PER_DAY = 4;
 // (≈0.10), pitchers ~50% instead of ~30%.
 export const INJURY_PROB_HITTER_PER_GAME   = 0.0055; // 0.55% per game
 export const INJURY_PROB_SP_PER_START      = 0.020;  // 2.0% per start
-export const INJURY_PROB_RP_PER_APP        = 0.010;  // 1.0% per appearance
+export const INJURY_PROB_RP_PER_APP        = 0.008;  // 0.8% per appearance (r61: real CPU box scores add relief outings)
 
 // Age modifiers (additive)
 export const INJURY_AGE_MOD_32_34          = 0.003;  // +0.3% age 32-34

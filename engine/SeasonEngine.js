@@ -35,403 +35,254 @@ const MS_PER_DAY = 86_400_000;
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_MINUTE = 60_000;
 
-// Series lengths — user schedule is generated as series blocks
-const SERIES_LENGTHS = [2, 3, 3, 4]; // weighted toward 3-game series
-const SERIES_WEIGHTS = [0.15, 0.55, 0.20, 0.10]; // cumulative
-
-// Spring training: starts ~March 21, 10 games over ~13 days with off days.
-// Last spring game lands ~March 30-31, leaving 1 day before April 1 Opening Day.
-const SPRING_START_MONTH = 2;  // March (0-indexed = 2)
-const SPRING_START_DAY   = 14; // March 14 anchor, rolled to nearest Monday (~Mar 14-16)
-// 10 games + 3 off days = 13 calendar days → ends ~Mar 26-28, before April 1
+// Canonical (display) spring start: March 14.
+const SPRING_START_MONTH = 2;  // March (0-indexed)
+const SPRING_START_DAY   = 14;
 
 // ─────────────────────────────────────────────────────────────
-// USER SCHEDULE GENERATION
+// ONE LEAGUE CALENDAR (§67)
 // ─────────────────────────────────────────────────────────────
+
+// Real-world gap from the first spring game to Opening Day (spring is 10
+// games over 13 days, then a short break).
+const SPRING_TO_SEASON_GAP_DAYS = 18;
+const SPRING_OFF_DAYS           = new Set([2, 5, 8]);
+const ALL_STAR_BREAK_DAYS       = 4;
 
 /**
- * generateUserSchedule(seasonNum, leagueTeams, startDateOverride?)
- * Generates the full user team schedule for one season:
- *   - 10 spring training games (mid-March, with off days, ends ~Mar 30)
- *   - 132 regular season games (April 1 start)
+ * generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride?, opts?)
+ * The whole league's season on ONE calendar — the user is one of ten teams.
  *
- * Returns an array of GameObjects sorted chronologically.
- * All timestamps are real-world Unix ms.
+ *   Spring:  10 games each, every team plays every spring day (off days 3, 6, 9).
+ *   Season:  46 series rounds; every team plays in every round, so every team
+ *            plays exactly REGULAR_SEASON_GAME_COUNT games. Division-weighted
+ *            (user decision, §67): ~6 series (~17 games) vs each division
+ *            rival, ~4 (~13) vs each club in the other division. Series are
+ *            2–3 games; every other round is staggered so each team gets an
+ *            off day and at least four teams play every day. The All-Star
+ *            break falls exactly after game ALL_STAR_BREAK_AFTER_GAME.
+ *   Times:   GAME_TIMES_BY_DOW for the real weekday; first spring day 1:05 PM.
  *
- * startDateOverride: optional Date object. When provided (e.g. from startNewGame),
- * the schedule anchors to this date rather than the canonical calendar date for
- * seasonNum. This ensures a newly created team's first game is always in the future
- * regardless of what time of year the user starts playing.
+ * Real (gameTime) and display (game.date) calendars share one day offset, so
+ * the user's games and the CPU slate always line up.
  *
  * @param {Number}   seasonNum
- * @param {Object[]} leagueTeams  — LEAGUE_TEAMS array from state
- * @param {Date}     [startDateOverride]  — optional anchor date for first spring game
- * @returns {Object[]} schedule
+ * @param {Object[]} leagueTeams  — { id, name, divisionId }
+ * @param {Date}     [startDateOverride] — real date of the first spring game
+ * @param {Object}   [opts]       — { userDivisionId = 'A' }
+ * @returns {{ schedule: Object[], leagueSchedule: { dayMap } }}
  */
-export function generateUserSchedule(seasonNum, leagueTeams, startDateOverride) {
-  const year        = _seasonYear(seasonNum);
+export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride, opts = {}) {
+  const year       = _seasonYear(seasonNum);
+  const realStart  = startDateOverride ? new Date(startDateOverride) : _getSpringStartDate(year);
+  const dispStart  = _getSpringStartDate(year);
+  const userDiv    = opts.userDivisionId || 'A';
+  const nameOf     = new Map(leagueTeams.map(t => [t.id, t.name]));
+  const teams      = [{ id: 'user', divisionId: userDiv }, ...leagueTeams.map(t => ({ id: t.id, divisionId: t.divisionId }))];
+  const ids        = teams.map(t => t.id);
 
-  // Real-world clock anchor — used for gameTime (when the game actually fires)
-  // Display date anchor — used for game.date (the fictional baseball calendar shown to user)
-  //
-  // These are deliberately separate:
-  //   gameTime: anchored to today/tomorrow so games fire at real clock times
-  //   game.date: anchored to the canonical baseball calendar (spring ~Mar 22)
-  //              so the schedule always shows realistic baseball dates
-  //
-  // This means a user who creates a team in June sees "Mar 22" as Game 1's date
-  // but the game still fires at today 1:05 PM. The fictional date is cosmetic only.
+  const byOffset = new Map();     // day offset → [{ homeId, awayId, isSpring, seriesId, seriesGame, seriesLength }]
+  const put = (offset, g) => { if (!byOffset.has(offset)) byOffset.set(offset, []); byOffset.get(offset).push(g); };
 
-  let realStart;
-  if (startDateOverride) {
-    realStart = new Date(startDateOverride);
-  } else {
-    realStart = _getSpringStartDate(year);
-  }
-
-  // Fictional display dates always start at the canonical baseball spring anchor
-  const canonicalSpringStart  = _getSpringStartDate(year);
-  const canonicalSeasonStart  = _getSeasonStartDate(year);
-
-  // Real-world season start: same gap after real spring start
-  // 10 spring games with off days = ~16 calendar days, then 1-2 travel days = 18
-  const SPRING_TO_SEASON_GAP_DAYS = 18;
-  const realSeasonStart = startDateOverride
-    ? _addDays(realStart, SPRING_TO_SEASON_GAP_DAYS)
-    : _getSeasonStartDate(year);
-
-  const schedule = [];
-
-  // Spring training (SPRING_TRAINING_GAME_COUNT games)
-  const springGames = _generateSpringGames(
-    realStart, canonicalSpringStart, leagueTeams, year
-  );
-
-  // Gate: the generated spring count and the constant must never disagree.
-  // They previously drifted (constant 20, generator 10), which corrupted the
-  // regular-season index math (phase transitions, IL return timing).
-  if (springGames.length !== SPRING_TRAINING_GAME_COUNT) {
-    throw new Error(
-      `SeasonEngine: generated ${springGames.length} spring games but ` +
-      `SPRING_TRAINING_GAME_COUNT is ${SPRING_TRAINING_GAME_COUNT} — these must match.`
-    );
-  }
-  schedule.push(...springGames);
-
-  // Regular season (132 games)
-  const regularGames = _generateRegularSeasonGames(
-    realSeasonStart, canonicalSeasonStart, leagueTeams, year
-  );
-  schedule.push(...regularGames);
-
-  schedule.forEach((g, i) => { g.index = i; });
-
-  return schedule;
-}
-
-// ─────────────────────────────────────────────────────────────
-// SPRING TRAINING SCHEDULE
-// ─────────────────────────────────────────────────────────────
-
-function _generateSpringGames(realStartDate, displayStartDate, leagueTeams, year) {
-  const games       = [];
-  const teams       = leagueTeams.map(t => t.name);
-  let realDate      = new Date(realStartDate);
-  let displayDate   = new Date(displayStartDate);
-  let gameNum       = 0;
-  let dayOffset     = 0; // total days advanced (including off days)
-
-  // 10 games over ~16 days (Mar 15 → ~Mar 30), leaving ~2 days before Apr 1.
-  // Off-day pattern: game-game-off-game-game-off-game-game-off-game-game
-  // This gives every 3rd day off — realistic spring training schedule.
-  const OFF_DAYS = new Set([2, 5, 8]); // 0-based day offsets that are rest days
-
-  while (gameNum < SPRING_TRAINING_GAME_COUNT) { // spring training games (single source: constants)
-    // Skip off days
-    if (OFF_DAYS.has(dayOffset)) {
-      realDate    = _addDays(realDate, 1);
-      displayDate = _addDays(displayDate, 1);
-      dayOffset++;
-      continue;
+  // ── Spring ───────────────────────────────────────────────────
+  const springRounds = _circleRounds(ids);
+  _shuffle(springRounds);
+  let offset = 0, played = 0;
+  while (played < SPRING_TRAINING_GAME_COUNT) {
+    if (!SPRING_OFF_DAYS.has(offset)) {
+      for (const [a, b] of springRounds[played % springRounds.length]) {
+        const home = Math.random() < 0.5;
+        put(offset, { homeId: home ? a : b, awayId: home ? b : a, isSpring: true,
+                      seriesId: `st-${played}-${a}-${b}`, seriesGame: 1, seriesLength: 1 });
+      }
+      played++;
     }
-
-    const dow    = DOW_NAMES[realDate.getDay()];
-    const isHome = Math.random() < 0.50;
-    const opponent = teams[gameNum % teams.length];
-
-    // First spring game always at 1:05 PM, rest use DOW-based times
-    const timeOptions = gameNum === 0
-      ? [SPRING_TRAINING_FIRST_GAME_TIME]
-      : (GAME_TIMES_BY_DOW[dow] || ['1:05 PM']);
-    const timeStr  = timeOptions[Math.floor(Math.random() * timeOptions.length)];
-    const gameTime = _parseGameTime(timeStr, realDate);
-
-    games.push(_makeGameObject({
-      index:    gameNum,
-      opponent,
-      isHome,
-      date:     _isoDate(displayDate),
-      gameTime,
-      isSpring: true,
-      phase:    PHASE.SPRING_TRAINING,
-    }));
-
-    gameNum++;
-    realDate    = _addDays(realDate, 1);
-    displayDate = _addDays(displayDate, 1);
-    dayOffset++;
+    offset++;
   }
 
-  return games;
-}
+  // ── Regular season ───────────────────────────────────────────
+  const rounds  = _regularSeasonRounds(teams);
+  const lengths = _roundLengths(rounds.length);
+  const homeNext = new Map();      // pair key → id of the team hosting their next series
+  offset = SPRING_TO_SEASON_GAP_DAYS;
+  let gamesSoFar = 0;
+  rounds.forEach((pairs, r) => {
+    const len     = lengths[r];
+    const stagger = r % 2 === 1;  // every other round: half the pairs start a day later
+    pairs.forEach(([a, b], k) => {
+      const key  = a < b ? `${a}|${b}` : `${b}|${a}`;
+      let host   = homeNext.get(key) || (Math.random() < 0.5 ? a : b);
+      homeNext.set(key, host === a ? b : a);
+      const away = host === a ? b : a;
+      const shift = stagger && k % 2 === 1 ? 1 : 0;
+      const sid   = `s${seasonNum}-r${r}-${key}`;
+      for (let gi = 0; gi < len; gi++) {
+        put(offset + shift + gi, { homeId: host, awayId: away, isSpring: false,
+                                   seriesId: sid, seriesGame: gi + 1, seriesLength: len });
+      }
+    });
+    offset += len + (stagger ? 1 : 0);
+    gamesSoFar += len;
+    if (gamesSoFar === ALL_STAR_BREAK_AFTER_GAME) offset += ALL_STAR_BREAK_DAYS;
+  });
 
-// ─────────────────────────────────────────────────────────────
-// REGULAR SEASON SCHEDULE
-// ─────────────────────────────────────────────────────────────
-
-function _generateRegularSeasonGames(realStartDate, displayStartDate, leagueTeams, year) {
-  const games        = [];
-  const teams        = leagueTeams.map(t => t.name);
-  let realDate       = new Date(realStartDate);
-  let displayDate    = new Date(displayStartDate);
-  let gameIndex      = 0;
-
-  const seriesBlocks = _buildSeriesBlocks(teams, REGULAR_SEASON_GAME_COUNT);
-
-  for (const series of seriesBlocks) {
-    if (gameIndex >= REGULAR_SEASON_GAME_COUNT) break;
-
-    const seriesLen = Math.min(series.length, REGULAR_SEASON_GAME_COUNT - gameIndex);
-
-    for (let i = 0; i < seriesLen; i++) {
-      const dow      = DOW_NAMES[realDate.getDay()];
-      const times    = GAME_TIMES_BY_DOW[dow] || ['7:05 PM'];
-      const timeStr  = times[Math.floor(Math.random() * times.length)];
-      const gameTime = _parseGameTime(timeStr, realDate);
-
-      const isDeadlineWindow = gameIndex >= TRADE_DEADLINE_OPEN
-                            && gameIndex <= TRADE_DEADLINE_CLOSE;
-      const isStretchRun     = gameIndex >= (REGULAR_SEASON_GAME_COUNT - STRETCH_RUN_FINAL_GAMES);
-
-      games.push(_makeGameObject({
-        index:              SPRING_TRAINING_GAME_COUNT + gameIndex,
-        opponent:           series.opponent,
-        isHome:             series.isHome,
-        date:               _isoDate(displayDate),  // fictional baseball date
-        gameTime,                                   // real-world clock time
-        isSpring:           false,
-        phase:              PHASE.REGULAR_SEASON,
-        regularSeasonIndex: gameIndex,
-        isDeadlineWindow,
-        isStretchRun,
-      }));
-
-      gameIndex++;
-      realDate    = _addDays(realDate, 1);
-      displayDate = _addDays(displayDate, 1);
-
-      // Travel day between series
-      if (i === seriesLen - 1 && gameIndex < REGULAR_SEASON_GAME_COUNT) {
-        const nextSeries = seriesBlocks[seriesBlocks.indexOf(series) + 1];
-        if (nextSeries && nextSeries.isHome !== series.isHome) {
-          realDate    = _addDays(realDate, 1);
-          displayDate = _addDays(displayDate, 1);
-        }
+  // ── Materialize: user schedule + CPU day map ─────────────────
+  const schedule = [];
+  const dayMap   = {};
+  let userRegular = 0;
+  const offsets = [...byOffset.keys()].sort((x, y) => x - y);
+  const firstSpringDay = offsets[0];
+  for (const off of offsets) {
+    const realDate = _addDays(realStart, off);
+    const dateStr  = _isoDate(_addDays(dispStart, off));
+    const dow      = DOW_NAMES[realDate.getDay()];
+    for (const g of byOffset.get(off)) {
+      const times    = off === firstSpringDay ? [SPRING_TRAINING_FIRST_GAME_TIME]
+                     : (GAME_TIMES_BY_DOW[dow] || ['7:05 PM']);
+      const gameTime = _parseGameTime(times[Math.floor(Math.random() * times.length)], realDate);
+      const userSide = g.homeId === 'user' ? 'home' : g.awayId === 'user' ? 'away' : null;
+      if (userSide) {
+        const oppId = userSide === 'home' ? g.awayId : g.homeId;
+        const ri    = g.isSpring ? null : userRegular++;
+        const game  = _makeGameObject({
+          index:              schedule.length,
+          opponent:           nameOf.get(oppId),
+          isHome:             userSide === 'home',
+          date:               dateStr,
+          gameTime,
+          isSpring:           g.isSpring,
+          phase:              g.isSpring ? PHASE.SPRING_TRAINING : PHASE.REGULAR_SEASON,
+          regularSeasonIndex: ri,
+          isDeadlineWindow:   ri !== null && ri >= TRADE_DEADLINE_OPEN && ri <= TRADE_DEADLINE_CLOSE,
+          isStretchRun:       ri !== null && ri >= REGULAR_SEASON_GAME_COUNT - STRETCH_RUN_FINAL_GAMES,
+        });
+        Object.assign(game, { opponentId: oppId, seriesId: g.seriesId, seriesGame: g.seriesGame, seriesLength: g.seriesLength });
+        schedule.push(game);
+      } else {
+        (dayMap[dateStr] = dayMap[dateStr] || []).push({
+          id:        `cg-${seasonNum}-${off}-${g.homeId}-${g.awayId}`,
+          homeId:    g.homeId,
+          awayId:    g.awayId,
+          date:      dateStr,
+          gameTime,
+          isSpring:  g.isSpring,
+          seriesId:  g.seriesId,
+          seriesGame: g.seriesGame,
+          seriesLength: g.seriesLength,
+          status:    GAME_STATUS.SCHEDULED,
+          played:    false,
+          homeScore: null,
+          awayScore: null,
+        });
       }
     }
-
-    // Insert All-Star Break after game 66
-    if (gameIndex === ALL_STAR_BREAK_AFTER_GAME) {
-      realDate    = _addDays(realDate, 4);
-      displayDate = _addDays(displayDate, 4);
-    }
   }
 
-  return games;
+  if (schedule.filter(g => g.isSpring).length !== SPRING_TRAINING_GAME_COUNT
+      || schedule.filter(g => !g.isSpring).length !== REGULAR_SEASON_GAME_COUNT) {
+    throw new Error('SeasonEngine.generateLeagueCalendar: game counts do not match the constants');
+  }
+  return { schedule, leagueSchedule: { dayMap } };
 }
 
-// ─────────────────────────────────────────────────────────────
-// SERIES BLOCK BUILDER
-// ─────────────────────────────────────────────────────────────
-
-/**
- * _buildSeriesBlocks(teams, totalGames)
- * Returns an array of { opponent, isHome, length } objects that sum to totalGames.
- * Each team is visited home and away roughly equally.
- */
-function _buildSeriesBlocks(teams, totalGames) {
-  const blocks  = [];
-  let remaining = totalGames;
-
-  // Each team plays home and away series
-  const matchups = [];
-  for (const team of teams) {
-    matchups.push({ opponent: team, isHome: true });
-    matchups.push({ opponent: team, isHome: false });
-  }
-
-  // Shuffle for variety
-  _shuffle(matchups);
-
-  // Add extra matchups to reach game count
-  let m = 0;
-  while (remaining > 0) {
-    const matchup = matchups[m % matchups.length];
-    const length  = Math.min(_pickSeriesLength(), remaining);
-    blocks.push({ ...matchup, length });
-    remaining -= length;
-    m++;
-  }
-
-  return blocks;
-}
-
-function _pickSeriesLength() {
-  const r = Math.random();
-  let cum = 0;
-  for (let i = 0; i < SERIES_WEIGHTS.length; i++) {
-    cum += SERIES_WEIGHTS[i];
-    if (r < cum) return SERIES_LENGTHS[i];
-  }
-  return 3;
-}
-
-// ─────────────────────────────────────────────────────────────
-// CPU SCHEDULE GENERATION
-// ─────────────────────────────────────────────────────────────
-
-/**
- * generateCPUSchedules(seasonNum, leagueTeams)
- * Generates game results for all CPU-vs-CPU matchups.
- * Returns a dayMap: { [dateStr]: CPUGameResult[] }
- *
- * CPU games are stored as results only — no full game objects.
- * Played immediately on game day by LeagueEngine.
- *
- * @param {Number}   seasonNum
- * @param {Object[]} leagueTeams
- * @returns {Object} dayMap
- */
-export function generateCPUSchedules(seasonNum, leagueTeams) {
-  const year       = _seasonYear(seasonNum);
-  const dayMap     = {};
-  const teams      = leagueTeams.map(t => ({ id: t.id, name: t.name }));
-  const pairs      = _generateRoundRobinPairs(teams);
-
-  // ── Spring training CPU games ─────────────────────────────
-  // Same 10-game schedule as the user, staggered 1 day so they
-  // don't all fall on the exact same days. Uses display dates
-  // anchored to canonical spring start.
-  const springStart = _getSpringStartDate(year);
-  const OFF_DAYS    = new Set([2, 5, 8]);
-  let springDate    = new Date(springStart);
-  let springGameNum = 0;
-  let springDayOff  = 0;
-
-  // CPU spring matches the user's spring length — single source: constants.
-  while (springGameNum < SPRING_TRAINING_GAME_COUNT) {
-    if (!OFF_DAYS.has(springDayOff)) {
-      const dateStr     = _isoDate(springDate);
-      const todayPairs  = _pairsForDay(pairs, springGameNum, teams.length);
-      dayMap[dateStr]   = todayPairs.map(([home, away]) => ({
-        homeId:    home.id,
-        awayId:    away.id,
-        date:      dateStr,
-        gameNum:   springGameNum,
-        isSpring:  true,
-        played:    false,
-        homeScore: null,
-        awayScore: null,
-      }));
-      springGameNum++;
+/** Circle-method 1-factorization: n−1 perfect matchings of an even list. */
+function _circleRounds(ids) {
+  const list = [...ids];
+  if (list.length % 2) list.push(null);
+  const n = list.length, rounds = [];
+  for (let r = 0; r < n - 1; r++) {
+    const pairs = [];
+    for (let i = 0; i < n / 2; i++) {
+      const a = list[i], b = list[n - 1 - i];
+      if (a !== null && b !== null) pairs.push([a, b]);
     }
-    springDate = _addDays(springDate, 1);
-    springDayOff++;
+    rounds.push(pairs);
+    list.splice(1, 0, list.pop());   // rotate all but the first
   }
-
-  // ── Regular season CPU games ──────────────────────────────
-  const startDate = _getSeasonStartDate(year);
-  let date        = new Date(startDate);
-
-  for (let gameNum = 0; gameNum < REGULAR_SEASON_GAME_COUNT; gameNum++) {
-    if (gameNum === ALL_STAR_BREAK_AFTER_GAME) {
-      date = _addDays(date, 4);
-    }
-
-    const dateStr     = _isoDate(date);
-    const todayPairs  = _pairsForDay(pairs, gameNum, teams.length);
-
-    dayMap[dateStr] = todayPairs.map(([home, away]) => ({
-      homeId:    home.id,
-      awayId:    away.id,
-      date:      dateStr,
-      gameNum,
-      played:    false,
-      homeScore: null,
-      awayScore: null,
-    }));
-
-    date = _addDays(date, 1);
-  }
-
-  return { dayMap };
+  return rounds;
 }
 
 /**
- * reconcileScheduleConflicts(userSchedule, leagueSchedule, leagueTeams)
- * The user's series schedule and the CPU day-map are generated independently, so
- * a team the user plays on a given date can also be booked in the CPU slate that
- * day. This strips those conflicts from the STORED day-map at generation time —
- * so the schedule is correct the moment it's created, before any game is played
- * (the Scores screen reads the stored day-map directly). Pure.
- *
- * @returns {Object} a new leagueSchedule with a de-conflicted dayMap
+ * Series rounds: every pairing 4× (four shuffled cycles of the 9 league-wide
+ * matchings) + 10 division rounds (each division's round robin twice; the two
+ * teams resting in their division meet each other). Shuffled, avoiding the same
+ * series twice in a row.
  */
-export function reconcileScheduleConflicts(userSchedule, leagueSchedule, leagueTeams) {
-  if (!leagueSchedule || !leagueSchedule.dayMap) return leagueSchedule;
-
-  const nameToId = new Map((leagueTeams || []).map(t => [t.name, t.id]));
-  const dayMap   = { ...leagueSchedule.dayMap };
-
-  for (const g of (userSchedule || [])) {
-    const oppId = nameToId.get(g.opponent);
-    if (!oppId || !g.date || !dayMap[g.date]) continue;
-    dayMap[g.date] = dayMap[g.date].filter(
-      cg => cg.homeId !== oppId && cg.awayId !== oppId
-    );
+function _regularSeasonRounds(teams) {
+  const ids = teams.map(t => t.id);
+  const rounds = [];
+  for (let c = 0; c < 4; c++) { const cyc = _circleRounds(ids); _shuffle(cyc); rounds.push(...cyc); }
+  const divs = [...new Set(teams.map(t => t.divisionId))];
+  const cycles = divs.map(d => _circleRoundsWithBye(teams.filter(t => t.divisionId === d).map(t => t.id)));
+  // Two passes of each division's round robin. The teams resting in their
+  // division meet each other, so the second pass re-orders the other
+  // division's rounds until no resting pair repeats (spreads the extra
+  // cross-division series evenly).
+  const divRounds = cycles.map(c => [...c]);
+  if (cycles.length === 2) {
+    const used = new Set(cycles[0].map((r, i) => `${r.bye}|${cycles[1][i].bye}`));
+    let second = [...cycles[1]];
+    for (let t = 0; t < 200; t++) {
+      _shuffle(second);
+      if (cycles[0].every((r, i) => !used.has(`${r.bye}|${second[i].bye}`))) break;
+    }
+    divRounds[0].push(...cycles[0]);
+    divRounds[1].push(...second);
+  } else {
+    cycles.forEach((c, i) => divRounds[i].push(...c));
   }
-
-  return { ...leagueSchedule, dayMap };
-}
-function _generateRoundRobinPairs(teams) {
-  const pairs = [];
-  for (let i = 0; i < teams.length; i++) {
-    for (let j = i + 1; j < teams.length; j++) {
-      pairs.push([teams[i], teams[j]]);
+  for (let r = 0; r < divRounds[0].length; r++) {
+    const pairs = [], byes = [];
+    for (const dr of divRounds) { pairs.push(...dr[r].pairs); if (dr[r].bye) byes.push(dr[r].bye); }
+    if (byes.length === 2) pairs.push([byes[0], byes[1]]);
+    rounds.push(pairs);
+  }
+  _shuffle(rounds);
+  const key = (p) => p.map(([a, b]) => (a < b ? `${a}|${b}` : `${b}|${a}`));
+  for (let i = 1; i < rounds.length; i++) {
+    const prev = new Set(key(rounds[i - 1]));
+    if (!key(rounds[i]).some(k => prev.has(k))) continue;
+    for (let j = i + 1; j < rounds.length; j++) {
+      if (!key(rounds[j]).some(k => prev.has(k))) { [rounds[i], rounds[j]] = [rounds[j], rounds[i]]; break; }
     }
   }
-  return pairs;
+  return rounds;
 }
 
-function _pairsForDay(allPairs, gameNum, teamCount) {
-  // Simple rotation: pick pairs such that each team plays once per day
-  // (not every team plays every day — some get off days)
-  const startIdx = (gameNum * 3) % allPairs.length;
-  const count    = Math.min(3, Math.floor(teamCount / 2));
-  const result   = [];
-  const used     = new Set();
-
-  for (let i = 0; i < allPairs.length && result.length < count; i++) {
-    const pair = allPairs[(startIdx + i) % allPairs.length];
-    const [a, b] = pair;
-    if (!used.has(a.id) && !used.has(b.id)) {
-      result.push(pair);
-      used.add(a.id);
-      used.add(b.id);
+/** Round robin of an odd group: each round some pairs + the team with the bye. */
+function _circleRoundsWithBye(members) {
+  const list = [...members, null];
+  const n = list.length, rounds = [];
+  for (let r = 0; r < n - 1; r++) {
+    const pairs = []; let bye = null;
+    for (let i = 0; i < n / 2; i++) {
+      const a = list[i], b = list[n - 1 - i];
+      if (a === null) bye = b; else if (b === null) bye = a; else pairs.push([a, b]);
     }
+    rounds.push({ pairs, bye });
+    list.splice(1, 0, list.pop());
   }
+  return rounds;
+}
 
-  return result;
+/**
+ * Series lengths: two halves of equal rounds, each summing to exactly half the
+ * season (so the All-Star break lands after game ALL_STAR_BREAK_AFTER_GAME),
+ * mostly 3-game series with a few 2-game sets.
+ */
+function _roundLengths(count) {
+  const half = count / 2;
+  const target = REGULAR_SEASON_GAME_COUNT / 2;
+  const make = () => {
+    const twos = 3 * half - target;          // 3·threes + 2·twos = target
+    const arr = [...Array(half - twos).fill(3), ...Array(twos).fill(2)];
+    _shuffle(arr);
+    return arr;
+  };
+  if (target !== ALL_STAR_BREAK_AFTER_GAME || !Number.isInteger(half)) {
+    throw new Error('SeasonEngine: round layout assumes the All-Star break at mid-season');
+  }
+  return [...make(), ...make()];
 }
 
 // ─────────────────────────────────────────────────────────────

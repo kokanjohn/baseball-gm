@@ -24,6 +24,7 @@
 
 import * as StateManager from '../../store/StateManager.js';
 import { SAVE_SLOT_LIMIT_FREE } from '../../data/constants.js';
+import { formatTeamRecord } from '../formatters.js';
 
 // ─────────────────────────────────────────────────────────────
 // PUBLIC API
@@ -121,7 +122,7 @@ function _renderSlotCard(slot, activeSlotId) {
       <div class="ts-card-main">
         ${isActive ? '<div class="ts-active-dot"></div><span class="ts-active-label">ACTIVE</span>' : ''}
         <div class="ts-card-name">${_esc(slot.teamName || 'Unknown Team')}</div>
-        <div class="ts-card-meta">${archetype}${archetype ? ' · ' : ''}Season ${seasonNum} · ${wins}–${losses}</div>
+        <div class="ts-card-meta">${archetype}${archetype ? ' · ' : ''}Season ${seasonNum} · ${formatTeamRecord(state.userTeam, state.phase)}</div>
         ${lastPlayed ? `<div class="ts-card-last">Last played ${lastPlayed}</div>` : ''}
       </div>
       <div class="ts-card-right">

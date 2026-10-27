@@ -128,6 +128,20 @@ export function formatRecord(wins, losses) {
 }
 
 /**
+ * formatTeamRecord(team, phase)
+ * The record that matters right now: the spring record (with ST badge text)
+ * during spring training — it is kept separately and never counts in the
+ * standings — otherwise the regular-season W–L (§67).
+ */
+export function formatTeamRecord(team, phase) {
+  if (phase === 'SPRING_TRAINING') {
+    const t = team?.springTies || 0;
+    return `${team?.springWins || 0}–${team?.springLosses || 0}${t ? `–${t}` : ''} ST`;
+  }
+  return formatRecord(team?.wins || 0, team?.losses || 0);
+}
+
+/**
  * formatGB(gb)
  * Formats a games-behind value.
  * '-' for the leader, 'X.0' or 'X.5' for others.

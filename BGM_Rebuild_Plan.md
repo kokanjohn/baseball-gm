@@ -6467,3 +6467,31 @@ New invariants every game: active + arriving = 28 for the user **and every CPU c
 ## 66. r60 — Injury split rebalanced (Session 8)
 User decision: move the injury split toward MLB's ~50/50 pitchers vs position players (Section 21 rates were ~30/70). Total injury volume unchanged (~0.10 per team-game):
 `INJURY_PROB_HITTER_PER_GAME 0.008 → 0.0055`, `INJURY_PROB_SP_PER_START 0.012 → 0.020`, `INJURY_PROB_RP_PER_APP 0.006 → 0.010`. Harness: pitcher share 44–57% across seeds (new check, 40–60%), ~10–12 injuries per club per 142 games, run environment 4.25–4.98 R/team/game.
+
+## 67. r61 — One league calendar, real CPU games, live league view (Session 8, Batch 2a)
+Closes §64 **A2, A3** and plan §28.2/§28.4. User decisions: **division-weighted schedule**; **CPU games watchable now** — from small square cards on the Dashboard (below the first-pitch card) and from Schedule → Scores (tap a game in progress or final).
+
+### 67.1 `SeasonEngine.generateLeagueCalendar` (replaces generateUserSchedule / generateCPUSchedules / reconcileScheduleConflicts)
+- All ten teams on one calendar. Spring: 10 games each, everyone plays every spring day (off days 3/6/9); first spring day all games 1:05 PM.
+- Regular season: 46 series rounds (four shuffled cycles of the 9 league-wide matchings + 10 division rounds; teams resting in their division meet each other, re-ordered so no resting pair repeats). Every team plays in every round → **every team exactly 132 games**; ~17 vs each division rival, ~13 vs the other division. 40 three-game + 6 two-game rounds, laid out so the **All-Star break (4 days) falls exactly after game 66**. Every other round is staggered (half the pairs start a day later) → one off day per two series for every team and ≥4 teams playing every day. ~155 days.
+- Real (gameTime) and display (date) calendars share one offset; times from `GAME_TIMES_BY_DOW`. User games carry `opponentId, seriesId, seriesGame, seriesLength`; CPU games live in `leagueSchedule.dayMap[date]` with `id, gameTime, status`.
+
+### 67.2 CPU games are real games on the league clock
+- `GameEngine.advanceClock` interleaves CPU first pitches / final outs with the roster clock in time order. First pitch: `generatePlays` with both clubs' rosters at that moment (home = side A). Final out: result + streak, **pitcher decisions for both sides**, player stats + hot/cold log, both rotations turn over, injuries from the actual box score (CPU GM reconciles at once), plays stripped, box kept, standings recomputed.
+- The user's game credits the opponent's record (mirror) and now also **turns the opponent's rotation** (it never advanced — the user always faced the same starter).
+- `LeagueEngine.simulateCPUGame` / `processCPUDay` (random-score shortcut) removed.
+
+### 67.3 Spring record kept separate (LOCKED rule)
+`_creditResult` sends spring results to `springWins/springLosses/springTies` for the user and every CPU club; standings use regular-season games only. `formatTeamRecord` shows "8–1–1 ST" during spring (Schedule header, team select).
+
+### 67.4 Other root fixes
+- `_assignPitcherDecisions` rewritten: W (pitcher of record at the go-ahead run; starter needs 15 outs), L, SV, HLD for both teams (opponents previously never got decisions). League totals now = one W and one L per game.
+- `accumulateBox` takes the explicit home roster (`homeIds`) instead of inferring sides from `teamId === 'user'` (needed for CPU-vs-CPU; stored in `liveLineups.homeIds`).
+- League leaders' SV+HLD read `s.hd` (never written) → `s.hld`.
+- RP injury rate 0.010 → 0.008 now that relief outings come from real CPU box scores (pitcher share ≈50%, ~15 injuries per club per season).
+
+### 67.5 UI — `ui/components/LiveGame.js`
+`renderLeagueLiveRow` (Dashboard "Around the league" row of square cards: abbrs, scores, ▲/▼ inning, base diamond; refreshes every 5 s) and `openLeagueGame` (sheet: score, status, inning, diamond, outs, linescore, last 30 plays, live box score). Revealed plays are derived from the clock, so every view agrees.
+
+### 67.6 Harness
+New: calendar (10 × 132, no double-booking, ≥4 clubs per day, division weighting), spring record separate (user + CPU), every CPU game before the user's last game played with a box score, every club's W+L = games played, CPU players accumulate stats, one W and one L per game, ≥20 different opposing starters faced. 12 seeds green.

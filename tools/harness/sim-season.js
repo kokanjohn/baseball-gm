@@ -386,6 +386,29 @@ async function main() {
   check(`regular games = ${REGULAR_SEASON_GAME_COUNT}`, regularGames === REGULAR_SEASON_GAME_COUNT, `got ${regularGames}`);
   check(`first regular game at schedule index ${SPRING_TRAINING_GAME_COUNT}`,
         s0.schedule[SPRING_TRAINING_GAME_COUNT] && !s0.schedule[SPRING_TRAINING_GAME_COUNT].isSpring);
+  // ── §67: one league calendar ───────────────────────────────────
+  {
+    const all = [];
+    for (const g of s0.schedule) all.push({ d: g.date, h: g.isHome ? 'user' : g.opponentId, a: g.isHome ? g.opponentId : 'user', sp: g.isSpring });
+    for (const [d, gs] of Object.entries(s0.leagueSchedule.dayMap)) for (const g of gs) all.push({ d, h: g.homeId, a: g.awayId, sp: g.isSpring });
+    const per = {}, day = {}, pair = {};
+    for (const g of all) {
+      if (g.sp) continue;
+      for (const t of [g.h, g.a]) per[t] = (per[t] || 0) + 1;
+      (day[g.d] = day[g.d] || []).push(g.h, g.a);
+      const k = [g.h, g.a].sort().join('|'); pair[k] = (pair[k] || 0) + 1;
+    }
+    check(`calendar: all 10 clubs play ${REGULAR_SEASON_GAME_COUNT} games`,
+          Object.keys(per).length === 10 && Object.values(per).every(n => n === REGULAR_SEASON_GAME_COUNT), JSON.stringify(per));
+    check('calendar: no club plays twice on one date', Object.values(day).every(l => new Set(l).size === l.length));
+    check('calendar: at least four clubs play every game day', Object.values(day).every(l => l.length >= 4));
+    const div = Object.fromEntries([['user', 'A'], ...s0.leagueTeams.map(t => [t.id, t.divisionId])]);
+    const dv = [], cr = [];
+    for (const [k, n] of Object.entries(pair)) { const [x, y] = k.split('|'); (div[x] === div[y] ? dv : cr).push(n); }
+    const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    check(`calendar: division-weighted (${avg(dv).toFixed(1)} vs rivals, ${avg(cr).toFixed(1)} vs other division)`,
+          avg(dv) >= 15.5 && avg(dv) <= 18.5 && avg(cr) >= 11.5 && avg(cr) <= 14.5);
+  }
   check(`initial active roster = ${ROSTER_LIMITS.ACTIVE_TOTAL} (+spring invitees)`,
         activeCount(s0) >= ROSTER_LIMITS.ACTIVE_TOTAL, `got ${activeCount(s0)}`);
 
@@ -525,6 +548,13 @@ async function main() {
 
     // detect spring→regular crossing
     if (!crossedToRegular && idx + 1 === SPRING_TRAINING_GAME_COUNT) {
+      const ut = post.userTeam;
+      check('spring: results kept out of the regular-season record (user)',
+            (ut.wins || 0) + (ut.losses || 0) === 0
+            && (ut.springWins || 0) + (ut.springLosses || 0) + (ut.springTies || 0) === SPRING_TRAINING_GAME_COUNT,
+            `W-L ${ut.wins}-${ut.losses}, spring ${ut.springWins}-${ut.springLosses}-${ut.springTies || 0}`);
+      check('spring: no CPU club has a regular-season record yet',
+            post.leagueTeams.every(t => (t.wins || 0) + (t.losses || 0) === 0));
       crossedToRegular = true;
       phaseAtCross = post.phase;
     }
@@ -706,6 +736,35 @@ async function main() {
     const firstReg = SM.get().schedule[SPRING_TRAINING_GAME_COUNT];
     check('spring→regular boundary: first post-spring game is regular season', firstReg && !firstReg.isSpring,
           `phase=${phaseAtCross}`);
+  }
+
+  // ── §67: a real league ─────────────────────────────────────────
+  if (committed >= SPRING_TRAINING_GAME_COUNT + 20) {
+    const st = SM.get();
+    const games = Object.values(st.leagueSchedule.dayMap).flat();
+    const lastUser = st.schedule[st.currentGameIndex - 1];
+    const due = games.filter(g => g.gameTime < (lastUser?.gameTime || 0));
+    check(`league: every CPU game before the user's last game was played (${due.filter(g => g.played).length}/${due.length})`,
+          due.every(g => g.played && g.boxScore));
+    const regPlayed = (id) => {
+      const cpu = games.filter(g => !g.isSpring && g.played && (g.homeId === id || g.awayId === id)).length;
+      const vsUser = st.schedule.filter(g => !g.isSpring && g._committed && g.opponentId === id).length;
+      return cpu + vsUser;
+    };
+    const bad = st.leagueTeams.filter(t => (t.wins || 0) + (t.losses || 0) !== regPlayed(t.id));
+    check('league: every club\'s W+L equals the games it played', bad.length === 0,
+          bad.map(t => `${t.abbr} ${t.wins}-${t.losses} vs ${regPlayed(t.id)}`).join(', '));
+    const cpuPlayers = Object.values(st.players).filter(p => p.teamId && p.teamId !== 'user');
+    const ab = cpuPlayers.reduce((a, p) => a + (p.stats?.ab || 0), 0);
+    const ws = Object.values(st.players).reduce((a, p) => a + (p.stats?.w || 0), 0);
+    const ls = Object.values(st.players).reduce((a, p) => a + (p.stats?.l || 0), 0);
+    const regGames = games.filter(g => !g.isSpring && g.played).length + st.schedule.filter(g => !g.isSpring && g._committed).length;
+    check(`league: CPU players accumulate real stats (${ab} AB)`, ab > regGames * 25);
+    check(`league: one W and one L per game (${ws} W / ${ls} L / ${regGames} games)`,
+          Math.abs(ws - regGames) <= regGames * 0.02 && Math.abs(ls - regGames) <= regGames * 0.02);
+    const starters = new Set(st.schedule.filter(g => !g.isSpring && g.boxScore)
+      .map(g => (g.boxScore.userIsHome ? g.boxScore.away : g.boxScore.home).pitchers[0]?.id));
+    check(`league: opponents' rotations turn over (${starters.size} different starters faced)`, starters.size >= 20);
   }
 
   // If we simulated the entire regular season, the playoffs must have started

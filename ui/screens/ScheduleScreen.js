@@ -27,8 +27,9 @@ import { GAME_STATUS, GAME_TIMES_BY_DOW }   from '../../data/constants.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import { renderBoxScore } from '../components/BoxScore.js';
 import { accumulateBox } from '../../engine/SimEngine.js';
+import { leagueGameState, wireLeagueGameTaps } from '../components/LiveGame.js';
 import {
-  formatDate, formatRecord, formatGameLabel,
+  formatDate, formatRecord, formatTeamRecord, formatGameLabel,
   formatGameStatus, formatPhaseLabel,
 } from '../formatters.js';
 
@@ -121,7 +122,7 @@ export function refresh() {
       <div class="section-pad" style="padding-bottom:4px;display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div class="section-title">Schedule</div>
-          <div class="section-sub">${formatRecord(state.userTeam?.wins || 0, state.userTeam?.losses || 0)} · ${formatPhaseLabel(phase)}</div>
+          <div class="section-sub">${formatTeamRecord(state.userTeam, phase)} · ${formatPhaseLabel(phase)}</div>
         </div>
         <button class="scores-btn" id="sched-scores-btn">Scores</button>
       </div>
@@ -540,7 +541,7 @@ function _openResultSheet(game, idx, state) {
   let boxHtml = '';
   let box = game.boxScore;
   if (!box && game.plays?.length > 0) {
-    box = accumulateBox(game.plays, state.players || {}, { userIsHome: !!game.isHome });
+    box = accumulateBox(game.plays, state.players || {}, { userIsHome: !!game.isHome, homeIds: game.liveLineups?.homeIds || null });
   }
   if (box) {
     const userName = state.userTeam?.abbr || state.userTeam?.nickname || state.userTeam?.city || state.userTeam?.name || 'Home';
@@ -821,28 +822,32 @@ function _renderScoresModal(state) {
     </div>`;
   }
 
-  // CPU games
+  // CPU games — real games on the league clock (§67): live score + inning
+  // while in progress, final score after; tap any started game to watch it.
   for (const g of cpuGames) {
     const awayAbbr = _abbr(g.awayId);
     const homeAbbr = _abbr(g.homeId);
     let scorePart, metaPart;
+    const started = g.played || (g.status === GAME_STATUS.LIVE && g.plays?.length);
 
     if (g.played && g.homeScore !== null) {
       const aWin = g.awayScore > g.homeScore;
       const hWin = g.homeScore > g.awayScore;
       scorePart = `<span class="${aWin?'sg-score-winner':''}">${g.awayScore}</span><span class="sg-dash">–</span><span class="${hWin?'sg-score-winner':''}">${g.homeScore}</span>`;
       metaPart  = `<span class="sg-final-pill">F</span>`;
+    } else if (started) {
+      const ls = leagueGameState(g, Date.now());
+      scorePart = `<span class="sg-away-score">${ls.awayScore}</span><span class="sg-dash">–</span><span class="sg-home-score">${ls.homeScore}</span>`;
+      metaPart  = `<span class="sg-live-pill">● ${ls.half === 'TOP' ? '▲' : '▼'}${ls.inning}${_sfx(ls.inning)}</span>`;
     } else {
-      // Show a plausible game time from DOW
-      const d   = new Date(_scoresBrowseDate + 'T12:00:00');
-      const DOW = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
-      const dow = DOW[d.getDay()];
-      const times = GAME_TIMES_BY_DOW[dow] || ['7:05 PM'];
-      scorePart = `<span class="sg-time">${times[0]}</span>`;
+      const t = Number.isFinite(g.gameTime)
+        ? new Date(g.gameTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : '';
+      scorePart = `<span class="sg-time">${t}</span>`;
       metaPart  = '';
     }
 
-    rows += `<div class="sg-row">
+    rows += `<div class="sg-row${started ? ' sg-row-tap' : ''}"${started ? ` data-lg-date="${_scoresBrowseDate}" data-lg-id="${g.id}"` : ''}>
       <span class="sg-abbr sg-abbr-away">${awayAbbr}</span>
       <span class="sg-score-wrap">${scorePart}</span>
       <span class="sg-abbr sg-abbr-home">${homeAbbr}</span>
@@ -851,6 +856,7 @@ function _renderScoresModal(state) {
   }
 
   bodyEl.innerHTML = `<div style="padding:0 16px 8px;">${rows}</div>`;
+  wireLeagueGameTaps(bodyEl);
 }
 
 function _scrollToCurrentGame() {
@@ -889,6 +895,8 @@ function _injectCSS() {
       50%      { border-color: var(--accent); }
     }
     .game-item.current-game { animation: currentPulse 2.4s ease-in-out infinite; }
+    .sg-row-tap { cursor:pointer; }
+    .sg-row-tap:active { opacity:.6; }
     .game-item.playoff-game { border-color: rgba(245,210,83,.25); }
     .gri-wrap { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0; }
     .game-bs-btn { font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;

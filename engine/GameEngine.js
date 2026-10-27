@@ -32,9 +32,7 @@ import {
 } from './LeagueFactory.js';
 
 import {
-  generateUserSchedule,
-  generateCPUSchedules,
-  reconcileScheduleConflicts,
+  generateLeagueCalendar,
   getNextPhase,
   buildPlayoffBracket,
   scheduleMakeupGame,
@@ -44,7 +42,6 @@ import {
 } from './SeasonEngine.js';
 
 import {
-  processCPUDay,
   processCPURosterDecisions,
   computeFullStandings,
 } from './LeagueEngine.js';
@@ -407,9 +404,8 @@ export async function startNewGame(config) {
   // If before 1:05 PM — scheduleAnchor is already today's midnight,
   // _parseGameTime will set the time to 1:05 PM on today.
 
-  const schedule        = generateUserSchedule(1, league.leagueTeams, scheduleAnchor);
-  const leagueScheduleRaw = generateCPUSchedules(1, league.leagueTeams);
-  const leagueSchedule  = reconcileScheduleConflicts(schedule, leagueScheduleRaw, league.leagueTeams);
+  // One calendar for the whole league (§67) — the user is one of ten teams.
+  const { schedule, leagueSchedule } = generateLeagueCalendar(1, league.leagueTeams, scheduleAnchor);
 
   // Apply everything to state in one batch
   StateManager.mutate(s => {
@@ -854,31 +850,15 @@ export async function commitGame(gameIndex) {
       const us = g.ourScore ?? 0, them = g.theirScore ?? 0;
       const outcome = us > them ? 'win' : us < them ? 'loss' : 'tie'; // ties only in spring
 
-      if (outcome === 'win') {
-        s.userTeam.wins++;
-        s.userTeam.streak = Math.max(0, s.userTeam.streak) + 1;
-      } else if (outcome === 'loss') {
-        s.userTeam.losses++;
-        s.userTeam.streak = Math.min(0, s.userTeam.streak) - 1;
-      } else {
-        s.userTeam.ties = (s.userTeam.ties || 0) + 1; // tie: streak unchanged
-      }
+      // Spring results go to the separate spring record (Spring Training
+      // Rules — LOCKED); only regular-season games count in the standings.
+      _creditResult(s.userTeam, outcome, !!g.isSpring);
 
-      // Credit the opponent's league record with the mirror result. The user's
-      // game IS the opponent's game for this date (their CPU slate game was
-      // dropped in processCPUDay), so without this their standings would omit
-      // every game they played against the user.
+      // The opponent's record gets the mirror result — this game IS their
+      // game for the date (one league calendar, §67).
       const oppRecordTeam = s.leagueTeams.find(t => t.name === g.opponent) || null;
       if (oppRecordTeam) {
-        if (outcome === 'win') {
-          oppRecordTeam.losses++;
-          oppRecordTeam.streak = Math.min(0, oppRecordTeam.streak || 0) - 1;
-        } else if (outcome === 'loss') {
-          oppRecordTeam.wins++;
-          oppRecordTeam.streak = Math.max(0, oppRecordTeam.streak || 0) + 1;
-        } else {
-          oppRecordTeam.ties = (oppRecordTeam.ties || 0) + 1;
-        }
+        _creditResult(oppRecordTeam, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', !!g.isSpring);
       }
 
       g._recordApplied = true;
@@ -932,6 +912,9 @@ export async function commitGame(gameIndex) {
       s.userTeam.rotation.currentIndex =
         (s.userTeam.rotation.currentIndex + 1) % s.userTeam.rotation.order.length;
     }
+    // The opponent's rotation turns over too (it used to stand still, so the
+    // user always faced the same starter).
+    _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent));
 
     // (Trades, arrivals and IL clearances are no longer tied to a commit —
     //  they run on the real-time roster clock: advanceClock(), §65.)
@@ -977,9 +960,7 @@ export async function commitGame(gameIndex) {
   // ── CPU processing (outside main mutate for clarity) ────
   const dateStr = game.date;
 
-  const cpuDayMutations = processCPUDay(StateManager.get(), dateStr);
-  StateManager.mutate(s => _applyMutations(s, cpuDayMutations));
-
+  // (CPU games are real games on the league clock — advanceClock, §67.)
   const cpuRosterMutations = processCPURosterDecisions(StateManager.get(), dateStr, endMs);
   StateManager.mutate(s => _applyMutations(s, cpuRosterMutations));
 
@@ -1660,9 +1641,7 @@ export async function resumeOffseasonAfterOwnership() {
 
   // Generate schedules for new season
   StateManager.mutate(s => {
-    const schedule       = generateUserSchedule(s.seasonNum, s.leagueTeams);
-    const leagueScheduleRaw = generateCPUSchedules(s.seasonNum, s.leagueTeams);
-    const leagueSchedule = reconcileScheduleConflicts(schedule, leagueScheduleRaw, s.leagueTeams);
+    const { schedule, leagueSchedule } = generateLeagueCalendar(s.seasonNum, s.leagueTeams);
     s.schedule           = schedule;
     s.leagueSchedule     = leagueSchedule;
   });
@@ -1887,6 +1866,167 @@ function _applyMutations(state, mutations) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// RESULTS + CPU GAMES ON THE LEAGUE CLOCK (§67)
+// ─────────────────────────────────────────────────────────────
+
+/** Credit a W/L/T to a team — spring games to the separate spring record. */
+function _creditResult(team, outcome, isSpring) {
+  if (!team) return;
+  if (isSpring) {
+    if (outcome === 'win')       team.springWins   = (team.springWins   || 0) + 1;
+    else if (outcome === 'loss') team.springLosses = (team.springLosses || 0) + 1;
+    else                         team.springTies   = (team.springTies   || 0) + 1;
+    return;
+  }
+  if (outcome === 'win') {
+    team.wins   = (team.wins || 0) + 1;
+    team.streak = Math.max(0, team.streak || 0) + 1;
+  } else if (outcome === 'loss') {
+    team.losses = (team.losses || 0) + 1;
+    team.streak = Math.min(0, team.streak || 0) - 1;
+  } else {
+    team.ties = (team.ties || 0) + 1;
+  }
+}
+
+function _advanceRotation(team) {
+  const r = team?.rotation;
+  if (r?.order?.length) r.currentIndex = ((r.currentIndex || 0) + 1) % r.order.length;
+}
+
+/** The moment a game with generated plays ends (its last play). */
+function _playsEndMs(game) {
+  const last = game?.plays?.[game.plays.length - 1];
+  return last && Number.isFinite(last._timestamp)
+    ? last._timestamp + (game._tickOffset || 0)
+    : (game.gameTime || 0) + GAME_DURATION_FALLBACK_MS;
+}
+
+/**
+ * _leagueGameEvents(state, clockMs)
+ * CPU games due on the clock: first pitch reached (simulate with the rosters
+ * of that moment) or final out reached (commit). Sorted by time.
+ */
+function _leagueGameEvents(state, clockMs) {
+  const out = [];
+  for (const [date, games] of Object.entries(state.leagueSchedule?.dayMap || {})) {
+    games.forEach((cg, i) => {
+      if (cg.played) return;
+      if (cg.status === GAME_STATUS.SCHEDULED && Number.isFinite(cg.gameTime) && cg.gameTime <= clockMs) {
+        out.push({ kind: 'start', date, i, at: cg.gameTime });
+      } else if (cg.status === GAME_STATUS.LIVE && _playsEndMs(cg) <= clockMs) {
+        out.push({ kind: 'final', date, i, at: _playsEndMs(cg) });
+      }
+    });
+  }
+  return out.sort((a, b) => a.at - b.at || (a.kind === 'final' ? -1 : 1));
+}
+
+/**
+ * _startLeagueGame(date, i)
+ * First pitch of a CPU game: the full SimEngine pipeline (same as the user's
+ * game) with both clubs' rosters as they are right now. Plays reveal on the
+ * real clock for anyone watching (§28.4).
+ */
+function _startLeagueGame(date, i) {
+  const state = StateManager.get();
+  const cg    = state.leagueSchedule.dayMap[date][i];
+  const home  = state.leagueTeams.find(t => t.id === cg.homeId);
+  const away  = state.leagueTeams.find(t => t.id === cg.awayId);
+  if (!home || !away) {
+    StateManager.mutate(s => { const g = s.leagueSchedule.dayMap[date][i]; g.status = GAME_STATUS.FINAL; g.played = true; g._void = true; });
+    return;
+  }
+  const sim = generatePlays(
+    { ...cg, isHome: true, weather: null, fieldCondition: null, _tickOffset: 0 },
+    home, away, state.players,
+    { phase: state.phase, isSpring: !!cg.isSpring,
+      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players) }
+  );
+  StateManager.mutate(s => {
+    const g = s.leagueSchedule.dayMap[date][i];
+    g.plays                = sim.plays;
+    g._precomputedBoxScore = sim.boxScore;
+    g.liveLineups          = sim.liveLineups;
+    g.status               = GAME_STATUS.LIVE;
+  });
+}
+
+/**
+ * _finishLeagueGame(date, i)
+ * Final out of a CPU game: result, standings, player stats + hot/cold log,
+ * both rotations turn over, injuries for the players who actually played,
+ * play data stripped (box score kept).
+ * @returns {Object[]} injury events
+ */
+function _finishLeagueGame(date, i) {
+  const st0 = StateManager.get();
+  const cg0 = st0.leagueSchedule.dayMap[date][i];
+  const endMs = _playsEndMs(cg0);
+  const last  = cg0.plays[cg0.plays.length - 1];
+  const homeScore = last?.cumOurScore ?? 0, awayScore = last?.cumTheirScore ?? 0;
+  const stats = accumulateStats(cg0.plays, null, null, st0.players, !!cg0.isSpring);
+  const statKey = cg0.isSpring ? 'springStats' : 'stats';
+  const perGame = {};
+  for (const play of cg0.plays) {
+    if (!play._statDeltas || play.type === 'pinch_hit') continue;
+    for (const [pid, list] of Object.entries(play._statDeltas)) {
+      perGame[pid] = perGame[pid] || {};
+      for (const { stat, delta } of list) perGame[pid][stat] = (perGame[pid][stat] || 0) + delta;
+    }
+  }
+
+  StateManager.mutate(s => {
+    const g    = s.leagueSchedule.dayMap[date][i];
+    const home = s.leagueTeams.find(t => t.id === g.homeId);
+    const away = s.leagueTeams.find(t => t.id === g.awayId);
+    const outcome = homeScore > awayScore ? 'win' : homeScore < awayScore ? 'loss' : 'tie';
+    _creditResult(home, outcome, !!g.isSpring);
+    _creditResult(away, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', !!g.isSpring);
+    _advanceRotation(home);
+    _advanceRotation(away);
+    for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
+    for (const [pid, d] of Object.entries(perGame)) {
+      if (s.players[pid]) s.players[pid]._impGameLog = appendGameLog(s.players[pid], s.currentGameIndex || 0, date, d)._impGameLog;
+    }
+    g.homeScore = homeScore;
+    g.awayScore = awayScore;
+    g.played    = true;
+    g.status    = GAME_STATUS.FINAL;
+    g.endedAt   = endMs;
+    g.boxScore  = g._precomputedBoxScore;
+    delete g.plays;
+    delete g._precomputedBoxScore;
+    if (home && away && !g.isSpring) {
+      const [w, l, ws, ls] = homeScore > awayScore ? [home, away, homeScore, awayScore] : [away, home, awayScore, homeScore];
+      s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+        buildActivityFeedEntry('result', w.abbr, `${w.abbr} def. ${l.abbr} ${ws}–${ls}`)]);
+    }
+    s.standings = computeFullStandings(s);
+  });
+
+  // Injuries: the players who took the field.
+  const st  = StateManager.get();
+  const g   = st.leagueSchedule.dayMap[date][i];
+  const box = g.boxScore;
+  if (!box) return [];
+  const side = (teamId, b) => ({ teamId, hitterIds: b.hitters.map(h => h.id),
+                                 starterId: b.pitchers[0]?.id || null,
+                                 relieverIds: b.pitchers.slice(1).map(p => p.id) });
+  const inj = rollGameInjuries(st, [side(g.homeId, box.home), side(g.awayId, box.away)], endMs);
+  if (Object.keys(inj.players).length) {
+    StateManager.mutate(s => {
+      for (const [id, upd] of Object.entries(inj.players)) Object.assign(s.players[id], upd);
+      // The CPU GMs react at once (IL / call-up through the ledger).
+      for (const teamId of new Set(inj.events.map(e => e.teamId))) {
+        applyRosterMutation(s, reconcileRoster(s, teamId, { autoManage: true, atMs: endMs }));
+      }
+    });
+  }
+  return inj.events.map(e => ({ ...e, atMs: endMs }));
+}
+
+// ─────────────────────────────────────────────────────────────
 // ROSTER CLOCK (§65)
 // ─────────────────────────────────────────────────────────────
 
@@ -1911,21 +2051,37 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
   if (!state?.userTeam) return { changed: false, events: [], clockMs: nowMs };
   const clockMs = rosterClock(state, nowMs);
 
-  const expired = CardEngine.expireDueRosterCards(clockMs);
+  // League games and roster moves interleave in real-time order: before each
+  // CPU first pitch / final out, everything due by that moment happens first.
+  const events = [...(opts.events || [])];
+  let changed = false;
+  for (let guard = 0; guard < 2000; guard++) {
+    const next = _leagueGameEvents(StateManager.get(), clockMs)[0];
+    if (!next) break;
+    const step = _rosterStep(next.at, {});
+    events.push(...step.events);
+    if (next.kind === 'start') _startLeagueGame(next.date, next.i);
+    else events.push(..._finishLeagueGame(next.date, next.i));
+    changed = true;
+  }
+  const step = _rosterStep(clockMs, { reconcileAll: !!opts.reconcileAll, events });
+  return { changed: changed || step.changed, events: [...events, ...step.events], clockMs };
+}
+
+/** One roster-clock step at `atMs`: deadlines, ledger, card sync. */
+function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
+  const expired = CardEngine.expireDueRosterCards(atMs);
   let applied = { changed: false, events: [] };
-  if (expired || opts.reconcileAll || hasDue(StateManager.get(), clockMs)) {
+  if (expired || reconcileAll || extra.length || hasDue(StateManager.get(), atMs)) {
     StateManager.mutate(s => {
-      applied = applyDue(s, clockMs, { reconcileAll: !!opts.reconcileAll });
-      if (applied.changed || opts.reconcileAll) s.userTeam.finances.payroll = computePayroll(s);
+      applied = applyDue(s, atMs, { reconcileAll });
+      if (applied.changed || reconcileAll) s.userTeam.finances.payroll = computePayroll(s);
     });
   }
-  const events = [...(opts.events || []), ...applied.events];
-  const cards  = CardEngine.syncRosterCards(events, clockMs);
+  const cards = CardEngine.syncRosterCards([...extra, ...applied.events], atMs);
   return {
     changed: expired > 0 || applied.changed || cards.delivered > 0 || cards.withdrawn > 0,
-    events,
-    cards,
-    clockMs,
+    events:  applied.events,
   };
 }
 
@@ -1994,19 +2150,7 @@ function _appearances(state, gameIndex) {
     fromBox('user', box.userIsHome ? box.home : box.away);
     if (opp) fromBox(opp.id, box.userIsHome ? box.away : box.home);
   }
-  const slate   = state.leagueSchedule?.dayMap?.[g?.date];
-  const playing = new Set(slate ? slate.flatMap(cg => [cg.homeId, cg.awayId]) : (state.leagueTeams || []).map(t => t.id));
-  for (const t of state.leagueTeams || []) {
-    if (t.id === opp?.id || !playing.has(t.id)) continue;
-    const rot = t.rotation?.order || [];
-    const pen = (t.rosterIds || []).filter(id => state.players[id]?.group === PLAYER_GROUP.BULLPEN);
-    out.push({
-      teamId:      t.id,
-      hitterIds:   (t.lineupSlots || []).map(s => s.playerId).filter(Boolean),
-      starterId:   rot.length ? rot[Math.floor(Math.random() * rot.length)] : null,
-      relieverIds: pen.sort(() => Math.random() - 0.5).slice(0, 3),
-    });
-  }
+  // Other CPU clubs' injuries come from their own games (_finishLeagueGame).
   return out;
 }
 

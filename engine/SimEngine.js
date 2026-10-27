@@ -247,8 +247,12 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   }
 
   // Build box score via the shared accumulator (single source of truth).
-  const boxScore    = accumulateBox(plays, players, { awayOrder: _awayOrder, homeOrder: _homeOrder, userIsHome: _userIsHome });
-  const liveLineups = { away: _awayOrder, home: _homeOrder };
+  // Home roster ids: who is on which side, independent of who the user is.
+  const homeTeamObj = _userIsHome ? userTeam : effectiveOppTeam;
+  const homeIds     = [...new Set([...(homeTeamObj.rosterIds || []),
+                                   ...(_userIsHome ? userLineup : oppLineup).slots.map(s => s.id)])];
+  const boxScore    = accumulateBox(plays, players, { awayOrder: _awayOrder, homeOrder: _homeOrder, userIsHome: _userIsHome, homeIds });
+  const liveLineups = { away: _awayOrder, home: _homeOrder, homeIds };
 
   return { plays, boxScore, liveLineups };
 }
@@ -1153,7 +1157,13 @@ export function accumulateStats(plays, userTeam, opponentTeam, players, isSpring
  * @returns {Object} { linescore, away, home, userIsHome }
  */
 export function accumulateBox(plays, players, opts = {}) {
-  const { awayOrder = [], homeOrder = [], userIsHome = false } = opts;
+  const { awayOrder = [], homeOrder = [], userIsHome = false, homeIds = null } = opts;
+  // Which side a player is on: the explicit home roster when given (every
+  // game type, incl. CPU vs CPU — §66), else the user/opponent convention.
+  const homeSet = homeIds ? new Set(homeIds) : null;
+  const sideFor = (pid, home, away) => homeSet
+    ? (homeSet.has(pid) ? home : away)
+    : (((players[pid]?.teamId === 'user') === userIsHome) ? home : away);
 
   const HIT0 = () => ({ ab:0, r:0, h:0, doubles:0, hr:0, tb:0, rbi:0, bb:0, hbp:0, k:0, sb:0, cs:0, sf:0, sac:0 });
   const PIT0 = () => ({ outs:0, h:0, hr:0, bb:0, k:0, er:0, w:0, l:0, sv:0, hld:0 });
@@ -1172,7 +1182,7 @@ export function accumulateBox(plays, players, opts = {}) {
     // enter (previously they surfaced only when they faced their first batter).
     if (play.type === 'pitching_change' && play.pitcherId) {
       const pid  = play.pitcherId;
-      const side = ((players[pid]?.teamId === 'user') === userIsHome) ? home : away;
+      const side = sideFor(pid, home, away);
       ensurePit(side, pid);
       continue;
     }
@@ -1191,7 +1201,7 @@ export function accumulateBox(plays, players, opts = {}) {
         if (play.type === 'game_end') {
           side = away.pit[pid] ? away
                : home.pit[pid] ? home
-               : ((players[pid]?.teamId === 'user') === userIsHome ? home : away);
+               : sideFor(pid, home, away);
         }
         const line = ensurePit(side, pid);
         for (const { stat, delta } of statList) {
@@ -1479,197 +1489,78 @@ function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, 
  * @returns {Object} statDeltas map { [pitcherId]: [{stat, delta}] }
  */
 function _assignPitcherDecisions(plays, userScore, oppScore, isHome) {
-  const userWon  = userScore > oppScore;
-  const userLost = oppScore  > userScore;
+  // Decisions for BOTH teams (§66): W/L/SV/HLD by the scoring rules, so CPU
+  // pitchers — and the user's opponents — carry real records too.
+  // Side 'A' is the team generatePlays received as userTeam (cumOurScore).
+  if (userScore === oppScore) return {};              // spring ties: no decision
+  const homeIsA  = !!isHome;
+  const pitchSide = (half) => ((half === 'TOP') === homeIsA ? 'A' : 'B'); // TOP: home pitches
+  const lead = (p, side) => side === 'A'
+    ? (p.cumOurScore ?? 0) - (p.cumTheirScore ?? 0)
+    : (p.cumTheirScore ?? 0) - (p.cumOurScore ?? 0);
+  const winner = userScore > oppScore ? 'A' : 'B';
+  const loser  = winner === 'A' ? 'B' : 'A';
 
-  // Collect user pitchers in order of appearance with their pitch spans
-  // Each entry: { id, firstPlayIdx, lastPlayIdx, outsRecorded, entryUserScore, entryOppScore }
-  const pitcherSpans = [];
-  let currentPitcher = null;
-
+  // Pitching spans per side, in order, with outs recorded and entry lead.
+  const spans = { A: [], B: [] };
+  let prevOuts = 0, prevHalf = null, prevPlay = null;
   for (const play of plays) {
-    if (!play.pitcherId) continue;
-    if (play.type === 'inning_end' || play.type === 'game_end') continue;
-
-    // Is this a user-team pitcher? User pitches in TOP half if home, BOT half if away.
-    const isUserPitching = isHome
-      ? play.half === 'TOP'
-      : play.half === 'BOT';
-    if (!isUserPitching) continue;
-
-    if (!currentPitcher || currentPitcher.id !== play.pitcherId) {
-      currentPitcher = {
-        id:             play.pitcherId,
-        firstPlayIdx:   play.playIndex,
-        lastPlayIdx:    play.playIndex,
-        outsRecorded:   0,
-        entryUserScore: play.cumOurScore   ?? 0,
-        entryOppScore:  play.cumTheirScore ?? 0,
-        exitUserScore:  play.cumOurScore   ?? 0,
-        exitOppScore:   play.cumTheirScore ?? 0,
-      };
-      pitcherSpans.push(currentPitcher);
+    if (!play.pitcherId || play.type === 'game_start' || play.type === 'game_end') { prevPlay = play; continue; }
+    const half = `${play.half}${play.inning}`;
+    if (half !== prevHalf) { prevOuts = 0; prevHalf = half; }
+    const side = pitchSide(play.half);
+    const list = spans[side];
+    let cur = list[list.length - 1];
+    if (!cur || cur.id !== play.pitcherId) {
+      cur = { id: play.pitcherId, outs: 0, entryLead: prevPlay ? lead(prevPlay, side) : 0, firstIdx: play.playIndex };
+      list.push(cur);
     }
-    currentPitcher.lastPlayIdx   = play.playIndex;
-    currentPitcher.exitUserScore = play.cumOurScore   ?? 0;
-    currentPitcher.exitOppScore  = play.cumTheirScore ?? 0;
-
-    if (_isOut(play.type)) currentPitcher.outsRecorded++;
+    const outsAfter = Number.isFinite(play.outsAfter) ? play.outsAfter : prevOuts;
+    cur.outs += Math.max(0, outsAfter - prevOuts);
+    cur.lastIdx = play.playIndex;
+    cur.exitLead = lead(play, side);
+    prevOuts = outsAfter >= 3 ? 0 : outsAfter;
+    prevPlay = play;
   }
+  if (!spans.A.length || !spans.B.length) return {};
 
-  if (!pitcherSpans.length) return {};
-
-  const decisions = {}; // { pitcherId: { w, l, sv, hd } }
-  const get = id => { if (!decisions[id]) decisions[id] = { w:0, l:0, sv:0, hd:0 }; return decisions[id]; };
-
-  // ── WIN ──────────────────────────────────────────────────────
-  // Find the pitcher who was on mound when user took the lead for good.
-  // Scan plays in order — find last time the lead changed to user advantage
-  // and which user pitcher was active then.
-  if (userWon && pitcherSpans.length > 0) {
-    let winningPitcherId = null;
-    let leadTakenIdx = -1;
-
-    for (const play of plays) {
-      if (!play.pitcherId) continue;
-      const isUserPitching = isHome ? play.half === 'TOP' : play.half === 'BOT';
-      if (!isUserPitching) continue;
-      const our   = play.cumOurScore   ?? 0;
-      const their = play.cumTheirScore ?? 0;
-      if (our > their) {
-        // User has lead — check if this is the play that gave them the lead
-        const prevPlay = plays[play.playIndex - 1];
-        const prevOur   = prevPlay?.cumOurScore   ?? 0;
-        const prevTheir = prevPlay?.cumTheirScore ?? 0;
-        // Actually, WIN goes to the pitcher who was pitching for the user team
-        // when user took the lead they kept — but W goes to the pitcher on the
-        // OFFENSIVE side (their team scored). In baseball, win goes to the
-        // pitcher of record for the WINNING team — the user team pitcher who
-        // was pitching when the WINNING team's offense put them ahead.
-        // Simplification: give W to the first pitcher who had ≥ 5 outs recorded,
-        // or the SP if they went ≥ 5 innings, else the pitcher on mound when
-        // user took the lead.
-      }
-    }
-
-    // Simplified win rule: W goes to the SP if they pitched ≥ 5 full outs (based on outsRecorded >= 15)
-    // otherwise to the user pitcher who was on mound when the user's offense took the final lead.
-    // We detect "took final lead" by scanning the score progression.
-    let finalLeadPitcherIdx = -1;
-    for (let pi = 0; pi < plays.length; pi++) {
-      const play = plays[pi];
-      if (!play.rbi || play.rbi <= 0) continue;
-      // User scored — check if this scoring play put them in a lead they kept
-      const our   = play.cumOurScore   ?? 0;
-      const their = play.cumTheirScore ?? 0;
-      if (our > their) {
-        // User has lead after this scoring play
-        // Check if any subsequent play shows them losing the lead
-        let keptLead = true;
-        for (let pj = pi + 1; pj < plays.length; pj++) {
-          const later = plays[pj];
-          if ((later.cumOppScore ?? later.cumTheirScore ?? 0) >= (later.cumOurScore ?? 0)) {
-            // Tie or opp takes lead later
-            if (!isHome ? later.half === 'BOT' : later.half === 'TOP') {
-              // Opponent scored to tie/lead
-              keptLead = false;
-              break;
-            }
-          }
-        }
-        if (keptLead) { finalLeadPitcherIdx = pi; break; }
-      }
-    }
-
-    // Find which user pitcher was on mound for the user team at that point
-    // (actually the W goes to the pitcher on the OPPOSING half — they were pitching
-    //  when they were losing and the user was batting. But conventionally W goes to
-    //  the pitcher of the winning team who was pitching when that team took the lead.)
-    // We'll assign to the SP if ≥ 15 outs recorded, else last reliever active.
-    const sp = pitcherSpans[0];
-    if (sp.outsRecorded >= 15) {
-      get(sp.id).w = 1;
-    } else {
-      // Find pitcher who was pitching (for user) at the time user's offense scored the go-ahead
-      // This is the pitcher who was LAST active on user's side when user took the permanent lead
-      const winPitcher = pitcherSpans[pitcherSpans.length - 1];
-      get(winPitcher.id).w = 1;
-    }
+  // The play on which the winner took the lead for good.
+  let goAhead = null;
+  for (let i = plays.length - 1; i >= 0; i--) {
+    const p = plays[i];
+    if (lead(p, winner) <= 0) break;
+    if ((p.rbi || 0) > 0) goAhead = p;
   }
+  if (!goAhead) goAhead = plays.find(p => lead(p, winner) > 0) || plays[plays.length - 1];
+  const at = goAhead.playIndex ?? 0;
+  const onMound = (side) => {
+    const list = spans[side];
+    return list.filter(s => s.firstIdx <= at).pop() || list[0];
+  };
 
-  // ── LOSS ─────────────────────────────────────────────────────
-  if (userLost) {
-    // L goes to the user pitcher who gave up the go-ahead run that held
-    // Find the first play where opponent took a lead the user never overcame
-    for (let pi = 0; pi < plays.length; pi++) {
-      const play = plays[pi];
-      if (!play.rbi || play.rbi <= 0) continue;
-      // Check if opponent scored on this play (rbi goes to batting team)
-      const isOppBatting = isHome ? play.half === 'BOT' : play.half === 'TOP';
-      if (!isOppBatting) continue;
-      const our   = play.cumOurScore   ?? 0;
-      const their = play.cumTheirScore ?? 0;
-      if (their > our) {
-        // Opponent has lead — check if user ever ties/leads again
-        let userTiedBack = false;
-        for (let pj = pi + 1; pj < plays.length; pj++) {
-          const later = plays[pj];
-          if ((later.cumOurScore ?? 0) >= (later.cumTheirScore ?? later.cumOppScore ?? 0)) {
-            userTiedBack = true;
-            break;
-          }
-        }
-        if (!userTiedBack) {
-          // This play gave opp the permanent lead — find user pitcher active then
-          const lossPitcher = pitcherSpans.find(s =>
-            s.firstPlayIdx <= pi && s.lastPlayIdx >= pi
-          ) || pitcherSpans[pitcherSpans.length - 1];
-          if (lossPitcher) get(lossPitcher.id).l = 1;
-          break;
-        }
-      }
-    }
-  }
+  const out = {};
+  const add = (id, stat) => { (out[id] = out[id] || []).push({ stat, delta: 1 }); };
 
-  // ── SAVE ─────────────────────────────────────────────────────
-  if (userWon && pitcherSpans.length >= 2) {
-    const closer = pitcherSpans[pitcherSpans.length - 1];
-    const lead   = closer.entryUserScore - closer.entryOppScore;
-    const alreadyHasW = decisions[closer.id]?.w;
-    if (!alreadyHasW && lead > 0 && lead <= 3 && closer.outsRecorded >= 1) {
-      get(closer.id).sv = 1;
-    }
+  // W: winner's pitcher of record at the go-ahead — a starter needs 15 outs,
+  // otherwise the scorer gives it to the first reliever who followed him.
+  let w = onMound(winner);
+  if (w === spans[winner][0] && w.outs < 15) w = spans[winner][1] || w;
+  add(w.id, 'w');
+  // L: loser's pitcher on the mound for the go-ahead run.
+  add(onMound(loser).id, 'l');
+  // SV: winner's last pitcher, not the W, finished it, entered leading by ≤3
+  // (or pitched 3+ innings with any lead) and recorded an out.
+  const last = spans[winner][spans[winner].length - 1];
+  const sv = last.id !== w.id && last.outs >= 1 && last.entryLead > 0
+    && (last.entryLead <= 3 || last.outs >= 9);
+  if (sv) add(last.id, 'sv');
+  // HLD: winner's middle relievers who entered in a save situation, got an
+  // out and handed the lead on intact.
+  for (const sp of spans[winner].slice(1)) {
+    if (sp.id === w.id || (sv && sp.id === last.id)) continue;
+    if (sp.entryLead > 0 && sp.entryLead <= 3 && sp.outs >= 1 && sp.exitLead > 0) add(sp.id, 'hld');
   }
-
-  // ── HOLDS ────────────────────────────────────────────────────
-  if (userWon && pitcherSpans.length >= 2) {
-    const saveOrWinIds = new Set(
-      Object.entries(decisions)
-        .filter(([, d]) => d.sv || d.w)
-        .map(([id]) => id)
-    );
-    // Middle relievers who pitched in a save situation and kept the lead
-    for (let i = 1; i < pitcherSpans.length - 1; i++) {
-      const span = pitcherSpans[i];
-      if (saveOrWinIds.has(span.id)) continue;
-      const lead = span.entryUserScore - span.entryOppScore;
-      if (lead > 0 && lead <= 3 && span.outsRecorded >= 1
-          && span.exitUserScore > span.exitOppScore) {
-        get(span.id).hd = 1;
-      }
-    }
-  }
-
-  // Convert to stat delta format
-  const result = {};
-  for (const [pitcherId, dec] of Object.entries(decisions)) {
-    result[pitcherId] = [];
-    if (dec.w)  result[pitcherId].push({ stat: 'w',  delta: 1 });
-    if (dec.l)  result[pitcherId].push({ stat: 'l',  delta: 1 });
-    if (dec.sv) result[pitcherId].push({ stat: 'sv', delta: 1 });
-    if (dec.hd) result[pitcherId].push({ stat: 'hld', delta: 1 });
-  }
-  return result;
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────
