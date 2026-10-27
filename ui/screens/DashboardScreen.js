@@ -528,7 +528,12 @@ function _renderDashboard(state) {
   const gamesPlayed  = wins + losses;
 
   let bannerGame, bannerRecord;
-  if (isSpring) {
+  const POST = { PLAYOFF_BRACKET_BUILD: 'POSTSEASON', WILD_CARD: 'WILD CARD', FIRST_ROUND: 'FIRST ROUND',
+                 DIVISION_SERIES: 'DIVISION SERIES', WORLD_SERIES: 'WORLD SERIES', SEASON_SUMMARY: 'SEASON COMPLETE' };
+  if (POST[phase]) {
+    bannerGame   = POST[phase];
+    bannerRecord = `${wins}–${losses} season · ${team.postseasonWins || 0}–${team.postseasonLosses || 0} postseason`;
+  } else if (isSpring) {
     bannerGame   = springPlayed === 0 ? 'SPRING TRAINING' : `SPRING GAME ${springPlayed}`;
     bannerRecord = springPlayed === 0 ? 'First game coming up' : `${springPlayed} of ${springTotal}`;
   } else {
@@ -1026,13 +1031,40 @@ function _renderFirstPitchCountdown(game) {
 // ─────────────────────────────────────────────────────────────
 
 function _renderSeasonDoneCard(state) {
+  // No game of ours is scheduled: say where the season stands (§68).
   const wins   = state.userTeam?.wins   || 0;
   const losses = state.userTeam?.losses || 0;
-  const ties   = state.userTeam?.ties   || 0;
+  const b      = state.playoffBracket;
+  const phase  = state.phase;
+  const ROUND  = { WILD_CARD: 'Wild Card', FIRST_ROUND: 'First Round', DIVISION_SERIES: 'Division Series', WORLD_SERIES: 'World Series' };
+  const series = b ? ['WILD_CARD', 'FIRST_ROUND', 'DIVISION_SERIES', 'WORLD_SERIES']
+    .flatMap(r => r === 'WORLD_SERIES' ? b.WORLD_SERIES.series : [...b.divA[r].series, ...b.divB[r].series]) : [];
+  const lostIn = series.find(x => x.status === 'final'
+    && ((x.winner === 'A' ? x.teamB : x.teamA)?.id === 'user'));
+  const champ  = b?.champion;
+
+  let title, line;
+  if (!b && ['REGULAR_SEASON', 'ALL_STAR_BREAK', 'TRADE_DEADLINE'].includes(phase)) {
+    title = 'Regular season complete';
+    line  = `${wins}–${losses}. The bracket is set when the league's last games are final.`;
+  } else if (champ) {
+    title = champ.id === 'user' ? 'World Series Champions 🏆' : 'Season complete';
+    line  = champ.id === 'user' ? `${wins}–${losses} in the regular season — and the last team standing.`
+                                : `The ${_escape(champ.name)} won the World Series.`;
+  } else if (lostIn) {
+    title = `Eliminated in the ${ROUND[lostIn.round]}`;
+    line  = 'The playoffs go on — follow the games below or in League → Playoffs.';
+  } else if (b) {
+    title = 'Through to the next round';
+    line  = 'The next round starts once the other series are decided.';
+  } else {
+    title = 'Season complete';
+    line  = `${wins}–${losses} final record`;
+  }
   return `<div class="next-game-card">
     <div class="ngc-info">
-      <div class="ngc-opp" style="font-size:16px;font-weight:700;">Season Complete</div>
-      <div class="ngc-loc">${wins}–${losses}${ties ? `–${ties}` : ''} final record</div>
+      <div class="ngc-opp" style="font-size:16px;font-weight:700;">${title}</div>
+      <div class="ngc-loc">${line}</div>
     </div>
   </div>`;
 }

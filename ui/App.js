@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r61';
+export const APP_VERSION = 'tfo-v2-r62';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -742,9 +742,17 @@ async function _releaseDueCards({ quiet = false } = {}) {
  */
 async function _advanceRosterClock() {
   if (!StateManager.get()) return;
-  const { advanceClock } = await import('../engine/GameEngine.js');
+  const { advanceClock, checkMilestone } = await import('../engine/GameEngine.js');
   const res = advanceClock(Date.now());
+  // Milestones queued by league events (playoff rounds, series results) —
+  // shown one per tick so they never stack.
+  if (!_milestoneActive) {
+    const m = checkMilestone();
+    if (m) showMilestone(m);
+  }
   if (!res.changed) return;
+  const phase = res.events.filter(e => e.type === 'PHASE').pop();
+  if (phase) EventBus.emit('game:phaseChanged', { to: phase.to, source: 'clock' });
   if (res.events.length) EventBus.emit('roster:changed', { source: 'clock', events: res.events });
   EventBus.emit('inbox:changed', { source: 'clock' });
   updateHeader(StateManager.get());

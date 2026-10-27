@@ -70,7 +70,8 @@ export function createGameState(config = {}) {
     allStarHostingScore:    0,
     allStarHostedCount:     0,
     allStarLastHostedSeason: null,
-    seenMilestones:         [],   // milestone IDs — serialized as Array (not Set)
+    seenMilestones:         [],   // 'MILESTONE_ID@season' keys — serialized as Array (not Set)
+    milestoneQueue:         [],   // milestones queued by league events, shown in order (§68)
     seasonHistory:          [],   // season summary objects added each offseason
     metricHistory:          [],   // { gameIndex, ovr, wins, losses } per game
 

@@ -65,6 +65,7 @@ export function unmount() {
 // ─────────────────────────────────────────────────────────────
 
 export function refresh() {
+  _injectCSS();
   const container = document.getElementById('playoff-content');
   if (!container) return;
 
@@ -147,7 +148,7 @@ function _renderSeriesChip(series, state, bestOf, isWildCard) {
   const userInvolved = series.teamA?.id === 'user' || series.teamB?.id === 'user';
   const winsA     = series.winsA || 0;
   const winsB     = series.winsB || 0;
-  const winner    = series.winner;
+  const winner    = _winnerTeam(series);
   const isActive  = series.status === 'live' || series.status === 'active';
   const isFinal   = !!winner || series.status === 'final';
 
@@ -201,7 +202,7 @@ function _renderWorldSeries(wsData, state) {
   const teamB     = _resolveTeam(series.teamB, state);
   const winsA     = series.winsA || 0;
   const winsB     = series.winsB || 0;
-  const winner    = series.winner;
+  const winner    = _winnerTeam(series);
   const isFinal   = !!winner;
   const isActive  = series.status === 'live' || series.status === 'active';
   const userInvA  = series.teamA?.id === 'user';
@@ -310,7 +311,7 @@ function _openSeriesLog(series, state) {
   const teamA    = _resolveTeam(series.teamA, state);
   const teamB    = _resolveTeam(series.teamB, state);
   const games    = series.games || [];
-  const winner   = series.winner;
+  const winner   = _winnerTeam(series);
   const userAbbr = state.userTeam?.abbr || '';
 
   const isUserA = teamA.abbr === userAbbr;
@@ -320,20 +321,19 @@ function _openSeriesLog(series, state) {
     ? `${_resolveTeam(winner, state).abbr} wins series`
     : `Series in progress`;
 
-  const winsA = (series.wins || {})[series.teamA?.id || ''] || 0;
-  const winsB = (series.wins || {})[series.teamB?.id || ''] || 0;
+  const winsA = series.winsA || 0;
+  const winsB = series.winsB || 0;
 
   const gameRows = games.length > 0
     ? games.map((g, i) => {
         const homeScore = g.homeScore ?? 0;
         const awayScore = g.awayScore ?? 0;
-        const winnerAbbr = homeScore > awayScore
-          ? (g.homeTeamId === series.teamA?.id ? teamA.abbr : teamB.abbr)
-          : (g.awayTeamId === series.teamA?.id ? teamA.abbr : teamB.abbr);
+        const winnerId   = homeScore > awayScore ? g.homeId : g.awayId;
+        const winnerAbbr = winnerId === series.teamA?.id ? teamA.abbr : teamB.abbr;
         return `
           <div class="series-log-game">
             <span class="series-log-gnum">G${i + 1}</span>
-            <span class="series-log-teams">${_escape(teamA.abbr)} ${awayScore > homeScore ? awayScore : homeScore} – ${awayScore > homeScore ? homeScore : awayScore} ${_escape(teamB.abbr)}</span>
+            <span class="series-log-teams">${_escape(g.awayId === series.teamA?.id ? teamA.abbr : teamB.abbr)} ${awayScore} @ ${homeScore} ${_escape(g.homeId === series.teamA?.id ? teamA.abbr : teamB.abbr)}</span>
             <span class="series-log-winner">${_escape(winnerAbbr)} W</span>
           </div>`;
       }).join('')
@@ -385,7 +385,7 @@ function _openSeriesLog(series, state) {
 }
 
 function _playoffStatusLine(bracket, state) {
-  const champion = bracket?.champion || bracket?.WORLD_SERIES?.winner;
+  const champion = bracket?.champion;
   if (champion) {
     const name = _resolveTeam(champion, state).name || 'Champion';
     return `🏆 ${_escape(name)} — World Champions`;
@@ -399,6 +399,11 @@ function _playoffStatusLine(bracket, state) {
     WORLD_SERIES:    'World Series',
   };
   return labels[phase] || 'Playoffs';
+}
+
+/** The series winner as a team object ('A' → teamA, 'B' → teamB). */
+function _winnerTeam(series) {
+  return series?.winner === 'A' ? series.teamA : series?.winner === 'B' ? series.teamB : null;
 }
 
 function _resolveTeam(teamRef, state) {

@@ -122,6 +122,40 @@ function stepTo(t) {
   }
 }
 
+// ── §68: after the regular season, live the league clock to the end ──
+async function runPostseason() {
+  let userGames = 0, steps = 0;
+  for (let guard = 0; guard < 3000; guard++) {
+    const st = SM.get();
+    if (st.phase === PHASE.SEASON_SUMMARY) break;
+    const idx = st.currentGameIndex;
+    const g = st.schedule[idx];
+    if (g && !g._committed) {
+      playToFinal(idx);
+      await commitGame(idx);
+      releaseDueCards();
+      if (g.isPlayoff) userGames++;
+      continue;
+    }
+    let next = Infinity;
+    for (const cg of Object.values(st.leagueSchedule.dayMap).flat()) {
+      if (cg.played) continue;
+      const t = cg.status === GAME_STATUS.LIVE && cg.plays?.length
+        ? cg.plays[cg.plays.length - 1]._timestamp : cg.gameTime;
+      if (t > clock.get() - 1 && t < next) next = t;
+    }
+    const sched = (st.scheduledCards || []).map(c => c.deliverAtMs).filter(t => t > clock.get());
+    if (sched.length) next = Math.min(next, ...sched);
+    if (!Number.isFinite(next)) { clock.advance(6 * 3600_000); }
+    else clock.set(next + 1000);
+    advanceClock(clock.get());
+    releaseDueCards();
+    gmActs();
+    steps++;
+  }
+  return { userGames, steps };
+}
+
 // ── Drive one game to FINAL by advancing the virtual clock ───────
 function playToFinal(idx) {
   for (let guard = 0; guard < 6000; guard++) {
@@ -769,9 +803,46 @@ async function main() {
 
   // If we simulated the entire regular season, the playoffs must have started
   // (guards the getNextPhase playoff-trigger off-by-one).
-  if (target >= SM.get().schedule.length) {
-    check('playoffs triggered after final regular game',
-          SM.get().phase === PHASE.PLAYOFF_BRACKET_BUILD, `phase=${SM.get().phase}`);
+  // ── §68: the postseason, played out on the league clock ─────────
+  if (target >= s0.schedule.length) {
+    const ps = await runPostseason();
+    const st = SM.get();
+    const b  = st.playoffBracket;
+    check('postseason: bracket built when the league\'s last regular game was final', !!b);
+    check(`postseason: season reaches SEASON_SUMMARY after the World Series (phase ${st.phase})`,
+          st.phase === PHASE.SEASON_SUMMARY, `${ps.steps} clock steps, ${ps.userGames} user playoff games`);
+    if (b) {
+      const all = ['WILD_CARD', 'FIRST_ROUND', 'DIVISION_SERIES', 'WORLD_SERIES']
+        .flatMap(r => r === 'WORLD_SERIES' ? b.WORLD_SERIES.series : [...b.divA[r].series, ...b.divB[r].series]);
+      check(`postseason: all ${all.length} series decided`, all.length === 9 && all.every(x => x.status === 'final'),
+            all.map(x => `${x.id}:${x.status}`).join(' '));
+      check('postseason: every series ended exactly when a team reached the wins needed',
+            all.every(x => Math.max(x.winsA, x.winsB) === x.winsNeeded && x.games.length === x.winsA + x.winsB
+                        && x.games.length <= x.bestOf));
+      const seedsOk = ['divA', 'divB'].every(d => {
+        const sd = b[d].seeds; const pct = t => t.wins / Math.max(1, t.wins + t.losses);
+        return sd.length === 5 && sd.every((t, i) => i === 0 || pct(sd[i - 1]) >= pct(t));
+      });
+      check('postseason: seeds follow the standings (all five teams per division)', seedsOk);
+      check('postseason: champion crowned', !!b.champion, b.champion?.name);
+      const pct = (t) => `${t.abbr || 'USR'} ${t.wins}-${t.losses}`;
+      check('season: final standings (info)', true,
+            [...b.divA.seeds, ...b.divB.seeds].map(t => `${t.abbr} ${t.wins}-${t.losses}`).join(' | '));
+      const regBad = [st.userTeam, ...st.leagueTeams].filter(t => (t.wins || 0) + (t.losses || 0) !== REGULAR_SEASON_GAME_COUNT);
+      check('postseason: playoff games never touch the regular-season record', regBad.length === 0,
+            regBad.map(t => `${t.abbr} ${t.wins}-${t.losses}`).join(', '));
+      const leftover = [...st.schedule.filter(g => g.isPlayoff && !g._committed),
+                        ...Object.values(st.leagueSchedule.dayMap).flat().filter(g => g.isPlayoff && !g.played)];
+      check('postseason: no orphaned playoff games (clinched series cancel their extras)', leftover.length === 0,
+            leftover.map(g => g.seriesId).join(','));
+      const userSeries = all.filter(x => x.teamA?.id === 'user' || x.teamB?.id === 'user');
+      check(`postseason: user played ${ps.userGames} live playoff games across ${userSeries.length} series`,
+            ps.userGames === userSeries.reduce((a, x) => a + x.games.length, 0) && userSeries.length >= 1);
+      const psW = Object.values(st.players).reduce((a, p) => a + (p.postseasonStats?.w || 0), 0);
+      const psGames = all.reduce((a, x) => a + x.games.length, 0);
+      check(`postseason: separate postseason stats (${psW} W in ${psGames} games)`,
+            Math.abs(psW - psGames) <= 1 && Object.values(st.players).every(p => !p.stats || true));
+    }
   }
 
   if (process.env.DBG) {

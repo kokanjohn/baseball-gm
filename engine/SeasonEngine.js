@@ -368,83 +368,7 @@ function _winPct(team) {
 // PLAYOFF BRACKET
 // ─────────────────────────────────────────────────────────────
 
-/**
- * buildPlayoffBracket(standings)
- * Builds the initial playoff bracket from final regular season standings.
- * Returns a bracket object used by GameEngine to generate playoff series.
- *
- * Format: 6 teams — 2 division leaders + 1 wildcard per league (simplified)
- * Wild card: best record among non-leaders (1-game)
- * Division series: best-of-5
- * Championship: best-of-7
- * World Series: best-of-7
- *
- * @param {Object} standings  — from computeFullStandings()
- * @returns {Object} bracket
- */
-/**
- * buildPlayoffBracket(standings)
- * Builds the division-contained playoff bracket (Section 26 — LOCKED).
- *
- * Structure per division:
- *   Wild Card (1 game):   4th vs 5th
- *   First Round (best 3): 1st vs WC winner, 2nd vs 3rd
- *   Division Series (best 5): first round winners
- * World Series (best 7): Division A champion vs Division B champion
- *
- * Seeding tiebreaker: head-to-head record (applied before bracket build).
- * World Series home field: team with better regular season record (#1 overall seed).
- *
- * @param {Object} standings  — from computeFullStandings()
- * @returns {Object} bracket
- */
-export function buildPlayoffBracket(standings) {
-  const { divA, divB } = standings;
-
-  const _makeSeries = (home, away, bestOf) => ({
-    home,
-    away,
-    bestOf,
-    winsNeeded: Math.ceil(bestOf / 2),
-    wins: {
-      [home?.id]: 0,
-      [away?.id]: 0,
-    },
-    games:    [],     // game objects added as series is played
-    complete: false,
-    winner:   null,
-  });
-
-  const _divBracket = (div) => ({
-    WILD_CARD: {
-      // 4th seed hosts (higher seed always hosts)
-      series: [ _makeSeries(div[3], div[4], 1) ],
-    },
-    FIRST_ROUND: {
-      // Filled after Wild Card resolves
-      // 1st vs WC winner, 2nd vs 3rd
-      // 1st seed hosts vs WC winner; 2nd seed hosts vs 3rd
-      series: [
-        _makeSeries(div[0], null, 3),  // home: 1st seed, away: WC winner (filled after WC)
-        _makeSeries(div[1], div[2], 3), // home: 2nd seed, away: 3rd seed
-      ],
-    },
-    DIVISION_SERIES: {
-      series: [], // filled after First Round resolves
-    },
-  });
-
-  return {
-    divA: _divBracket(divA),
-    divB: _divBracket(divB),
-    WORLD_SERIES: {
-      series: [], // filled after both Division Series resolve
-      // home field: overallOne.divisionId determines which division hosts
-    },
-    overallOneDivision: standings.overallOne?.divisionId || 'A',
-    champion: null,
-  };
-}
+// (The playoff bracket lives in PlayoffEngine.js — §68.)
 
 // ─────────────────────────────────────────────────────────────
 // PHASE TRANSITION
@@ -480,8 +404,8 @@ export function getNextPhase(currentPhase, scheduleIndex, standings, userInPlayo
     case PHASE.REGULAR_SEASON:
       if (reg === ALL_STAR_BREAK_AFTER_GAME)          return PHASE.ALL_STAR_BREAK;
       if (reg === TRADE_DEADLINE_OPEN)                return PHASE.TRADE_DEADLINE;
-      // Playoffs begin once the final regular-season game has been committed.
-      if (reg + 1 >= REGULAR_SEASON_GAME_COUNT)        return PHASE.PLAYOFF_BRACKET_BUILD;
+      // The end of the regular season is a LEAGUE event (every club's last
+      // game), handled on the clock by GameEngine._seasonProgress (§68).
       return null;
 
     case PHASE.ALL_STAR_BREAK:
@@ -491,21 +415,14 @@ export function getNextPhase(currentPhase, scheduleIndex, standings, userInPlayo
       if (reg > TRADE_DEADLINE_CLOSE) return PHASE.REGULAR_SEASON;
       return null;
 
+    // Playoff rounds advance when every series in the round is decided —
+    // GameEngine._seasonProgress, on the league clock (§68).
     case PHASE.PLAYOFF_BRACKET_BUILD:
-      // All 5 teams per division qualify — user is always in playoffs
-      return PHASE.WILD_CARD;
-
     case PHASE.WILD_CARD:
-      return PHASE.FIRST_ROUND;
-
     case PHASE.FIRST_ROUND:
-      return PHASE.DIVISION_SERIES;
-
     case PHASE.DIVISION_SERIES:
-      return PHASE.WORLD_SERIES;
-
     case PHASE.WORLD_SERIES:
-      return PHASE.SEASON_SUMMARY;
+      return null;
 
     case PHASE.SEASON_SUMMARY:
       return PHASE.OFFSEASON;

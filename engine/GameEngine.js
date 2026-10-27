@@ -34,11 +34,11 @@ import {
 import {
   generateLeagueCalendar,
   getNextPhase,
-  buildPlayoffBracket,
   scheduleMakeupGame,
   buildActivityFeedEntry,
   pruneActivityFeed,
   _isoDate,
+  _makeGameObject,
 } from './SeasonEngine.js';
 
 import {
@@ -59,6 +59,10 @@ import {
 } from './RosterEngine.js';
 
 import { rosterClock, applyDue, hasDue, callUp } from './TransactionEngine.js';
+import {
+  seedDivision, buildBracket, prepareRound, recordGame, roundComplete, roundSeries,
+  roundForPhase, nextRound, seriesGames, ROUND_PHASE, ROUND_LABEL,
+} from './PlayoffEngine.js';
 import { rollGameInjuries, beginInjury, clearInjuryUpdate } from './InjuryEngine.js';
 
 import { computeOVR, computeAge } from './PlayerFactory.js';
@@ -92,6 +96,7 @@ import {
   GAME_STATUS,
   GAME_TICK_MS,
   GAME_DURATION_FALLBACK_MS,
+  GAME_TIMES_BY_DOW,
   MILESTONE_SCREENS,
   PLAYOFF_WILD_CARD_GAMES,
   PLAYOFF_FIRST_ROUND_BEST_OF,
@@ -851,14 +856,21 @@ export async function commitGame(gameIndex) {
       const outcome = us > them ? 'win' : us < them ? 'loss' : 'tie'; // ties only in spring
 
       // Spring results go to the separate spring record (Spring Training
-      // Rules — LOCKED); only regular-season games count in the standings.
-      _creditResult(s.userTeam, outcome, !!g.isSpring);
+      // Rules — LOCKED); playoff results to the postseason record and the
+      // series. Only regular-season games count in the standings.
+      const kind = g.isPlayoff ? 'playoff' : g.isSpring ? 'spring' : 'regular';
+      _creditResult(s.userTeam, outcome, kind);
 
       // The opponent's record gets the mirror result — this game IS their
       // game for the date (one league calendar, §67).
       const oppRecordTeam = s.leagueTeams.find(t => t.name === g.opponent) || null;
       if (oppRecordTeam) {
-        _creditResult(oppRecordTeam, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', !!g.isSpring);
+        _creditResult(oppRecordTeam, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', kind);
+      }
+      if (g.isPlayoff && s.playoffBracket) {
+        _pendingSeriesResults.push({ seriesId: g.seriesId, gameId: `u-${g.index}`,
+          homeId: g.isHome ? 'user' : g.opponentId, awayId: g.isHome ? g.opponentId : 'user',
+          homeScore: g.isHome ? us : them, awayScore: g.isHome ? them : us, atMs: endMs });
       }
 
       g._recordApplied = true;
@@ -870,10 +882,10 @@ export async function commitGame(gameIndex) {
     if (!g._statsApplied && g.plays && g.plays.length > 0) {
       g._statsApplied = true;
       const opponentTeam = s.leagueTeams.find(t => t.name === g.opponent) || null;
+      const statKey = g.isPlayoff ? 'postseasonStats' : g.isSpring ? 'springStats' : 'stats';
       const statMutations = accumulateStats(
-        g.plays, s.userTeam, opponentTeam, s.players, g.isSpring || false
+        g.plays, s.userTeam, opponentTeam, s.players, statKey
       );
-      const statKey = g.isSpring ? 'springStats' : 'stats';
 
       // Apply merged stat lines to each player.
       // accumulateStats already merged current + delta — assign directly.
@@ -988,14 +1000,10 @@ export async function commitGame(gameIndex) {
   const currentPhase = state2.phase;
   let newPhase = null;
 
-  // For playoff phases, only advance when the current round is fully resolved
-  if (_isPlayoffPhase(currentPhase)) {
-    if (_isPlayoffRoundComplete(state2)) {
-      newPhase = getNextPhase(currentPhase, gameIndex, state2.standings, true);
-    }
-  } else {
-    newPhase = getNextPhase(currentPhase, gameIndex, state2.standings, true);
-  }
+  // Spring → season, All-Star break, trade deadline follow the user's game
+  // count. The end of the regular season and every playoff round are LEAGUE
+  // events (all teams' games), driven by the clock in _seasonProgress (§68).
+  newPhase = getNextPhase(currentPhase, gameIndex, state2.standings, true);
 
   if (newPhase) {
     await advancePhase(newPhase);
@@ -1156,6 +1164,17 @@ export function getNextGame() {
  * @returns {Promise<void>}
  */
 export async function advancePhase(newPhase) {
+  _applyPhase(newPhase);
+  await StateManager.save();
+}
+
+/**
+ * _applyPhase(newPhase)
+ * The side effects of entering a phase — synchronous, so the league clock
+ * (advanceClock) can move the season forward in time order (§68). Phase
+ * milestones with no game trigger are queued for the App to show.
+ */
+function _applyPhase(newPhase) {
   const state = StateManager.get();
   const fromPhase = state.phase;
 
@@ -1202,37 +1221,6 @@ export async function advancePhase(newPhase) {
       });
       break;
 
-    case PHASE.PLAYOFF_BRACKET_BUILD: {
-      const standings = computeFullStandings(StateManager.get());
-      const bracket   = buildPlayoffBracket(standings);
-      // Wire WC winner slot into First Round bracket after WC resolves
-      // (done at FIRST_ROUND phase entry — bracket shell built here)
-      StateManager.mutate(s => {
-        s.playoffBracket = bracket;
-        s.standings      = standings;
-      });
-      break;
-    }
-
-    case PHASE.FIRST_ROUND: {
-      // Wire Wild Card winners into First Round bracket
-      // GameEngine fills bracket.divA.FIRST_ROUND.series[0].away
-      // and bracket.divB.FIRST_ROUND.series[0].away from WC results
-      const state  = StateManager.get();
-      const bracket = state.playoffBracket;
-      if (bracket) {
-        ['divA', 'divB'].forEach(div => {
-          const wcWinner = bracket[div]?.WILD_CARD?.series?.[0]?.winner;
-          if (wcWinner && bracket[div]?.FIRST_ROUND?.series?.[0]) {
-            bracket[div].FIRST_ROUND.series[0].away = wcWinner;
-            bracket[div].FIRST_ROUND.series[0].wins[wcWinner.id] = 0;
-          }
-        });
-        StateManager.mutate(s => { s.playoffBracket = bracket; });
-      }
-      break;
-    }
-
     case PHASE.OFFSEASON: {
       // Initialize offseason state
       const osInitMuts = initOffseason(StateManager.get());
@@ -1278,40 +1266,11 @@ export async function advancePhase(newPhase) {
       break;
     }
 
-    case PHASE.DIVISION_SERIES: {
-      // Wire Division Series winners into World Series bracket
-      const state = StateManager.get();
-      const bracket = state.playoffBracket;
-      if (bracket) {
-        const divAWinner = bracket.divA?.DIVISION_SERIES?.series?.find(s => s.winner)?.winner;
-        const divBWinner = bracket.divB?.DIVISION_SERIES?.series?.find(s => s.winner)?.winner;
-        if (divAWinner || divBWinner) {
-          if (!bracket.WORLD_SERIES) bracket.WORLD_SERIES = { series: [{}] };
-          if (!bracket.WORLD_SERIES.series[0]) bracket.WORLD_SERIES.series[0] = {};
-          if (divAWinner) bracket.WORLD_SERIES.series[0].teamA = divAWinner;
-          if (divBWinner) bracket.WORLD_SERIES.series[0].teamB = divBWinner;
-          bracket.WORLD_SERIES.series[0].wins = {
-            [divAWinner?.id || 'a']: 0,
-            [divBWinner?.id || 'b']: 0,
-          };
-          StateManager.mutate(s => { s.playoffBracket = bracket; });
-        }
-      }
-      break;
-    }
-
-    case PHASE.WORLD_SERIES: {
-      // World Series bracket slot already populated by DIVISION_SERIES phase.
-      // No additional wiring needed — bracket.WORLD_SERIES.series[0] is ready.
-      break;
-    }
-
     case PHASE.SEASON_SUMMARY: {
       // Compute prestige for the completed season
       const state3 = StateManager.get();
       const bracket = state3.playoffBracket;
-      const wonChampionship = bracket?.champion?.id === 'user'
-        || bracket?.WORLD_SERIES?.series?.[0]?.winner?.id === 'user';
+      const wonChampionship = bracket?.champion?.id === 'user';
       const playoffRoundsWon = _countPlayoffRoundsWon(state3);
       const winTarget = state3.userTeam._ownerWinTarget || 75;
       const wins      = state3.userTeam.wins || 0;
@@ -1434,7 +1393,7 @@ export async function advancePhase(newPhase) {
       break;
   }
 
-  await StateManager.save();
+  _queuePhaseMilestones(newPhase);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1499,11 +1458,19 @@ function _checkSeriesMilestone(state) {
 }
 
 export function checkMilestone() {
+  // Milestones queued by league events (playoff rounds, series results,
+  // season over, champions — §68) come first, one per call.
+  if ((StateManager.get().milestoneQueue || []).length) {
+    let m = null;
+    StateManager.mutate(s => { m = s.milestoneQueue.shift(); });
+    return m;
+  }
   const state       = StateManager.get();
   const phase       = state.phase;
   const gameIndex   = (state.currentGameIndex || 0) - SPRING_TRAINING_GAME_COUNT;
   const seasonNum   = state.seasonNum;
-  const seenSet     = new Set(state.seenMilestones || []);
+  // Seen per season: Opening Day, the deadline etc. happen every year.
+  const seenSet     = new Set((state.seenMilestones || []).filter(k => k.endsWith(`@${seasonNum}`)).map(k => k.split('@')[0]));
 
   // Series-result screens fire at the end of each series (recurring — NOT
   // seen-gated), with the correct Won/Lost/Split outcome. Handled before the
@@ -1516,8 +1483,10 @@ export function checkMilestone() {
     // A milestone with neither a phase nor a game trigger has no defined "when",
     // so it must be fired explicitly by game logic — never by this generic scan.
     // (Previously these fired on game 1: SERIES_WON, then SEASON_OVER, etc.)
-    if ((milestone.triggerPhase === null || milestone.triggerPhase === undefined)
-        && (milestone.triggerGame === null || milestone.triggerGame === undefined)) continue;
+    // Only game-index milestones are polled here. Phase milestones without a
+    // game trigger are queued once, when the phase is entered
+    // (_queuePhaseMilestones, §68) — polling them re-fired them on every load.
+    if (milestone.triggerGame === null || milestone.triggerGame === undefined) continue;
     if (seenSet.has(milestone.id)) continue;
     if (milestone.triggerPhase && milestone.triggerPhase !== phase) continue;
     if (milestone.triggerGame !== null && milestone.triggerGame !== undefined
@@ -1527,8 +1496,8 @@ export function checkMilestone() {
 
     // Milestone fires — mark as seen
     StateManager.mutate(s => {
-      if (!s.seenMilestones.includes(milestone.id)) {
-        s.seenMilestones.push(milestone.id);
+      if (!s.seenMilestones.includes(`${milestone.id}@${seasonNum}`)) {
+        s.seenMilestones.push(`${milestone.id}@${seasonNum}`);
       }
     });
 
@@ -1869,10 +1838,18 @@ function _applyMutations(state, mutations) {
 // RESULTS + CPU GAMES ON THE LEAGUE CLOCK (§67)
 // ─────────────────────────────────────────────────────────────
 
-/** Credit a W/L/T to a team — spring games to the separate spring record. */
-function _creditResult(team, outcome, isSpring) {
+/**
+ * Credit a W/L/T to a team. kind: 'regular' (standings), 'spring' (separate
+ * spring record), 'playoff' (postseason record).
+ */
+function _creditResult(team, outcome, kind) {
   if (!team) return;
-  if (isSpring) {
+  if (kind === 'playoff') {
+    if (outcome === 'win') team.postseasonWins   = (team.postseasonWins   || 0) + 1;
+    else                   team.postseasonLosses = (team.postseasonLosses || 0) + 1;
+    return;
+  }
+  if (kind === 'spring') {
     if (outcome === 'win')       team.springWins   = (team.springWins   || 0) + 1;
     else if (outcome === 'loss') team.springLosses = (team.springLosses || 0) + 1;
     else                         team.springTies   = (team.springTies   || 0) + 1;
@@ -1965,8 +1942,8 @@ function _finishLeagueGame(date, i) {
   const endMs = _playsEndMs(cg0);
   const last  = cg0.plays[cg0.plays.length - 1];
   const homeScore = last?.cumOurScore ?? 0, awayScore = last?.cumTheirScore ?? 0;
-  const stats = accumulateStats(cg0.plays, null, null, st0.players, !!cg0.isSpring);
-  const statKey = cg0.isSpring ? 'springStats' : 'stats';
+  const statKey = cg0.isPlayoff ? 'postseasonStats' : cg0.isSpring ? 'springStats' : 'stats';
+  const stats = accumulateStats(cg0.plays, null, null, st0.players, statKey);
   const perGame = {};
   for (const play of cg0.plays) {
     if (!play._statDeltas || play.type === 'pinch_hit') continue;
@@ -1981,8 +1958,13 @@ function _finishLeagueGame(date, i) {
     const home = s.leagueTeams.find(t => t.id === g.homeId);
     const away = s.leagueTeams.find(t => t.id === g.awayId);
     const outcome = homeScore > awayScore ? 'win' : homeScore < awayScore ? 'loss' : 'tie';
-    _creditResult(home, outcome, !!g.isSpring);
-    _creditResult(away, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', !!g.isSpring);
+    const kind = g.isPlayoff ? 'playoff' : g.isSpring ? 'spring' : 'regular';
+    _creditResult(home, outcome, kind);
+    _creditResult(away, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', kind);
+    if (g.isPlayoff) {
+      _pendingSeriesResults.push({ seriesId: g.seriesId, gameId: g.id, homeId: g.homeId, awayId: g.awayId,
+                                   homeScore, awayScore, atMs: endMs });
+    }
     _advanceRotation(home);
     _advanceRotation(away);
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
@@ -2000,7 +1982,7 @@ function _finishLeagueGame(date, i) {
     if (home && away && !g.isSpring) {
       const [w, l, ws, ls] = homeScore > awayScore ? [home, away, homeScore, awayScore] : [away, home, awayScore, homeScore];
       s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
-        buildActivityFeedEntry('result', w.abbr, `${w.abbr} def. ${l.abbr} ${ws}–${ls}`)]);
+        buildActivityFeedEntry('result', w.abbr, `${g.isPlayoff ? 'Playoffs: ' : ''}${w.abbr} def. ${l.abbr} ${ws}–${ls}`)]);
     }
     s.standings = computeFullStandings(s);
   });
@@ -2024,6 +2006,214 @@ function _finishLeagueGame(date, i) {
     });
   }
   return inj.events.map(e => ({ ...e, atMs: endMs }));
+}
+
+// ─────────────────────────────────────────────────────────────
+// SEASON PROGRESS — end of season + playoffs on the league clock (§68)
+// ─────────────────────────────────────────────────────────────
+
+// Playoff finals waiting to be applied to the bracket (filled inside commit /
+// CPU-finish mutations, drained by _seasonProgress in time order).
+const _pendingSeriesResults = [];
+
+const REGULAR_PHASES = new Set([PHASE.REGULAR_SEASON, PHASE.ALL_STAR_BREAK, PHASE.TRADE_DEADLINE]);
+
+function _regularSeasonDone(state) {
+  const userDone = (state.schedule || []).filter(g => !g.isSpring && !g.isPlayoff).every(g => g._committed);
+  if (!userDone) return false;
+  for (const games of Object.values(state.leagueSchedule?.dayMap || {})) {
+    for (const g of games) if (!g.isSpring && !g.isPlayoff && !g.played) return false;
+  }
+  return true;
+}
+
+/**
+ * _seasonProgress(atMs)
+ * Moves the league's season forward when its games say so — not when the
+ * user's game index does. Applies playoff finals to the bracket (cancelling a
+ * clinched series' remaining games), builds the bracket when the last
+ * regular-season game in the league is final, starts each round when the
+ * previous one is complete, and closes the season after the World Series.
+ * @returns {Object[]} events ({ type: 'PHASE', to } …)
+ */
+function _seasonProgress(atMs) {
+  const events = [];
+
+  // 1. Playoff results → bracket.
+  while (_pendingSeriesResults.length) {
+    const r = _pendingSeriesResults.shift();
+    let res = null;
+    StateManager.mutate(s => { if (s.playoffBracket) res = recordGame(s.playoffBracket, r.seriesId, r); });
+    if (res?.clinched) {
+      _cancelSeriesGames(r.seriesId);
+      _queueSeriesMilestone(res);
+      events.push({ type: 'SERIES_FINAL', seriesId: r.seriesId, winnerId: res.winnerId, loserId: res.loserId });
+    }
+  }
+
+  // 2. End of the regular season → bracket → Wild Card.
+  let st = StateManager.get();
+  if (REGULAR_PHASES.has(st.phase) && _regularSeasonDone(st)) {
+    const standings = computeFullStandings(st);
+    const results = _regularSeasonResults(st);
+    const bracket = buildBracket(seedDivision(standings.divA, results), seedDivision(standings.divB, results));
+    StateManager.mutate(s => { s.standings = standings; s.playoffBracket = bracket; });
+    _applyPhase(PHASE.PLAYOFF_BRACKET_BUILD);
+    events.push({ type: 'PHASE', to: PHASE.PLAYOFF_BRACKET_BUILD });
+    _startRound('WILD_CARD', atMs);
+    events.push({ type: 'PHASE', to: PHASE.WILD_CARD });
+    return events;
+  }
+
+  // 3. A round finished → the next one, or the season is over.
+  const round = roundForPhase(st.phase);
+  if (round && st.playoffBracket && roundComplete(st.playoffBracket, round)) {
+    const nr = nextRound(round);
+    if (nr) {
+      _startRound(nr, atMs);
+      events.push({ type: 'PHASE', to: ROUND_PHASE[nr] });
+    } else {
+      _applyPhase(PHASE.SEASON_SUMMARY);
+      events.push({ type: 'PHASE', to: PHASE.SEASON_SUMMARY });
+    }
+  }
+  return events;
+}
+
+/** Every regular-season final in the league (for head-to-head tiebreaks). */
+function _regularSeasonResults(state) {
+  const out = [];
+  for (const g of state.schedule || []) {
+    if (g.isSpring || g.isPlayoff || !g._committed || !g.score) continue;
+    const [hs, as] = g.isHome ? [g.score.us, g.score.them] : [g.score.them, g.score.us];
+    out.push({ homeId: g.isHome ? 'user' : g.opponentId, awayId: g.isHome ? g.opponentId : 'user', homeScore: hs, awayScore: as });
+  }
+  for (const games of Object.values(state.leagueSchedule?.dayMap || {})) {
+    for (const g of games) if (!g.isSpring && !g.isPlayoff && g.played) out.push(g);
+  }
+  return out;
+}
+
+/**
+ * _startRound(round, atMs)
+ * Places last round's winners and schedules every series of `round` on the
+ * real calendar: one off day, then a game a day (World Series: travel days
+ * after games 2 and 5), evening first pitch. The user's games join
+ * state.schedule (the live pipeline); the rest join the league day map.
+ */
+function _startRound(round, atMs) {
+  StateManager.mutate(s => { prepareRound(s.playoffBracket, round); });
+  const st = StateManager.get();
+  const first = new Date(atMs); first.setHours(0, 0, 0, 0); first.setDate(first.getDate() + 2);
+  const nameOf = (id) => (st.leagueTeams.find(t => t.id === id)?.name || id);
+
+  StateManager.mutate(s => {
+    for (const series of roundSeries(s.playoffBracket, round)) {
+      if (!series.teamA || !series.teamB) continue;
+      let dayOffset = 0;
+      for (const g of seriesGames(series)) {
+        const real = new Date(first); real.setDate(real.getDate() + dayOffset);
+        const times = GAME_TIMES_BY_DOW[['SUN','MON','TUE','WED','THU','FRI','SAT'][real.getDay()]] || ['7:05 PM'];
+        const gameTime = _timeOn(real, times[times.length - 1]);
+        const date = _displayDateFor(s, real.getTime());
+        const common = { isPlayoff: true, playoffRound: round, seriesId: series.id,
+                         seriesGame: g.gameNo, seriesLength: series.bestOf };
+        if (g.homeId === 'user' || g.awayId === 'user') {
+          const isHome = g.homeId === 'user';
+          const oppId  = isHome ? g.awayId : g.homeId;
+          const game = _makeGameObject({ index: s.schedule.length, opponent: nameOf(oppId), isHome,
+            date, gameTime, isSpring: false, phase: ROUND_PHASE[round] });
+          Object.assign(game, common, { opponentId: oppId });
+          s.schedule.push(game);
+        } else {
+          (s.leagueSchedule.dayMap[date] = s.leagueSchedule.dayMap[date] || []).push({
+            id: `po-${s.seasonNum || 1}-${series.id}-${g.gameNo}`, homeId: g.homeId, awayId: g.awayId,
+            date, gameTime, isSpring: false, ...common,
+            status: GAME_STATUS.SCHEDULED, played: false, homeScore: null, awayScore: null,
+          });
+        }
+        dayOffset += 1 + (round === 'WORLD_SERIES' && (g.gameNo === 2 || g.gameNo === 5) ? 1 : 0);
+      }
+    }
+  });
+  _applyPhase(ROUND_PHASE[round]);
+}
+
+/** Remove a clinched series' games that will never be played. */
+function _cancelSeriesGames(seriesId) {
+  StateManager.mutate(s => {
+    const before = s.schedule.length;
+    s.schedule = s.schedule.filter(g => !(g.seriesId === seriesId && g.isPlayoff && !g._committed
+                                         && g.status === GAME_STATUS.SCHEDULED));
+    if (s.schedule.length !== before) s.schedule.forEach((g, i) => { g.index = i; });
+    for (const [d, games] of Object.entries(s.leagueSchedule.dayMap)) {
+      const kept = games.filter(g => !(g.seriesId === seriesId && g.isPlayoff && !g.played
+                                       && g.status === GAME_STATUS.SCHEDULED));
+      if (kept.length !== games.length) {
+        if (kept.length) s.leagueSchedule.dayMap[d] = kept; else delete s.leagueSchedule.dayMap[d];
+      }
+    }
+  });
+}
+
+function _timeOn(day, timeStr) {
+  const [hm, mer] = timeStr.split(' ');
+  let [h, m] = hm.split(':').map(Number);
+  if (mer === 'PM' && h !== 12) h += 12;
+  if (mer === 'AM' && h === 12) h = 0;
+  const d = new Date(day); d.setHours(h, m, 0, 0);
+  return d.getTime();
+}
+
+/** The baseball-calendar date shown for a real day (one offset for the season). */
+function _displayDateFor(state, realMs) {
+  const base = state.schedule[0];
+  const baseReal = new Date(base.gameTime); baseReal.setHours(0, 0, 0, 0);
+  const real = new Date(realMs); real.setHours(0, 0, 0, 0);
+  const days = Math.round((real - baseReal) / 86_400_000);
+  const [y, mo, d] = base.date.split('-').map(Number);
+  return _isoDate(new Date(y, mo - 1, d + days));
+}
+
+/** Queue phase milestones (no game trigger) — playoff rounds only while the user is in them. */
+function _queuePhaseMilestones(phase) {
+  const st = StateManager.get();
+  const round = roundForPhase(phase);
+  if (round) {
+    const inRound = roundSeries(st.playoffBracket, round)
+      .some(sr => sr.teamA?.id === 'user' || sr.teamB?.id === 'user');
+    if (!inRound) return;
+  }
+  const season = st.seasonNum || 1;
+  for (const m of Object.values(MILESTONE_SCREENS)) {
+    if (m.triggerPhase !== phase || (m.triggerGame !== null && m.triggerGame !== undefined)) continue;
+    if (m.requiresHosting && !st.userTeam?._hostedAllStar) continue;
+    if (m.minSeason && season < m.minSeason) continue;
+    const key = `${m.id}@${season}`;
+    if ((st.seenMilestones || []).includes(key)) continue;
+    StateManager.mutate(s => {
+      s.seenMilestones = [...(s.seenMilestones || []), key];
+      s.milestoneQueue = [...(s.milestoneQueue || []), { ...m }];
+    });
+  }
+}
+
+/** The user's series ended: Series Won / Champions / Season Over. */
+function _queueSeriesMilestone(res) {
+  const sr = res.series;
+  if (!sr || (sr.teamA?.id !== 'user' && sr.teamB?.id !== 'user')) return;
+  const won = res.winnerId === 'user';
+  const opp = won ? (sr.teamA.id === 'user' ? sr.teamB : sr.teamA) : (sr.teamA.id === 'user' ? sr.teamB : sr.teamA);
+  const label = ROUND_LABEL[sr.round];
+  const record = sr.teamA.id === 'user' ? `${sr.winsA}–${sr.winsB}` : `${sr.winsB}–${sr.winsA}`;
+  const id = won ? (sr.round === 'WORLD_SERIES' ? 'CHAMPIONS' : 'SERIES_WON') : 'SEASON_OVER';
+  const base = MILESTONE_SCREENS[id];
+  if (!base) return;
+  const subtitle = won
+    ? (sr.round === 'WORLD_SERIES' ? `World Series won ${record} over the ${opp?.name}. ${base.subtitle}`
+                                   : `${label} won ${record} over the ${opp?.name}. ${base.subtitle}`)
+    : `Eliminated ${record} by the ${opp?.name} in the ${label}. ${base.subtitle}`;
+  StateManager.mutate(s => { s.milestoneQueue = [...(s.milestoneQueue || []), { ...base, subtitle }]; });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2062,10 +2252,13 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
     events.push(...step.events);
     if (next.kind === 'start') _startLeagueGame(next.date, next.i);
     else events.push(..._finishLeagueGame(next.date, next.i));
+    events.push(..._seasonProgress(next.at));
     changed = true;
   }
+  events.push(..._seasonProgress(clockMs));
   const step = _rosterStep(clockMs, { reconcileAll: !!opts.reconcileAll, events });
-  return { changed: changed || step.changed, events: [...events, ...step.events], clockMs };
+  return { changed: changed || step.changed || events.some(e => e.type === 'PHASE'),
+           events: [...events, ...step.events], clockMs };
 }
 
 /** One roster-clock step at `atMs`: deadlines, ledger, card sync. */
@@ -2368,23 +2561,12 @@ function _updateWinTarget(state) {
 }
 
 function _countPlayoffRoundsWon(state) {
-  const bracket = state.playoffBracket;
-  if (!bracket) return 0;
-  let rounds = 0;
-  const divs = ['divA', 'divB'];
-  for (const div of divs) {
-    const d = bracket[div];
-    if (!d) continue;
-    for (const round of ['WILD_CARD','FIRST_ROUND','DIVISION_SERIES']) {
-      const series = d[round]?.series || [];
-      for (const s of series) {
-        if (s.winner?.id === 'user') rounds++;
-      }
-    }
-  }
-  const ws = bracket.WORLD_SERIES?.series?.[0];
-  if (ws?.winner?.id === 'user') rounds++;
-  return rounds;
+  const b = state.playoffBracket;
+  if (!b) return 0;
+  return ['WILD_CARD', 'FIRST_ROUND', 'DIVISION_SERIES', 'WORLD_SERIES']
+    .flatMap(r => roundSeries(b, r))
+    .filter(sr => sr.status === 'final'
+      && (sr.winner === 'A' ? sr.teamA : sr.teamB)?.id === 'user').length;
 }
 
 function _rng(lo, hi) {
@@ -2394,58 +2576,6 @@ function _rng(lo, hi) {
 // ─────────────────────────────────────────────────────────────
 // PLAYOFF HELPERS
 // ─────────────────────────────────────────────────────────────
-
-/**
- * _isPlayoffPhase(phase)
- * Returns true for phases that require series completion before advancing.
- */
-function _isPlayoffPhase(phase) {
-  return phase === PHASE.WILD_CARD
-      || phase === PHASE.FIRST_ROUND
-      || phase === PHASE.DIVISION_SERIES
-      || phase === PHASE.WORLD_SERIES;
-}
-
-/**
- * _isPlayoffRoundComplete(state)
- * Returns true when every series in the current playoff round has a winner.
- *
- * Bracket shape (from SeasonEngine.buildPlayoffBracket):
- *   state.playoffBracket.divA[round].series[]
- *   state.playoffBracket.divB[round].series[]
- *   state.playoffBracket.WORLD_SERIES.series[]
- *
- * A series has a winner when series.winner is set (non-null).
- *
- * @param {Object} state
- * @returns {Boolean}
- */
-function _isPlayoffRoundComplete(state) {
-  const bracket = state.playoffBracket;
-  if (!bracket) return false;
-
-  const phase = state.phase;
-
-  if (phase === PHASE.WORLD_SERIES) {
-    const ws = bracket.WORLD_SERIES?.series || [];
-    return ws.length > 0 && ws.every(s => s.winner != null);
-  }
-
-  // Map phase to bracket round key
-  const roundKey = {
-    [PHASE.WILD_CARD]:       'WILD_CARD',
-    [PHASE.FIRST_ROUND]:     'FIRST_ROUND',
-    [PHASE.DIVISION_SERIES]: 'DIVISION_SERIES',
-  }[phase];
-
-  if (!roundKey) return false;
-
-  const divASeries = bracket.divA?.[roundKey]?.series || [];
-  const divBSeries = bracket.divB?.[roundKey]?.series || [];
-  const allSeries  = [...divASeries, ...divBSeries];
-
-  return allSeries.length > 0 && allSeries.every(s => s.winner != null);
-}
 
 function _clamp(val, min, max) {
   return Math.max(min, Math.min(max, val));

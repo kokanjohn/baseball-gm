@@ -59,7 +59,9 @@ export function mount() {
     _listeners.push({ event, handler });
   };
 
-  wire('game:committed',    () => { if (_activeTab === 'standings') refresh(); });
+  wire('game:committed',    () => { if (_activeTab === 'standings' || _activeTab === 'playoffs') refresh(); });
+  wire('game:phaseChanged', () => refresh());
+  wire('roster:changed',    () => { if (_activeTab === 'playoffs') refresh(); });
   wire('game:phaseChanged', () => refresh());
   wire('roster:changed',    () => refresh());
   wire('nav:tabActivated',  ({ tab }) => { if (tab === 'league') refresh(); });
@@ -90,6 +92,7 @@ export function refresh() {
         <button class="league-tab-btn ${_activeTab === 'players'   ? 'active' : ''}" id="ltab-players">Players</button>
         <button class="league-tab-btn ${_activeTab === 'teams'     ? 'active' : ''}" id="ltab-teams">Teams</button>
         <button class="league-tab-btn ${_activeTab === 'standings' ? 'active' : ''}" id="ltab-standings">Standings</button>
+        ${state.playoffBracket ? `<button class="league-tab-btn ${_activeTab === 'playoffs' ? 'active' : ''}" id="ltab-playoffs">Playoffs</button>` : ''}
       </div>
       <div class="league-tab-content active" id="league-body">
         ${_renderTabBody(state)}
@@ -105,6 +108,7 @@ function _renderTabBody(state) {
     case 'players':   return _renderPlayers(state);
     case 'teams':     return _renderTeams(state);
     case 'standings': return _renderStandings(state);
+    case 'playoffs':  return '<div id="playoff-content"></div>';   // filled by PlayoffScreen (§68)
     default:          return '';
   }
 }
@@ -627,9 +631,13 @@ function _sortVal(player, col) {
 
 function _attachListeners(state) {
   // Tab switching
-  for (const [id, tab] of [['ltab-players','players'],['ltab-teams','teams'],['ltab-standings','standings']]) {
+  for (const [id, tab] of [['ltab-players','players'],['ltab-teams','teams'],['ltab-standings','standings'],['ltab-playoffs','playoffs']]) {
     const el = document.getElementById(id);
     if (el) el.addEventListener('click', () => { _activeTab = tab; refresh(); });
+  }
+  if (_activeTab === 'playoffs') {
+    import('./PlayoffScreen.js').then(P => P.refresh());
+    return;
   }
 
   if (_activeTab !== 'players') return;

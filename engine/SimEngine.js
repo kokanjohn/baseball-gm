@@ -1101,7 +1101,9 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
  * @returns {Object} mutations
  */
 export function accumulateStats(plays, userTeam, opponentTeam, players, isSpring = false) {
-  const statKey = isSpring ? 'springStats' : 'stats';
+  // 5th arg: a stat-line key ('stats' | 'springStats' | 'postseasonStats'),
+  // or the legacy spring boolean.
+  const statKey = typeof isSpring === 'string' ? isSpring : (isSpring ? 'springStats' : 'stats');
   const deltas  = {}; // { [playerId]: { [statField]: delta } }
 
   for (const play of plays) {

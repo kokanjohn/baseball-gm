@@ -705,8 +705,9 @@ function _renderScoresModal(state) {
   const dayMap      = state.leagueSchedule?.dayMap || {};
   const leagueTeams = state.leagueTeams || [];
 
-  // All unique display dates from user schedule, sorted
-  const allDates = [...new Set(schedule.map(g => g.date).filter(Boolean))].sort();
+  // Every date with a game anywhere in the league (one calendar, §67) —
+  // includes playoff days after the user is eliminated.
+  const allDates = [...new Set([...schedule.map(g => g.date), ...Object.keys(dayMap)].filter(Boolean))].sort();
   if (!allDates.length) {
     bodyEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);">No schedule yet.</div>';
     return;
@@ -755,7 +756,7 @@ function _renderScoresModal(state) {
   });
 
   // Gather games for this date
-  const userGame = schedule.find(g => g.date === _scoresBrowseDate && !g.isPlayoff);
+  const userGame = schedule.find(g => g.date === _scoresBrowseDate);
   const cpuGames = dayMap[_scoresBrowseDate] || [];
 
   if (!userGame && !cpuGames.length) {
