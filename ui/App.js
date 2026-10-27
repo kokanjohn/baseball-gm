@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r56';
+export const APP_VERSION = 'tfo-v2-r57';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -818,11 +818,6 @@ async function _openTeamSelect() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SETTINGS — COLOR + THEME PICKERS (Phase 15)
-// ─────────────────────────────────────────────────────────────
-
-/**
-// ─────────────────────────────────────────────────────────────
 // AUDIO SYSTEM (ported from v1 Chapter 2)
 // Web Audio API — all sounds generated procedurally, no files.
 // ─────────────────────────────────────────────────────────────
@@ -1352,15 +1347,18 @@ async function _toggleNotifications(e) {
 
 async function _sendTestNotification() {
   const { sendTestPush } = await import('./PushClient.js');
-  try {
-    const ok = await sendTestPush();
-    showToast(ok
-      ? 'Test sent through the push server — it arrives within a minute. Close the app to see it arrive.'
-      : 'Enable notifications first.', ok ? 'positive' : 'neutral', 5000);
-  } catch (err) {
-    console.error('App._sendTestNotification:', err);
-    showToast('Test failed — could not reach the push server.', 'negative', 3500);
+  const r = await sendTestPush();
+  if (r.ok) {
+    showToast('✅ Test delivered to your device now. A second one arrives in ~90s — close the app to check it arrives while closed.', 'positive', 7000);
+    return;
   }
+  // Show the real reason so a failure can be diagnosed from the phone.
+  let why = r.error || `push service answered ${r.status}${r.response ? ': ' + r.response.slice(0, 90) : ''}`;
+  if (r.keys && r.keys.privateMatchesPublic === false) why = 'server VAPID private key does not match its public key';
+  else if (r.keys && r.keys.subjectValid === false)    why = 'server VAPID_SUBJECT must start with mailto: or https:';
+  else if (r.keys?.error)                              why = r.keys.error;
+  console.error('[Push test]', r);
+  showToast(`❌ Push test failed — ${why}`, 'negative', 9000);
 }
 
 // ─────────────────────────────────────────────────────────────

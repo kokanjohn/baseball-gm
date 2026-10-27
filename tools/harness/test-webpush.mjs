@@ -46,5 +46,60 @@ const msg = JSON.stringify({ title:'The Front Office', body:'New message ⚾' })
 let out = null;
 try { out = await decrypt(await encryptPayload(sub, msg), myPriv, myPub, myAuth); } catch (e) { out = 'ERROR ' + e.message; }
 ok('worker payload decrypts on the browser side', out === msg, out);
+// 3) Whole worker end-to-end with a fake KV + fake push service
+{
+  const worker = (await import(new URL('../../workers/push-worker.js', import.meta.url))).default;
+  const vk = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const kv = new Map();
+  const env = {
+    VAPID_PRIVATE_KEY: (await subtle.exportKey('jwk', vk.privateKey)).d,
+    VAPID_PUBLIC_KEY:  Buffer.from(new Uint8Array(await subtle.exportKey('raw', vk.publicKey))).toString('base64url'),
+    VAPID_SUBJECT:     'mailto:test@example.com',
+    SCHEDULES: {
+      async put(k, v) { kv.set(k, v); },
+      async get(k, t) { const v = kv.get(k); return v == null ? null : (t === 'json' ? JSON.parse(v) : v); },
+      async delete(k) { kv.delete(k); },
+      async list({ prefix }) { return { keys: [...kv.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })) }; },
+    },
+  };
+  const received = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    received.push({ url, init });
+    return new Response('', { status: 201 });
+  };
+  const subJson = { endpoint: 'https://fcm.googleapis.com/fcm/send/fake', keys: sub.keys };
+  const call = (method, path, body) => worker.fetch(new Request('https://w.test' + path,
+    { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }), env);
+
+  const reg = await call('POST', '/register', { userId: 'dev1', subscription: subJson,
+    schedule: [{ id: 'c1', deliverAt: Date.now() - 1000, title: 'GM', body: 'Due now' },
+               { id: 'c2', deliverAt: Date.now() + 3600e3, title: 'GM', body: 'Later' }] });
+  ok('worker /register accepts a schedule', reg.status === 200);
+
+  const ts = await (await call('POST', '/test-send', { userId: 'dev1', subscription: subJson })).json();
+  ok('worker /test-send reports success + matching VAPID keys', ts.ok && ts.status === 201 && ts.keys?.ok, JSON.stringify(ts.keys));
+
+  await worker.scheduled({}, env);
+  const st = await (await call('GET', '/status')).json();
+  ok('cron sent the due card and kept the future one',
+     st.cron?.sent === 1 && st.subscriptions[0]?.scheduled === 1, JSON.stringify({ cron: st.cron, s: st.subscriptions }));
+
+  // What the push service received must decrypt and carry a valid VAPID JWT
+  const last = received[received.length - 1];
+  const pt = await decrypt(new Uint8Array(await new Response(last.init.body).arrayBuffer()), myPriv, myPub, myAuth);
+  ok('delivered push decrypts to the card text', JSON.parse(pt).body === 'Due now', pt);
+  const [, t] = last.init.headers.Authorization.match(/t=([^,]+)/);
+  const [h, p, sg] = t.split('.');
+  const jwtOk = await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, vk.publicKey,
+    Buffer.from(sg, 'base64url'), new TextEncoder().encode(h + '.' + p));
+  ok('VAPID JWT verifies with the public key', jwtOk);
+
+  env.VAPID_PUBLIC_KEY = env.VAPID_PUBLIC_KEY.slice(0, -4) + 'AAAA';
+  const bad = await (await call('GET', '/status')).json();
+  ok('/status detects a private/public key mismatch', bad.keys.privateMatchesPublic === false);
+  globalThis.fetch = realFetch;
+}
+
 console.log(`\n${fail ? fail + ' failed' : 'all passed'}`);
 process.exit(fail ? 1 : 0);

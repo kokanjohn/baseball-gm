@@ -25,3 +25,6 @@ jobs:
 
       - name: Web Push encryption round trip (push worker)
         run: node tools/harness/test-webpush.mjs
+
+      - name: Static reference check (screens the harness cannot run)
+        run: node tools/harness/check-refs.mjs

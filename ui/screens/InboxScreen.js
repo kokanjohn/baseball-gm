@@ -506,13 +506,7 @@ function _attachTabListeners(state) {
                 || getHistory(100).find(c => c.instanceId === id);
       // Long cards open in CardModal; short cards expand inline
       if (card && shouldUseModal(card)) {
-        openCardModal(card, async (instanceId, choice) => {
-          const { resolve } = await import('../../engine/CardEngine.js');
-          resolve(instanceId, choice);
-          EventBus.emit('card:resolved', { instanceId, choice });
-          App.showToast(choice === 'yes' ? 'Decision made.' : 'Declined.', choice === 'yes' ? 'positive' : 'neutral', 2000);
-          refresh();
-        });
+        openCardModal(card, (instanceId, choice) => _resolveCard(instanceId, choice));
       } else {
         _expandedCard = _expandedCard === id ? null : id;
         refresh();
@@ -526,7 +520,7 @@ function _attachTabListeners(state) {
       e.stopPropagation();
       const instanceId = btn.dataset.resolve;
       const choice     = btn.dataset.choice;
-      await _resolveCard(instanceId, choice, state);
+      await _resolveCard(instanceId, choice);
     });
   });
 
@@ -562,6 +556,31 @@ function _attachTabListeners(state) {
   }
 }
 
+
+/**
+ * _resolveCard(instanceId, choice)
+ * The ONE path that resolves an inbox decision — used by the inline Yes/No
+ * buttons and by the CardModal sheet (§62). Before r57 the inline buttons
+ * called this function but it did not exist, so only long cards (which open in
+ * the modal) could be decided.
+ */
+async function _resolveCard(instanceId, choice) {
+  try {
+    const card = getInbox().find(c => c.instanceId === instanceId);
+    const { resolve } = await import('../../engine/CardEngine.js');
+    resolve(instanceId, choice);
+    EventBus.emit('card:resolved', { instanceId, choice });
+    _expandedCard = null;
+    // Show the card's own outcome line ("Upgrades complete. Players will notice.")
+    const msg = choice === 'yes' ? card?.yesMsg : card?.noMsg;
+    App.showToast(msg || (choice === 'yes' ? 'Decision made.' : 'Declined.'),
+                  choice === 'yes' ? 'positive' : 'neutral', msg ? 3500 : 2000);
+  } catch (err) {
+    console.error('InboxScreen._resolveCard:', err);
+    App.showToast('That decision could not be saved. Please try again.', 'negative', 3000);
+  }
+  refresh();
+}
 
 async function _sendCompose(topicId, channelId, state) {
   const gameIdx = state.currentGameIndex || 0;

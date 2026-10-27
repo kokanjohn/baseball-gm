@@ -68,23 +68,44 @@ export function syncPushSchedule({ immediate = false } = {}) {
 
 /**
  * sendTestPush()
- * Queues a test notification on the worker for "now". The worker's cron runs
- * once a minute, so it arrives within ~60s — close the app to prove it works
- * with the app closed.
+ * Two-part end-to-end test (§62):
+ *   1. NOW: asks the worker to send a push immediately (POST /test-send) and
+ *      returns the push service's real answer — success or the exact reason.
+ *   2. +90s: queues a second test through the normal schedule + cron, so the
+ *      user can close the app and prove delivery while it is closed.
+ * @returns {Promise<{ ok, status, response?, error?, keys? }>}
  */
 export async function sendTestPush() {
-  if (!pushSupported() || Notification.permission !== 'granted') return false;
-  await _getSubscription({ create: true });
-  const test = {
-    id:        `test-${Date.now()}`,
-    deliverAt: Date.now(),
+  if (!pushSupported())                      return { ok: false, error: 'This browser does not support push.' };
+  if (Notification.permission !== 'granted') return { ok: false, error: 'Notifications are not enabled.' };
+  const sub = await _getSubscription({ create: true });
+  if (!sub) return { ok: false, error: 'Could not subscribe this device.' };
+
+  let result;
+  try {
+    const res = await fetch(`${PUSH_WORKER_URL}/test-send`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ userId: _deviceId(), subscription: sub.toJSON() }),
+    });
+    result = res.headers.get('content-type')?.includes('json')
+      ? await res.json()
+      : { ok: false, status: res.status, error: `worker answered ${res.status} — is the latest worker deployed?` };
+  } catch (err) {
+    result = { ok: false, error: `could not reach the push server (${err.message})` };
+  }
+
+  // Part 2: the closed-app test via the regular schedule/cron path.
+  const later = {
+    id:        `test-closed-${Date.now()}`,
+    deliverAt: Date.now() + 90 * 1000,
     title:     'The Front Office',
-    body:      'Push notifications are working. ⚾',
-    tag:       'bgm-test',
+    body:      'Delivered with the app closed. ⚾',
+    tag:       'bgm-test-closed',
   };
-  await _register([test, ..._currentSchedule()]);
-  _lastSyncSignature = ''; // the next normal sync replaces the test entry
-  return true;
+  try { await _register([later, ..._currentSchedule()]); } catch { /* reported via result */ }
+  _lastSyncSignature = ''; // next normal sync replaces the test entry
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────────

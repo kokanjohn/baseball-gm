@@ -6294,3 +6294,28 @@ Contract unchanged: `GET /vapid-key`; `POST /register { userId, subscription, sc
 
 ### Repo access
 GitHub connector is read-only for this repo; pushing needs the Claude GitHub App installed on `kokanjohn/baseball-gm`. Cloudflare connector can read worker code but not deploy.
+
+---
+
+## 62. r57 — Inbox decisions fixed, hidden audio bug, push diagnostics (Session 8)
+
+**Reported on r56:** only the pre-season inspection card could be decided; the other four cards ignored both buttons. Send Test showed its toast but no notification arrived with the app closed.
+
+### Inbox decisions (root cause)
+`InboxScreen`'s inline Yes/No buttons called `_resolveCard(...)`, a function that **never existed** in that module (checked back through repo history). Every tap threw a ReferenceError inside the click handler and did nothing. Cards whose body is ≥ 400 chars open in `CardModal` instead, which had its own working inline resolver — that is why the long `sp_hint1` card worked and the short ones did not. Fix: one `_resolveCard(instanceId, choice)` used by both paths; it also shows the card's own outcome line (`yesMsg`/`noMsg`) as the toast instead of "Decision made.", and reports a failure instead of failing silently.
+
+### Hidden audio bug (found by the new check)
+A stray `/**` in `App.js` (after a dangling "COLOR + THEME PICKERS" banner) turned `let _audioCtx` and `function _getAudioCtx()` into a comment until the next `*/`, so every game sound threw (swallowed by try/catch). Removed.
+
+### New CI guard: `tools/harness/check-refs.mjs`
+The season harness cannot execute screens (DOM). This static check fails CI when any module calls a private `_helper()` that is neither defined nor imported in that module, or when a block comment hides line-start declarations (stray opener). Run on r56 it reports exactly the two bugs above; on r57 it passes (43 modules).
+
+### Push diagnostics
+The worker code was proven correct offline, so the failure is in deployment state that could not be seen (VAPID secrets, cron, or the push service's answer — the old cron swallowed errors). Added:
+- `POST /test-send` — sends a push **immediately** and returns `{ ok, status, response, error, keys }` (the push service's real answer + a VAPID key check).
+- `GET /status` — last cron run (`meta:cron`: sent/failures/lastError), VAPID check (`privateMatchesPublic`, `subjectValid`), per-device schedule size, next delivery, and last send result. No secrets or full endpoints.
+- `vapidKeyCheck`: imports `VAPID_PRIVATE_KEY`, derives its public point and compares it with `VAPID_PUBLIC_KEY` (a mismatch makes every push fail with 403).
+- Settings → Send Test now: (1) immediate send through `/test-send`, toast shows ✅ or the exact failure reason; (2) a second test queued 90 s out through the normal schedule + cron to prove delivery with the app closed.
+- `test-webpush.mjs` now runs the whole worker in Node against a fake KV and fake push service: register → test-send → cron → status, decrypts what the push service received and verifies the VAPID JWT; also proves `/status` flags a key mismatch.
+
+**Requires redeploying `workers/push-worker.js`** to Cloudflare.

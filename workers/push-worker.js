@@ -9,6 +9,10 @@
  *   POST /register    → { userId, subscription, schedule: [{ id, deliverAt, title, body, tag }] }
  *                       Stores the subscription and REPLACES the whole schedule.
  *                       The app re-posts the full schedule whenever it changes.
+ *   POST /test-send   → { userId, subscription } — sends a test push NOW and
+ *                       returns the push service's answer + a VAPID key check
+ *   GET  /status      → diagnostics: last cron run, key check, per-device
+ *                       schedule size and last send result (no secrets)
  * Cron (every minute)
  *   Sends every schedule item with deliverAt <= now as an encrypted Web Push,
  *   then keeps only the items still in the future.
@@ -131,7 +135,44 @@ async function sendPush(subscription, item, env) {
   });
   const txt = await res.text();
   console.log('[Push]', item.id, '→', res.status, txt.slice(0, 120));
-  return res.status;
+  return { status: res.status, response: txt.slice(0, 300) };
+}
+
+/** Send one item and describe exactly what happened (never throws). */
+async function sendAndReport(subscription, item, env) {
+  const at = Date.now();
+  try {
+    const { status, response } = await sendPush(subscription, item, env);
+    return { at, id: item.id, ok: status >= 200 && status < 300, status, response,
+             pushService: _host(subscription.endpoint) };
+  } catch (e) {
+    return { at, id: item.id, ok: false, status: 0, error: String(e?.message || e),
+             pushService: _host(subscription.endpoint) };
+  }
+}
+
+function _host(u) { try { return new URL(u).host; } catch { return '?'; } }
+
+/** Does VAPID_PRIVATE_KEY produce VAPID_PUBLIC_KEY? (a mismatch = every push 403s) */
+async function vapidKeyCheck(env) {
+  try {
+    if (!env.VAPID_PRIVATE_KEY || !env.VAPID_PUBLIC_KEY) return { ok: false, error: 'VAPID secret(s) missing' };
+    const key = await crypto.subtle.importKey('pkcs8', wrapPkcs8(b64ToBytes(env.VAPID_PRIVATE_KEY)),
+      { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+    const jwk = await crypto.subtle.exportKey('jwk', key);
+    const pub = b64ToBytes(env.VAPID_PUBLIC_KEY);
+    const matches = pub.length === 65 && bytesToB64url(pub.slice(1, 33)) === jwk.x
+                                      && bytesToB64url(pub.slice(33)) === jwk.y;
+    const subject = String(env.VAPID_SUBJECT || '');
+    return {
+      ok: matches && /^(mailto:|https:)/.test(subject),
+      privateMatchesPublic: matches,
+      subjectValid: /^(mailto:|https:)/.test(subject),
+      publicKeyPrefix: env.VAPID_PUBLIC_KEY.slice(0, 12),
+    };
+  } catch (e) {
+    return { ok: false, error: 'private key unreadable: ' + String(e?.message || e) };
+  }
 }
 
 // ── Handlers ────────────────────────────────────────────────────
@@ -160,9 +201,58 @@ async function handleRegister(req, env) {
   return new Response('OK');
 }
 
+// POST /test-send { userId, subscription } — send right now, report the result.
+async function handleTestSend(req, env) {
+  let data;
+  try { data = await req.json(); } catch { return _json({ ok: false, error: 'Bad JSON' }, 400); }
+  const { userId, subscription } = data || {};
+  if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+    return _json({ ok: false, error: 'missing subscription' }, 400);
+  }
+  const keys   = await vapidKeyCheck(env);
+  const result = await sendAndReport(subscription, {
+    id: `test-${Date.now()}`, title: 'The Front Office', body: 'Push notifications are working. ⚾', tag: 'bgm-test',
+  }, env);
+  if (userId) {
+    const rec = await env.SCHEDULES.get(`sub:${userId}`, 'json');
+    if (rec) await env.SCHEDULES.put(`sub:${userId}`, JSON.stringify({ ...rec, lastResult: result }),
+                                     { expirationTtl: KV_TTL_SECONDS });
+  }
+  return _json({ ...result, keys });
+}
+
+// GET /status — diagnostics (no secrets, no full endpoints).
+async function handleStatus(env) {
+  const list = await env.SCHEDULES.list({ prefix: 'sub:' });
+  const now  = Date.now();
+  const subs = [];
+  for (const k of list.keys.slice(0, 20)) {
+    const d = await env.SCHEDULES.get(k.name, 'json');
+    const sched = d?.schedule || [];
+    subs.push({
+      device:       k.name.slice(4, 12),
+      pushService:  _host(d?.subscription?.endpoint),
+      scheduled:    sched.length,
+      nextInMin:    sched.length ? Math.round((sched[0].deliverAt - now) / 60000) : null,
+      lastResult:   d?.lastResult || null,
+    });
+  }
+  return _json({
+    now,
+    cron:  await env.SCHEDULES.get('meta:cron', 'json'),
+    keys:  await vapidKeyCheck(env),
+    subscriptions: subs,
+  });
+}
+
+function _json(obj, status = 200) {
+  return new Response(JSON.stringify(obj, null, 2), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
 async function handleCron(env) {
   const now  = Date.now();
   const list = await env.SCHEDULES.list({ prefix: 'sub:' });
+  const cron = { startedAt: now, subscriptions: list.keys.length, sent: 0, failures: 0, lastError: null };
   for (const key of list.keys) {
     const data = await env.SCHEDULES.get(key.name, 'json');
     if (!data?.subscription || !data.schedule?.length) continue;
@@ -170,14 +260,12 @@ async function handleCron(env) {
     const pending = data.schedule.filter(i => i.deliverAt >  now);
     if (!due.length) continue;
 
-    let gone = false;
+    let gone = false, last = null;
     for (const item of due) {
-      try {
-        const status = await sendPush(data.subscription, item, env);
-        if (status === 404 || status === 410) { gone = true; break; }   // subscription expired
-      } catch (e) {
-        console.error('[Cron] Push failed:', e.message);
-      }
+      last = await sendAndReport(data.subscription, item, env);
+      cron.sent++;
+      if (!last.ok) { cron.failures++; cron.lastError = last; }
+      if (last.status === 404 || last.status === 410) { gone = true; break; }   // subscription expired
     }
     if (gone) { await env.SCHEDULES.delete(key.name); continue; }
 
@@ -185,9 +273,11 @@ async function handleCron(env) {
     const latest = await env.SCHEDULES.get(key.name, 'json');
     const sentIds = new Set(due.map(i => i.id));
     const schedule = (latest?.schedule || pending).filter(i => !(sentIds.has(i.id) && i.deliverAt <= now));
-    await env.SCHEDULES.put(key.name, JSON.stringify({ ...(latest || data), schedule }),
+    await env.SCHEDULES.put(key.name, JSON.stringify({ ...(latest || data), schedule, lastResult: last }),
                             { expirationTtl: KV_TTL_SECONDS });
   }
+  cron.finishedAt = Date.now();
+  await env.SCHEDULES.put('meta:cron', JSON.stringify(cron));
 }
 
 const CORS = {
@@ -203,6 +293,10 @@ export default {
     let res;
     if (request.method === 'POST' && url.pathname === '/register') {
       res = await handleRegister(request, env);
+    } else if (request.method === 'POST' && url.pathname === '/test-send') {
+      res = await handleTestSend(request, env);
+    } else if (request.method === 'GET' && url.pathname === '/status') {
+      res = await handleStatus(env);
     } else if (request.method === 'GET' && url.pathname === '/vapid-key') {
       res = new Response(env.VAPID_PUBLIC_KEY, { headers: { 'Content-Type': 'text/plain' } });
     } else {
