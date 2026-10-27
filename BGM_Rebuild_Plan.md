@@ -6587,3 +6587,38 @@ Roster moves (call-ups incl. spring, audition, move to DH, bullpen → rotation,
 
 ### 72.1 Next: acquisitions and the rest
 Acquisition cards (`sign_*`, `waiver_dfa`, `sign_dfa`, `dl3_acquire`, `trade_*`, NRI, international/indie scouting) still use flavor names (`{acq_*}`, `{dfa_*}`, `{intl_*}`, `{nri_*}`) that never resolved, so these cards could never be delivered. They need real players bound to them: the free-agent pool or generated players, the waiver wire, and CPU rosters through TradeEngine. Then health (`injurePlayer_*`), org/media, D2 personal leave, and D3 card timing.
+
+---
+
+## 73. r67 — Card actions, part 3: outside players are real (Session 8, Batch 3)
+
+- **`engine/MarketEngine.js` (pure).**
+  - `marketCandidate`: the best real free agent who fits a card (veteran / depth / prospect / international / independent, by side, position and minimum OVR). If nobody fits, it generates a player at the league's talent level. That player is handed back as a candidate and only joins the free-agent pool if the card is actually delivered.
+  - `signingTerms`: veterans get a one-year deal at ~80% of market; prospects get a bonus plus a 3-year minor-league deal.
+  - `signToClub`: to the 28, optioning (or releasing) the named reserve when full, including the 38-man spring camp; or to the farm, releasing the farm's least promising player when a side is over its cap.
+  - `rentalTarget` / `prospectToSend`: trades.
+  - In-season deals cover the current season (`applyContract(…, { startNow })`).
+- **Tokens bound to real players** (`CardTokens._marketRoles`, by the card's action):
+  - `acq_*`: the signing candidate, or the CPU club's player in a trade.
+  - `dfa_player`: a CPU-waived player on the wire (claim), or a released free agent (sign).
+  - `trade_prospect`: the farm player we'd send.
+  - `nri`: a spring non-roster invitee.
+  - `intl_player`: an international prospect, with `intl_country`.
+  - `indie_player`: an independent-league prospect.
+  - `drop_pitcher`: the weakest arm.
+  - Also: real `era_10day` (the bullpen's ERA over its last 10 game-log entries) and `streak_context`.
+  - A card with no real player to offer is never sent (`missingPlayer`), and the empty "()" artifacts in the card text were replaced with age / OVR.
+- **No cash in trades (§9.1 LOCKED).** The b1, dl3 and dl4 deadline cards used to say "costs {trade_cost}". They now ask for one of our prospects, and the deal goes through the trade ledger (`queueTrade`, executes on the clock §65). The retired t1–t9 cards stay retired; real CPU trade offers come from TradeEngine.
+- **Actions wired:**
+  - `sign_acquire_hitter` / `sign_veteran_hitter`: the veteran signs and takes the weak starter's spot; the weakest bench bat is optioned.
+  - `sign_acquire_pitcher` / `sign_prospect_pitcher` / `sign_intl_player` / `sign_intl_flyer` / `indie_sign`: the prospect goes to the farm with a bonus.
+  - `sign_dfa`: a released veteran joins the 28.
+  - `waiver_dfa`: puts in a claim. It's resolved when the 72-hour window closes, in claiming order (worst record first, the user included). The GM gets a "claim awarded / lost" card; if the claim is won with a full 28, the weakest reserve is optioned.
+  - `trade_acquire_*` / `dl3_acquire`: a CPU club's player for one of our prospects.
+  - `sp15_callup`: a non-roster invitee joins spring camp.
+  - `intl_workout`: the workout result arrives in 3–5 days as sc3_sign or sc3_fail about the same player.
+  - `scouting_intl_trip`: 1–2 workout leads from that country over the next week.
+  - `scouting_indie_tip`: the scout's report card arrives in 2–4 days.
+  - `sr2_shakeup`: call up the farm's best bat and option the weakest bench bat.
+- **Follow-up cards** (`_intlFollowupOnly`) are never drawn from the pool; they are delivered only about the player they follow, and withdrawn if he signs elsewhere.
+- **Harness:** every one of these actions is verified to have done what the card said. 27 action types were exercised across 8 seeds; all green.

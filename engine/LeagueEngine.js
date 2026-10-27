@@ -99,7 +99,10 @@ export function cpuWaiverClaimant(state, playerId) {
     losses:     state.userTeam?.losses || 0,
   });
   for (const entry of [...standings.all].reverse()) {
-    if (entry.id === 'user' || entry.id === player._waivedBy) continue;
+    if (entry.id === player._waivedBy) continue;
+    // The user claims only by putting a claim in (§73); clubs claim in
+    // reverse order of the standings — worst record first.
+    if (entry.id === 'user') { if (player._userClaim) return 'user'; continue; }
     const team = state.leagueTeams.find(t => t.id === entry.id);
     if (team && _isUpgradeFor(team, player, state.players)) return team.id;
   }

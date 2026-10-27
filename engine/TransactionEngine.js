@@ -55,6 +55,7 @@ import {
   pendingArrivals,
   makeArrival,
   clearWaivers,
+  sendToFarm,
   HITTER_TARGET,
   PITCHER_TARGET,
 } from './RosterEngine.js';
@@ -455,20 +456,38 @@ function _executeTrade(draft, tx, events, touched) {
 
 function _resolveWaiver(draft, player, atMs, events, touched) {
   const claimant = cpuWaiverClaimant(draft, player.id);
+  const userClaimed = !!player._userClaim;
+  player._userClaim = false;
   if (claimant) {
     draft.waiverPool = (draft.waiverPool || []).filter(id => id !== player.id);
+    // Our claim won (§73): with the 28 full, the weakest same-side reserve is
+    // optioned so the claimed player has a spot when he reports.
+    if (claimant === 'user' && rosterIsFull(draft, 'user')) {
+      const out = _weakestReserve(draft, player);
+      if (out) { applyRosterMutation(draft, sendToFarm(draft, out.id, 'user')); events.push({ type: 'OPTIONED', playerId: out.id, teamId: 'user', atMs }); }
+    }
     const { tx, patch } = makeArrival({ player, teamId: claimant, fromTeamId: player._waivedBy || null,
-                                        reason: 'waiver', atMs, by: 'cpu' });
+                                        reason: 'waiver', atMs, by: claimant === 'user' ? 'gm' : 'cpu' });
     Object.assign(player, patch, { onWaivers: false, waiverStartTime: null, _waivedBy: null, _waiveReason: null });
     draft.transactions.push(tx);
     touched.add(claimant);   // "the claiming team must immediately drop a player"
-    events.push({ type: 'WAIVER_CLAIMED', playerId: player.id, teamId: claimant, atMs });
+    events.push({ type: 'WAIVER_CLAIMED', playerId: player.id, teamId: claimant, atMs, userClaimed });
     return;
   }
   const from = player._waivedBy;
   applyRosterMutation(draft, clearWaivers(draft, player.id));
   if (from) touched.add(from);
   events.push({ type: 'WAIVER_CLEARED', playerId: player.id, teamId: draft.players[player.id]?.teamId || null, atMs });
+}
+
+/** The weakest healthy same-side player not in the lineup / rotation. */
+function _weakestReserve(draft, incoming) {
+  const u = draft.userTeam;
+  const isP = (p) => ['SP', 'RP'].includes(p?.pos);
+  const busy = new Set([...(u.lineupSlots || []).map(s => s.playerId), ...(u.rotation?.order || [])]);
+  return (u.rosterIds || []).map(id => draft.players[id])
+    .filter(p => p && isP(p) === isP(incoming) && !busy.has(p.id) && p.group !== PLAYER_GROUP.IL)
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0] || null;
 }
 
 function _arrive(draft, tx, events, touched) {

@@ -27,7 +27,8 @@ import {
   PHASE,
 } from '../data/constants.js';
 import { STAFF_NAMES } from '../data/player-names.js';
-import { isAvailable } from './PlayerFactory.js';
+import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
+import { marketCandidate, signingTerms, rentalTarget, prospectToSend } from './MarketEngine.js';
 import { eligibleSlotsFor } from './RosterEngine.js';
 import {
   CARD_TOKEN_POOLS,
@@ -170,6 +171,15 @@ export function buildTokenMap(cardDef, context, state) {
     values[key] = _pick(pool) ?? '';
   }
 
+  // Outside players (§73): free agents, the waiver wire, a CPU club's player,
+  // non-roster invitees, international / independent prospects — real ones.
+  if (ctx._country) values.intl_country = ctx._country;   // a scouting trip's leads come from its country
+  const outside = _marketRoles(cardDef, state, values, amountsK, activeHitter);
+  values.era_10day = bullpenRecentERA(state).toFixed(2);
+  const streak = userTeam.streak || 0;
+  values.streak_context = streak <= -2 ? `we've lost ${-streak} straight`
+    : streak >= 2 ? `even with ${streak} wins in a row` : `the last stretch has been rough`;
+
   // Which player each role token names (§71) — a card's action acts on the
   // same man its text is about.
   const players = {
@@ -180,9 +190,13 @@ export function buildTokenMap(cardDef, context, state) {
     pl_player: plPlayer?.id || null,
     prospect_hitter: prospectHitter?.id || null, prospect_pitcher: prospectPitcher?.id || null,
     drop_hitter: dropHitter?.id || null, audition_hitter: auditionHitter?.id || null,
+    ...outside.players,
   };
 
-  return { values, amountsK, players, counts };
+  // A card about an outside player with nobody real to offer can't be sent.
+  const helper = new Set(['drop_pitcher', 'replaced_starter', 'trade_prospect']);
+  const missingPlayer = outside.needsPlayer && !Object.keys(outside.players).some(k => !helper.has(k));
+  return { values, amountsK, players, counts, newPlayers: outside.newPlayers, offer: outside.offer, missingPlayer };
 }
 
 /**
@@ -310,6 +324,175 @@ function _pickAnyActivePitcher(state, used, ok = _all) {
 }
 function _pickActiveHitter(state, used, ok = _all) {
   return _pick(_roster(state, used).filter(p => HITTER_GROUPS.includes(p.group) && ok(p)));
+}
+
+/**
+ * bullpenRecentERA(state)
+ * Our relievers' ERA over their last 10 game-log entries (the card that says
+ * "the past 10 days" shows the real number).
+ */
+export function bullpenRecentERA(state) {
+  const pen = (state.userTeam?.rosterIds || []).map(id => state.players?.[id])
+    .filter(p => p && [PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group));
+  const cut = (state.currentGameIndex || 0) - 10;
+  let er = 0, ip = 0;
+  for (const p of pen) for (const e of p._impGameLog || []) {
+    if ((e.gameIndex ?? -1) < cut) continue;
+    er += e.stats?.er || 0; ip += e.stats?.ip || 0;
+  }
+  return ip > 0 ? (er * 9) / ip : 0;
+}
+
+// ─────────────────────────────────────────────────────────────
+// OUTSIDE PLAYERS (§73)
+// ─────────────────────────────────────────────────────────────
+
+const MARKET_ACTIONS = Object.freeze({
+  sign_acquire_hitter:   { kind: 'veteran',  side: 'hitter',  starter: true },
+  sign_veteran_hitter:   { kind: 'veteran',  side: 'hitter',  starter: true },
+  sign_acquire_pitcher:  { kind: 'prospect', side: 'pitcher' },
+  sign_prospect_pitcher: { kind: 'prospect', side: 'pitcher' },
+  sign_dfa:              { pool: 'released' },
+  waiver_dfa:            { pool: 'waivers' },
+  trade_acquire_pitcher: { trade: 'pitcher' },
+  trade_acquire_hitter:  { trade: 'hitter' },
+  dl3_acquire:           { trade: 'hitter' },
+  sp15_callup:           { kind: 'veteran', side: 'any', nri: true },
+  intl_workout:          { kind: 'intl', side: 'any', intl: true },
+  scouting_intl_trip:    { intlTrip: true },
+  scouting_indie_tip:    { kind: 'indie', side: 'any', indie: true },
+});
+
+/** Token values ({prefix}_name/_pos/_hand/_age/_ovr/_desc) for a real player. */
+export function playerTokenValues(state, prefix, p) {
+  const v = {};
+  _playerTokens(v, prefix, p, state);
+  return v;
+}
+
+/** "shortstop", "left-hander"… for an international prospect. */
+export function intlTypeOf(pl) {
+  return ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-hander' : 'right-hander')
+    : ({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder');
+}
+
+function _playerTokens(values, prefix, p, state) {
+  if (!p) return;
+  const isP = ['SP', 'RP'].includes(p.pos);
+  values[`${prefix}_name`] = p.name;
+  values[`${prefix}_pos`]  = isP ? p.pos : (p.nativePos || p.pos);
+  values[`${prefix}_hand`] = isP ? (PITCHER_HAND_DISPLAY[p.hand] || '(R)') : '';
+  values[`${prefix}_age`]  = String(computeAge(p.dob, baseballYear(state)));
+  values[`${prefix}_ovr`]  = String(p.ovr);
+  values[`${prefix}_desc`] = `${p.name} (${values[`${prefix}_pos`]}, OVR ${p.ovr})`;
+}
+
+/**
+ * _marketRoles(cardDef, state, values, amountsK, activeHitter)
+ * Binds a card's outside-player tokens to real players. Returns their ids,
+ * any newly generated players (added to the world only if the card is
+ * delivered) and, for a trade card, the offer.
+ */
+function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
+  const out = { players: {}, newPlayers: [], offer: null };
+  const spec = MARKET_ACTIONS[cardDef?.onYes];
+  // Weakest active pitcher — the arm a card says could be replaced.
+  const dropPitcher = (state.userTeam?.rosterIds || []).map(id => state.players?.[id])
+    .filter(p => p && isAvailable(p) && PITCHER_GROUPS.includes(p.group))
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0] || null;
+  if (dropPitcher) { _playerTokens(values, 'drop_pitcher', dropPitcher, state); out.players.drop_pitcher = dropPitcher.id; }
+  if (!spec) return out;
+  out.needsPlayer = !spec.intlTrip;
+  const u = state.userTeam || {};
+  const side = spec.side === 'any' ? (Math.random() < 0.5 ? 'pitcher' : 'hitter') : spec.side;
+  const take = (prefix, cand) => {
+    if (!cand?.player) return null;
+    _playerTokens(values, prefix, cand.player, state);
+    out.players[prefix] = cand.player.id;
+    if (cand.generated) out.newPlayers.push(cand.player);
+    return cand.player;
+  };
+  const money = (key, k) => { amountsK[key] = k; values[key] = formatK(k); };
+
+  if (spec.kind && spec.starter) {
+    // A veteran who'd start: at the spot where our starter is weakest.
+    const weakest = (u.lineupSlots || []).filter(sl => sl.slot !== 'DH' && sl.playerId)
+      .map(sl => ({ slot: sl.slot, p: state.players?.[sl.playerId] })).filter(x => x.p)
+      .sort((a, b) => (a.p.ovr || 0) - (b.p.ovr || 0))[0];
+    if (weakest) {
+      const vet = take('acq_hitter', marketCandidate(state, { kind: spec.kind, side: 'hitter', pos: weakest.slot, minOvr: (weakest.p.ovr || 0) + 2 }));
+      if (vet) { vet._startAt = weakest.slot; money('sign_cost', signingTerms(state, vet).salary); }
+      out.players.replaced_starter = weakest.p.id;
+    }
+  } else if (spec.kind && !spec.nri && !spec.intl && !spec.indie) {
+    const pros = take(side === 'pitcher' ? 'acq_pitcher' : 'acq_hitter', marketCandidate(state, { kind: spec.kind, side }));
+    if (pros) money('sign_cost', signingTerms(state, pros).bonus || signingTerms(state, pros).salary);
+  } else if (spec.pool === 'waivers') {
+    const w = (state.waiverPool || []).map(id => state.players?.[id])
+      .filter(p => p && p._waivedBy && p._waivedBy !== 'user' && !p._userClaim)
+      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+    if (w) {
+      take('dfa_player', { player: w });
+      const isP = ['SP', 'RP'].includes(w.pos);
+      values.dfa_dest = isP ? 'the bullpen' : 'the bench';
+      values.dfa_preview_dest = values.dfa_dest;
+      values.dfa_yes_msg = 'Claim is in — he reports if no club ahead of us in the claiming order claims him.';
+    }
+  } else if (spec.pool === 'released') {
+    const f = (state.freeAgentPool || []).map(id => state.players?.[id])
+      .filter(p => p && p._faFrom && p._faFrom !== 'user')
+      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+    if (f) {
+      take('dfa_player', { player: f });
+      const isP = ['SP', 'RP'].includes(f.pos);
+      values.dfa_dest = isP ? 'the bullpen' : 'the bench';
+      values.dfa_preview_dest = `open to a deal with us`;
+      values.dfa_yes_msg = 'He joins the active roster.';
+      money('sign_cost', signingTerms(state, f).salary);
+    }
+  } else if (spec.trade) {
+    // A CPU club's player who's an upgrade, for one of our prospects (§9.1: no cash).
+    const isP = spec.trade === 'pitcher';
+    const floor = isP ? (dropPitcher?.ovr || 0) + 3
+      : Math.min(...(u.lineupSlots || []).map(sl => state.players?.[sl.playerId]?.ovr).filter(Number.isFinite)) + 2;
+    const target = rentalTarget(state, spec.trade, Number.isFinite(floor) ? floor : 0);
+    const prospect = target && prospectToSend(state, (target.player.ovr || 0) - 8);
+    if (target && prospect) {
+      take(isP ? 'acq_pitcher' : 'acq_hitter', { player: target.player });
+      values.rival_team = target.team.name;
+      _playerTokens(values, 'trade_prospect', prospect, state);
+      out.players.trade_prospect = prospect.id;
+      out.offer = { incomingIds: [target.player.id], outgoingIds: [prospect.id], proposingTeamId: target.team.id };
+    }
+  } else if (spec.nri) {
+    const vet = take('nri', marketCandidate(state, { kind: 'veteran', side }));
+    if (vet) {
+      const pos = values.nri_pos;
+      values.nri_subject = `Non-roster invitee ${vet.name} is turning heads`;
+      values.nri_preview = `${vet.name} (${pos}, ${values.nri_age}) came to camp on a minor-league deal — and is making noise…`;
+      values.nri_body = `${vet.name} (${pos}, ${values.nri_age}, OVR ${vet.ovr}) came to camp as a non-roster invitee and has been one of the stories of the spring. `
+        + `A camp spot costs ${values.nri_cost}; he'd compete for an Opening Day job.`;
+    }
+  } else if (spec.intl) {
+    const pl = take('intl_player', marketCandidate(state, { kind: 'intl', side }, new Set(state.freeAgentPool || [])));
+    if (pl) {
+      values.intl_player_type = ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-hander' : 'right-hander')
+        : ({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder');
+      values.intl_player_age = values.intl_player_age;
+      pl._marketKind = 'intl';
+      pl._intlCountry = values.intl_country;
+      money('sign_cost', signingTerms(state, pl).bonus);
+    }
+  } else if (spec.indie) {
+    const pl = take('indie_player', marketCandidate(state, { kind: 'indie', side }, new Set(state.freeAgentPool || [])));
+    if (pl) {
+      values.college_pos = ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-handed pitcher' : 'right-handed pitcher')
+        : `${({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder')}`;
+      pl._marketKind = 'indie';
+      pl._indieLeague = values.indie_league_name;
+    }
+  }
+  return out;
 }
 
 /** Which players a card can be about (§72). Unflagged cards: anyone. */

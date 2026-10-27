@@ -35,6 +35,20 @@ export const BROADCAST_MARKET_MULTIPLIER = Object.freeze({ min: 1.25, max: 1.6 }
 
 export const CARD_TOKEN_POOLS = Object.freeze({
 
+  // ── Outside players (§73) ───────────────────────────────────
+  sr2_read: ['The at-bats are flat and the dugout is quiet', 'Guys are pressing — everybody is trying to hit a five-run homer',
+             'The bullpen is gassed and the lineup has stopped grinding', 'Nobody is talking in the clubhouse'],
+  intl_country: ['the Dominican Republic', 'Venezuela', 'Cuba', 'Japan', 'South Korea', 'Taiwan',
+                 'Panama', 'Colombia', 'Mexico', 'Curaçao', 'Nicaragua', 'Australia'],
+  indie_league_name: ['Atlantic League', 'American Association', 'Frontier League', 'Pioneer League'],
+  s2_pitch_type: ['a heavy sinker that already plays', 'a wipeout slider', 'a plus changeup',
+                  'mid-90s velocity from a loose arm', 'a big-breaking curveball'],
+  s2_concern: ['the delivery has a lot of moving parts', 'he walks too many hitters',
+               'there\'s an old elbow issue in the medicals', 'he tires after the third inning',
+               'the breaking ball comes and goes'],
+  prospect_slide_reason: ['after a club backed out of a verbal agreement', 'because of a signability scare',
+                          'after a quiet showcase season', 'once a bigger club spent its pool elsewhere'],
+
   // ── Spring training ─────────────────────────────────────────
   sp2_items: [
     'a leaking shower bank, worn turf in the cage, and lockers that no longer close',

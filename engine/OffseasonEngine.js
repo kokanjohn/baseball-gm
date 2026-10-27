@@ -259,11 +259,14 @@ export function marketTerms(draft, player) {
   return { salary, years };
 }
 
-/** Sign `playerId` to `terms` starting next season. */
-export function applyContract(draft, playerId, terms) {
+/**
+ * Sign `playerId` to `terms`: starting next season (offseason deals), or —
+ * `startNow` — covering the current season too (in-season signings).
+ */
+export function applyContract(draft, playerId, terms, { startNow = false } = {}) {
   const p = draft.players[playerId];
   if (!p) return;
-  const start = (draft.seasonNum || 1) + 1;
+  const start = (draft.seasonNum || 1) + (startNow ? 0 : 1);
   Object.assign(p, {
     contractSalary:        terms.salary,
     contractYears:         terms.years,

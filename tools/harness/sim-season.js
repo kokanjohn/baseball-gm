@@ -103,6 +103,20 @@ function cardDidIt(action, c, st) {
     case 'audition_promote': return inLineup(c._tokenPlayers.audition_hitter);
     case 'move_to_dh': return (u.lineupSlots || []).find(sl => sl.slot === 'DH')?.playerId === p?.id;
     case 'move_bp_to_rotation': return inRot(p?.id) && p.group === 'sp';
+    // §73 outside players
+    case 'sign_acquire_hitter': case 'sign_veteran_hitter': case 'sign_dfa':
+      return u.rosterIds.includes(c._tokenPlayers.acq_hitter || c._tokenPlayers.dfa_player);
+    case 'sign_acquire_pitcher': case 'sign_prospect_pitcher': return (u.farmIds || []).includes(c._tokenPlayers.acq_pitcher);
+    case 'sign_intl_player': case 'sign_intl_flyer': return (u.farmIds || []).includes(c._tokenPlayers.intl_player);
+    case 'indie_sign': return (u.farmIds || []).includes(c._targetPlayerId);
+    case 'waiver_dfa': return !!st.players[c._tokenPlayers.dfa_player]?._userClaim;
+    case 'trade_acquire_pitcher': case 'trade_acquire_hitter': case 'dl3_acquire':
+      return (st.transactions || []).some(t => t.kind === 'trade' && t.offer?.incomingIds?.includes(c._offer?.incomingIds?.[0]));
+    case 'sp15_callup': return u.rosterIds.includes(c._tokenPlayers.nri);
+    case 'intl_workout': return (st.scheduledCards || []).some(x => (x._rosterKey || '').includes(c._tokenPlayers.intl_player));
+    case 'scouting_intl_trip': return (st.scheduledCards || []).some(x => x.cardId === 'sc3');
+    case 'scouting_indie_tip': return (st.scheduledCards || []).some(x => x.cardId === 'indie_report');
+    case 'sr2_shakeup': return (st.transactions || []).some(t => t.status === 'pending' && t.playerId === c._tokenPlayers.prospect_hitter);
     default: return true;
   }
 }
@@ -847,8 +861,13 @@ async function main() {
       for (const def of entries) {
         if (!def || !(def.body || def.subject) || def._retired) continue;
         if ([def.onYes, def.onNo].some(a => a && !HANDLED_CARD_ACTIONS.has(a))) continue;
+        // Follow-up cards are only delivered about a named player (§73), and a
+        // card with no real outside player to offer is never sent.
+        if (def._intlFollowupOnly) continue;
+        const tm = buildTokenMap(def, ctx, st);
+        if (tm.missingPlayer) continue;
         checked++;
-        const { values } = buildTokenMap(def, ctx, st);
+        const { values } = tm;
         const bodies = [def.body, ...((def.variants || def._variants || []).map(v => v?.body))];
         const fields = [def.subject, def.preview, def.sender, def.yesLabel, def.noLabel,
                         def.yesMsg, def.noMsg, def._expireMsg, ...bodies];

@@ -23,6 +23,8 @@ import { setUnavailable, setCondition, startPlan } from './DevelopmentEngine.js'
 import { callUp, rosterIsFull } from './TransactionEngine.js';
 import { sendToFarm, applyRosterMutation, eligibleSlotsFor, defaultActiveGroup } from './RosterEngine.js';
 import { marketTerms, contractIsUp } from './OffseasonEngine.js';
+import { signToClub, signingTerms } from './MarketEngine.js';
+import { queueTrade } from './TradeEngine.js';
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -228,7 +230,144 @@ const sickStart = {
   apply: (d, c) => [setCondition(d, c._targetPlayerId, { subRating: 'stuff', amount: 5, games: 1, reason: 'sick' })].filter(Boolean),
 };
 
+// ─────────────────────────────────────────────────────────────
+// OUTSIDE PLAYERS (§73)
+// ─────────────────────────────────────────────────────────────
+
+const DAY = 86_400_000;
+const isFA = (st, id) => st.players[id]?.group === PLAYER_GROUP.FREE_AGENT;
+const fullFor = (st) => rosterIsFull(st, 'user');
+const between = (lo, hi) => lo + Math.random() * (hi - lo);
+
+/** A veteran who wants to start: signs, takes the weak starter's spot; the weakest bench bat goes down. */
+const signStarter = {
+  feasible: (st, c) => isFA(st, role(c, 'acq_hitter')) && REGULAR_OR_SPRING.has(st.phase)
+    && (!fullFor(st) || ours(st, role(c, 'drop_hitter'))),
+  apply(d, c, atMs) {
+    const id = role(c, 'acq_hitter');
+    const events = signToClub(d, id, 'user', atMs, { displaceId: role(c, 'drop_hitter') });
+    const p = d.players[id];
+    const i = (d.userTeam.lineupSlots || []).findIndex(s => s.slot === p?._startAt && s.playerId === role(c, 'replaced_starter'));
+    if (i >= 0 && eligibleSlotsFor(p).includes(d.userTeam.lineupSlots[i].slot)) d.userTeam.lineupSlots[i].playerId = id;
+    if (p) p._startAt = undefined;
+    return events;
+  },
+};
+
+/** A prospect signs a bonus and reports to the farm. */
+const signProspect = (r) => ({
+  feasible: (st, c) => isFA(st, role(c, r)),
+  apply(d, c, atMs) {
+    const id = role(c, r);
+    const t = signingTerms(d, d.players[id]);
+    const ev = signToClub(d, id, 'user', atMs, { toFarm: true, terms: t });
+    if (c.cardId !== 'sc3_fail') d.userTeam.finances.operatingSpent = (d.userTeam.finances.operatingSpent || 0) + (t.bonus || 0);
+    return ev;
+  },
+});
+
+/** A released veteran signs a short deal and joins the active roster. */
+const signReleased = {
+  feasible: (st, c) => isFA(st, role(c, 'dfa_player')) && REGULAR_OR_SPRING.has(st.phase),
+  apply: (d, c, atMs) => signToClub(d, role(c, 'dfa_player'), 'user', atMs),
+};
+
+/** A waiver claim: resolved when the 72-hour window closes, by claiming order (§20.2). */
+const claimWaivers = {
+  feasible: (st, c) => {
+    const p = st.players[role(c, 'dfa_player')];
+    return !!p && (st.waiverPool || []).includes(p.id) && p._waivedBy !== 'user' && !p._userClaim;
+  },
+  apply(d, c) {
+    d.players[role(c, 'dfa_player')]._userClaim = true;
+    return [{ type: 'WAIVER_CLAIM_ENTERED', playerId: role(c, 'dfa_player') }];
+  },
+};
+
+/** A CPU club's player for one of our prospects — through the trade ledger (§65). */
+const tradeFor = {
+  feasible: (st, c) => {
+    const o = c._offer;
+    if (!o || st.phase === PHASE.SPRING_TRAINING) return false;
+    const team = (st.leagueTeams || []).find(t => t.id === o.proposingTeamId);
+    return !!team && o.incomingIds.every(id => team.rosterIds.includes(id) && isAvailable(st.players[id]))
+      && o.outgoingIds.every(id => (st.userTeam.farmIds || []).includes(id) || ours(st, id));
+  },
+  apply(d, c, atMs) {
+    d.transactions = [...(d.transactions || []), queueTrade(c._offer, c._offer.proposingTeamId, atMs)];
+    return [{ type: 'TRADE_QUEUED', offer: c._offer }];
+  },
+};
+
+/** Spring: a non-roster invitee joins camp to compete for a job. */
+const inviteNRI = {
+  feasible: (st, c) => st.phase === PHASE.SPRING_TRAINING && isFA(st, role(c, 'nri')) && !rosterIsFull(st, 'user'),
+  apply(d, c, atMs) {
+    const id = role(c, 'nri');
+    const ev = signToClub(d, id, 'user', atMs, { terms: { salary: 75, years: 1 } });
+    if (d.players[id]) d.players[id]._isSpringInvitee = true;
+    return ev;
+  },
+};
+
+/** A workout: the result comes in 3–5 days — good or a disappointment. */
+const workout = {
+  feasible: (st, c) => isFA(st, role(c, 'intl_player')),
+  apply(d, c, atMs) {
+    const id = role(c, 'intl_player');
+    const p = d.players[id];
+    const rel = (p.ovr || 45) - (d.leagueTalentOffset || 0);
+    const good = Math.random() < (rel >= 44 ? 0.7 : 0.35);
+    p._workout = good ? 'impressed' : 'disappointed';
+    return [{ type: 'SCHEDULE_CARD', defId: good ? 'sc3_sign' : 'sc3_fail', preset: { intl_player: id }, atMs: atMs + between(3, 5) * DAY }];
+  },
+};
+
+/** An international scouting trip: 1–2 workout leads over the next week. */
+const intlTrip = {
+  feasible: () => true,
+  apply(d, c, atMs) {
+    const n = 1 + (Math.random() < 0.5 ? 1 : 0);
+    return Array.from({ length: n }, (_, i) => ({ type: 'SCHEDULE_CARD', defId: 'sc3', preset: { _country: c._intlCountry },
+                                                  atMs: atMs + between(2 + i * 2, 4 + i * 2) * DAY }));
+  },
+};
+
+/** An independent-league tip: the scout's report arrives in 2–4 days. */
+const indieTip = {
+  feasible: (st, c) => isFA(st, role(c, 'indie_player')),
+  apply: (d, c, atMs) => [{ type: 'SCHEDULE_INDIE', playerId: role(c, 'indie_player'), atMs: atMs + between(2, 4) * DAY }],
+};
+
+const indieSign = {
+  feasible: (st, c) => isFA(st, c._targetPlayerId),
+  apply(d, c, atMs) {
+    const t = signingTerms(d, d.players[c._targetPlayerId]);
+    d.userTeam.finances.operatingSpent = (d.userTeam.finances.operatingSpent || 0) + (t.bonus || 0);
+    return signToClub(d, c._targetPlayerId, 'user', atMs, { toFarm: true, terms: t });
+  },
+};
+
+const REGULAR_OR_SPRING = new Set([...REGULAR, PHASE.SPRING_TRAINING]);
+
 export const CARD_ACTIONS = Object.freeze({
+  sign_acquire_hitter:   signStarter,
+  sign_veteran_hitter:   signStarter,
+  sign_acquire_pitcher:  signProspect('acq_pitcher'),
+  sign_prospect_pitcher: signProspect('acq_pitcher'),
+  sign_intl_player:      signProspect('intl_player'),
+  sign_intl_flyer:       signProspect('intl_player'),
+  sign_dfa:              signReleased,
+  waiver_dfa:            claimWaivers,
+  trade_acquire_pitcher: tradeFor,
+  trade_acquire_hitter:  tradeFor,
+  dl3_acquire:           tradeFor,
+  sp15_callup:           inviteNRI,
+  intl_workout:          workout,
+  scouting_intl_trip:    intlTrip,
+  scouting_indie_tip:    indieTip,
+  indie_sign:            indieSign,
+  sr2_shakeup:           callupHitter,
   rest_active_hitter:   away(restReason, 1),
   bench_active_pitcher: away(restReason, 1),
   bench_active_hitter:  away((raw) => raw.tag === 'DISCIPLINE' ? 'suspended' : raw.tag === 'HEALTH' ? 'illness' : 'benched', 2),

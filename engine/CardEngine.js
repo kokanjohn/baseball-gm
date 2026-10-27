@@ -58,10 +58,11 @@ import {
   getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull,
 } from './TransactionEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
-import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK } from './CardTokens.js';
+import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import { CARD_ACTIONS, cardFeasible } from './CardActions.js';
+import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
 import { computeOVR } from './PlayerFactory.js';
@@ -662,6 +663,21 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
         preview: `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) joins the farm system.`,
         body:    `Our farm system was getting thin, so I signed ${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) to a minor-league deal. He's available as a call-up if we need him.`,
       }, ev.atMs)) delivered++;
+    } else if (ev.type === 'WAIVER_CLAIMED' && ev.userClaimed) {
+      // §73: how our waiver claim came out.
+      const st = StateManager.get();
+      const p = st.players[ev.playerId];
+      const won = ev.teamId === 'user';
+      const winner = won ? null : (st.leagueTeams || []).find(t => t.id === ev.teamId)?.name;
+      if (p && _deliverNotice(`claim:${ev.playerId}:${ev.atMs}`, {
+        sender: 'Player Dev.', avatar: '📋', type: won ? 'good' : 'normal',
+        subject: won ? `Claim awarded: ${p.name}` : `Claim lost: ${p.name}`,
+        preview: won ? `${_who(p)} is ours — he reports tomorrow.` : `${winner || 'Another club'} was ahead of us in the claiming order.`,
+        body: won ? `Our claim on ${_who(p)} came through. He reports tomorrow.`
+                  : `${winner || 'Another club'} had priority in the claiming order (worse record) and claimed ${_who(p)}.`,
+      }, ev.atMs ?? atMs)) delivered++;
+    } else if (ev.type === 'WAIVER_CLEARED' && ev.userClaimed) {
+      // (cannot happen: a user claim always makes the user a claimant)
     } else if (ev.type === 'DEV_DONE' && ev.teamId === 'user') {
       if (_deliverDevelopmentReport(ev, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'TRADE_VOIDED') {
@@ -715,7 +731,7 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     if (key.startsWith('os:resign:')) return players[c._targetPlayerId]?.teamId !== 'user';
     // §71: a card about one of our players that can no longer apply (he left,
     // got hurt, or is already away) is withdrawn rather than left as a ghost.
-    if (!key && CARD_ACTIONS[c._raw?.onYes]) return !cardFeasible(state, c);
+    if ((!key || key.startsWith('followup:') || key.startsWith('indie:')) && CARD_ACTIONS[c._raw?.onYes]) return !cardFeasible(state, c);
     if (c._tradeOffer)               return !_tradeStillValid(state, c);
     return false;
   });
@@ -1375,6 +1391,10 @@ function _filterEligible(pool, context, state) {
 
     // Roster coverage gates
     if (card._requiresBenchSP && !_hasBenchSP(state)) return false;
+    // §73: follow-up cards are only ever delivered about the player they follow.
+    if (card._intlFollowupOnly) return false;
+    // §73: "the bullpen ERA is catastrophic" only when it is.
+    if (card._requiresBullpenERA && bullpenRecentERA(state) < card._requiresBullpenERA) return false;
     if (card._requiresTargetCoverage && !_hasPositionCoverage(state)) return false;
 
     // Prestige tier gate
@@ -1441,7 +1461,22 @@ function _createInstance(cardDef, context, state) {
 
   // ONE token map for every field of this card (§60): same player, same
   // sponsor, same dollar amounts in subject, body, labels and outcome messages.
-  const { values, amountsK, players: tokenPlayers, counts } = buildTokenMap(cardDef, context, state);
+  const { values, amountsK, players: tokenPlayers, counts, newPlayers, offer, missingPlayer } = buildTokenMap(cardDef, context, state);
+  if (missingPlayer && !context?._preset) return null;   // §73: no real player to offer — nothing to send
+  // Preset players (§73): a follow-up card about a player already named.
+  if (context?._preset) {
+    for (const [role, id] of Object.entries(context._preset)) {
+      if (role.startsWith('_')) continue;
+      const pl = state.players[id];
+      if (!pl) continue;
+      Object.assign(values, playerTokenValues(state, role, pl));
+      tokenPlayers[role] = id;
+      if (pl._intlCountry) values.intl_country = pl._intlCountry;
+      if (role === 'intl_player') values.intl_player_type = intlTypeOf(pl);
+      const terms = signingTerms(state, pl);
+      amountsK.sign_cost = terms.bonus || terms.salary; values.sign_cost = formatK(amountsK.sign_cost);
+    }
+  }
   const t = (text) => applyTokens(text || '', values);
   const target = _cardTarget(cardDef, tokenPlayers);
 
@@ -1512,11 +1547,20 @@ function _createInstance(cardDef, context, state) {
     // §71: the number of games the card's text promises (e.g. a suspension).
     _actionGames:     cardDef._gamesToken ? (counts?.[cardDef._gamesToken] ?? null) : null,
     _tokenPlayers:    tokenPlayers || {},
+    _offer:           offer || null,
+    _intlCountry:     values.intl_country || null,
     _raw:             cardDef,
   };
-  // §71–72: a card whose action can't happen (nobody to cover, wrong player,
-  // no room) is never delivered.
-  if (!cardFeasible(state, instance)) return null;
+  // §71–73: a card whose action can't happen (nobody to cover, wrong player,
+  // no room, no real player to offer) is never delivered — before any new
+  // player it would introduce is put into the world.
+  const probe = StateManager.get();
+  const world = (newPlayers || []).length
+    ? { ...probe, players: { ...probe.players, ...Object.fromEntries(newPlayers.map(p => [p.id, p])) },
+        freeAgentPool: [...(probe.freeAgentPool || []), ...newPlayers.map(p => p.id)] }
+    : probe;
+  if (!cardFeasible(world, instance)) return null;
+  if ((newPlayers || []).length) StateManager.mutate(s => { for (const p of newPlayers) addToMarket(s, p, Date.now()); });
   return instance;
 }
 
@@ -1773,11 +1817,54 @@ function _applyCardAction(action, instance, atMs) {
   // Things changed since the card arrived (someone got hurt, the spot is gone):
   // it can't happen any more.
   if (!handler.feasible(st, instance)) return;
+  let events = [];
   StateManager.mutate(s => {
-    handler.apply(s, instance, atMs);
+    events = handler.apply(s, instance, atMs) || [];
     applyRosterMutation(s, reconcileRoster(s, 'user'));
     s.userTeam.finances.payroll = computePayroll(s);
   });
+  // Follow-ups the action set in motion (§73: a workout's result, a scouting
+  // trip's leads, an independent-league report) — real cards at real times.
+  for (const ev of events) {
+    if (ev?.type === 'SCHEDULE_CARD') _deliverFollowupDef(ev.defId, ev.preset || {}, ev.atMs);
+    if (ev?.type === 'SCHEDULE_INDIE') _deliverIndieReport(ev.playerId, ev.atMs);
+  }
+}
+
+/** A pool card about players already named (follow-ups), parked for `atMs`. */
+function _deliverFollowupDef(defId, preset, atMs) {
+  let def = null;
+  for (const pool of Object.values(ALL_POOLS)) {
+    const f = pool.find(e => (e?.card || e)?.id === defId);
+    if (f) { def = f.card || f; break; }
+  }
+  if (!def) return null;
+  const inst = _createInstance(def, { _preset: preset, _country: preset._country }, StateManager.get());
+  if (!inst) return null;
+  inst._rosterKey = `followup:${defId}:${Object.values(preset).join(',')}`;
+  return _deliverAt(inst, atMs);
+}
+
+/** The scout's independent-league report: sign him to the farm, or pass. */
+function _deliverIndieReport(playerId, atMs) {
+  const state = StateManager.get();
+  const p = state.players[playerId];
+  if (!p || p.group !== PLAYER_GROUP.FREE_AGENT) return null;
+  const terms = signingTerms(state, p);
+  const age = computeAge(p.dob, baseballYear(state));
+  const card = _rosterCard(state, {
+    cardId: 'indie_report', tag: 'SCOUTING', sender: 'Amateur Scouting', avatar: '🔭', type: 'good',
+    _rosterKey: `indie:${playerId}`, _targetPlayerId: playerId, _tokenPlayers: { indie_player: playerId },
+    subject: `Scouting report: ${p.name}`,
+    preview: `${_who(p)}, ${age} — ${p._indieLeague || 'independent ball'}.`,
+    body: `Our scout saw ${_who(p)}, ${age}, in the ${p._indieLeague || 'independent leagues'}. `
+        + `He'd sign for a ${formatK(terms.bonus)} bonus and report to our farm system.`,
+    yesLabel: `Sign him (${formatK(terms.bonus)})`, noLabel: 'Pass',
+    expiresAtMs: atMs + 3 * 86_400_000,
+    _raw: { onYes: 'indie_sign', onNo: 'indie_pass', onAuto: 'indie_pass' },
+    _autoLabel: 'No answer — passed',
+  });
+  return _deliverAt(card, atMs);
 }
 
 /** A development plan finished: the coach reports how it went. */
