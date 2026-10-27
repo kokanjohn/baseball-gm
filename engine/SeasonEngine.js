@@ -73,7 +73,9 @@ const ALL_STAR_BREAK_DAYS       = 4;
  * @returns {{ schedule: Object[], leagueSchedule: { dayMap } }}
  */
 export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride, opts = {}) {
-  const year       = _seasonYear(seasonNum);
+  // The league's year comes from the save (§70); the real clock only as a
+  // fallback for callers that have no state.
+  const year       = Number.isFinite(opts.year) ? opts.year : _seasonYear(seasonNum);
   const realStart  = startDateOverride ? new Date(startDateOverride) : _getSpringStartDate(year);
   const dispStart  = _getSpringStartDate(year);
   const userDiv    = opts.userDivisionId || 'A';
@@ -502,12 +504,12 @@ export function scheduleMakeupGame(schedule, postponedGameIndex) {
  * @param {String} text
  * @returns {Object} feed entry
  */
-export function buildActivityFeedEntry(type, teamAbbr, text) {
+export function buildActivityFeedEntry(type, teamAbbr, text, atMs = Date.now()) {
   return {
     type,
     teamAbbr,
     text,
-    timestamp: Date.now(),
+    timestamp: atMs,   // when it happened on the league clock (catch-up passes the event time)
   };
 }
 

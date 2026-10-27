@@ -12,7 +12,8 @@
  *   - getNextGame()                — returns the game the UI should be showing
  *   - checkMilestone()             — evaluates whether a milestone screen should fire
  *   - advancePhase()               — executes phase transitions
- *   - runOffseason()               — executes the 12-step offseason sequence
+ *   - advanceClock()               — runs the league calendar: CPU games,
+ *                                    roster moves, playoffs and the offseason (§70)
  *
  * Rules:
  *   - The only module that imports StateManager.
@@ -65,7 +66,7 @@ import {
 } from './PlayoffEngine.js';
 import { rollGameInjuries, beginInjury, clearInjuryUpdate } from './InjuryEngine.js';
 
-import { computeOVR, computeAge } from './PlayerFactory.js';
+import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
 import { STAFF_NAMES } from '../data/player-names.js';
 import {
   generatePlays,
@@ -76,20 +77,7 @@ import {
 import * as CardEngine from './CardEngine.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint, evaluateAllStarHostingEligibility } from './PrestigeEngine.js';
-import {
-  initOffseason,
-  advanceOffseasonDay,
-  checkHardGates,
-  autoResolveHardGates,
-  canBeginSpringTraining,
-  processOffseasonStep1,
-  processOffseasonSteps2to5,
-  processOffseasonStep7,
-  processOffseasonStep8,
-  processOffseasonStep11to12,
-  getOffseasonStatus,
-  OFFSEASON_DAY_POOLS,
-} from './OffseasonEngine.js';
+import * as Offseason from './OffseasonEngine.js';
 
 import {
   PHASE,
@@ -98,6 +86,8 @@ import {
   GAME_DURATION_FALLBACK_MS,
   GAME_TIMES_BY_DOW,
   MILESTONE_SCREENS,
+  OFFSEASON_CARD_HOUR,
+  OFFSEASON_FA_CARD_HOUR,
   PLAYOFF_WILD_CARD_GAMES,
   PLAYOFF_FIRST_ROUND_BEST_OF,
   PLAYOFF_DIVISION_SERIES_BEST_OF,
@@ -383,9 +373,12 @@ export async function startNewGame(config) {
   // Build the full league — all 10 teams, all rosters, farm systems
   const state    = StateManager.get();
   const uuidFn   = () => crypto.randomUUID();
+  // The league's year (§70): fixed now, advanced one per season.
+  const baseYear = new Date().getFullYear();
   const league   = buildFullLeague({
     archetypeId: config.archetypeId,
     seasonNum:   1,
+    seasonYear:  baseYear,
     uuidFn,
     userTeam:    state.userTeam,
     region:      config.region || 'north',
@@ -411,7 +404,7 @@ export async function startNewGame(config) {
   // _parseGameTime will set the time to 1:05 PM on today.
 
   // One calendar for the whole league (§67) — the user is one of ten teams.
-  const { schedule, leagueSchedule } = generateLeagueCalendar(1, league.leagueTeams, scheduleAnchor);
+  const { schedule, leagueSchedule } = generateLeagueCalendar(1, league.leagueTeams, scheduleAnchor, { year: baseYear });
 
   // Apply everything to state in one batch
   StateManager.mutate(s => {
@@ -423,6 +416,7 @@ export async function startNewGame(config) {
     s.userTeam.farmIds     = league.farmIds;
     s.userTeam.lineupSlots = league.lineupSlots;
     s.leagueTalentOffset   = league.leagueOffset ?? 0;   // §69 — league talent level
+    s.baseYear             = baseYear;                   // §70 — the league's year for season 1
     s.userTeam.finances.payroll = league.payroll;
 
     // Populate SP rotation order from the generated roster, sorted by OVR so the
@@ -1223,50 +1217,9 @@ function _applyPhase(newPhase) {
       });
       break;
 
-    case PHASE.OFFSEASON: {
-      // Initialize offseason state
-      const osInitMuts = initOffseason(StateManager.get());
-      StateManager.mutate(s => {
-        s.offseasonDay              = osInitMuts.offseasonDay;
-        s.offseasonStartedAt        = osInitMuts.offseasonStartedAt;
-        s.offseasonHardGatesCleared = osInitMuts.offseasonHardGatesCleared;
-        s._offseasonGate            = osInitMuts._offseasonGate;
-      });
-
-      // Steps 1-5: Lock record, archive stats, age players, flag expiries
-      const step1  = processOffseasonStep1(StateManager.get());
-      const step25 = processOffseasonSteps2to5(StateManager.get());
-      StateManager.mutate(s => {
-        s.seasonHistory = step1.seasonHistory;
-        if (step25.players) {
-          for (const [id, upd] of Object.entries(step25.players)) {
-            if (s.players[id]) Object.assign(s.players[id], upd);
-          }
-        }
-      });
-
-      // Step 7: CPU free agent processing — expired contracts released or re-signed
-      const step7 = processOffseasonStep7(StateManager.get());
-      StateManager.mutate(s => {
-        if (step7.players) {
-          for (const [id, upd] of Object.entries(step7.players)) {
-            if (s.players[id]) Object.assign(s.players[id], upd);
-          }
-        }
-        if (step7.leagueTeams) s.leagueTeams = step7.leagueTeams;
-        if (step7.freeAgentPool) s.freeAgentPool = step7.freeAgentPool;
-      });
-
-      // Step 8: Payroll recalculation and financial reset for new season
-      const step8 = processOffseasonStep8(StateManager.get());
-      StateManager.mutate(s => {
-        if (step8.userTeam?.finances) {
-          Object.assign(s.userTeam.finances, step8.userTeam.finances);
-        }
-      });
-
+    case PHASE.OFFSEASON:
+      // The offseason's work runs on the clock (§70, _runOffseasonStep).
       break;
-    }
 
     case PHASE.SEASON_SUMMARY: {
       // Compute prestige for the completed season
@@ -1513,114 +1466,6 @@ export function checkMilestone() {
   }
 
   return null;
-}
-
-// ─────────────────────────────────────────────────────────────
-// OFFSEASON SEQUENCE (Section 13.2)
-// ─────────────────────────────────────────────────────────────
-
-/**
- * runOffseason()
- * Executes the 12-step offseason sequence in strict order.
- * Steps 6 and 9 are player-gated — they queue cards and pause here.
- * CardEngine (Phase 9) advances the offseason when those cards are resolved.
- *
- * Steps that run automatically:
- *   1  Lock the record
- *   2  Archive player stats
- *   3  Player aging (gates step 4)
- *   4  Sub-rating development and decline
- *   5  Contract expiry flagging
- *   7  League roster turnover (CPU)
- *   8  Payroll recalculation
- *   10 Coaching staff decisions
- *   11 Schedule generation
- *   12 Spring training setup
- *
- * Steps that queue cards and pause:
- *   6  User roster decisions (re-sign/release)
- *   9  Ownership evaluation card
- *
- * @returns {Promise<void>}
- */
-export async function runOffseason() {
-  // Offseason processing is now orchestrated through OffseasonEngine.
-  // This function is retained as the entry point called by advancePhase(OFFSEASON).
-  // The actual 12-step sequence runs across the 6 offseason days, gated
-  // by hard gate resolution via CardEngine cards.
-  //
-  // Steps 1-5 run in advancePhase(OFFSEASON) immediately.
-  // Steps 6+ are triggered as cards resolve via resumeOffseasonAfterResigns()
-  // and resumeOffseasonAfterOwnership().
-  //
-  // This function is a no-op — the work happens in advancePhase above.
-}
-
-/**
- * resumeOffseasonAfterResigns()
- * Called by CardEngine (Phase 9) after all re-sign cards are resolved.
- * Executes offseason steps 7–12.
- *
- * @returns {Promise<void>}
- */
-export async function resumeOffseasonAfterResigns() {
-  // Step 7: CPU roster turnover
-  const step7 = processOffseasonStep7(StateManager.get());
-  StateManager.mutate(s => {
-    if (step7.players) {
-      for (const [id, upd] of Object.entries(step7.players)) {
-        if (s.players[id]) Object.assign(s.players[id], upd);
-        else s.players[id] = upd;
-      }
-    }
-    if (step7.leagueTeams)  s.leagueTeams  = step7.leagueTeams;
-    if (step7.freeAgentPool) s.freeAgentPool = step7.freeAgentPool;
-  });
-
-  // Step 8: Payroll recalculation
-  const step8 = processOffseasonStep8(StateManager.get());
-  StateManager.mutate(s => {
-    if (step8.userTeam?.finances) Object.assign(s.userTeam.finances, step8.userTeam.finances);
-  });
-
-  // Step 9: Queue ownership evaluation card
-  StateManager.mutate(s => {
-    s._offseasonGate = 'AWAITING_OWNERSHIP_CARD';
-    _updateWinTarget(s);
-  });
-}
-
-/**
- * resumeOffseasonAfterOwnership()
- * Called by CardEngine after ownership evaluation card resolves.
- * Executes offseason steps 10–12.
- *
- * @returns {Promise<void>}
- */
-export async function resumeOffseasonAfterOwnership() {
-  // Steps 11-12: Season increment + schedule generation
-  const step1112 = processOffseasonStep11to12(StateManager.get());
-  StateManager.mutate(s => {
-    s.seasonNum          = step1112.seasonNum;
-    s.currentGameIndex   = step1112.currentGameIndex;
-    s.offseasonDay       = step1112.offseasonDay;
-    s.offseasonStartedAt = step1112.offseasonStartedAt;
-    s.offseasonHardGatesCleared = step1112.offseasonHardGatesCleared;
-    s._offseasonGate     = step1112._offseasonGate;
-    if (step1112.userTeam) Object.assign(s.userTeam, step1112.userTeam);
-  });
-
-  // Generate schedules for new season
-  StateManager.mutate(s => {
-    const { schedule, leagueSchedule } = generateLeagueCalendar(s.seasonNum, s.leagueTeams);
-    s.schedule           = schedule;
-    s.leagueSchedule     = leagueSchedule;
-  });
-
-  // Step 12: Advance to spring training
-  await advancePhase(PHASE.SPRING_TRAINING);
-
-  await StateManager.save();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2077,6 +1922,8 @@ function _seasonProgress(atMs) {
     } else {
       _applyPhase(PHASE.SEASON_SUMMARY);
       events.push({ type: 'PHASE', to: PHASE.SEASON_SUMMARY });
+      // The offseason calendar starts the midnight after the last out (§70).
+      StateManager.mutate(s => { s.offseason = Offseason.createOffseason(atMs, s.seasonNum || 1); });
     }
   }
   return events;
@@ -2248,12 +2095,16 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
   const events = [...(opts.events || [])];
   let changed = false;
   for (let guard = 0; guard < 2000; guard++) {
-    const next = _leagueGameEvents(StateManager.get(), clockMs)[0];
+    const st   = StateManager.get();
+    const game = _leagueGameEvents(st, clockMs)[0];
+    const os   = Offseason.dueSteps(st, clockMs)[0];
+    const next = game && (!os || game.at <= os.at) ? game : os ? { kind: 'offseason', ...os } : null;
     if (!next) break;
     const step = _rosterStep(next.at, {});
     events.push(...step.events);
     if (next.kind === 'start') _startLeagueGame(next.date, next.i);
-    else events.push(..._finishLeagueGame(next.date, next.i));
+    else if (next.kind === 'final') events.push(..._finishLeagueGame(next.date, next.i));
+    else events.push(..._runOffseasonStep(next.step, next.at));
     events.push(..._seasonProgress(next.at));
     changed = true;
   }
@@ -2261,6 +2112,128 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
   const step = _rosterStep(clockMs, { reconcileAll: !!opts.reconcileAll, events });
   return { changed: changed || step.changed || events.some(e => e.type === 'PHASE'),
            events: [...events, ...step.events], clockMs };
+}
+
+// ─────────────────────────────────────────────────────────────
+// THE OFFSEASON ON THE CLOCK (§70)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * _runOffseasonStep(step, atMs)
+ * One step of the six-day offseason (OffseasonEngine has the work; this runs
+ * it at its moment, delivers the GM's cards and records the league's moves).
+ * Steps run once each, in order — catch-up after the app was closed replays
+ * them at their own times.
+ */
+function _runOffseasonStep(step, atMs) {
+  const events = [];
+  let st = StateManager.get();
+  const os = st.offseason;
+  if (!os) return events;
+  const done = () => StateManager.mutate(s => { if (s.offseason) s.offseason.done = [...(s.offseason.done || []), step]; });
+  const cardAt = (n, hour) => Offseason._atHour(Offseason.dayStart(os, n), hour);
+  const springAt = os.springAt;
+
+  if (step === 'day1') {
+    _applyPhase(PHASE.OFFSEASON);
+    events.push({ type: 'PHASE', to: PHASE.OFFSEASON });
+    let ev = [];
+    StateManager.mutate(s => { ev = Offseason.beginOffseason(s, atMs); });
+    _feedLeagueMoves(ev);
+    const offer = Offseason.ownershipOffer(StateManager.get());
+    CardEngine.deliverOwnershipCard(offer, cardAt(1, OFFSEASON_CARD_HOUR), springAt);
+    for (const e of ev.filter(e => e.type === 'RETIRED' && e.teamId === 'user')) {
+      CardEngine.deliverRetirementNotice(e.playerId, e.age, cardAt(1, OFFSEASON_CARD_HOUR));
+    }
+    done();
+    return events;
+  }
+
+  if (step === 'day2') {
+    let ev = [];
+    StateManager.mutate(s => { ev = Offseason.contractDay(s, atMs); });
+    _feedLeagueMoves(ev);
+    for (const { player } of Offseason.userExpiring(StateManager.get())) {
+      CardEngine.deliverResignCard(player.id, cardAt(2, OFFSEASON_CARD_HOUR), springAt);
+    }
+    _cpuFreeAgencyRound(atMs);
+    CardEngine.deliverFreeAgentCards(cardAt(2, OFFSEASON_FA_CARD_HOUR), springAt);
+    done();
+    return events;
+  }
+
+  if (step === 'day3') {
+    if (Offseason.managerContractIsUp(StateManager.get())) {
+      CardEngine.deliverManagerContractCard(cardAt(3, OFFSEASON_CARD_HOUR), springAt);
+    }
+    _cpuFreeAgencyRound(atMs);
+    done();
+    return events;
+  }
+
+  if (step === 'day4' || step === 'day5' || step === 'day6') {
+    _cpuFreeAgencyRound(atMs);
+    if (step === 'day4') CardEngine.deliverFreeAgentCards(cardAt(4, OFFSEASON_FA_CARD_HOUR), springAt);
+    if (step === 'day5') CardEngine.deliverGateReminder(cardAt(5, OFFSEASON_CARD_HOUR), springAt);
+    done();
+    return events;
+  }
+
+  if (step === 'spring') {
+    // Required decisions still open were auto-resolved by the roster step at
+    // this same moment (their deadline is spring). Now the new season.
+    let ev = [];
+    StateManager.mutate(s => {
+      ev = Offseason.openNewSeason(s, atMs);
+      for (const t of s.leagueTeams || []) applyRosterMutation(s, reconcileRoster(s, t.id, { autoManage: true }));
+      applyRosterMutation(s, reconcileRoster(s, 'user'));
+      const { schedule, leagueSchedule } = generateLeagueCalendar(s.seasonNum, s.leagueTeams, new Date(springAt),
+        { year: baseballYear(s), userDivisionId: s.userTeam.divisionId || 'A' });
+      s.schedule       = schedule;
+      s.leagueSchedule = leagueSchedule;
+      s.userTeam.finances.payroll = computePayroll(s);
+    });
+    _feedLeagueMoves(ev);
+    _applyPhase(PHASE.SPRING_TRAINING);
+    events.push({ type: 'PHASE', to: PHASE.SPRING_TRAINING });
+    StateManager.mutate(s => {
+      s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+        buildActivityFeedEntry('milestone', s.userTeam.abbr, `Spring training opens — Season ${s.seasonNum}`, atMs)]);
+    });
+    return events;
+  }
+  return events;
+}
+
+/** One CPU free-agency round, recorded in the activity feed. */
+function _cpuFreeAgencyRound(atMs) {
+  let ev = [];
+  StateManager.mutate(s => { ev = Offseason.cpuFreeAgencyRound(s, atMs); });
+  _feedLeagueMoves(ev);
+}
+
+/** League moves worth a line in the activity feed. */
+function _feedLeagueMoves(events) {
+  const st = StateManager.get();
+  const level = st.leagueTalentOffset || 0;
+  const abbrOf = (id) => id === 'user' ? st.userTeam.abbr : (st.leagueTeams.find(t => t.id === id)?.abbr || '');
+  const lines = [];
+  for (const e of events || []) {
+    const p = st.players[e.playerId];
+    if (!p) continue;
+    const notable = (p.ovr || 0) - level >= 58 || e.teamId === 'user' || e.fromTeamId === 'user';
+    const who = `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
+    const at = e.atMs;
+    if (e.type === 'FA_SIGNED') lines.push([abbrOf(e.teamId), `${abbrOf(e.teamId)} sign free agent ${who}`, at]);
+    else if (e.type === 'RETIRED' && notable) lines.push([abbrOf(e.teamId), `${who} retires`, at]);
+    else if (e.type === 'DEPARTED' && e.reason === 'abroad' && notable) lines.push([abbrOf(e.fromTeamId), `${who} signs with a club in another league`, at]);
+    else if (e.type === 'FREE_AGENT' && notable) lines.push([abbrOf(e.fromTeamId), `${who} becomes a free agent`, at]);
+  }
+  if (!lines.length) return;
+  StateManager.mutate(s => {
+    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+      ...lines.map(([abbr, text, at]) => buildActivityFeedEntry('signing', abbr, text, at))]);
+  });
 }
 
 /** One roster-clock step at `atMs`: deadlines, ledger, card sync. */
@@ -2381,185 +2354,6 @@ function _currentInning(game) {
   if (!game.plays || game.livePlayIndex === 0) return 1;
   const play = game.plays[game.livePlayIndex - 1];
   return play?.inning || 1;
-}
-
-/**
- * _applyAgeAndDevelopment(player, seasonNum)
- * Applies per-sub-rating development and decline curves based on age.
- * Section 4.1 — LOCKED curves:
- *
- *                Growth  Peak   Prime  Decline  Steep
- *                (21-24) (25-27)(28-30)(31-33)  (34+)
- * contact/control: +1.5   +0.5  -0.5   -1.5    -3.0  (most durable)
- * power/stuff:     +1.0   +0.5  -1.0   -2.0    -3.5  (peaks early)
- * speed/stamina:   +0.5   +0.0  -1.5   -2.5    -4.0  (fastest to decline)
- *
- * Mutates player in-place (called inside StateManager.mutate).
- */
-function _applyAgeAndDevelopment(player, seasonNum) {
-  const age = computeAge(player.dob);
-  const sr  = player.subRatings;
-  if (!sr) return;
-
-  const isPitcher  = sr.stuff !== null;
-  const activeKeys = isPitcher
-    ? ['stuff', 'control', 'stamina']
-    : ['contact', 'power', 'speed'];
-
-  // Per-sub-rating base curves [growth, peak, prime, decline, steep]
-  // Index: 0=contact/control, 1=power/stuff, 2=speed/stamina
-  const CURVES = [
-    [1.5,  0.5, -0.5, -1.5, -3.0],  // contact / control (most durable)
-    [1.0,  0.5, -1.0, -2.0, -3.5],  // power / stuff
-    [0.5,  0.0, -1.5, -2.5, -4.0],  // speed / stamina (fastest decline)
-  ];
-
-  const ageIdx = age <= AGE_DEVELOPMENT_WINDOWS.GROWTH.max  ? 0
-               : age <= AGE_DEVELOPMENT_WINDOWS.PEAK.max    ? 1
-               : age <= AGE_DEVELOPMENT_WINDOWS.PRIME.max   ? 2
-               : age <= AGE_DEVELOPMENT_WINDOWS.DECLINE.max ? 3
-               : 4;
-
-  for (let i = 0; i < activeKeys.length; i++) {
-    const key = activeKeys[i];
-    if (sr[key] === null || sr[key] === undefined) continue;
-
-    let baseChange = CURVES[i][ageIdx];
-
-    // Random variance
-    let variance = _rng(-2, 2);
-
-    // Trait modifiers
-    if (player.trait === 'youngGun' && age < 28) {
-      baseChange += 1;
-    } else if (player.trait === 'veteran' && age >= 30) {
-      // Contact/control decline halved for veterans
-      if (i === 0 && baseChange < 0) baseChange *= 0.5;
-    }
-    if (player.trait === 'consistent') variance = _rng(-1, 1);
-    if (player.trait === 'volatile')   variance = _rng(-4, 4);
-
-    const finalChange = _clamp(
-      Math.round(baseChange + variance),
-      -5, 4  // hard cap: max +4, max -5 per offseason
-    );
-
-    sr[key] = _clamp(sr[key] + finalChange, SUB_RATING_MIN, SUB_RATING_MAX);
-  }
-
-  // New season, clean slate: injuries heal over the winter (§65).
-  if (player.injury || player.group === PLAYER_GROUP.IL) {
-    Object.assign(player, clearInjuryUpdate());
-    if (player.group === PLAYER_GROUP.IL) player.group = defaultActiveGroup(player);
-  }
-  player.injuryPenalty = null;
-
-  // Recompute OVR from updated sub-ratings
-  player.ovr = computeOVR(sr);
-
-  // Update career peak if applicable
-  if (player.ovr > (player.careerStats?.peakOvr || 0)) {
-    if (player.careerStats) {
-      player.careerStats.peakOvr    = player.ovr;
-      player.careerStats.peakSeason = seasonNum;
-    }
-  }
-}
-
-/**
- * _processCPUContractExpiry(state, team)
- * CPU teams auto-process expired contracts.
- * Released players enter state.freeAgentPool.
- */
-function _processCPUContractExpiry(state, team) {
-  const expiredIds = (team.rosterIds || []).filter(id => {
-    const p = state.players[id];
-    return p && p.contractExpired;
-  });
-
-  for (const id of expiredIds) {
-    const player = state.players[id];
-    if (!player) continue;
-
-    // CPU re-signs if OVR is above threshold and team needs the player
-    const shouldResign = player.ovr >= 60 && Math.random() < 0.65;
-    if (shouldResign) {
-      // New contract issued — reset extension flag (Section 9.4b)
-      player.contractExpired      = false;
-      player._contractExpiringNext = false;
-      player.contractExtended     = false;
-      player.contractYears        = _rng(1, 3);
-      player.contractExpiry       = state.seasonNum + player.contractYears;
-    } else {
-      // Release to free agent pool
-      player.contractExpired = false;
-      player.teamId          = null;
-      player.group           = 'freeAgent';
-      team.rosterIds         = team.rosterIds.filter(rid => rid !== id);
-      state.freeAgentPool    = [...(state.freeAgentPool || []), id];
-    }
-  }
-}
-
-/**
- * _updatePrestige(state)
- * Recalculates prestige score and tier based on season performance.
- * Mutates state in-place (called inside StateManager.mutate).
- */
-function _updatePrestige(state) {
-  let points = 0;
-
-  // Per-win points
-  points += state.userTeam.wins * PRESTIGE_POINTS_PER_WIN;
-
-  // Winning season bonus
-  if (state.userTeam.wins >= PRESTIGE_WINNING_WIN_THRESHOLD) {
-    points += PRESTIGE_POINTS_WINNING_SEASON;
-  }
-
-  // Playoff appearance
-  if (_userQualifiedForPlayoffs(state)) {
-    points += PRESTIGE_POINTS_PLAYOFF_APPEARANCE;
-  }
-
-  state.prestigeScore = (state.prestigeScore || 0) + points;
-
-  // Update tier
-  let tier = 1;
-  for (let i = PRESTIGE_TIER_THRESHOLDS.length - 1; i >= 0; i--) {
-    if (state.prestigeScore >= PRESTIGE_TIER_THRESHOLDS[i]) {
-      tier = i + 1;
-      break;
-    }
-  }
-  state.prestigeTier = tier;
-
-  state.prestigeHistory.push({
-    seasonNum: state.seasonNum,
-    tier,
-    score:     state.prestigeScore,
-    points,
-  });
-}
-
-/**
- * _updateWinTarget(state)
- * Adjusts ownership win target based on last season's performance.
- */
-function _updateWinTarget(state) {
-  const target = state.userTeam._ownerWinTarget || 75;
-  const wins   = state.userTeam.wins;
-  const diff   = wins - target;
-  let adj      = 0;
-
-  if      (diff >= 8)                          adj = WIN_TARGET_ADJ_EXCEED_8_PLUS;
-  else if (diff >= 3)                          adj = WIN_TARGET_ADJ_EXCEED_3_TO_7;
-  else if (diff >= -WIN_TARGET_MET_WITHIN)     adj = WIN_TARGET_ADJ_MET;
-  else if (diff >= -4)                         adj = WIN_TARGET_ADJ_MISS_1_TO_4;
-  else if (diff >= -9)                         adj = WIN_TARGET_ADJ_MISS_5_TO_9;
-  else                                         adj = WIN_TARGET_ADJ_MISS_10_PLUS;
-
-  state.userTeam._ownerWinTarget = target + adj;
 }
 
 function _countPlayoffRoundsWon(state) {

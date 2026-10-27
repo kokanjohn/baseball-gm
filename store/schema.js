@@ -124,6 +124,7 @@ export function createGameState(config = {}) {
     // LeagueTeamObject[] — populated by LeagueEngine in Phase 4
     leagueTeams: [],
     leagueTalentOffset: 0,      // §69 — league talent level around the user's archetype
+    baseYear: null,             // §70 — the league's year in season 1 (seasons advance it by one)
 
     // ── Schedule ───────────────────────────────────────────
     // GameObject[] — user team's full season schedule.
@@ -231,15 +232,13 @@ export function createGameState(config = {}) {
     // ── Playoff bracket ────────────────────────────────────────────
     playoffBracket: null,  // built at PLAYOFF_BRACKET_BUILD phase
 
-    // ── Offseason flow ──────────────────────────────────────────────
-    // _offseasonGate: null | 'AWAITING_RESIGN_DECISIONS' | 'AWAITING_OWNERSHIP_CARD'
-    // offseasonDay: 0 (not in offseason) | 1-6 (active offseason day)
-    // offseasonStartedAt: Unix ms timestamp when OFFSEASON phase began
-    // offseasonHardGatesCleared: true when all hard gates resolved (spring can begin)
-    _offseasonGate: null,
-    offseasonDay: 0,
-    offseasonStartedAt: null,
-    offseasonHardGatesCleared: false,
+    // ── Offseason on the league calendar (§70) ──────────────────────
+    // null during a season. From the last out of the World Series to the
+    // opening of spring training:
+    //   { seasonNum, endedAt, dayStarts: [day1…day6 local midnights],
+    //     springAt (day-7 midnight), done: ['day1', …] }
+    // OffseasonEngine owns the steps; GameEngine.advanceClock runs them.
+    offseason: null,
 
     // ── Waiver priority (Section 20.2) ─────────────────────────────
     // Array of teamIds in priority order (index 0 = highest priority)
@@ -543,9 +542,16 @@ function _fillDefaults(state) {
     }
   }
 
+  // §70: saves from before the baseball calendar take season 1's year from
+  // its first scheduled game (the year its calendar was built for).
+  if (state.baseYear == null) {
+    const y = parseInt(String(state.schedule?.[0]?.date || '').slice(0, 4), 10);
+    state.baseYear = Number.isFinite(y) ? y - ((state.seasonNum || 1) - 1) : new Date().getFullYear();
+  }
+
   // Fill new top-level fields
   const newTopLevel = {
-    standings: null, playoffBracket: null, _offseasonGate: null, waiverPriority: [],
+    standings: null, playoffBracket: null, offseason: null, waiverPriority: [],
     scheduledCards: [],
   };
   for (const key of Object.keys(newTopLevel)) {

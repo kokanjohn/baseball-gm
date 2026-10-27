@@ -115,6 +115,10 @@ export const PLAYER_GROUP = Object.freeze({
   // On no roster or farm list; player.teamId is the DESTINATION and exactly
   // one pending 'arrival' transaction in state.transactions carries him.
   IN_TRANSIT:       'transit',
+  // Off every roster (§70): unsigned, retired, or gone to another league.
+  FREE_AGENT:       'freeAgent',
+  RETIRED:          'retired',
+  DEPARTED:         'departed',
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -1306,3 +1310,62 @@ export const IMP_MIN_IP_SEASON = 20.0;
 
 // Eligible archetypes check against ARCHETYPE[id].turningPointEligible
 // Fired once per franchise lifetime; enforced via state.turningPointFired: Boolean
+
+// ─────────────────────────────────────────────────────────────
+// OFFSEASON ON THE LEAGUE CALENDAR (§70)
+// ─────────────────────────────────────────────────────────────
+// Six calendar days, starting the midnight after the World Series ends;
+// spring training opens the midnight after day 6. Every step happens at a
+// fixed local hour of its day (catch-up runs them in order at their times).
+export const OFFSEASON_DAYS = 6;
+export const OFFSEASON_STEP_HOURS = Object.freeze({
+  day1: 0,     // record locked, stats archived, players age & develop, retirements
+  day2: 10,    // contracts: CPU decisions, farm renewals; free agency opens
+  day3: 10,    // manager contract; free agency
+  day4: 10,    // free agency
+  day5: 10,    // free agency; reminder for required decisions
+  day6: 10,    // last free-agency round
+  spring: 0,   // (day 7) required decisions auto-resolve; spring training opens
+});
+export const OFFSEASON_CARD_HOUR     = 9;    // ownership / contract / manager cards arrive
+export const OFFSEASON_FA_CARD_HOUR  = 12;   // free-agent cards arrive (days 2 and 4)
+export const FA_CARD_TTL_DAYS        = 3;    // §23.2 soft gate: auto-decline after 3 days
+export const FA_CARDS_PER_ROUND      = 3;
+export const FA_UPGRADE_MIN          = 3;    // OVR over the man he'd replace
+
+// CPU re-sign odds by OVR relative to the league level (§69), then age.
+export const CPU_RESIGN_ODDS = Object.freeze([
+  { minRel: 65, p: 0.75 },
+  { minRel: 58, p: 0.60 },
+  { minRel: 50, p: 0.40 },
+  { minRel: -99, p: 0.20 },
+]);
+export const CPU_RESIGN_AGE_34_MULT  = 0.6;
+// A player nobody re-signs may take an offer from another league instead of
+// testing this league's market (user decision, §70).
+export const WALK_ABROAD_PROB_31_PLUS  = 0.35;
+export const WALK_ABROAD_PROB_UNDER_31 = 0.15;
+
+// Amateur signings: every club adds young prospects to its farm each spring.
+export const PROSPECTS_PER_TEAM_MIN = 2;
+export const PROSPECTS_PER_TEAM_MAX = 3;
+export const PROSPECT_AGE_MIN       = 19;
+export const PROSPECT_AGE_MAX       = 21;
+export const PROSPECT_OVR_MIN       = 36;    // + league level
+export const PROSPECT_OVR_MAX       = 47;
+
+// Ownership evaluation (§23 hard gate): next season's payroll cap and
+// operating budget move with the season against the win target.
+export const OWNERSHIP_OFFER = Object.freeze({
+  perWin:     0.005,   // ±0.5% per win above / below target
+  maxSwing:   0.08,
+  champion:   0.05,
+  perRound:   0.01,    // per playoff round won
+  pushExtra:  0.04,    // "push for more": +4% on the offer …
+  pushTrust:  -5,      // … at an owner-trust cost
+  autoCut:    -0.03,   // unanswered by spring: ownership decides, 3% tighter
+  autoTrust:  -3,
+});
+export const CONTRACT_AUTO_WALK_MORALE = -1;  // per player let go by default
+export const MANAGER_EXTENSION_YEARS   = 2;
+export const MANAGER_AUTO_CONFIDENCE   = -5;

@@ -27,6 +27,8 @@
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
+import { baseballYear } from '../../engine/PlayerFactory.js';
+import { contractIsUp } from '../../engine/OffseasonEngine.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
@@ -443,7 +445,7 @@ function _renderHitterRow(player, imp, role, slot, gameIdx, isSpring = false, al
           ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
           ${_dotIndicator(player)}
         </div>
-        <div class="player-sub">${nativePos} · ${formatAge(player.dob)}y · ${formatSalary(player.contractSalary)}${emergency ? ' · <span class="oop-note">out of position</span>' : ''}</div>
+        <div class="player-sub">${nativePos} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_contractNote(player)}${emergency ? ' · <span class="oop-note">out of position</span>' : ''}</div>
       </div>
       <div class="player-pos-badge${emergency ? ' oop' : ''}">${slotLabel}</div>
       <div class="rating-cell">
@@ -537,7 +539,7 @@ function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [],
           ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
           ${_dotIndicator(player)}
         </div>
-        <div class="player-sub">${posHand} · ${formatAge(player.dob)}y · ${formatSalary(player.contractSalary)}</div>
+        <div class="player-sub">${posHand} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_contractNote(player)}</div>
       </div>
       <div class="rating-cell">
         <div class="rating-num ${ovrColor}">${formatOVR(player.ovr)}</div>
@@ -691,6 +693,13 @@ function _clockText(ms) {
 function _dayText(ms) {
   return new Date(ms).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
+/** Between seasons (§70): flag a player whose deal is up — a decision is due. */
+function _contractNote(player) {
+  const st = StateManager.get();
+  if (!st?.offseason || player.teamId !== 'user' || !contractIsUp(player, st.seasonNum)) return '';
+  return ' · <span class="contract-note">contract up</span>';
+}
+
 function _whenText(ms) {
   const d = new Date(ms);
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
@@ -760,7 +769,7 @@ function _renderFarmRow(player, state, gameIdx, canCallUp = true) {
           <span style="font-size:10px;color:var(--muted);margin-left:3px;">${player.pos}</span>
           ${arcIcon ? `<span class="farm-arc-icon" title="${player._farmArc || ''}">${arcIcon}</span>` : ''}
         </div>
-        <div style="font-size:11px;color:var(--muted);">${formatAge(player.dob)}y · ${sendDown}${contextNote ? ` · ${contextNote}` : ''}</div>
+        <div style="font-size:11px;color:var(--muted);">${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${sendDown}${contextNote ? ` · ${contextNote}` : ''}</div>
       </div>
       <div class="rating-cell">
         <div class="rating-num ${ovrColor}" style="font-size:18px;">${formatOVR(player.ovr)}</div>
@@ -1396,6 +1405,7 @@ function _injectCSS() {
     .pending-tag{font-size:10px;font-weight:700;color:var(--accent);padding:5px 0 5px 8px;}
     .pending-tag.out{color:var(--muted);}
     .oop-note{color:var(--danger);}
+    .contract-note{color:var(--warning, #f5a524);font-weight:600;}
     .player-pos-badge.oop{border-color:var(--danger);color:var(--danger);}
     .swap-btn.full{opacity:.45;}
     .vacancy-row{border:1.5px dashed var(--border);border-radius:8px;margin:4px 12px;

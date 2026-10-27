@@ -158,7 +158,7 @@ export function initNameRegistry() {
  * @param {Function} uuidFn      — () => String UUID
  * @returns {{ players: Object, leagueTeams: Object[] }}
  */
-export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamDefs, leagueOffset = 0) {
+export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamDefs, leagueOffset = 0, seasonYear = new Date().getFullYear()) {
   const teamsToUse = teamDefs || LEAGUE_TEAMS;
   const players    = {};
   const leagueTeams = [];
@@ -174,7 +174,7 @@ export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamD
     farmNameIdx += 20;
 
     const { rosterIds, farmIds, lineupSlots } = _buildCPURoster(
-      teamDef, teamNames, teamFarmNames, seasonNum, uuidFn, players, leagueOffset
+      teamDef, teamNames, teamFarmNames, seasonNum, uuidFn, players, leagueOffset, seasonYear
     );
 
     // Build initial rotation order from SP playerIds
@@ -225,7 +225,7 @@ function _spreadTargets(n, min, max) {
   return out;
 }
 
-function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playersOut, leagueOffset = 0) {
+function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playersOut, leagueOffset = 0, seasonYear = new Date().getFullYear()) {
   const str      = teamDef.str;
   // League talent is set relative to the user's archetype (§69): `str` keeps
   // each club's place in the pecking order (compressed into a realistic band),
@@ -241,7 +241,7 @@ function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playe
     const p = createPlayer({
       id, name, pos, group, hand,
       targetOvr, ageMin, ageMax,
-      seasonNum, teamId: teamDef.id,
+      seasonNum, seasonYear, teamId: teamDef.id,
       leagueLevel: leagueOffset,
     });
     playersOut[id] = p;
@@ -371,7 +371,7 @@ function _buildLineupSlots(activeHitterIds, players) {
   return slots;
 }
 
-export function buildUserRoster(archetypeId, userNames, farmNames, seasonNum, uuidFn) {
+export function buildUserRoster(archetypeId, userNames, farmNames, seasonNum, uuidFn, seasonYear = new Date().getFullYear()) {
   const arch     = ARCHETYPE[archetypeId];
   if (!arch) throw new Error(`buildUserRoster: unknown archetype '${archetypeId}'`);
 
@@ -394,7 +394,7 @@ export function buildUserRoster(archetypeId, userNames, farmNames, seasonNum, uu
     const p  = createPlayer({
       id, name, pos, group, hand,
       targetOvr, ageMin, ageMax,
-      seasonNum,
+      seasonNum, seasonYear,
       contractLengthOverride,
       teamId: 'user',
     });
@@ -563,7 +563,7 @@ export function applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams) {
  *   payroll:    Number,
  * }}
  */
-export function buildFullLeague({ archetypeId, seasonNum, uuidFn, userTeam, region, leagueOffsetOverride = null }) {
+export function buildFullLeague({ archetypeId, seasonNum, seasonYear = new Date().getFullYear(), uuidFn, userTeam, region, leagueOffsetOverride = null }) {
   const { userNames, cpuNames, farmNames } = initNameRegistry();
 
   // Split farmNames: first 180 for CPU teams (9×20), next 20 for user team
@@ -580,12 +580,12 @@ export function buildFullLeague({ archetypeId, seasonNum, uuidFn, userTeam, regi
     ? leagueOffsetOverride
     : (LEAGUE_TALENT_OFFSET_BY_ARCHETYPE[archetypeId] ?? 0);
   const { players: cpuPlayers, leagueTeams } = buildLeagueRosters(
-    cpuNames, cpuFarmNames, seasonNum, uuidFn, regionTeams, leagueOffset
+    cpuNames, cpuFarmNames, seasonNum, uuidFn, regionTeams, leagueOffset, seasonYear
   );
 
   // Build user roster
   const { players: userPlayers, rosterIds, farmIds, payroll, lineupSlots } = buildUserRoster(
-    archetypeId, userNames, userFarmNames, seasonNum, uuidFn
+    archetypeId, userNames, userFarmNames, seasonNum, uuidFn, seasonYear
   );
 
   // Merge all players into one registry

@@ -27,6 +27,8 @@
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
 import { getHotColdIndicator, getImpLabel } from '../../engine/IMPEngine.js';
 import { PHASE } from '../../data/constants.js';
+import * as StateManager from '../../store/StateManager.js';
+import { baseballYear } from '../../engine/PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // OPEN / CLOSE
@@ -121,7 +123,7 @@ function _renderCard(player, playerId, state) {
           <span class="pc-dot">·</span>
           <span class="pc-hand">${player.hand === 'L' ? 'Left' : 'Right'}</span>
           <span class="pc-dot">·</span>
-          <span class="pc-age">${formatAge(player.dob)} yrs</span>
+          <span class="pc-age">${formatAge(player.dob, baseballYear(StateManager.get()))} yrs</span>
         </div>
         <div class="pc-team">${_escape(teamName)}</div>
         ${isFarm ? `<div class="pc-farm-badge">Farm System</div>` : ''}

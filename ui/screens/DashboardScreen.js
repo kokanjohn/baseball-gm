@@ -30,6 +30,7 @@ import { getHotColdIndicator } from '../../engine/IMPEngine.js';
 import { accumulateBox, liveSituation } from '../../engine/SimEngine.js';
 import { renderBoxScore } from '../components/BoxScore.js';
 import { renderLeagueLiveRow, wireLeagueGameTaps } from '../components/LiveGame.js';
+import { renderOffseasonCard, updateOffseasonCountdown } from '../components/OffseasonCard.js';
 import { GAME_STATUS, PLAYER_GROUP } from '../../data/constants.js';
 import {
   formatRecord, formatStreak, formatDate, metricBarColor, computeRosterOvr,
@@ -71,6 +72,11 @@ export function mount() {
   wire('game:phaseChanged', () => refresh());
   wire('roster:changed',    () => refresh());
   wire('app:ready',         () => refresh());
+  // Offseason (§70): decisions and new days change the card's gates and focus.
+  const offseasonRefresh = () => { if (StateManager.get()?.offseason) refresh(); };
+  wire('inbox:changed',     offseasonRefresh);
+  wire('card:resolved',     offseasonRefresh);
+  wire('card:delivered',    offseasonRefresh);
 
   // League games in progress (§67): the small cards update on the same
   // 5-second cadence as the app tick, without re-rendering the dashboard.
@@ -502,7 +508,8 @@ function _renderDashboard(state) {
 
   let bannerGame, bannerRecord;
   const POST = { PLAYOFF_BRACKET_BUILD: 'POSTSEASON', WILD_CARD: 'WILD CARD', FIRST_ROUND: 'FIRST ROUND',
-                 DIVISION_SERIES: 'DIVISION SERIES', WORLD_SERIES: 'WORLD SERIES', SEASON_SUMMARY: 'SEASON COMPLETE' };
+                 DIVISION_SERIES: 'DIVISION SERIES', WORLD_SERIES: 'WORLD SERIES', SEASON_SUMMARY: 'SEASON COMPLETE',
+                 OFFSEASON: 'OFFSEASON' };
   if (POST[phase]) {
     bannerGame   = POST[phase];
     bannerRecord = `${wins}–${losses} season · ${team.postseasonWins || 0}–${team.postseasonLosses || 0} postseason`;
@@ -1004,6 +1011,8 @@ function _renderFirstPitchCountdown(game) {
 // ─────────────────────────────────────────────────────────────
 
 function _renderSeasonDoneCard(state) {
+  // Between seasons the offseason card says where the league calendar is (§70).
+  if (state.offseason) return renderOffseasonCard(state);
   // No game of ours is scheduled: say where the season stands (§68).
   const wins   = state.userTeam?.wins   || 0;
   const losses = state.userTeam?.losses || 0;
@@ -1086,13 +1095,24 @@ const _FEED_ICONS = {
   waiver:'📋',win:'✅',loss:'❌',weather:'⛈️',result:'⚾',
 };
 
+/** Real-time label for a feed entry (the league runs on the real clock). */
+function _agoText(ms) {
+  if (!Number.isFinite(ms)) return '';
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  if (mins < 1)  return 'now';
+  if (mins < 60) return `${mins}m ago`;
+  const h = Math.round(mins / 60);
+  if (h < 24)    return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'yesterday' : `${d}d ago`;
+}
+
 function _renderActivityFeed(state) {
   const feed = (state.activityFeed || []).slice(-8).reverse();
   if (!feed.length) return '';
 
   const entries = feed.map(e => {
-    const diff = (state.currentGameIndex || 0) - (e.gameIndex || 0);
-    const time = diff === 0 ? 'Today' : diff === 1 ? '1g ago' : `${diff}g ago`;
+    const time = _agoText(e.timestamp);
     return `<div class="activity-entry">
       <div class="activity-icon">${_FEED_ICONS[e.type] || '·'}</div>
       <div class="activity-text">${_escape(e.text || '')}</div>
@@ -1165,6 +1185,7 @@ function _openGameLogModal(state, filter) {
 
 let _leagueTimer = null;
 function _refreshLeagueRow() {
+  updateOffseasonCountdown();
   const el = document.getElementById('dash-league-live');
   const st = StateManager.get();
   if (!el || !st) return;

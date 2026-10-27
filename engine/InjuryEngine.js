@@ -63,7 +63,7 @@ import {
   FARM_ARC_DECLINE_DRIFT_MAX,
 } from '../data/constants.js';
 
-import { computeAge, computeOVR } from './PlayerFactory.js';
+import { computeAge, computeOVR, baseballYear } from './PlayerFactory.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -104,7 +104,7 @@ export function rollGameInjuries(state, appearances, nowMs) {
       const player = state.players[playerId];
       if (!player || player.isInjured || player.injury) continue;
       if (player.group === PLAYER_GROUP.IL) continue;
-      if (Math.random() >= _injuryProbability(player, role)) continue;
+      if (Math.random() >= _injuryProbability(player, role, baseballYear(state))) continue;
 
       const begun = beginInjury(player, nowMs);
       players[playerId] = app.teamId === 'user'
@@ -447,8 +447,8 @@ export function processFarmArcs(state, now = Date.now()) {
 // INTERNAL HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _injuryProbability(player, role) {
-  const age = computeAge(player.dob);
+function _injuryProbability(player, role, seasonYear) {
+  const age = computeAge(player.dob, seasonYear);
 
   let base = role === 'starter'  ? INJURY_PROB_SP_PER_START
            : role === 'reliever' ? INJURY_PROB_RP_PER_APP

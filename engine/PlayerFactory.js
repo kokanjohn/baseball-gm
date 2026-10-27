@@ -107,18 +107,21 @@ export function createPlayer(config) {
     seasonNum = 1,
     contractLengthOverride = null,
     teamId = null,
-    // The league's talent level around the user (§69). Ratings are absolute,
-    // but pay, contract length and clubhouse standing are relative to the
-    // league a player plays in — a league-average regular is paid like one.
+    // The league's talent level around the user (§69). Ratings and pay are on
+    // one absolute scale for every club (the user's payroll cap is set on it);
+    // contract length and clubhouse standing are relative to the league.
     leagueLevel = 0,
+    // The baseball year the player is created in (§70) — his DOB is set so
+    // his baseball age that season falls in [ageMin, ageMax].
+    seasonYear = new Date().getFullYear(),
   } = config;
 
   // Position decides hitter vs pitcher. (Deciding by group made every farm
   // HITTER a pitcher — PRACTICE_SQUAD holds both — so farm call-ups came up
   // with stuff/control/stamina and no contact/power/speed.)
   const isPitcher = pos ? ['SP', 'RP'].includes(pos) : _isPitcherGroup(group);
-  const dob       = _generateDob(ageMin, ageMax);
-  const age       = computeAge(dob);
+  const dob       = _generateDob(ageMin, ageMax, seasonYear);
+  const age       = computeAge(dob, seasonYear);
   const trait     = _generateTrait(age, targetOvr - leagueLevel);
 
   // Generate sub-ratings around targetOvr
@@ -128,7 +131,7 @@ export function createPlayer(config) {
   const ovr = computeOVR(subRatings);
 
   const contractLength = contractLengthOverride ?? _generateContractLength(ovr - leagueLevel, group);
-  const contractSalary = _generateSalary(ovr - leagueLevel);
+  const contractSalary = _generateSalary(ovr);
 
   const stats       = _freshStats(isPitcher);
   const springStats = _freshStats(isPitcher);
@@ -350,22 +353,45 @@ function _generateSalary(ovr) {
 // DOB / AGE HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _generateDob(ageMin, ageMax) {
-  const now        = new Date();
+function _generateDob(ageMin, ageMax, seasonYear) {
   const ageYears   = _rng(ageMin, ageMax);
-  const birthYear  = now.getFullYear() - ageYears;
   const birthMonth = _rng(1, 12);
   const birthDay   = _rng(1, 28);
+  // Baseball age is the age on July 1 — a player born after it is a year older
+  // by birth year than his baseball age.
+  const birthYear  = seasonYear - ageYears - (_afterJuly1(birthMonth, birthDay) ? 1 : 0);
   return `${birthYear}-${String(birthMonth).padStart(2,'0')}-${String(birthDay).padStart(2,'0')}`;
 }
 
-export function computeAge(dob) {
+function _afterJuly1(month, day) {
+  return month > 7 || (month === 7 && day > 1);
+}
+
+/**
+ * baseballYear(state)
+ * The league's year for the current season (§70). Fixed at game creation
+ * (state.baseYear) and advanced one per season — never read off the real
+ * clock, which runs a season in ~6 months.
+ */
+export function baseballYear(state) {
+  const base = Number.isFinite(state?.baseYear) ? state.baseYear : new Date().getFullYear();
+  return base + (state?.seasonNum || 1) - 1;
+}
+
+/**
+ * computeAge(dob, seasonYear?)
+ * With a season year: the player's baseball age that season (age on July 1),
+ * so every player ages exactly one year per season. Without one, age today
+ * on the real calendar (legacy display fallback only).
+ */
+export function computeAge(dob, seasonYear = null) {
   if (!dob) return 27;
-  const birth = new Date(dob);
-  const now   = new Date();
-  let age = now.getFullYear() - birth.getFullYear();
-  const m = now.getMonth() - birth.getMonth();
-  if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) age--;
+  const [y, m, d] = String(dob).split('-').map(Number);
+  if (Number.isFinite(seasonYear)) return seasonYear - y - (_afterJuly1(m, d) ? 1 : 0);
+  const now = new Date();
+  let age = now.getFullYear() - y;
+  const mo = now.getMonth() + 1 - m;
+  if (mo < 0 || (mo === 0 && now.getDate() < d)) age--;
   return age;
 }
 

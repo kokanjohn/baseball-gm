@@ -20,11 +20,13 @@ import { getRosterNeeds, auditRosters, rankCallupCandidates } from '../../engine
 import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation } from '../../engine/SimEngine.js';
+import * as Offseason from '../../engine/OffseasonEngine.js';
+import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
 import * as CardPools from '../../data/cards-pool.js';
 import {
-  GAME_STATUS, PHASE, ROSTER_LIMITS,
+  GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP,
   SPRING_TRAINING_GAME_COUNT, REGULAR_SEASON_GAME_COUNT,
   NEW_TEAM_SEED_CARDS,
 } from '../../data/constants.js';
@@ -155,6 +157,115 @@ async function runPostseason() {
     steps++;
   }
   return { userGames, steps };
+}
+
+// ── §70: drive the six-day offseason hour by hour, the GM acting on cards ──
+async function runOffseasonChecks() {
+  const pre   = SM.get();
+  const os    = pre.offseason;
+  check('offseason: calendar set when the season ended', !!os && os.dayStarts?.length === 6 && os.springAt > os.dayStarts[5]);
+  if (!os) return;
+  const year1 = baseballYear(pre);
+  const before = {};
+  for (const p of Object.values(pre.players)) before[p.id] = { ovr: p.ovr, g: p.stats?.g || 0, careerG: p.careerStats?.g || 0, teamId: p.teamId,
+                                                               age: computeAge(p.dob, year1), group: p.group };
+  const userWins = pre.userTeam.wins, userLosses = pre.userTeam.losses;
+  const expiringUser = (pre.userTeam.rosterIds || []).filter(id => Offseason.contractIsUp(pre.players[id], pre.seasonNum));
+  const sched1Len = pre.schedule.filter(g => !g.isPlayoff).length;
+  const phases = []; let lastPhase = pre.phase; let offseasonAt = null, springAt = null;
+  const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0;
+  clock.set(Math.max(clock.get(), os.endedAt));
+  for (let guard = 0; guard < 24 * 9; guard++) {
+    clock.advance(3600_000);
+    advanceClock(clock.get());
+    releaseDueCards();
+    for (const c of getInbox()) {
+      if ((c._rosterKey || '').startsWith('os:resign:')) resignCards.add(c._targetPlayerId);
+      if ((c._rosterKey || '').startsWith('os:fa:')) faCards.add(c._targetPlayerId);
+      if (c.cardId === 'os_ownership') ownershipCard = 1;
+    }
+    const faBefore = SM.get().userTeam.rosterIds.length;
+    gmActs();
+    if (SM.get().userTeam.rosterIds.length > faBefore) signedByUser++;
+    const ph = SM.get().phase;
+    if (ph !== lastPhase) {
+      phases.push(ph); lastPhase = ph;
+      if (ph === PHASE.OFFSEASON) offseasonAt = clock.get();
+      if (ph === PHASE.SPRING_TRAINING) { springAt = clock.get(); break; }
+    }
+  }
+  const st = SM.get();
+  const year2 = baseballYear(st);
+  check(`offseason: SEASON_SUMMARY → OFFSEASON → SPRING_TRAINING (${phases.join(' → ')})`,
+        phases.join(',') === `${PHASE.OFFSEASON},${PHASE.SPRING_TRAINING}`);
+  check('offseason: day 1 begins the midnight after the season ended',
+        offseasonAt !== null && offseasonAt - os.dayStarts[0] >= 0 && offseasonAt - os.dayStarts[0] < 3600_000 + 1000);
+  check('offseason: spring opens after six full days', springAt !== null && springAt - os.springAt >= 0 && springAt - os.springAt < 3600_000 + 1000
+        && Math.round((os.springAt - os.dayStarts[0]) / 86_400_000) === 6);
+  check(`offseason: season 2 begins (season ${st.seasonNum}, year ${year1} → ${year2})`, st.seasonNum === 2 && year2 === year1 + 1);
+  const hist = (st.seasonHistory || []).find(h => h.seasonNum === 1);
+  check('offseason: season 1 locked into history (record, postseason result, standings)',
+        !!hist && hist.wins === userWins && hist.losses === userLosses && !!hist.postseason?.result && hist.standings?.length === 10,
+        hist ? `${hist.wins}-${hist.losses} ${hist.postseason?.result}` : 'missing');
+  const alive = Object.values(st.players).filter(p => p.group !== PLAYER_GROUP.RETIRED && p.group !== PLAYER_GROUP.DEPARTED && before[p.id]);
+  check('offseason: every player is a year older (baseball age)', alive.every(p => computeAge(p.dob, year2) === before[p.id].age + 1));
+  check('offseason: season stats archived to career and reset',
+        alive.every(p => (p.stats?.g || 0) === 0 && (p.careerStats?.g || 0) === before[p.id].careerG + before[p.id].g));
+  const young = alive.filter(p => before[p.id].age <= 23), old = alive.filter(p => before[p.id].age >= 33);
+  const mean = (arr) => arr.reduce((a, p) => a + (p.ovr - before[p.id].ovr), 0) / Math.max(1, arr.length);
+  check(`offseason: young players develop, veterans decline (Δ young ${mean(young).toFixed(1)}, Δ 33+ ${mean(old).toFixed(1)})`,
+        mean(young) > 0 && mean(old) < 0);
+  const retired = Object.values(st.players).filter(p => p.group === PLAYER_GROUP.RETIRED && before[p.id] && before[p.id].group !== PLAYER_GROUP.RETIRED);
+  check(`offseason: retirements happen, oldest first (${retired.length} retired)`,
+        retired.length >= 3 && retired.every(p => before[p.id].age + 1 >= 28));
+  const teams = [st.userTeam, ...st.leagueTeams];
+  const where = new Map();
+  let dup = 0;
+  for (const t of teams) for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) { if (where.has(id)) dup++; where.set(id, t.id); }
+  check('offseason: no player on two lists', dup === 0, `${dup}`);
+  const offList = [...where.keys()].filter(id => [PLAYER_GROUP.RETIRED, PLAYER_GROUP.DEPARTED, PLAYER_GROUP.FREE_AGENT].includes(st.players[id]?.group));
+  check('offseason: no retired / departed / free-agent player on a club', offList.length === 0, offList.length);
+  const badTeam = [...where.entries()].filter(([id, tid]) => st.players[id]?.teamId !== tid);
+  check('offseason: every rostered player\'s teamId matches his club', badTeam.length === 0, badTeam.length);
+  const upAfter = [...where.keys()].filter(id => Offseason.yearsLeft(st.players[id], st.seasonNum) < 1);
+  check('offseason: every player on a club is under contract for season 2', upAfter.length === 0,
+        upAfter.slice(0, 5).map(id => `${st.players[id].name} exp ${st.players[id].contractExpiry} ${where.get(id)}/${st.players[id].group}/${st.players[id].tier}/${st.players[id]._amateurSigning || ''}${st.players[id]._depthSigning ? 'D' : ''}`).join(', '));
+  check('offseason: free-agent pool empties at spring (unsigned players leave)',
+        (st.freeAgentPool || []).length === 0 && !Object.values(st.players).some(p => p.group === PLAYER_GROUP.FREE_AGENT));
+  check(`offseason: one re-sign card per expiring user player (${resignCards.size}/${expiringUser.filter(id => SM.get().players[id]?.group !== PLAYER_GROUP.RETIRED).length})`,
+        expiringUser.filter(id => st.players[id]?.retiredSeason !== 1).every(id => resignCards.has(id)));
+  check('offseason: ownership evaluation card delivered and decided',
+        ownershipCard === 1 && (st.userTeam.finances.payrollCapHistory || []).some(h => h.seasonNum === 2));
+  check('offseason: every required decision resolved by spring', Offseason.hardGates(st).open.length === 0);
+  const signings = (st.activityFeed || []).filter(e => /sign free agent/.test(e.text)).length;
+  check(`offseason: CPU clubs sign free agents (${signings} signings, ${faCards.size} FA cards to the GM, ${signedByUser} signed)`, signings >= 3);
+  const cpuBad = st.leagueTeams.filter(t => Offseason.activeCount(st, t.id) !== ROSTER_LIMITS.ACTIVE_TOTAL);
+  check('offseason: every CPU club opens camp with a full 28', cpuBad.length === 0,
+        cpuBad.map(t => `${t.abbr} ${Offseason.activeCount(st, t.id)}`).join(', '));
+  const farmBad = teams.filter(t => {
+    const f = (t.farmIds || []).map(id => st.players[id]).filter(Boolean);
+    const h = f.filter(p => !['SP', 'RP'].includes(p.pos)).length;
+    return h > ROSTER_LIMITS.FARM_HITTER_MAX || f.length - h > ROSTER_LIMITS.FARM_PITCHER_MAX;
+  });
+  check('offseason: farm caps hold after amateur signings', farmBad.length === 0, farmBad.map(t => t.abbr || 'USR').join(','));
+  const prospects = Object.values(st.players).filter(p => p._amateurSigning === 2).length;
+  check(`offseason: amateur prospects join every farm (${prospects})`, prospects >= 20);
+  const recs = teams.every(t => !t.wins && !t.losses && !t.springWins && !t.postseasonWins);
+  check('season 2: every record starts at zero', recs && st.standings === null && st.playoffBracket === null && st.currentGameIndex === 0);
+  const sched2 = st.schedule;
+  check(`season 2: a full new calendar (${sched2.length} games, first ${sched2[0]?.date})`,
+        sched2.length === sched1Len && sched2[0].gameTime >= os.springAt && String(sched2[0].date).startsWith(String(year2))
+        && Object.keys(st.leagueSchedule.dayMap).length > 50);
+  const ghost = getInbox().filter(c => !c.resolved && ((c._rosterKey || '').startsWith('os:fa:') || c._osGate));
+  check('offseason: no offseason card left open in season 2', ghost.length === 0, ghost.map(c => c.cardId).join(','));
+  // Season 2 plays: the first spring games run through the normal pipeline.
+  let played = 0;
+  for (let i = 0; i < 3; i++) {
+    const idx = SM.get().currentGameIndex;
+    if (!playToFinal(idx)) break;
+    await commitGame(idx); releaseDueCards(); played++;
+  }
+  check(`season 2: spring games play and commit (${played}/3)`, played === 3 && SM.get().phase === PHASE.SPRING_TRAINING);
 }
 
 // ── Drive one game to FINAL by advancing the virtual clock ───────
@@ -877,6 +988,11 @@ async function main() {
       check(`postseason: separate postseason stats (${psW} W in ${psGames} games)`,
             Math.abs(psW - psGames) <= 1 && Object.values(st.players).every(p => !p.stats || true));
     }
+  }
+
+  // ── §70: the offseason on the league calendar → season 2 ────────
+  if (SM.get().phase === PHASE.SEASON_SUMMARY) {
+    await runOffseasonChecks();
   }
 
   if (process.env.DBG) {

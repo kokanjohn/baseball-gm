@@ -339,7 +339,10 @@ function _renderTTL(card, gameIdx) {
   // Real-time deadline (roster decisions, §65): show the clock time it's due.
   if (Number.isFinite(card.expiresAtMs) && card.autoResolve === 'roster') {
     const left = card.expiresAtMs - Date.now();
-    const at   = new Date(card.expiresAtMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    // A deadline more than a day out names its day (offseason decisions, §70).
+    const d    = new Date(card.expiresAtMs);
+    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const at   = left > 20 * 3600_000 ? `${d.toLocaleDateString([], { weekday: 'short' })} ${time}` : time;
     const cls  = left < 3 * 3600_000 ? 'ttl-badge ttl-warn' : 'ttl-badge';
     return `<span class="${cls}">⏰ by ${at}</span>`;
   }

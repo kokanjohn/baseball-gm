@@ -41,6 +41,8 @@ import {
   INJURY_MRI_RESULT_MIN_MS,
   INJURY_MRI_RESULT_MAX_MS,
   INJURY_MORNING_EXAM_HOUR,
+  FA_CARD_TTL_DAYS,
+  FA_CARDS_PER_ROUND,
 } from '../data/constants.js';
 
 import {
@@ -49,14 +51,16 @@ import {
 } from './InjuryEngine.js';
 import {
   activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation,
-  defaultActiveGroup, nextCalendarDay,
+  defaultActiveGroup, nextCalendarDay, computePayroll,
 } from './RosterEngine.js';
 import { evaluateTrade, queueTrade, recordDeclinedOffer, generateCPUTradeOffer } from './TradeEngine.js';
 import {
   getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull,
 } from './TransactionEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
-import { buildTokenMap, applyTokens, hasUnresolvedTokens } from './CardTokens.js';
+import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK } from './CardTokens.js';
+import * as Offseason from './OffseasonEngine.js';
+import { baseballYear, computeAge } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
 import { computeOVR } from './PlayerFactory.js';
 
@@ -86,7 +90,9 @@ const PHASE_POOLS = Object.freeze({
   [PHASE.DIVISION_SERIES]:       ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL'],
   [PHASE.WORLD_SERIES]:          ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL'],
   [PHASE.SEASON_SUMMARY]:        ['DECISIONS_POOL'],
-  [PHASE.OFFSEASON]:             ['DECISIONS_POOL', 'MANAGER_CONTRACT_POOL', 'COACHING_CONTRACT_POOL'],
+  // §70: the manager's contract is a data-driven card (only when it is up);
+  // coaches are kept on. The generic contract pools no longer fire here.
+  [PHASE.OFFSEASON]:             ['DECISIONS_POOL'],
 });
 
 // Max cards delivered per game check (prevents inbox flooding)
@@ -699,6 +705,10 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     }
     if (key.startsWith('ilreturn:')) return !queue.has(c._targetPlayerId);
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
+    // §70: a free agent who signed elsewhere (or left); a re-sign card for a
+    // player no longer ours (retired, traded).
+    if (key.startsWith('os:fa:'))     return players[c._targetPlayerId]?.group !== PLAYER_GROUP.FREE_AGENT;
+    if (key.startsWith('os:resign:')) return players[c._targetPlayerId]?.teamId !== 'user';
     if (c._tradeOffer)               return !_tradeStillValid(state, c);
     return false;
   });
@@ -1550,6 +1560,180 @@ function _applyPlayerRelationshipEffect(state, effect, choice) {
  * "call him up", "bench him") that the engine cannot perform. Add the action
  * name here in the same change that adds its handler (§60).
  */
+// ─────────────────────────────────────────────────────────────
+// OFFSEASON CARDS (§70)
+// ─────────────────────────────────────────────────────────────
+//
+// The offseason's decisions are roster cards on the clock: delivered at a
+// real hour of their day, withdrawn when their situation is gone (a free
+// agent signs elsewhere), and auto-resolved conservatively at their deadline.
+// Hard gates (§23.2 — ownership, expiring contracts, manager) carry `_osGate`
+// and are due when spring training opens; free-agent cards are soft (3 days).
+
+const _who = (p) => `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
+const _years = (n) => `${n} year${n === 1 ? '' : 's'}`;
+
+/** Ownership evaluation — next season's payroll cap and operating budget. */
+export function deliverOwnershipCard(offer, atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const owner = state.userTeam.ownerName || 'Ownership';
+  const last  = (state.seasonHistory || [])[state.seasonHistory.length - 1] || {};
+  const dir   = offer.pct > 0.005 ? 'raise' : offer.pct < -0.005 ? 'trim' : 'hold';
+  const card = _rosterCard(state, {
+    cardId: 'os_ownership', tag: 'OWNERSHIP', sender: owner, avatar: '💼', type: 'urgent',
+    _rosterKey: `os:ownership:${state.seasonNum}`, _osGate: 'ownership', _offer: offer,
+    subject: 'Season review — next year\'s budget',
+    preview: `${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses}. Ownership wants to ${dir} the budget.`,
+    body: `We finished ${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses} against a target of ${last.winTarget ?? '—'} wins`
+        + `${last.postseason?.result && last.postseason.result !== 'Did not qualify' ? ` (${last.postseason.result.toLowerCase()})` : ''}. `
+        + `For next season ownership is offering a payroll cap of ${formatK(offer.payrollCap)} (was ${formatK(offer.prevPayrollCap)}) `
+        + `and an operating budget of ${formatK(offer.operatingBudget)} (was ${formatK(offer.prevOperatingBudget)}). `
+        + `Next season's win target: ${offer.winTarget}. You can accept, or push for 4% more at a cost to ownership's trust. `
+        + `If there's no answer by the time spring training opens, ownership decides — and it will be tighter.`,
+    yesLabel: 'Accept the offer', noLabel: 'Push for more',
+    expiresAtMs,
+    _raw: { onYes: 'os_owner_accept', onNo: 'os_owner_push', onAuto: 'os_owner_auto' },
+    _autoLabel: 'No answer — ownership set a tighter budget',
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** A user player whose deal is up: re-sign at his asking terms, or let him walk. */
+export function deliverResignCard(playerId, atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const p = state.players[playerId];
+  if (!p || p.teamId !== 'user') return null;
+  const terms = p._ask || Offseason.marketTerms(state, p);
+  const age = computeAge(p.dob, baseballYear(state) + 1);
+  const payroll = state.userTeam.finances?.payroll || 0;
+  const cap = state.userTeam.finances?.payrollCap || 0;
+  const delta = terms.salary - (p.contractSalary || 0);
+  const card = _rosterCard(state, {
+    cardId: 'os_resign', tag: 'CONTRACT', sender: `${p.name}'s agent`, avatar: '✍️', type: 'normal',
+    _rosterKey: `os:resign:${playerId}:${state.seasonNum}`, _osGate: 'contracts', _targetPlayerId: playerId,
+    subject: `${p.name}'s contract is up`,
+    preview: `Asking ${formatK(terms.salary)} a year for ${_years(terms.years)}.`,
+    body: `${_who(p)}, ${age} next season, is a free agent unless we re-sign him. He's asking ${formatK(terms.salary)} a year for ${_years(terms.years)}`
+        + ` (he made ${formatK(p.contractSalary || 0)}). That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))} — payroll is ${formatK(payroll)} against a ${formatK(cap)} cap. `
+        + `If we let him walk he goes to the free-agent market, where any club can sign him. No answer by the time spring training opens means he walks.`,
+    yesLabel: `Re-sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Let him walk',
+    expiresAtMs,
+    _raw: { onYes: 'os_resign', onNo: 'os_walk', onAuto: 'os_walk_auto' },
+    _autoLabel: 'No answer — he walked',
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** The manager's contract is up. */
+export function deliverManagerContractCard(atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const m = state.userTeam.coachingStaff?.manager || {};
+  const last = (state.seasonHistory || [])[state.seasonHistory.length - 1] || {};
+  const card = _rosterCard(state, {
+    cardId: 'os_manager', tag: 'MANAGER_CONTRACT', sender: m.name || 'The manager', avatar: '📋', type: 'urgent',
+    _rosterKey: `os:manager:${state.seasonNum}`, _osGate: 'manager',
+    subject: `${m.name || 'The manager'} — contract decision`,
+    preview: 'His contract is up. Extend him, or open a search?',
+    body: `${m.name || 'The manager'}'s contract is up after a ${last.wins ?? '—'}–${last.losses ?? '—'} season. `
+        + `A ${_years(MANAGER_EXTENSION_YEARS_UI)} extension keeps the clubhouse steady (salary up 5%). Opening a search brings in a new voice — and some uncertainty. `
+        + `With no decision by the time spring training opens, he stays on a one-year deal and knows he wasn't our first choice.`,
+    yesLabel: `Extend ${_years(MANAGER_EXTENSION_YEARS_UI)}`, noLabel: 'Open a search',
+    expiresAtMs,
+    _raw: { onYes: 'os_mgr_extend', onNo: 'os_mgr_replace', onAuto: 'os_mgr_auto' },
+    _autoLabel: 'No decision — one-year renewal',
+  });
+  return _deliverAt(card, atMs);
+}
+const MANAGER_EXTENSION_YEARS_UI = 2;
+
+/** Free agents worth a look (soft: auto-declined after 3 days). */
+export function deliverFreeAgentCards(atMs, springAt) {
+  const state = StateManager.get();
+  const offered = new Set([...(state.inbox || []), ...(state.scheduledCards || [])]
+    .filter(c => (c._rosterKey || '').startsWith('os:fa:')).map(c => c._targetPlayerId));
+  let n = 0;
+  for (const t of Offseason.userFreeAgentTargets(state, FA_CARDS_PER_ROUND, offered)) {
+    const p = t.player;
+    const terms = p._ask || Offseason.marketTerms(state, p);
+    const room = Offseason.displacementFor(state, 'user', p);
+    const age = computeAge(p.dob, baseballYear(state) + 1);
+    const from = (state.leagueTeams || []).find(x => x.id === p._faFrom)?.name || (p._faFrom === 'user' ? 'us' : null);
+    const card = _rosterCard(state, {
+      cardId: 'os_free_agent', tag: 'FREE_AGENT', sender: 'Pro Scouting', avatar: '🔎', type: 'good',
+      _rosterKey: `os:fa:${p.id}:${state.seasonNum}`, _targetPlayerId: p.id,
+      subject: `Free agent: ${p.name}`,
+      preview: `${p.nativePos || p.pos}, OVR ${p.ovr}, ${age} — ${t.reason}.`,
+      body: `${_who(p)}, ${age} next season${from ? `, formerly with ${from}` : ''}, is on the market — ${t.reason}. `
+          + `He's asking ${formatK(terms.salary)} a year for ${_years(terms.years)}. `
+          + (room ? `Our 28 is full, so ${room.name} (OVR ${room.ovr}) would go to the farm to make room. ` : '')
+          + `Other clubs are looking too — if he signs elsewhere this offer disappears.`,
+      yesLabel: `Sign him (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Pass',
+      expiresAtMs: Math.min(atMs + FA_CARD_TTL_DAYS * 86_400_000, springAt),
+      _raw: { onYes: 'os_fa_sign', onNo: 'os_fa_pass', onAuto: 'os_fa_pass' },
+      _autoLabel: 'No answer — passed',
+    });
+    if (_deliverAt(card, atMs)) n++;
+  }
+  return n;
+}
+
+/** Day 5: one reminder listing required decisions still open. */
+export function deliverGateReminder(atMs, springAt) {
+  const state = StateManager.get();
+  const gates = Offseason.hardGates(state);
+  if (!gates.open.length) return null;
+  const names = { ownership: 'the budget offer from ownership', contracts: 'expiring contracts', manager: 'the manager\'s contract' };
+  return _deliverNotice(`os:reminder:${state.seasonNum}`, {
+    sender: 'Front Office', type: 'urgent', avatar: '⏰',
+    subject: 'Decisions due before spring training',
+    preview: `Still open: ${gates.open.map(g => names[g]).join(', ')}.`,
+    body: `Spring training opens at midnight tomorrow. Still open: ${gates.open.map(g => names[g]).join(', ')}. Anything without an answer by then is decided for us — conservatively.`,
+    expiresAtMs: springAt,
+  }, atMs);
+}
+
+/** A user player retires. */
+export function deliverRetirementNotice(playerId, age, atMs) {
+  const state = StateManager.get();
+  const p = state.players[playerId];
+  if (!p) return null;
+  return _deliverNotice(`os:retire:${playerId}`, {
+    sender: _managerName(state), avatar: '🎩', type: 'normal',
+    subject: `${p.name} is retiring`,
+    preview: `${_who(p)} has decided to hang them up at ${age}.`,
+    body: `${_who(p)} told us he's retiring at ${age}, after ${p.careerStats?.seasons || 1} season${(p.careerStats?.seasons || 1) === 1 ? '' : 's'}. His spot on the roster is open.`,
+  }, atMs);
+}
+
+/** Offseason card decisions (inside _applyRosterAction). */
+function _applyOffseasonAction(action, instance, atMs) {
+  const id = instance._targetPlayerId;
+  switch (action) {
+    case 'os_owner_accept': StateManager.mutate(s => Offseason.applyOwnership(s, instance._offer, 'accept')); return true;
+    case 'os_owner_push':   StateManager.mutate(s => Offseason.applyOwnership(s, instance._offer, 'push'));   return true;
+    case 'os_owner_auto':   StateManager.mutate(s => Offseason.applyOwnership(s, instance._offer, 'auto'));   return true;
+    case 'os_resign':       StateManager.mutate(s => Offseason.applyResign(s, id)); return true;
+    case 'os_walk':         StateManager.mutate(s => Offseason.applyLetWalk(s, id, atMs)); return true;
+    case 'os_walk_auto':    StateManager.mutate(s => Offseason.applyLetWalk(s, id, atMs, { auto: true })); return true;
+    case 'os_mgr_extend':   StateManager.mutate(s => Offseason.applyManagerDecision(s, 'extend'));  return true;
+    case 'os_mgr_replace':  StateManager.mutate(s => Offseason.applyManagerDecision(s, 'replace')); return true;
+    case 'os_mgr_auto':     StateManager.mutate(s => Offseason.applyManagerDecision(s, 'auto'));    return true;
+    case 'os_fa_sign': {
+      StateManager.mutate(s => {
+        const p = s.players[id];
+        if (!p || p.group !== PLAYER_GROUP.FREE_AGENT) return;
+        const room = Offseason.displacementFor(s, 'user', p);
+        Offseason.signFreeAgent(s, id, 'user', atMs, { displaceId: room?.id || null });
+        applyRosterMutation(s, reconcileRoster(s, 'user'));
+        s.userTeam.finances.payroll = computePayroll(s);
+      });
+      return true;
+    }
+    case 'os_fa_pass': return true;
+    default: return false;
+  }
+}
+
 export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'il_return_activate',
   'il_return_waive',
@@ -1566,6 +1750,11 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'need_callup',
   'need_defer',
   'need_auto',
+  // §70 offseason
+  'os_owner_accept', 'os_owner_push', 'os_owner_auto',
+  'os_resign', 'os_walk', 'os_walk_auto',
+  'os_mgr_extend', 'os_mgr_replace', 'os_mgr_auto',
+  'os_fa_sign', 'os_fa_pass',
 ]));
 
 function _cardActionsHandled(card) {
@@ -1582,6 +1771,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now() } = {})
   const raw    = instance._raw || {};
   const action = choice === 'yes' ? raw.onYes : choice === 'no' ? raw.onNo : choice === 'auto' ? raw.onAuto : null;
   if (!action) return;
+  if (action.startsWith('os_')) { _applyOffseasonAction(action, instance, atMs); return; }
 
   const playerId = instance._targetPlayerId || null;
   const reconcileUser = () => {

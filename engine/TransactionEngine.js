@@ -63,7 +63,7 @@ import { cpuWaiverClaimant } from './LeagueEngine.js';
 
 import { tradePlayerPatches } from './TradeEngine.js';
 import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate } from './InjuryEngine.js';
-import { computeAge, createPlayer } from './PlayerFactory.js';
+import { computeAge, createPlayer, baseballYear } from './PlayerFactory.js';
 import { PLAYER_NAME_POOL } from '../data/player-names.js';
 
 const MS_PER_DAY = 86_400_000;
@@ -216,7 +216,7 @@ export function managerPick(state, teamId, need, exclude = new Set()) {
     .filter(p => p && !p.isInjured && !exclude.has(p.id) && (need.side === 'pitcher') === isPitcher(p));
   return side
     .sort((a, b) => fits(b) - fits(a)
-      || (computeAge(b.dob) - computeAge(a.dob))
+      || (computeAge(b.dob, baseballYear(state)) - computeAge(a.dob, baseballYear(state)))
       || ((a.ovr || 0) - (b.ovr || 0)))[0] || null;
 }
 
@@ -618,6 +618,7 @@ function _depthSigning(draft, want, pos) {
     contractLengthOverride: 1,
     teamId:    null,
     leagueLevel: draft.leagueTalentOffset || 0,
+    seasonYear: baseballYear(draft),
   });
   draft.players[p.id] = p;
   return p;

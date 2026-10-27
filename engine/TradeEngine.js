@@ -23,7 +23,7 @@ import {
   TRADE_CASH_ENABLED,
 } from '../data/constants.js';
 
-import { computeAge } from './PlayerFactory.js';
+import { computeAge, baseballYear } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // TRADE VALUE CALCULATION
@@ -120,7 +120,7 @@ function _playerValue(player, state) {
   if (!player) return 0;
 
   const ovr          = player.ovr || 55;
-  const age          = computeAge(player.dob);
+  const age          = computeAge(player.dob, baseballYear(state));
   const seasonNum    = state.seasonNum || 1;
   const yearsLeft    = Math.max(0, (player.contractExpiry || seasonNum + 1) - seasonNum);
   const salary       = player.contractSalary || 0;

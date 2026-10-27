@@ -417,8 +417,14 @@ function _wireActions(overlay, state) {
   });
 
   on('dbg-jump-offseason', async () => {
-    StateManager.mutate(s => { s.phase = 'OFFSEASON'; });
-    EventBus.emit('game:phaseChanged', { to: 'OFFSEASON' });
+    // §70: end the season as of yesterday so offseason day 1 is today; the
+    // league clock runs the day's steps on the next tick.
+    const { createOffseason } = await import('../../engine/OffseasonEngine.js');
+    StateManager.mutate(s => {
+      s.phase = 'SEASON_SUMMARY';
+      s.offseason = createOffseason(Date.now() - 86_400_000, s.seasonNum || 1);
+    });
+    EventBus.emit('game:phaseChanged', { to: 'SEASON_SUMMARY' });
     closeDebug();
     EventBus.emit('nav:switchTab', { tab: 'dashboard' });
   });
@@ -492,9 +498,9 @@ function _wireActions(overlay, state) {
 
   // ── Screen previews ──────────────────────────────────────
   on('dbg-preview-offseason', async () => {
+    // The offseason lives on the dashboard (§70, OffseasonCard).
     closeDebug();
-    const { mount } = await import('./OffseasonScreen.js');
-    mount();
+    EventBus.emit('nav:switchTab', { tab: 'dashboard' });
   });
 
   on('dbg-preview-history', async () => {

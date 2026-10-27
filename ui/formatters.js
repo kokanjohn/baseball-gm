@@ -21,6 +21,7 @@
  */
 
 import { COLOR_PALETTE, COLOR_PRIMARY_DEFAULT, COLOR_SECONDARY_DEFAULT } from '../data/constants.js';
+import { computeAge } from '../engine/PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // MONEY FORMATTING
@@ -181,14 +182,11 @@ export function formatSalary(amountK, yearsLeft) {
  * @param {String} dob  — 'YYYY-MM-DD'
  * @returns {String}
  */
-export function formatAge(dob) {
+export function formatAge(dob, seasonYear = null) {
   if (!dob) return '—';
-  const birth    = new Date(dob);
-  const today    = new Date();
-  let age        = today.getFullYear() - birth.getFullYear();
-  const monthOff = today.getMonth() - birth.getMonth();
-  if (monthOff < 0 || (monthOff === 0 && today.getDate() < birth.getDate())) age--;
-  return String(age);
+  // Baseball age in the league's current season (§70) — the same age every
+  // engine uses — when the caller knows the season year.
+  return String(computeAge(dob, seasonYear));
 }
 
 /**
