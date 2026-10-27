@@ -2200,7 +2200,7 @@ export const FCM_SENDER_ID = '157200420537';
 - [x] `VAPID_SUBJECT` set to operator email
 - [x] KV namespace `SCHEDULES` bound to worker
 - [x] Cron trigger set to `*/1 * * * *`
-- [ ] Regenerate VAPID keys after Phase 11 testing (security cleanup)
+- [x] Regenerate VAPID keys after Phase 11 testing (security cleanup) — done Oct 26, 2026 (§63)
 
 ---
 
@@ -6344,3 +6344,9 @@ New checks: each seed decision moves a dashboard metric; delete one / undo / del
 
 ### Push status at r58
 The deployed worker was still the r56 build (no `/test-send`), which is why Send Test reported "worker answered 404". Deploy `workers/push-worker.js` (r57+).
+
+### §63 addendum — push confirmed working on a real device (Oct 26, 2026)
+- Root cause of the last failure: Cloudflare `VAPID_PRIVATE_KEY` was not the partner of `VAPID_PUBLIC_KEY` (found by the r57 `/test-send` key check). User generated a new pair in Firebase and set both Cloudflare secrets — this also completes the §12.7 "regenerate VAPID keys" security item.
+- The app fetches the public key from the worker's `/vapid-key` and re-subscribes automatically when it changes. `data/constants.js` `VAPID_PUBLIC_KEY` is now only an offline fallback and still holds the OLD key — update it when convenient (the public key is safe to commit).
+- Closed-app delivery confirmed on Android: test notification arrived ~3 min after Send Test (queued +90 s, then up to 60 s for the next cron tick, then FCM `Urgency: normal` batching while the phone is idle).
+- Wrangler "update your configuration" notice in the dashboard can be ignored — the worker is deployed by pasting into the dashboard, not via a local wrangler config.
