@@ -37,14 +37,27 @@ import {
   TRADE_DEADLINE_OPEN,
   TRADE_DEADLINE_CLOSE,
   GM_RELATIONSHIP_DEFAULT,
+  INJURY_MRI_COST_K,
+  INJURY_MRI_RESULT_MIN_MS,
+  INJURY_MRI_RESULT_MAX_MS,
+  INJURY_MORNING_EXAM_HOUR,
 } from '../data/constants.js';
 
-import { injurePlayer } from './InjuryEngine.js';
-import { activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation } from './RosterEngine.js';
-import { evaluateTrade, executeTrade, recordDeclinedOffer, generateCPUTradeOffer } from './TradeEngine.js';
+import {
+  confirmDiagnosis, placeOnILUpdate, dayToDayUpdate, dayToDayAllowed,
+  clearInjuryUpdate, ilMinDays,
+} from './InjuryEngine.js';
+import {
+  activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation,
+  defaultActiveGroup, nextCalendarDay,
+} from './RosterEngine.js';
+import { evaluateTrade, queueTrade, recordDeclinedOffer, generateCPUTradeOffer } from './TradeEngine.js';
+import {
+  getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull,
+} from './TransactionEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens } from './CardTokens.js';
-import { planDeliveryTimes } from './CardScheduler.js';
+import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
 import { computeOVR } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -105,8 +118,8 @@ export function checkAndDeliver(context) {
   // 1. Expire old cards first
   _expireCards(state, context);
 
-  // 2. Process IL return queue
-  _processILReturnQueue(state, context);
+  // (IL return, injury and open-roster-spot cards run on the roster clock —
+  //  syncRosterCards(), called by GameEngine.advanceClock — not per game.)
 
   // 3. Check inbox capacity
   // Capacity counts cards already scheduled to arrive, not just the inbox.
@@ -228,7 +241,7 @@ export function resolve(instanceId, choice) {
       ? (instance._raw?.onYes)
       : (instance._raw?.onNo);
 
-    if (followupType) {
+    if (followupType && !HANDLED_CARD_ACTIONS.has(followupType)) {
       s.followupQueue = [...(s.followupQueue || []), {
         type:    followupType,
         atGame:  (s.currentGameIndex || 0) + 1,
@@ -243,20 +256,48 @@ export function resolve(instanceId, choice) {
   });
 
   // Handle roster actions
-  _applyRosterAction(instance, choice, StateManager.get());
+  _applyRosterAction(instance, choice, StateManager.get(), { atMs: Date.now() });
 }
 
 /**
- * expire(instanceId)
- * Auto-resolves a card with its auto-resolve path and penalty.
+ * expire(instanceId, atMs = Date.now())
+ * Auto-resolves a card with its auto-resolve path and penalty. A roster card
+ * (autoResolve 'roster', §65) runs its `_raw.onAuto` roster action at `atMs`
+ * — the roster-clock moment of the deadline, which during catch-up is in the
+ * past. A card that expires before it was ever released is moved into the
+ * inbox first, so the Completed tab shows what happened.
  *
  * @param {String} instanceId
- * @returns {void}
+ * @param {Number} [atMs]
  */
-export function expire(instanceId) {
-  const state    = StateManager.get();
-  const instance = (state.inbox || []).find(c => c.instanceId === instanceId);
+export function expire(instanceId, atMs = Date.now()) {
+  let state    = StateManager.get();
+  let instance = (state.inbox || []).find(c => c.instanceId === instanceId);
+  if (!instance) {
+    const sched = (state.scheduledCards || []).find(c => c.instanceId === instanceId);
+    if (!sched) return;
+    StateManager.mutate(s => {
+      s.scheduledCards = (s.scheduledCards || []).filter(c => c.instanceId !== instanceId);
+      s.inbox = [...(s.inbox || []), { ...sched, arrivedAtMs: Math.min(sched.deliverAtMs, atMs) }];
+    });
+    state    = StateManager.get();
+    instance = state.inbox.find(c => c.instanceId === instanceId);
+  }
   if (!instance || instance.resolved) return;
+
+  if (instance.autoResolve === 'roster') {
+    StateManager.mutate(s => {
+      const card = s.inbox.find(c => c.instanceId === instanceId);
+      if (card) {
+        card.resolved     = true;
+        card.choice       = 'auto';
+        card.resolvedAt   = s.currentGameIndex || 0;
+        card.resolvedAtMs = atMs;
+      }
+    });
+    _applyRosterAction(instance, 'auto', StateManager.get(), { atMs, auto: true });
+    return;
+  }
 
   const autoPath = instance.autoResolve || 'no';
   if (autoPath === 'skip') {
@@ -282,217 +323,414 @@ export function expire(instanceId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// IL RETURN DECISION CARDS
+// ROSTER CARDS ON THE ROSTER CLOCK (§65)
 // ─────────────────────────────────────────────────────────────
+//
+// Injury (Act 1 exam choice → Act 2 diagnosis), IL return, open roster spot,
+// and roster notices. Every one of them:
+//   - is delivered at a real moment (scheduledCards → push), not "next game";
+//   - carries `_rosterKey` — the exact roster situation it is about;
+//   - is WITHDRAWN (removed, never left as a ghost) by syncRosterCards() the
+//     moment that situation no longer exists, however it was resolved
+//     (inbox, Team screen, the manager, a trade…);
+//   - expires at a real deadline (expiresAtMs) into its `_raw.onAuto` action.
 
-/**
- * _processILReturnQueue(state, context)
- * Generates IL return decision cards for players in ilReturnQueue.
- * Presents GM with: activate, send to farm (spring only), or waive.
- */
-function _processILReturnQueue(state, context) {
-  const queue = state.ilReturnQueue || [];
-  if (queue.length === 0) return;
+const _hand = (p) => (['SP', 'RP'].includes(p?.pos) ? ` ${PITCHER_HAND_DISPLAY[p.hand] || '(R)'}` : '');
+const _clock = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+const _day   = (ms) => new Date(ms).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+const _randBetween = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
 
-  const isSpring = state.phase === PHASE.SPRING_TRAINING;
-
-  for (const playerId of queue) {
-    const player = state.players[playerId];
-    if (!player) continue;
-
-    // Check if already has an IL return card in inbox
-    const alreadyHasCard = (state.inbox || []).some(
-      c => !c.resolved && c._targetPlayerId === playerId && c.tag === 'IL_RETURN'
-    );
-    if (alreadyHasCard) continue;
-
-    const isPitcher  = ['SP', 'RP'].includes(player.pos);
-    const handSuffix = isPitcher
-      ? ` ${PITCHER_HAND_DISPLAY[player.hand] || '(R)'}`
-      : '';
-    const playerRef  = `${player.name}${handSuffix} (${player.pos})`;
-
-    // Find best callup candidate for the yes label
-    const callupCandidate = _findCallupCandidate(player, state);
-    const callupName      = callupCandidate
-      ? state.players[callupCandidate]?.name || 'Farm callup'
-      : 'Farm callup';
-
-    const noLabels = isSpring
-      ? ['Activate', 'Send to Farm', 'Place on Waivers']
-      : ['Activate', 'Place on Waivers'];
-
-    const instance = {
-      instanceId:       _uuid(),
-      cardId:           'il_return',
-      deliveredAt:      state.currentGameIndex || 0,
-      expiresAt:        (state.currentGameIndex || 0) + 3,
-      expiresAtMs:      null,
-      resolved:         false,
-      resolvedAt:       null,
-      choice:           null,
-      type:             'urgent',
-      tag:              'IL_RETURN',
-      sender:           'Team Physician',
-      subject:          `${player.name} cleared to return`,
-      preview:          `${playerRef} has been cleared — roster decision needed.`,
-      body:             `${playerRef} has completed their recovery and been cleared for game action. ${callupName} has been covering the spot. Do you want to activate ${player.name}, or make a different move?`,
-      yesLabel:         `Activate ${player.name}`,
-      noLabel:          isSpring ? 'Send to Farm' : 'Place on Waivers',
-      yesEffect:        { morale: 1 },
-      noEffect:         { morale: -1 },
-      autoResolve:      'yes',
-      autoResolveTax:   null,
-      _playerRelationshipEffect: null,
-      _budgetCost:      null,
-      _targetPlayerId:  playerId,
-      _callupCandidate: callupCandidate,
-      _isSpring:        isSpring,
-      _raw:             { onYes: 'il_return_activate', onNo: isSpring ? 'il_return_farm' : 'il_return_waive' },
-    };
-
-    StateManager.mutate(s => {
-      s.inbox = [...(s.inbox || []), instance];
-    });
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// INJURY TWO-ACT CARD GENERATION
-// ─────────────────────────────────────────────────────────────
-
-/**
- * deliverInjuryAct1(event, context)
- * Generates the Act 1 INGAME injury card from an InjuryEngine event.
- * Called by GameEngine when an in-game injury event fires.
- *
- * @param {Object} event   — { playerId, severity, injuryType, ilReturnGame }
- * @param {Object} context — from GameEngine.buildCardContext()
- */
-export function deliverInjuryAct1(event, context) {
-  const state    = StateManager.get();
-  const player   = state.players[event.playerId];
-  if (!player) return;
-
-  const isPitcher  = ['SP', 'RP'].includes(player.pos);
-  const handSuffix = isPitcher ? ` ${PITCHER_HAND_DISPLAY[player.hand] || '(R)'}` : '';
-  const playerRef  = `${player.name}${handSuffix}`;
-  const inningStr  = `${context.currentInning || 'an early'}`;
-
-  const instance = {
-    instanceId:      _uuid(),
-    cardId:          'injury_act1',
-    deliveredAt:     state.currentGameIndex || 0,
-    expiresAt:       (state.currentGameIndex || 0) + 1,
-    expiresAtMs:     null,
-    resolved:        false,
-    resolvedAt:      null,
-    choice:          null,
-    type:            'urgent',
-    tag:             'INJURY',
-    sender:          'Head Trainer',
-    subject:         `${player.name} down — leaving the game, evaluation pending`,
-    preview:         `${playerRef} left the field in the ${inningStr} inning. Evaluation in progress.`,
-    body:            `${playerRef} left the field in the ${inningStr} inning and is being evaluated in the clubhouse. No diagnosis yet. ${state.userTeam.coachingStaff?.manager?.name || 'The manager'} wants to know how to handle the lineup for the rest of the game.`,
-    yesLabel:        'Cover the slot — adjust the lineup now',
-    noLabel:         'Hold — wait to see if they can return',
-    yesEffect:       { morale: -1 },
-    noEffect:        { morale: -2 },
-    autoResolve:     'yes',
-    autoResolveTax:  { morale: -1 },
+function _rosterCard(state, fields) {
+  return {
+    instanceId:     _uuid(),
+    deliveredAt:    state.currentGameIndex || 0,
+    expiresAt:      null,
+    expiresAtMs:    null,
+    resolved:       false,
+    resolvedAt:     null,
+    choice:         null,
+    type:           'urgent',
+    yesEffect:      {},
+    noEffect:       {},
+    autoResolve:    'roster',
+    autoResolveTax: null,
     _playerRelationshipEffect: null,
-    _budgetCost:     null,
-    _targetPlayerId: event.playerId,
-    _act2Variance:   player._act2Variance || 'confirmed',
-    _raw:            { onYes: 'injury_act2', onNo: 'injury_act2' },
+    _budgetCost:    null,
+    _expiredSeason: state.seasonNum,
+    ...fields,
   };
+}
 
+/** Every card (inbox, resolved or not, and scheduled) with this roster key. */
+function _cardsWithKey(state, key) {
+  return [...(state.inbox || []), ...(state.scheduledCards || [])].filter(c => c._rosterKey === key);
+}
+
+/** Park a roster card for delivery at `atMs` (push-synced like every card). */
+function _deliverAt(instance, atMs) {
+  const state = StateManager.get();
+  if (_cardsWithKey(state, instance._rosterKey).some(c => !c.resolved)) return null;
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), instance];
-    _sortInbox(s.inbox);
+    s.scheduledCards = [...(s.scheduledCards || []), { ...instance, deliverAtMs: atMs }]
+      .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
   });
+  return instance;
+}
+
+/** Remove unresolved cards matching `pred` from the inbox and the schedule. */
+function _withdraw(pred) {
+  const state = StateManager.get();
+  const hit = [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])].filter(pred);
+  if (!hit.length) return 0;
+  const ids = new Set(hit.map(c => c.instanceId));
+  StateManager.mutate(s => {
+    s.inbox          = (s.inbox || []).filter(c => c.resolved || !ids.has(c.instanceId));
+    s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId));
+  });
+  return hit.length;
+}
+
+function _managerName(state) {
+  return state.userTeam.coachingStaff?.manager?.name || 'The manager';
+}
+
+function _needFor(player) {
+  if (!player) return { side: 'hitter', pos: null };
+  if (['SP', 'RP'].includes(player.pos)) return { side: 'pitcher', pos: player.pos };
+  return { side: 'hitter', pos: player.nativePos || player.pos };
 }
 
 /**
- * deliverInjuryAct2(playerId, act2Variance, context)
- * Generates the Act 2 post-game injury card with full diagnosis.
- * Called by GameEngine's followup queue processor.
- *
- * @param {String} playerId
- * @param {String} act2Variance — 'better'|'confirmed'|'worse'
+ * deliverInjuryAct1(playerId, atMs)
+ * Act 1 — the trainer's report right after the game: exam tonight or wait?
+ * An MRI tonight ($) returns a diagnosis in 1–2 hours, so a roster move made
+ * before midnight reports tomorrow. Waiting means the morning exam — free,
+ * but the replacement can't report until the day after.
  */
-export function deliverInjuryAct2(playerId, act2Variance) {
+export function deliverInjuryAct1(playerId, atMs = Date.now()) {
   const state  = StateManager.get();
   const player = state.players[playerId];
-  if (!player) return;
+  if (!player || player.injury?.status !== 'evaluating') return null;
+  const label  = (player.injury.label || 'injury').toLowerCase();
+  const card = _rosterCard(state, {
+    cardId:   'injury_act1',
+    tag:      'INJURY',
+    sender:   'Head Trainer',
+    _rosterKey: `injury:${playerId}:act1`,
+    _targetPlayerId: playerId,
+    subject:  `${player.name} hurt — evaluation needed`,
+    preview:  `${player.name}${_hand(player)} came out of tonight's game with a possible ${label}.`,
+    body:     `${player.name}${_hand(player)} (${player.pos}) came out of tonight's game with what looks like a ${label}. He's unavailable until we know more. We can send him for an MRI tonight — results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a call-up made tomorrow won't report until the day after.`,
+    yesLabel: `MRI tonight (${'$'}${INJURY_MRI_COST_K}K)`,
+    noLabel:  'Wait for the morning exam',
+    _budgetCost: INJURY_MRI_COST_K,
+    // Answer by midnight (at least an hour) or the doctor waits for morning.
+    expiresAtMs: Math.max(nextCalendarDay(atMs), atMs + 60 * 60_000),
+    _raw: { onYes: 'injury_mri_now', onNo: 'injury_mri_wait', onAuto: 'injury_mri_wait' },
+    _autoLabel: 'No answer — morning exam',
+  });
+  return _deliverAt(card, atMs);
+}
 
-  const report     = player.injuryReport;
-  const isPitcher  = ['SP', 'RP'].includes(player.pos);
-  const handSuffix = isPitcher ? ` ${PITCHER_HAND_DISPLAY[player.hand] || '(R)'}` : '';
-  const playerRef  = `${player.name}${handSuffix}`;
+/**
+ * deliverInjuryAct2(playerId, atMs)
+ * Act 2 — the diagnosis. The exam revises the Act 1 read (better / as feared
+ * / worse). Place on the IL and call up the best fit, or — for a short
+ * timeline — manage him day-to-day and keep the roster spot. Due before the
+ * next roster deadline; if nobody answers, he goes on the IL and the
+ * manager makes the call-up.
+ */
+export function deliverInjuryAct2(playerId, atMs = Date.now()) {
+  let state = StateManager.get();
+  const p0  = state.players[playerId];
+  if (!p0 || p0.injury?.status !== 'evaluating') return null;
 
-  // Act 2 variance affects the diagnosis framing
-  const varianceNote = act2Variance === 'better'
-    ? 'Good news — it\'s less serious than initially feared.'
-    : act2Variance === 'worse'
-    ? 'The scans showed more than expected. The timeline is longer.'
+  // Lock in the diagnosis now (the Team screen still says "being evaluated").
+  const dx = confirmDiagnosis(p0, atMs);
+  if (dx.injury) StateManager.mutate(s => Object.assign(s.players[playerId], dx));
+  state = StateManager.get();
+  const player = state.players[playerId];
+  const inj    = player.injury;
+  const report = player.injuryReport;
+  const v      = player._act2Variance;
+  const varianceNote = v === 'better' ? 'Good news — it is less serious than it looked on the field.'
+                     : v === 'worse'  ? 'The scans showed more than we hoped. The timeline is longer.'
+                     : 'The scans confirm what we saw on the field.';
+  const seasonEnding = inj.severity === 'season';
+  const ilDays     = Math.max(inj.days, ilMinDays(player));
+  const eligibleAt = inj.injuredAt + ilDays * 86_400_000;
+  const best       = rankCallupCandidates(state, 'user', _needFor(player))[0] || null;
+  const dtd        = dayToDayAllowed(player);
+  const deadline   = decisionDeadlineAfter(state, atMs);
+
+  const ilLine = seasonEnding
+    ? 'He is out for the rest of the season.'
+    : `On the ${ilMinDays(player)}-day IL (backdated to the injury) he's eligible to return ${_day(eligibleAt)}.`;
+  const dtdLine = dtd
+    ? ` Or we manage it day-to-day: he keeps his roster spot and should be available in about ${inj.days} days, but we play a man short until then.`
+    : '';
+  const bestLine = best
+    ? ` Best fit on the farm: ${best.name}${_hand(best)} (${best.nativePos || best.pos}, OVR ${best.ovr}) — he'd report tomorrow.`
+    : ' There is no healthy fit on the farm right now.';
+  const dlLine = deadline
+    ? ` We need a decision by ${_clock(deadline)} (${_day(deadline)}) or ${_managerName(state)} will make the move himself.`
     : '';
 
-  const ilDays         = report?.ilDays || 10;
-  const callupCandidate = _findCallupCandidate(player, state);
-  const callupName     = callupCandidate
-    ? state.players[callupCandidate]?.name || 'a farm player'
-    : 'a farm player';
+  const card = _rosterCard(state, {
+    cardId:   'injury_act2',
+    tag:      'INJURY',
+    sender:   'Team Physician',
+    _rosterKey: `injury:${playerId}:act2`,
+    _targetPlayerId:  playerId,
+    _callupCandidate: best?.id || null,
+    subject:  seasonEnding
+      ? `${player.name} — ${(inj.label || 'injury').toLowerCase()}, out for the season`
+      : `${player.name} — ${(inj.label || 'injury').toLowerCase()}, about ${inj.days} days`,
+    preview:  `${varianceNote} ${seasonEnding ? 'Season-ending.' : `About ${inj.days} days.`}`,
+    body:     `${report?.detailedText || ''} ${varianceNote} ${ilLine}${dtdLine}${bestLine}${dlLine}`.replace(/\s+/g, ' ').trim(),
+    yesLabel: best ? `Place on IL — call up ${best.name}` : 'Place on IL',
+    noLabel:  dtd ? 'Day-to-day — keep his roster spot' : `Place on IL — I'll pick the call-up`,
+    expiresAtMs: deadline,
+    _raw: {
+      onYes:  best ? 'il_placement' : 'il_placement_only',
+      onNo:   dtd ? 'day_to_day' : 'il_placement_only',
+      onAuto: 'injury_auto',
+    },
+    _autoLabel: `No decision — placed on IL, ${_managerName(state)} made the call-up`,
+  });
 
-  const instance = {
-    instanceId:      _uuid(),
-    cardId:          'injury_act2',
-    deliveredAt:     state.currentGameIndex || 0,
-    expiresAt:       (state.currentGameIndex || 0) + 3,
-    expiresAtMs:     null,
-    resolved:        false,
-    resolvedAt:      null,
-    choice:          null,
-    type:            'urgent',
-    tag:             'INJURY',
-    sender:          'Team Physician',
-    subject:         `${player.name} — diagnosis confirmed`,
-    preview:         `MRI results back. ${varianceNote || report?.generalText || 'See full report.'}`,
-    body:            `MRI results are in. ${report?.detailedText || report?.generalText || 'See team physician for details.'} ${varianceNote} The physician recommends ${ilDays} days minimum. You can place on the IL now and call up ${callupName}, or manage day-to-day and preserve roster flexibility.`,
-    yesLabel:        `Place on IL — call up ${callupName}`,
-    noLabel:         'Day-to-day — manage the roster manually',
-    yesEffect:       { morale: 1 },
-    noEffect:        { morale: -1 },
-    autoResolve:     'yes',
-    autoResolveTax:  { morale: -2 },
-    _playerRelationshipEffect: null,
-    _budgetCost:     null,
-    _targetPlayerId: playerId,
-    _callupCandidate: callupCandidate,
-    _raw:            { onYes: 'il_placement', onNo: 'day_to_day' },
-  };
-
-  StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), instance];
-    _sortInbox(s.inbox);
-
-    // ── Franchise history: serious injury (IL > 14 days — Section 35.2) ───
-    if (ilDays > 14) {
-      const injuryDesc = report?.detailedText || report?.generalText || 'injury';
+  const delivered = _deliverAt(card, atMs);
+  if (delivered && (seasonEnding || ilDays > 14)) {
+    StateManager.mutate(s => {
       s.history = [...(s.history || []), {
         id:       _uuid(),
         type:     'injury',
         season:   s.seasonNum || 1,
         gameIdx:  s.currentGameIndex || 0,
-        headline: `${player.name} — ${ilDays}-day IL stint`,
-        detail:   `${player.name} (${player.pos}) placed on IL. ${injuryDesc} Estimated return: ${ilDays} days.`,
-        playerId: playerId,
+        headline: seasonEnding ? `${player.name} — season-ending injury` : `${player.name} — ${ilDays}-day IL stint`,
+        detail:   `${player.name} (${player.pos}). ${report?.detailedText || ''}`,
+        playerId,
         icon:     '🩹',
         userNote: '',
       }];
-    }
-  });
+    });
+  }
+  return delivered;
 }
+
+/** When Act 2 arrives, given when Act 1 was answered and how. */
+function _act2Time(state, decidedAtMs, mriNow) {
+  if (mriNow) return decidedAtMs + _randBetween(INJURY_MRI_RESULT_MIN_MS, INJURY_MRI_RESULT_MAX_MS);
+  const d = new Date(decidedAtMs);
+  if (d.getHours() >= INJURY_MORNING_EXAM_HOUR) d.setDate(d.getDate() + 1);
+  d.setHours(INJURY_MORNING_EXAM_HOUR, 0, 0, 0);
+  let t = d.getTime() + _randBetween(0, 90) * 60_000;
+  // Always in hand at least 30 minutes before the roster deadline.
+  const dl = decisionDeadlineAfter(state, decidedAtMs);
+  if (dl && t > dl - 30 * 60_000) t = Math.max(decidedAtMs + 15 * 60_000, dl - 30 * 60_000);
+  return t;
+}
+
+/** IL return decision — delivered the moment the player is cleared. */
+function _deliverILReturnCard(playerId, atMs) {
+  const state  = StateManager.get();
+  const player = state.players[playerId];
+  if (!player || !(state.ilReturnQueue || []).includes(playerId)) return null;
+  const isSpring = state.phase === PHASE.SPRING_TRAINING;
+  const full     = rosterIsFull(state, 'user');
+  const drop     = full ? _dropCandidate(state, playerId) : null;
+  const deadline = decisionDeadlineAfter(state, atMs);
+  const ref      = `${player.name}${_hand(player)} (${player.pos})`;
+
+  const card = _rosterCard(state, {
+    cardId:   'il_return',
+    tag:      'IL_RETURN',
+    sender:   'Team Physician',
+    _rosterKey: `ilreturn:${playerId}`,
+    _targetPlayerId: playerId,
+    _dropId:  drop?.id || null,
+    subject:  `${player.name} cleared to return`,
+    preview:  `${ref} has been cleared — roster decision needed.`,
+    body:     `${ref} has completed his recovery and is cleared for game action.`
+            + (drop ? ` The active roster is full, so activating him means a corresponding move: ${drop.name} (${drop.nativePos || drop.pos}, OVR ${drop.ovr}) is the player who'd be ${isSpring ? 'optioned to the farm' : 'placed on waivers'}.`
+                    : ' There is room on the active roster for him.')
+            + (deadline ? ` If we haven't decided by ${_clock(deadline)} (${_day(deadline)}), ${_managerName(state)} will activate him.` : ''),
+    yesLabel: drop ? `Activate ${player.name} — ${isSpring ? 'option' : 'waive'} ${drop.name}` : `Activate ${player.name}`,
+    noLabel:  isSpring ? `Send ${player.name} to the farm` : `Place ${player.name} on waivers`,
+    type:     'urgent',
+    expiresAtMs: deadline,
+    _raw: { onYes: 'il_return_activate', onNo: isSpring ? 'il_return_farm' : 'il_return_waive', onAuto: 'il_return_activate' },
+    _autoLabel: `No decision — ${_managerName(state)} activated him`,
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** The lowest-value droppable active player (never a lineup starter or rotation arm). */
+function _dropCandidate(state, exceptId) {
+  const t = state.userTeam;
+  const returning = state.players[exceptId];
+  const samSide = (p) => ['SP', 'RP'].includes(p.pos) === ['SP', 'RP'].includes(returning?.pos);
+  const locked = new Set([...(t.lineupSlots || []).map(s => s.playerId).filter(Boolean), ...(t.rotation?.order || [])]);
+  const pool = (t.rosterIds || []).map(id => state.players[id]).filter(p =>
+    p && p.id !== exceptId && p.group !== PLAYER_GROUP.IL && !p.isInjured && !locked.has(p.id));
+  // Same side of the roster first (a returning pitcher replaces a pitcher).
+  return pool.sort((a, b) => (samSide(b) - samSide(a)) || ((a.ovr || 0) - (b.ovr || 0)))[0] || null;
+}
+
+/** Open roster spot — one card per open spot, tied to the current deadline. */
+function _deliverNeedCard(state, need, index, needs, atMs) {
+  const deadline = needs.deadlineAt;
+  const best     = rankCallupCandidates(state, 'user', need)[0] || null;
+  const what     = need.pos ? (need.side === 'pitcher' ? (need.pos === 'SP' ? 'a starting pitcher' : 'a reliever') : `a ${need.pos}`)
+                            : (need.side === 'pitcher' ? 'a pitcher' : 'a position player');
+  const card = _rosterCard(state, {
+    cardId:   'roster_need',
+    tag:      'ROSTER',
+    sender:   _managerName(state),
+    type:     'urgent',
+    _rosterKey: `need:${deadline}:${index}`,
+    _rosterKind: 'need',
+    _callupCandidate: best?.id || null,
+    _need:    need,
+    subject:  needs.short > 1 ? `${needs.short} open roster spots` : 'Open roster spot',
+    preview:  `We're ${needs.short} short of 28 — I need ${what}.`,
+    body:     `We're carrying ${28 - needs.short} active players. I need ${what}.`
+            + (best ? ` The best fit on the farm is ${best.name}${_hand(best)} (${best.nativePos || best.pos}, OVR ${best.ovr}); he'd report tomorrow.` : ' Nobody on the farm fits — look at the waiver wire or make a trade.')
+            + ` You can also pick someone else from the dashed spot on the Team screen.`
+            + (deadline ? ` If nothing's done by ${_clock(deadline)} (${_day(deadline)}), I'll call someone up myself.` : ''),
+    yesLabel: best ? `Call up ${best.name}` : 'Understood',
+    noLabel:  best ? `I'll choose on the Team screen` : null,
+    expiresAtMs: deadline,
+    _raw: { onYes: best ? 'need_callup' : 'need_defer', onNo: 'need_defer', onAuto: 'need_auto' },
+    _autoLabel: `No decision — ${_managerName(state)} made the call-up`,
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** One-button notice (manager's call-up, voided trade). */
+function _deliverNotice(key, fields, atMs) {
+  const state = StateManager.get();
+  if (_cardsWithKey(state, key).length) return null;
+  const card = _rosterCard(state, {
+    tag: 'ROSTER', type: 'normal', noLabel: null, yesLabel: 'Understood',
+    autoResolve: 'skip', expiresAtMs: atMs + 24 * 3600_000,
+    _rosterKey: key, _raw: {},
+    ...fields,
+  });
+  return _deliverAt(card, atMs);
+}
+
+/**
+ * syncRosterCards(events, atMs)
+ * Brings the inbox in line with the roster, after every roster-clock step.
+ *   - delivers cards for new situations (injuries, clearances, open spots,
+ *     the manager's moves, voided trades);
+ *   - withdraws every unresolved card whose situation is gone (§65 — no
+ *     ghost messages, whichever screen the GM acted on).
+ * @returns {{ delivered: Number, withdrawn: Number }}
+ */
+export function syncRosterCards(events = [], atMs = Date.now()) {
+  let delivered = 0;
+  for (const ev of events) {
+    if (ev.type === 'INJURY' && ev.teamId === 'user') {
+      if (deliverInjuryAct1(ev.playerId, (ev.atMs ?? atMs) + _randBetween(5, 20) * 60_000)) delivered++;
+    } else if (ev.type === 'MANAGER_FILL') {
+      const st = StateManager.get();
+      const names = (ev.playerIds || []).map(id => st.players[id]?.name).filter(Boolean);
+      if (_deliverNotice(`managerfill:${ev.atMs}`, {
+        sender:  _managerName(st),
+        subject: names.length ? `I called up ${names.join(' and ')}` : 'We are playing short',
+        preview: 'No move was made before the deadline, so I made it.',
+        body:    names.length
+          ? `Nobody made a move on the open roster spot before the deadline, so I called up ${names.join(' and ')}. ${names.length > 1 ? 'They report' : 'He reports'} tomorrow. Ownership noticed (Owner Trust ${ev.penalty?.ownerTrust ?? -2}, Atmosphere ${ev.penalty?.atmosphere ?? -1}).`
+          : `Nobody made a move on the open roster spot before the deadline, and there's no one on the farm who can fill it. We'll play short until something changes. Ownership noticed.`,
+      }, ev.atMs)) delivered++;
+    } else if (ev.type === 'FARM_SIGNING' && ev.teamId === 'user') {
+      const st = StateManager.get();
+      const p  = st.players[ev.playerId];
+      if (p && _deliverNotice(`farmsign:${ev.playerId}:${ev.atMs}`, {
+        sender:  'Farm Director',
+        subject: `Signed ${p.name} to a minor-league deal`,
+        preview: `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) joins the farm system.`,
+        body:    `Our farm system was getting thin, so I signed ${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) to a minor-league deal. He's available as a call-up if we need him.`,
+      }, ev.atMs)) delivered++;
+    } else if (ev.type === 'TRADE_VOIDED') {
+      const st = StateManager.get();
+      const team = (st.leagueTeams || []).find(t => t.id === ev.tx?.fromTeamId);
+      if (_deliverNotice(`tradevoid:${ev.tx?.id}`, {
+        sender:  team?.name || 'League Office',
+        subject: 'Trade called off',
+        preview: `The deal with ${team?.name || 'the other club'} did not go through.`,
+        body:    `The trade with ${team?.name || 'the other club'} was voided before it could be finalized: ${ev.reason}. Nobody changes teams.`,
+      }, ev.tx?.effectiveAt ?? atMs)) delivered++;
+    }
+  }
+
+  let state = StateManager.get();
+
+  // IL clearances → decision cards (at the moment of clearance).
+  for (const id of state.ilReturnQueue || []) {
+    const at = state.players[id]?.injury?.eligibleAt;
+    if (_deliverILReturnCard(id, Number.isFinite(at) ? Math.min(at, atMs) : atMs)) delivered++;
+  }
+
+  // Open roster spots → one card per spot, keyed to the current deadline.
+  state = StateManager.get();
+  const needs = getRosterNeeds(state, 'user');
+  const liveNeedKeys = new Set();
+  if (needs.applies && needs.short > 0 && needs.deadlineAt) {
+    needs.needs.forEach((need, i) => {
+      const key = `need:${needs.deadlineAt}:${i}`;
+      liveNeedKeys.add(key);
+      if (!_cardsWithKey(state, key).length && _deliverNeedCard(state, need, i, needs, atMs)) delivered++;
+      state = StateManager.get();
+    });
+  }
+
+  // Withdraw cards whose situation no longer exists.
+  state = StateManager.get();
+  const players = state.players;
+  const queue   = new Set(state.ilReturnQueue || []);
+  const withdrawn = _withdraw(c => {
+    const key = c._rosterKey || '';
+    if (key.startsWith('injury:')) {
+      const p = players[c._targetPlayerId];
+      return !p || !(state.userTeam.rosterIds || []).includes(p.id) || p.injury?.status !== 'evaluating';
+    }
+    if (key.startsWith('ilreturn:')) return !queue.has(c._targetPlayerId);
+    if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
+    if (c._tradeOffer)               return !_tradeStillValid(state, c);
+    return false;
+  });
+
+  return { delivered, withdrawn };
+}
+
+function _tradeStillValid(state, card) {
+  const o    = card._tradeOffer || {};
+  const team = (state.leagueTeams || []).find(t => t.id === card._proposingTeamId);
+  const ok   = (id, list) => list.includes(id) && !state.players[id]?.isInjured;
+  return !!team
+    && (o.outgoingIds || []).every(id => ok(id, state.userTeam.rosterIds || []))
+    && (o.incomingIds || []).every(id => ok(id, team.rosterIds || []));
+}
+
+/**
+ * expireDueRosterCards(atMs)
+ * Expires every unresolved roster card (inbox or not yet released) whose
+ * deadline is at or before `atMs`, oldest deadline first, each at its own
+ * deadline moment.
+ * @returns {Number} count expired
+ */
+export function expireDueRosterCards(atMs) {
+  const state = StateManager.get();
+  const due = [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])]
+    .filter(c => c.autoResolve === 'roster' && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
+    .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
+  for (const c of due) expire(c.instanceId, c.expiresAtMs);
+  return due.length;
+}
+
 // ─────────────────────────────────────────────────────────────
 
 /**
@@ -559,7 +797,9 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = f
     _playerRelationshipEffect: null,
     _budgetCost:     null,
     _tradeOffer:     offer,
-    _tradeEval:      evaluation,
+    // A frozen summary of the offer as proposed — never live player objects
+    // (those keep changing; the card must describe the deal it offered).
+    _tradeEval:      _evalSnapshot(evaluation),
     _proposingTeamId: proposingTeamId,
     _expiredSeason:  state.seasonNum,
     _raw:            { onYes: 'trade_execute', onNo: 'trade_decline' },
@@ -575,6 +815,19 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = f
   } else {
     _scheduleCards([instance], state);
   }
+}
+
+function _evalSnapshot(ev) {
+  const slim = (p) => ({ id: p.id, name: p.name, pos: p.pos, ovr: p.ovr, hand: p.hand || null,
+                         teamId: p.teamId, _previouslyWithOrg: !!p._previouslyWithOrg });
+  return {
+    fairnessRating:  ev.fairnessRating,
+    fairnessLabel:   ev.fairnessLabel,
+    payrollDelta:    ev.payrollDelta,
+    overCap:         !!ev.overCap,
+    incomingPlayers: (ev.incomingPlayers || []).map(slim),
+    outgoingPlayers: (ev.outgoingPlayers || []).map(slim),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -644,11 +897,17 @@ export function releaseDueCards(nowMs = Date.now()) {
  * Seed cards are never included.
  */
 export function getPushSchedule(state, nowMs = Date.now()) {
+  const qs = state?.push?.quietStart, qe = state?.push?.quietEnd;
   return (state?.scheduledCards || [])
-    .filter(c => !c._seed && c.deliverAtMs > nowMs - 60 * 1000)
-    .map(c => ({
+    .filter(c => !c._seed)
+    // Pool cards are already planned outside quiet hours; real-time roster
+    // cards reach the inbox when they happen and only the alert waits (§65).
+    .map(c => ({ c, at: pushTimeFor(c.deliverAtMs, qs, qe) }))
+    // An alert that would sound after the card's deadline is pointless.
+    .filter(({ c, at }) => at > nowMs - 60 * 1000 && !(Number.isFinite(c.expiresAtMs) && at >= c.expiresAtMs))
+    .map(({ c, at }) => ({
       id:        c.instanceId,
-      deliverAt: c.deliverAtMs,
+      deliverAt: at,
       title:     c.sender  || 'The Front Office',
       body:      c.subject || 'New message in your inbox',
       tag:       c.instanceId,
@@ -1297,75 +1556,157 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'il_return_farm',
   'trade_execute',
   'trade_decline',
-  'injury_act2',
+  // §65 roster clock
+  'injury_mri_now',
+  'injury_mri_wait',
+  'il_placement',
+  'il_placement_only',
+  'day_to_day',
+  'injury_auto',
+  'need_callup',
+  'need_defer',
+  'need_auto',
 ]));
 
 function _cardActionsHandled(card) {
   return [card.onYes, card.onNo].every(a => !a || HANDLED_CARD_ACTIONS.has(a));
 }
 
-function _applyRosterAction(instance, choice, state) {
-  const action = choice === 'yes'
-    ? instance._raw?.onYes
-    : instance._raw?.onNo;
-
+/**
+ * _applyRosterAction(instance, choice, state, { atMs, auto })
+ * Carries out a roster card's decision. `choice` is 'yes' | 'no' | 'auto'
+ * (deadline). `atMs` is the moment of the decision — real time for a GM tap,
+ * the deadline for an auto-resolve — and dates every transaction it creates.
+ */
+function _applyRosterAction(instance, choice, state, { atMs = Date.now() } = {}) {
+  const raw    = instance._raw || {};
+  const action = choice === 'yes' ? raw.onYes : choice === 'no' ? raw.onNo : choice === 'auto' ? raw.onAuto : null;
   if (!action) return;
 
+  const playerId = instance._targetPlayerId || null;
+  const reconcileUser = () => {
+    const rec = reconcileRoster(StateManager.get(), 'user');
+    StateManager.mutate(s => applyRosterMutation(s, rec));
+  };
+  const placeOnIL = () => StateManager.mutate(s => {
+    const p = s.players[playerId];
+    if (p && p.injury?.status === 'evaluating') Object.assign(p, placeOnILUpdate(p));
+  });
+  const callUpBest = (preferredId, need) => {
+    const st = StateManager.get();
+    const ranked = rankCallupCandidates(st, 'user', need);
+    const pick = ranked.find(p => p.id === preferredId) || ranked[0];
+    if (!pick) return null;
+    let res = null;
+    StateManager.mutate(s => { res = callUp(s, pick.id, 'user', atMs, 'gm'); });
+    return res?.ok ? pick.id : null;
+  };
+
   switch (action) {
-    case 'il_return_activate': {
-      const playerId = instance._targetPlayerId;
-      if (!playerId) break;
-      const player   = state.players[playerId];
-      if (!player) break;
-      const isPitcher = ['SP','RP'].includes(player.pos);
-      const targetGroup = isPitcher ? PLAYER_GROUP.BULLPEN : PLAYER_GROUP.BENCH_HITTERS;
-      const mutations = activateFromIL(state, playerId, targetGroup);
+    // ── Injury Act 1 ────────────────────────────────────────────
+    case 'injury_mri_now':
+    case 'injury_mri_wait': {
+      const st = StateManager.get();
+      if (st.players[playerId]?.injury?.status !== 'evaluating') break;
+      deliverInjuryAct2(playerId, _act2Time(st, atMs, action === 'injury_mri_now'));
+      break;
+    }
+
+    // ── Injury Act 2 ────────────────────────────────────────────
+    case 'il_placement': {
+      const need = _needFor(StateManager.get().players[playerId]);
+      placeOnIL();
+      reconcileUser();
+      callUpBest(instance._callupCandidate, need);
+      reconcileUser();
+      break;
+    }
+    case 'il_placement_only':
+      placeOnIL();
+      reconcileUser();
+      break;
+    case 'injury_auto':
+      // Nobody answered by the deadline: he goes on the IL and the open spot's
+      // deadline is the one that just passed — the roster clock has the
+      // manager fill it (with the "didn't act" penalty) in this same step.
+      placeOnIL();
+      reconcileUser();
+      StateManager.mutate(s => { s.userTeam.vacancyDeadlineAt = atMs; });
+      break;
+    case 'day_to_day':
       StateManager.mutate(s => {
-        Object.assign(s.players[playerId] || {}, mutations.players?.[playerId] || {});
-        s.ilReturnQueue = (s.ilReturnQueue || []).filter(id => id !== playerId);
+        const p = s.players[playerId];
+        if (p && p.injury?.status === 'evaluating') Object.assign(p, dayToDayUpdate(p));
       });
+      reconcileUser();
+      break;
+
+    // ── Open roster spot ────────────────────────────────────────
+    case 'need_callup':
+      callUpBest(instance._callupCandidate, instance._need);
+      reconcileUser();
+      break;
+    case 'need_defer':
+    case 'need_auto':
+      break;   // the roster clock owns the deadline
+
+    // ── IL return ───────────────────────────────────────────────
+    case 'il_return_activate': {
+      const st = StateManager.get();
+      const player = st.players[playerId];
+      if (!player || !(st.ilReturnQueue || []).includes(playerId)) break;
+      // A full active roster needs a corresponding move (Section 9.7: waivers
+      // in season, the farm in spring).
+      const isSpring = st.phase === PHASE.SPRING_TRAINING;
+      if (rosterIsFull(st, 'user')) {
+        const planned = st.players[instance._dropId];
+        const drop = planned && planned.teamId === 'user' && planned.group !== PLAYER_GROUP.IL
+          && (st.userTeam.rosterIds || []).includes(planned.id) ? planned : _dropCandidate(st, playerId);
+        if (drop) {
+          const mut = isSpring ? sendToFarm(st, drop.id, 'user') : placeOnWaivers(st, drop.id);
+          StateManager.mutate(s => applyRosterMutation(s, mut));
+        }
+      }
+      const act = activateFromIL(StateManager.get(), playerId, defaultActiveGroup(player));
+      StateManager.mutate(s => {
+        applyRosterMutation(s, act);
+        Object.assign(s.players[playerId], clearInjuryUpdate());
+      });
+      reconcileUser();
       break;
     }
 
     case 'il_return_waive': {
-      const playerId = instance._targetPlayerId;
       if (!playerId) break;
       const mutations = placeOnWaivers(state, playerId);
       StateManager.mutate(s => {
-        if (mutations.players?.[playerId]) Object.assign(s.players[playerId], mutations.players[playerId]);
-        s.waiverPool   = mutations.waiverPool || s.waiverPool;
-        s.ilReturnQueue = (s.ilReturnQueue || []).filter(id => id !== playerId);
-        if (mutations.userTeam) Object.assign(s.userTeam, mutations.userTeam);
+        applyRosterMutation(s, mutations);
+        Object.assign(s.players[playerId], clearInjuryUpdate());
       });
+      reconcileUser();
       break;
     }
 
     case 'il_return_farm': {
-      const playerId = instance._targetPlayerId;
       if (!playerId) break;
       const mutations = sendToFarm(state, playerId, 'user');
       StateManager.mutate(s => {
-        if (mutations.players?.[playerId]) Object.assign(s.players[playerId], mutations.players[playerId]);
-        if (mutations.userTeam) Object.assign(s.userTeam, mutations.userTeam);
+        applyRosterMutation(s, mutations);
+        Object.assign(s.players[playerId], clearInjuryUpdate());
         s.ilReturnQueue = (s.ilReturnQueue || []).filter(id => id !== playerId);
       });
+      reconcileUser();
       break;
     }
 
+    // ── Trades ──────────────────────────────────────────────────
     case 'trade_execute': {
-      const offer     = instance._tradeOffer;
-      const proposer  = instance._proposingTeamId;
+      const offer    = instance._tradeOffer;
+      const proposer = instance._proposingTeamId;
       if (!offer || !proposer) break;
-      const mutations = executeTrade(offer, state);
+      // One ledger record; it executes on the roster clock (§65).
       StateManager.mutate(s => {
-        if (mutations.players) {
-          for (const [id, upd] of Object.entries(mutations.players)) {
-            if (s.players[id]) Object.assign(s.players[id], upd);
-          }
-        }
-        if (mutations._pendingAcquisitions) s._pendingAcquisitions = mutations._pendingAcquisitions;
-        if (mutations.leagueTeams)          s.leagueTeams = mutations.leagueTeams;
-        if (mutations.userTeam)             Object.assign(s.userTeam, mutations.userTeam);
+        s.transactions = [...(s.transactions || []), queueTrade(offer, proposer, atMs)];
       });
       break;
     }
@@ -1383,17 +1724,6 @@ function _applyRosterAction(instance, choice, state) {
     default:
       break;
   }
-
-  // After any IL-return action the active roster changed (a player left the IL
-  // to the bench/bullpen, was waived, or was optioned to the farm). Reconcile so
-  // lineup slots and the rotation are restored to healthy, rostered players.
-  // Activating from the IL can push the roster over 28 — that's a GM decision, so
-  // reconcile reports the surplus (a later batch presents the "who comes off?"
-  // card); it does not silently waive a user player.
-  if (action === 'il_return_activate' || action === 'il_return_waive' || action === 'il_return_farm') {
-    const rec = reconcileRoster(StateManager.get(), 'user');
-    StateManager.mutate(s => applyRosterMutation(s, rec));
-  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1405,6 +1735,7 @@ function _expireCards(state, context) {
   const now      = Date.now();
   const toExpire = (state.inbox || []).filter(c => {
     if (c.resolved) return false;
+    if (c.autoResolve === 'roster') return false;   // roster clock (§65)
     if (c.expiresAt   !== null && c.expiresAt   <= gameIdx) return true;
     if (c.expiresAtMs !== null && c.expiresAtMs <= now)     return true;
     return false;
@@ -1445,13 +1776,6 @@ function _fireFollowup(followup) {
   const state = StateManager.get();
 
   switch (followup.type) {
-    case 'injury_act2': {
-      const { playerId, act2Variance } = followup.payload || {};
-      if (playerId && state.players[playerId]?.isInjured) {
-        deliverInjuryAct2(playerId, act2Variance || 'confirmed');
-      }
-      break;
-    }
     default:
       break;
   }
@@ -1465,16 +1789,6 @@ function _fireFollowup(followup) {
 
 
 
-
-function _findCallupCandidate(injuredPlayer, state) {
-  const farmIds = state.userTeam?.farmIds || [];
-  const isPitcher = ['SP','RP'].includes(injuredPlayer.pos);
-  const candidates = farmIds
-    .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && (isPitcher ? ['SP','RP'].includes(p.pos) : !['SP','RP'].includes(p.pos)))
-    .sort((a, b) => b.ovr - a.ovr);
-  return candidates[0]?.id || null;
-}
 
 function _hasBenchSP(state) {
   return (state.userTeam?.rosterIds || []).some(id => {

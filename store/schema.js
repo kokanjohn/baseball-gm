@@ -101,7 +101,9 @@ export function createGameState(config = {}) {
     //   waiverStartTime: Number|null, _farmArc: String|null,
     //   _isSpringInvitee: Boolean,  // true while on spring roster; cleared after Opening Day
     //   _isKeeper: Boolean,         // GM-tagged during spring; determines Opening Day roster
-    //   _pendingILReturn: Boolean, ilReturnGame: Number|null,
+    //   _pendingILReturn: Boolean,
+    //   injury: null | { status: 'evaluating'|'dtd'|'il', typeId, label, severity,
+    //                    days, injuredAt, returnAt|null, eligibleAt|null } (§65)
     //   trait: String, _act2Variance: String|null,
     //   stats: Object, springStats: Object, careerStats: Object,
     //   injuryReport: Object|null, teamId: String|null
@@ -246,8 +248,16 @@ export function createGameState(config = {}) {
     // { [composeTopicId]: gameIndex } — prevents repeated compose use
     composeCooldowns: {},
 
-    // ── Pending transactions ───────────────────────────────
-    _pendingAcquisitions: [],   // incoming players held until game commit
+    // ── Roster transactions on a real clock (§65) ─────────────
+    // One record per move, for EVERY team:
+    //   { id, kind: 'trade'|'arrival', teamId, playerId?, fromTeamId?,
+    //     toGroup?, reason?, offer?, createdAt, effectiveAt,
+    //     status: 'pending'|'done'|'cancelled', doneAt?, note? }
+    // A 'trade' executes when the roster clock reaches effectiveAt (never in
+    // the middle of a game); each player then becomes IN_TRANSIT with an
+    // 'arrival' due the next calendar day. TransactionEngine.applyDue() is the
+    // only code that carries them out.
+    transactions: [],
 
     // ── Trade cooldowns ────────────────────────────────────
     // { [teamId]: gameIndex } — 15-game cooldown after declined offer
@@ -398,8 +408,10 @@ export function createUserTeamObject(config = {}) {
       },
     },
 
-    // Pending transactions
-    _pendingAcquisitions: [],
+    // Roster-decision deadline (§65): set when the active roster first falls
+    // short of 28 (counting players already on their way); cleared when it is
+    // whole again. If it passes, the field manager fills the spot himself.
+    vacancyDeadlineAt: null,
 
     // Watchlist — playerIds the user is watching
     watchlist: [],

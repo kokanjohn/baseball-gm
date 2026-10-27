@@ -6400,3 +6400,66 @@ Opening Day keeper cut to 28; reconcile keeps lineup/rotation valid after roster
 3. **Card actions** (D1–D3).
 4. **All-Star hosting, fatigue, user-initiated trades** (E1, E3, B7).
 5. **Weather + radar** (E2).
+
+## 65. r59 — Transactions, injuries & vacancies on a real clock (Session 8, Batch 1)
+
+Closes gap-register items **B1–B6, C1–C6** (§64). Design approved by the user before coding; decisions in **bold** are theirs.
+
+### 65.1 The roster clock (LOCKED)
+- `rosterClock(state, now) = min(now, first pitch of the next game not yet played)`. Nothing changes a roster mid-game; when the app was closed for days, games and roster moves replay in the order they really happened (each game is simulated with the roster it would actually have had).
+- `GameEngine.advanceClock(now)` is the one driver: (1) roster cards past their deadline auto-resolve **at their deadline time**; (2) `TransactionEngine.applyDue` — ledger, waivers, injury timeline, reconcile, the GM's vacancy deadline; (3) `CardEngine.syncRosterCards` — new cards + withdrawal of every card whose situation is gone. Called from `tick()` (so the harness covers it), the App tick, app open, every inbox roster decision, and at the end of `commitGame` (with `reconcileAll`, after the phase transition).
+- `hasDue()` keeps the 5-second tick write-free when idle.
+
+### 65.2 The ledger — `state.transactions`
+- `'trade'` (one record per accepted deal, `TradeEngine.queueTrade`) executes when the clock reaches it → every player in the deal leaves his roster at once and goes `IN_TRANSIT` (`PLAYER_GROUP.IN_TRANSIT = 'transit'`, `teamId` = destination) → one `'arrival'` each, **reporting the next calendar day (local midnight)** — both directions, so a traded player can never face his old team that day. Re-validated at execution: a player no longer where the deal expects, or injured, voids the trade ("failed physical") with an inbox notice.
+- **Farm call-ups also report the next calendar day** (user choice), same `'arrival'` record (`by: 'gm' | 'manager' | 'cpu'`). A call-up is refused when the active roster has no open spot.
+- Arrivals hold their roster spot: every count of the active roster is **active (non-IL) + pending arrivals**. CPU reconcile, spring cuts and needs all use it.
+- Removed: `markPendingDeparture`, `drainPendingTrades`, `_pendingAcquisitions`, `executeTrade`/`deferTrade`, commit Steps 3–4, `callUpFromFarm`, `autoResolveDepth`, `processWaiverClaims`, `ilReturnGame` (game-index IL).
+
+### 65.3 Injuries (C1, C2)
+- On for **all ten teams**, rolled at commit for the players who actually appeared (box score for the user + opponent; lineup/starter/relievers for other CPU clubs playing that date). **Existing locked rates kept** (user choice) — ~10 IL-level injuries per club per 142 games in the harness.
+- Real-day timeline on `player.injury = { status: 'evaluating'|'dtd'|'il'|'cleared', severity, days, injuredAt, returnAt, eligibleAt }`. IL is backdated to the injury with MLB minimums (**10-day hitters / 15-day pitchers**); season-ending = 200 days (cleared over the winter).
+- User flow (two acts, delivered at real moments, pushed outside quiet hours):
+  - **Act 1** (5–20 min after the game, Head Trainer): *MRI tonight ($15K, diagnosis in 60–120 min, so a move before midnight reports tomorrow)* vs *wait for the morning exam (9:00–10:30, free, replacement reports a day later)*. Unanswered by midnight → morning exam.
+  - **Act 2** (diagnosis; better ×0.6 / as feared / worse ×1.4): *Place on IL — call up {best fit}* vs *Day-to-day — keep his roster spot* (only when ≤10 days; otherwise *Place on IL — I'll pick the call-up*). Due at the roster deadline; unanswered → IL + the manager's call-up + penalty.
+  - IL clearance → *Activate {name} — waive {lowest same-side non-starter}* when the roster is full, or *Place on waivers* (spring: farm). Unanswered → manager activates.
+- CPU GMs decide at once: ≤5 days day-to-day, otherwise IL; their call-ups go through the ledger.
+- An evaluating player who leaves the active roster (cut/waived) simply heals on a day-to-day timeline.
+
+### 65.4 Vacancies — one source, two screens (C3, C4, C5, C6)
+- `TransactionEngine.getRosterNeeds(state, team)` is DERIVED, never stored: short/surplus, one need per open spot with side (hitter/pitcher by the 14/14 composition) and a position hint (a lineup slot held by an out-of-position fill, a short rotation). The Team screen's dashed cards and the inbox's "Open roster spot" cards both read it.
+- **Deadline: 1 hour before the next first pitch** (user choice). `userTeam.vacancyDeadlineAt` is set when the roster first falls short, cleared when whole. A spot that opens in the final hour is due before the following game.
+- **Manager fill + small Owner/Fan hit** (user choice): at the deadline the field manager calls up by position, then seniority (oldest), never by best rating, never the wrong side; `MANAGER_FILL_PENALTY = { ownerTrust: -2, atmosphere: -1 }`; an inbox notice explains it.
+- Ghost withdrawal: every roster card carries `_rosterKey`; `syncRosterCards` deletes unresolved cards whose situation no longer exists (injury no longer 'evaluating', player off the IL-return queue, need index ≥ open spots or deadline changed, trade offer whose players moved/got hurt) — whichever screen the GM acted on. A card tapped after withdrawal shows "no longer needed".
+- Manager domain: a lineup slot nobody on the bench can play is filled out of position (`emergency: true`, red "out of position" on the Team screen) — every club always fields nine.
+
+### 65.5 Waivers, farm depth (Section 20.2 completed)
+- 72-hour real claim window on the clock. CPU clubs claim only a real upgrade (≥3 OVR over the weakest active player at his position), worst record first; the claimant drops a player at once (reconcile). Unclaimed → **outrighted to the placing team's farm** (§20.2 step 7 — previously he went to free agency and never left the pool); farm-overflow displacements still go to free agency.
+- Farm director (every club, regular season/playoffs, once per game day): keeps a C, CI, MI, OF, 2 SP, 2 RP and ≥6 hitters / ≥5 pitchers on the farm by signing the best matching free agent to a minor-league deal ($20K, 1 year); when the pool has nobody of that type, a low-OVR independent-league veteran is created. User signings arrive as a Farm Director notice. Without this, farms only shrank and late-season injuries couldn't be covered.
+
+### 65.6 Root causes fixed along the way
+- **Every farm hitter was generated as a pitcher** (`createPlayer` decided hitter/pitcher by group, and `PRACTICE_SQUAD` holds both): farm hitters had stuff/control/stamina and null contact/power/speed. Now decided by position.
+- **Spring cuts re-ran every time the phase re-entered REGULAR_SEASON** (after the All-Star break and the trade deadline) and counted IL players — silently waiving healthy players mid-season. Cuts now run only coming out of spring and count only the active roster (+ arrivals).
+- **Opening Day auto-cuts kept the 28 highest OVRs regardless of position** (e.g. 15 hitters / 13 pitchers, no backup catcher). Cuts now build a real roster: every lineup position + a backup C, 5 starters + 2 spot starters, 14 / 14, then best available.
+- **Spring camp could exceed 38** when an IL player was activated; `rosterIsFull()` (28 in season incl. arrivals, 38 in camp) now governs activations and call-ups.
+- **Silently committed games never credited player stats** (gate was `!alreadyCommitted`); now `_statsApplied`.
+- `commitGame` returned `result` before declaring it (TDZ) on a non-committable game.
+- Waiver claims put pitchers in the hitter group (eligible to DH); now `defaultActiveGroup`.
+- Trade cards stored live player objects (`_tradeEval`), so a card's text changed after the trade; now a frozen snapshot.
+- **League-relative plate appearances**: the PA model measured every at-bat against a fixed rating (55). With injuries on, league talent drifts (≈3 OVR in the lineups by September) and runs fell from 4.7 to ~3.2 R/G over a season. `SimEngine.leagueNorms()` now supplies the league's current average contact/power/speed and stuff/control at first pitch — rates are relative to the league, as in real baseball. A team of call-ups still does worse than the others; the league environment stays MLB-like.
+- Quiet hours now delay only the phone ALERT for real-time roster news (`CardScheduler.pushTimeFor`); the card itself reaches the inbox when it happens. An alert that would sound after the card's deadline is dropped.
+
+### 65.7 UI
+- Team screen: red-dashed banner "N open roster spots — due {time} or {manager} picks"; dashed **Open spot** cards per need in Hitters / Pitchers (tap → farm picker, best fit first); dashed **arriving** cards ("Called up — reports tomorrow"); Pending Transactions from the ledger (pending trade, INCOMING, OUTGOING with report dates); IL shows "Elig. {date}" / "Cleared" / "Season"; Eval / DTD status chips; farm Call Up greyed when the roster is full.
+- Inbox: real-time "⏰ by 6:05 PM" badge on roster cards; Completed shows what auto-resolve did ("No decision — placed on IL, {manager} made the call-up").
+- Debug "Injure random player" runs the real path (`GameEngine.debugInjure`).
+
+### 65.8 Harness (all green on 30 seeds)
+New invariants every game: active + arriving = 28 for the user **and every CPU club**; every lineup fields nine; no player on two rosters / in transit without exactly one arrival (`auditRosters`); nobody plays for a club before reporting or after leaving (built from every arrival record); no ghost card after any action. A simulated GM lives between games — answers ~75% of roster cards in the inbox, makes ~30% of call-ups from the Team screen path instead, ignores the rest (deadlines + manager fills run), accepts ~35% of trade offers. Season checks: injuries happen at a realistic rate, every accepted trade executes or is voided, every traded player reports the next calendar day, no alert sounds in quiet hours.
+
+### 65.9 Still open (unchanged from §64 unless noted)
+- The CPU league schedule (A2) still gives some clubs ~40 games; the injury check accepts 8/10 clubs hurt until Batch 2.
+- CPU-vs-CPU games are still the quick OVR formula (plan §28 wants the full pipeline) — Batch 2.
+- User waiver claims and free-agent signings by the GM (B7-adjacent) — Batch 4.
+- In-game injuries (a player leaving mid-game in the play-by-play) — later; injuries are currently discovered after the final out.
+- Pitcher/hitter injury share is ~30/70 under the locked rates (MLB is closer to 55/45) — flag for the user before changing locked constants.

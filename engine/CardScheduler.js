@@ -88,6 +88,17 @@ export function inQuietHours(ms, quietStart = '22:00', quietEnd = '08:00') {
   return qs > qe ? (m >= qs || m < qe) : (m >= qs && m < qe);
 }
 
+/**
+ * pushTimeFor(ms, quietStart, quietEnd)
+ * When a notification for something that happened at `ms` may sound: `ms`
+ * itself, or the end of quiet hours if `ms` falls inside them. Real-time
+ * roster news (an injury after a night game) reaches the inbox when it
+ * happens; only the phone alert waits for morning (§65).
+ */
+export function pushTimeFor(ms, quietStart = '22:00', quietEnd = '08:00') {
+  return inQuietHours(ms, quietStart, quietEnd) ? nextWakeTime(ms, quietEnd) : ms;
+}
+
 function nextWakeTime(fromMs, quietEnd) {
   const d = new Date(fromMs); d.setHours(0, 0, 0, 0);
   let t = _at(d.getTime(), _minutes(quietEnd));

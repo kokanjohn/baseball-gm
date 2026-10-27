@@ -5,8 +5,10 @@
  * Rules:
  *   - Pure functions. No state reads or writes. GameEngine applies mutations.
  *   - Runs on ALL 10 teams — same probability model, same constants, no hidden invincibility.
- *   - CPU injuries are silent (no inbox card) but update player registry and affect OVR.
- *   - User team injuries fire an event object that CardEngine uses to generate the two-act card.
+ *   - Time is REAL time (§65): injuries carry injuredAt / returnAt / eligibleAt
+ *     in ms. TransactionEngine.applyDue() moves them along the roster clock.
+ *   - CPU injuries are silent (no inbox card); the CPU GM decides IL vs day-to-day at once.
+ *   - User team injuries start as 'evaluating' and CardEngine runs the two-act card.
  *   - Does NOT call RosterEngine directly — returns mutations for caller to apply.
  *
  * Section references: Section 21 (injury system), Section 11 (two-act model)
@@ -27,6 +29,12 @@ import {
   INJURY_IL_DAYS_MODERATE,
   INJURY_IL_DAYS_SIGNIFICANT,
   INJURY_IL_DAYS_SEASON,
+  INJURY_SEASON_ENDING_DAYS,
+  INJURY_DTD_MAX_DAYS,
+  INJURY_ACT2_BETTER_MULT,
+  INJURY_ACT2_WORSE_MULT,
+  IL_MIN_DAYS_HITTER,
+  IL_MIN_DAYS_PITCHER,
   INJURY_SR_PENALTY_MINOR,
   INJURY_SR_PENALTY_MODERATE,
   INJURY_SR_PENALTY_SIGNIFICANT,
@@ -60,150 +68,151 @@ import { computeAge, computeOVR } from './PlayerFactory.js';
 const MS_PER_DAY = 86_400_000;
 
 // ─────────────────────────────────────────────────────────────
-// DAILY INJURY CHECK — runs for all 10 teams
+// GAME INJURIES — every team, real clock (§65)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * runDailyInjuryCheck(state, gameIndex)
- * Evaluates injury probability for every active roster player on all 10 teams.
- * Returns mutations and a list of injury events for user team players.
+ * rollGameInjuries(state, appearances, nowMs)
+ * Rolls injuries for the players who actually took the field in a game day.
+ * Same probability model for all ten teams — no hidden invincibility.
  *
- * User team injuries: { type: 'USER_INJURY', playerId, severity, injuryType }
- *   → CardEngine generates the two-act card from this event
+ *   USER players  → status 'evaluating' (still on the active roster, not
+ *                   available to play). CardEngine runs the two-act flow:
+ *                   Act 1 (exam choice) → Act 2 (diagnosis: IL or day-to-day).
+ *   CPU players   → diagnosed at once; the CPU GM picks IL or day-to-day.
  *
- * CPU team injuries: applied silently — player registry updated, no event generated
- *
- * @param {Object} state
- * @param {Number} gameIndex   — current game index (for IL return date calculation)
- * @returns {Object} { mutations: { players: {}, leagueTeams: [] }, events: [] }
+ * @param {Object}   state
+ * @param {Object[]} appearances — [{ teamId, hitterIds, starterId, relieverIds }]
+ * @param {Number}   nowMs       — the moment of injury (end of the game)
+ * @returns {{ players: Object, events: Object[] }}
+ *          events: [{ type: 'INJURY', teamId, playerId }]
  */
-export function runDailyInjuryCheck(state, gameIndex) {
-  const playerMutations = {};
-  const events          = [];
+export function rollGameInjuries(state, appearances, nowMs) {
+  const players = {};
+  const events  = [];
 
-  // Check user team
-  const userEvents = _checkTeamInjuries(
-    state.userTeam.rosterIds,
-    state.players,
-    gameIndex,
-    true,    // isUserTeam
-    playerMutations
-  );
-  events.push(...userEvents);
+  for (const app of appearances || []) {
+    const roles = [
+      ...(app.hitterIds   || []).map(id => [id, 'hitter']),
+      ...(app.starterId ? [[app.starterId, 'starter']] : []),
+      ...(app.relieverIds || []).map(id => [id, 'reliever']),
+    ];
+    const seen = new Set();
+    for (const [playerId, role] of roles) {
+      if (seen.has(playerId)) continue;
+      seen.add(playerId);
+      const player = state.players[playerId];
+      if (!player || player.isInjured || player.injury) continue;
+      if (player.group === PLAYER_GROUP.IL) continue;
+      if (Math.random() >= _injuryProbability(player, role)) continue;
 
-  // Check CPU teams (silent)
-  for (const team of (state.leagueTeams || [])) {
-    _checkTeamInjuries(
-      team.rosterIds,
-      state.players,
-      gameIndex,
-      false,   // isUserTeam
-      playerMutations
-    );
-  }
-
-  return {
-    mutations: { players: playerMutations },
-    events,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
-// PLAYER INJURY
-// ─────────────────────────────────────────────────────────────
-
-/**
- * injurePlayer(player, gameIndex, severityOverride?)
- * Determines IL duration, sub-rating penalty, and generates injury report.
- * Returns a partial player update object (mutations to apply).
- *
- * Called directly for in-game injuries (two-act model Act 1 resolution).
- * Also called by runDailyInjuryCheck for daily probability hits.
- *
- * @param {Object} player           — full player object
- * @param {Number} gameIndex        — current game index
- * @param {String} severityOverride — 'minor'|'moderate'|'significant'|'season' (optional)
- * @returns {Object} player mutation
- */
-export function injurePlayer(player, gameIndex, severityOverride = null) {
-  const severity   = severityOverride || _rollSeverity();
-  const injuryType = _pickInjuryType(player);
-  const ilDays     = _rollILDays(severity);
-  const penalty    = _penaltyForSeverity(severity);
-  const report     = _generateInjuryReport(player, injuryType, severity, ilDays);
-
-  // Store uncertainty for Act 2 (sometimes better, sometimes worse than Act 1)
-  const act2Variance = _rollAct2Variance(severity);
-
-  return {
-    isInjured:      true,
-    tier:           'active',   // stays on active roster tier (on IL, not farm)
-    group:          PLAYER_GROUP.IL,
-    ilReturnGame:   gameIndex + ilDays,
-    injuryPenalty:  {
-      subRating: injuryType.affectedSR,
-      amount:    penalty,
-    },
-    injuryReport:   report,
-    _injuryType:    injuryType.id,
-    _injurySeverity: severity,
-    _act2Variance:  act2Variance,   // revealed at Act 2 card time
-    _pendingILReturn: false,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
-// IL RETURN PROCESSING
-// ─────────────────────────────────────────────────────────────
-
-/**
- * processILReturns(state, gameIndex)
- * Checks all injured players across all teams for return eligibility.
- * For user team: flags _pendingILReturn, adds to ilReturnQueue (CardEngine handles decision).
- * For CPU teams: auto-activates returning players.
- *
- * Returns mutations.
- *
- * @param {Object} state
- * @param {Number} gameIndex
- * @returns {Object} mutations
- */
-export function processILReturns(state, gameIndex) {
-  const playerMutations = {};
-  const ilReturnQueue   = [...(state.ilReturnQueue || [])];
-
-  for (const [playerId, player] of Object.entries(state.players)) {
-    if (!player.isInjured || player.ilReturnGame === null) continue;
-    if (player.ilReturnGame > gameIndex) continue;
-
-    const isUserPlayer = state.userTeam.rosterIds.includes(playerId);
-
-    if (isUserPlayer) {
-      // Flag for GM decision — CardEngine generates the IL return card
-      if (!ilReturnQueue.includes(playerId)) {
-        ilReturnQueue.push(playerId);
-      }
-      playerMutations[playerId] = {
-        isInjured:        false,
-        ilReturnGame:     null,
-        _pendingILReturn: true,
-      };
-    } else {
-      // CPU auto-activate — clear injury, restore to bullpen/bench
-      const isPitcher = ['SP','RP'].includes(player.pos);
-      playerMutations[playerId] = {
-        isInjured:        false,
-        ilReturnGame:     null,
-        injuryPenalty:    null,
-        _pendingILReturn: false,
-        group:  isPitcher ? PLAYER_GROUP.BULLPEN : PLAYER_GROUP.BENCH_HITTERS,
-      };
+      const begun = beginInjury(player, nowMs);
+      players[playerId] = app.teamId === 'user'
+        ? begun
+        : { ...begun, ..._cpuDisposition({ ...player, ...begun }) };
+      events.push({ type: 'INJURY', teamId: app.teamId, playerId });
     }
   }
+  return { players, events };
+}
 
+/**
+ * beginInjury(player, nowMs, severityOverride?)
+ * The moment a player gets hurt: unavailable at once, still occupying his
+ * active-roster spot until the GM decides (status 'evaluating').
+ * @returns {Object} partial player update
+ */
+export function beginInjury(player, nowMs, severityOverride = null) {
+  const severity   = severityOverride || _rollSeverity();
+  const injuryType = _pickInjuryType(player);
+  const days       = _rollILDays(severity);
   return {
-    mutations: { players: playerMutations, ilReturnQueue },
+    isInjured:      true,
+    isResting:      false,
+    injuryPenalty:  { subRating: injuryType.affectedSR, amount: _penaltyForSeverity(severity) },
+    injuryReport:   _generateInjuryReport(player, injuryType, severity, days, nowMs),
+    _act2Variance:  _rollAct2Variance(severity),
+    _pendingILReturn: false,
+    injury: {
+      status:     'evaluating',
+      typeId:     injuryType.id,
+      label:      injuryType.label || 'Injury',
+      severity,
+      days,
+      injuredAt:  nowMs,
+      returnAt:   null,
+      eligibleAt: null,
+      diagnosed:  false,
+    },
   };
+}
+
+/**
+ * confirmDiagnosis(player, nowMs)
+ * Act 2: the exam revises the on-field read (better / confirmed / worse).
+ * Idempotent — a diagnosed injury is returned unchanged.
+ * @returns {Object} partial player update ({ injury, injuryReport })
+ */
+export function confirmDiagnosis(player, nowMs) {
+  const inj = player.injury;
+  if (!inj || inj.diagnosed) return {};
+  const v    = player._act2Variance || 'confirmed';
+  const mult = v === 'better' ? INJURY_ACT2_BETTER_MULT : v === 'worse' ? INJURY_ACT2_WORSE_MULT : 1;
+  const days = inj.severity === 'season' ? inj.days : Math.max(2, Math.round(inj.days * mult));
+  const type = INJURY_TYPES.find(t => t.id === inj.typeId) || { label: inj.label };
+  return {
+    injury:       { ...inj, days, diagnosed: true },
+    injuryReport: _generateInjuryReport(player, type, inj.severity, days, nowMs ?? inj.injuredAt),
+  };
+}
+
+/** Minimum IL stay for this player (10-day hitters, 15-day pitchers). */
+export function ilMinDays(player) {
+  return ['SP', 'RP'].includes(player?.pos) ? IL_MIN_DAYS_PITCHER : IL_MIN_DAYS_HITTER;
+}
+
+/** True when the physician will allow day-to-day management. */
+export function dayToDayAllowed(player) {
+  const inj = player?.injury;
+  return !!inj && inj.severity !== 'season' && inj.days <= INJURY_DTD_MAX_DAYS;
+}
+
+/**
+ * placeOnILUpdate(player)
+ * IL placement, backdated to the injury. Eligible to return after
+ * max(timeline, IL minimum) real days.
+ */
+export function placeOnILUpdate(player) {
+  const inj  = player.injury || {};
+  const days = Math.max(inj.days || 0, ilMinDays(player));
+  return {
+    group:  PLAYER_GROUP.IL,
+    isInjured: true,
+    injury: { ...inj, status: 'il', diagnosed: true, eligibleAt: (inj.injuredAt || 0) + days * MS_PER_DAY, returnAt: null },
+  };
+}
+
+/** Day-to-day: stays on the active roster, unavailable until returnAt. */
+export function dayToDayUpdate(player) {
+  const inj = player.injury || {};
+  return {
+    isInjured: true,
+    injury: { ...inj, status: 'dtd', diagnosed: true, returnAt: (inj.injuredAt || 0) + (inj.days || 0) * MS_PER_DAY, eligibleAt: null },
+  };
+}
+
+/** Fully healed and available (day-to-day return, or IL activation). */
+export function clearInjuryUpdate() {
+  return { isInjured: false, injury: null, injuryPenalty: null, _pendingILReturn: false, _act2Variance: null };
+}
+
+// CPU GMs decide at once: short timelines are managed day-to-day, the rest
+// go on the IL. (Their call-ups go through the same transaction clock.)
+function _cpuDisposition(player) {
+  const dx = { ...player, ...confirmDiagnosis(player, player.injury.injuredAt) };
+  const half = Math.floor(INJURY_DTD_MAX_DAYS / 2);
+  const choice = dx.injury.days <= half ? dayToDayUpdate(dx) : placeOnILUpdate(dx);
+  return { injuryReport: dx.injuryReport, ...choice };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -438,43 +447,12 @@ export function processFarmArcs(state, now = Date.now()) {
 // INTERNAL HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _checkTeamInjuries(rosterIds, players, gameIndex, isUserTeam, playerMutationsOut) {
-  const events = [];
+function _injuryProbability(player, role) {
+  const age = computeAge(player.dob);
 
-  for (const playerId of rosterIds) {
-    const player = players[playerId];
-    if (!player) continue;
-    if (player.isInjured || player.isSuspended || player.onPersonalLeave) continue;
-    if (player.group === PLAYER_GROUP.IL || player.group === PLAYER_GROUP.PRACTICE_SQUAD) continue;
-
-    const prob = _injuryProbability(player);
-    if (Math.random() >= prob) continue;
-
-    // Injury occurred
-    const mutation = injurePlayer(player, gameIndex);
-    playerMutationsOut[playerId] = mutation;
-
-    if (isUserTeam) {
-      events.push({
-        type:        'USER_INJURY',
-        playerId,
-        severity:    mutation._injurySeverity,
-        injuryType:  mutation._injuryType,
-        ilReturnGame: mutation.ilReturnGame,
-      });
-    }
-  }
-
-  return events;
-}
-
-function _injuryProbability(player) {
-  const age      = computeAge(player.dob);
-  const isPitcher = ['SP','RP'].includes(player.pos);
-
-  let base = isPitcher
-    ? (player.group === PLAYER_GROUP.STARTING_PITCHERS ? INJURY_PROB_SP_PER_START : INJURY_PROB_RP_PER_APP)
-    : INJURY_PROB_HITTER_PER_GAME;
+  let base = role === 'starter'  ? INJURY_PROB_SP_PER_START
+           : role === 'reliever' ? INJURY_PROB_RP_PER_APP
+           : INJURY_PROB_HITTER_PER_GAME;
 
   // Age modifier
   if (age >= 35) base += INJURY_AGE_MOD_35_PLUS;
@@ -512,9 +490,15 @@ function _rollILDays(severity) {
     moderate:    INJURY_IL_DAYS_MODERATE,
     significant: INJURY_IL_DAYS_SIGNIFICANT,
     season:      INJURY_IL_DAYS_SEASON,
+  INJURY_SEASON_ENDING_DAYS,
+  INJURY_DTD_MAX_DAYS,
+  INJURY_ACT2_BETTER_MULT,
+  INJURY_ACT2_WORSE_MULT,
+  IL_MIN_DAYS_HITTER,
+  IL_MIN_DAYS_PITCHER,
   };
+  if (severity === 'season') return INJURY_SEASON_ENDING_DAYS;
   const [min, max] = ranges[severity] || INJURY_IL_DAYS_MINOR;
-  if (min === max) return min; // season-ending
   return _rng(min, max);
 }
 
@@ -536,8 +520,7 @@ function _rollAct2Variance(severity) {
   return 'worse';                    // 45%: worse than Act 1 feared
 }
 
-function _generateInjuryReport(player, injuryType, severity, ilDays) {
-  const now         = Date.now();
+function _generateInjuryReport(player, injuryType, severity, ilDays, now) {
   const playerName  = player.name || 'Player';
   const label       = injuryType.label || 'injury';
   const weeksMin    = Math.ceil(ilDays / 7);
@@ -547,7 +530,9 @@ function _generateInjuryReport(player, injuryType, severity, ilDays) {
     generatedAt:  now,
     vagueText:    `${playerName} — upper body injury. Day-to-day.`,
     generalText:  `${playerName} — ${label.toLowerCase()}. Estimated ${weeksMin}–${weeksMax} weeks.`,
-    detailedText: `Grade ${_severityGrade(severity)} ${label.toLowerCase()}. Targeting return in ${ilDays} days. ${_prognosisText(severity)}`,
+    detailedText: severity === 'season'
+      ? `Grade ${_severityGrade(severity)} ${label.toLowerCase()}. ${_prognosisText(severity)}`
+      : `Grade ${_severityGrade(severity)} ${label.toLowerCase()}. Targeting return in ${ilDays} days. ${_prognosisText(severity)}`,
     severity,
     injuryTypeId: injuryType.id,
     ilDays,

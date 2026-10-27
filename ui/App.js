@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r58';
+export const APP_VERSION = 'tfo-v2-r59';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -456,8 +456,10 @@ export async function init() {
   switchTab(openInbox ? 'decisions' : 'dashboard');
   if (openInbox) history.replaceState(null, '', location.pathname);
 
-  // Deliver anything that came due while the app was closed, then make sure
-  // the push worker has this device's current schedule.
+  // Catch the roster clock up to now and deliver anything that came due
+  // while the app was closed, then make sure the push worker has this
+  // device's current schedule.
+  await _advanceRosterClock();
   await _releaseDueCards({ quiet: true });
   _syncPush({ immediate: true });
 
@@ -732,6 +734,23 @@ async function _releaseDueCards({ quiet = false } = {}) {
   return released;
 }
 
+/**
+ * _advanceRosterClock()
+ * Runs the league's roster clock up to now (GameEngine.advanceClock, §65) and
+ * tells the screens when a roster or the inbox changed — a player reported,
+ * a deadline passed, a card was withdrawn because its situation is gone.
+ */
+async function _advanceRosterClock() {
+  if (!StateManager.get()) return;
+  const { advanceClock } = await import('../engine/GameEngine.js');
+  const res = advanceClock(Date.now());
+  if (!res.changed) return;
+  if (res.events.length) EventBus.emit('roster:changed', { source: 'clock', events: res.events });
+  EventBus.emit('inbox:changed', { source: 'clock' });
+  updateHeader(StateManager.get());
+  _syncPush();
+}
+
 /** Send the current card schedule to the push worker (debounced). */
 function _syncPush(opts) {
   import('./PushClient.js')
@@ -754,7 +773,9 @@ export function startTick() {
     const state   = StateManager.get();
     if (!state) return;
 
-    // Timed inbox delivery (§61) — independent of whether a game is live.
+    // The roster clock (§65): trades, arrivals, IL clearances, deadlines —
+    // then timed inbox delivery (§61). Both independent of a live game.
+    await _advanceRosterClock();
     await _releaseDueCards();
 
     const gameIdx = state?.currentGameIndex ?? 0;

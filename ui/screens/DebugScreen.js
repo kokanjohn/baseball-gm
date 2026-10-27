@@ -471,12 +471,18 @@ function _wireActions(overlay, state) {
     const s        = StateManager.get();
     const active   = (s.userTeam?.rosterIds || [])
       .map(id => s.players[id])
-      .filter(p => p && !p.isInjured && !p.isSuspended);
+      .filter(p => p && !p.isInjured && !p.injury && !p.isSuspended && p.group !== 'il');
     if (active.length === 0) { alert('No active players to injure.'); return; }
     const target = active[Math.floor(Math.random() * active.length)];
     try {
-      const { deliverInjuryAct1 } = await import('../../engine/CardEngine.js');
-      deliverInjuryAct1(target.id);
+      // The real injury path (§65): 'evaluating' now, Act 1 in the inbox, then
+      // the two-act flow and the roster clock.
+      const { debugInjure } = await import('../../engine/GameEngine.js');
+      const { releaseDueCards } = await import('../../engine/CardEngine.js');
+      if (!debugInjure(target.id, Date.now())) { alert(`Could not injure ${target.name}.`); return; }
+      releaseDueCards();
+      EventBus.emit('roster:changed', { source: 'debug' });
+      EventBus.emit('card:delivered', { source: 'debug' });
       closeDebug();
       EventBus.emit('nav:switchTab', { tab: 'decisions' });
     } catch (e) {

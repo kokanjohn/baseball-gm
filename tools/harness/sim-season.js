@@ -15,7 +15,8 @@
 
 import { clock, seedRandom } from './shims.js';           // MUST be first (installs globals)
 import * as SM from '../../store/StateManager.js';
-import { startNewGame, tick, commitGame, buildCardContext } from '../../engine/GameEngine.js';
+import { startNewGame, tick, commitGame, buildCardContext, advanceClock, gmCallUp } from '../../engine/GameEngine.js';
+import { getRosterNeeds, auditRosters, rankCallupCandidates } from '../../engine/TransactionEngine.js';
 import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
@@ -27,7 +28,7 @@ import {
   NEW_TEAM_SEED_CARDS,
 } from '../../data/constants.js';
 import {
-  reconcileRoster, applyRosterMutation, eligibleSlotsFor,
+  reconcileRoster, applyRosterMutation, eligibleSlotsFor, pendingArrivals, nextCalendarDay,
 } from '../../engine/RosterEngine.js';
 
 const GAMES = parseInt(process.argv[2] || '20', 10);
@@ -49,6 +50,78 @@ const summarize = () => {
   return passed === results.length;
 };
 
+// ── §65: a simulated GM living between games ─────────────────────
+// Walks the virtual clock through every card delivery before first pitch so
+// the GM can read and answer roster cards in real time — sometimes in the
+// inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
+// deadline then runs). After every action the inbox must have no ghosts.
+const gm = { seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [] };
+function ghostCards(st) {
+  const needs = getRosterNeeds(st, 'user');
+  const queue = new Set(st.ilReturnQueue || []);
+  return getInbox().filter(c => {
+    const key = c._rosterKey || '';
+    if (key.startsWith('injury:'))  return st.players[c._targetPlayerId]?.injury?.status !== 'evaluating';
+    if (key.startsWith('ilreturn:')) return !queue.has(c._targetPlayerId);
+    if (c._rosterKind === 'need') {
+      const [, dl, i] = key.split(':');
+      return !(needs.short > Number(i) && Number(dl) === needs.deadlineAt);
+    }
+    if (c._tradeOffer) {
+      const team = st.leagueTeams.find(t => t.id === c._proposingTeamId);
+      return !team || !c._tradeOffer.outgoingIds.every(id => st.userTeam.rosterIds.includes(id))
+          || !c._tradeOffer.incomingIds.every(id => team.rosterIds.includes(id));
+    }
+    return false;
+  });
+}
+function assertNoGhosts(where) {
+  const g = ghostCards(SM.get());
+  if (g.length) gm.ghostFails.push(`${where}: ${g.map(c => c.cardId).join(',')}`);
+}
+function gmActs() {
+  // Re-read the inbox after every action: one decision can withdraw others.
+  for (let guard = 0; guard < 50; guard++) {
+    const c = getInbox().find(x => !gm.seen.has(x.instanceId)
+      && (x.autoResolve === 'roster' || !!x._rosterKey || (!!x._tradeOffer && !x._seed)));
+    if (!c) break;
+    const isTrade  = !!c._tradeOffer && !c._seed;
+    gm.seen.add(c.instanceId);
+    if (c.autoResolve === 'skip') { resolveCard(c.instanceId, 'yes'); continue; }   // notices
+    if (isTrade) {
+      if (Math.random() < 0.35) {
+        const before = JSON.parse(JSON.stringify(c._tradeOffer));
+        resolveCard(c.instanceId, 'yes');
+        advanceClock(clock.get());
+        gm.tradesAccepted.push({ offer: before, at: clock.get(), team: c._proposingTeamId });
+      }
+      continue;
+    }
+    const r = Math.random();
+    if (c._rosterKind === 'need' && r < 0.3) {
+      // Team screen path: pick from the dashed spot instead of the card.
+      const pick = rankCallupCandidates(SM.get(), 'user', c._need)[1] || rankCallupCandidates(SM.get(), 'user', c._need)[0];
+      if (pick && gmCallUp(pick.id, clock.get()).ok) { gm.teamScreen++; assertNoGhosts('after Team-screen call-up'); continue; }
+    }
+    if (r < 0.75) { resolveCard(c.instanceId, Math.random() < 0.6 ? 'yes' : 'no'); gm.acted++; }
+    else gm.ignored++;
+    advanceClock(clock.get());
+    assertNoGhosts(`after ${c.cardId}`);
+  }
+}
+function stepTo(t) {
+  for (let guard = 0; guard < 400; guard++) {
+    const st = SM.get();
+    const next = (st.scheduledCards || []).map(c => c.deliverAtMs)
+      .filter(x => x > clock.get() && x < t).sort((a, b) => a - b)[0];
+    if (next === undefined) break;
+    clock.set(next + 1000);
+    advanceClock(clock.get());
+    releaseDueCards();
+    gmActs();
+  }
+}
+
 // ── Drive one game to FINAL by advancing the virtual clock ───────
 function playToFinal(idx) {
   for (let guard = 0; guard < 6000; guard++) {
@@ -58,6 +131,9 @@ function playToFinal(idx) {
 
     // Advance the clock precisely to the next event, then tick once.
     if (g.status === GAME_STATUS.SCHEDULED || g.status === GAME_STATUS.PRE_GAME_WATCH) {
+      // Live the day before first pitch (cards, decisions, deadlines).
+      advanceClock(clock.get()); releaseDueCards(); gmActs();
+      stepTo(g.gameTime || clock.get());
       clock.set((g.gameTime || clock.get()) + 60_000);
     } else if (g.status === GAME_STATUS.LIVE) {
       const np = g.plays?.[g.livePlayIndex];
@@ -77,6 +153,28 @@ function playToFinal(idx) {
 function activeCount(state) {
   const p = state.players;
   return (state.userTeam.rosterIds || []).filter(id => p[id] && p[id].group !== 'il').length;
+}
+// §65: active + already on the way (traded / called up, reporting tomorrow).
+function rosterSpotsHeld(state, teamId) {
+  const team = teamId === 'user' ? state.userTeam : state.leagueTeams.find(t => t.id === teamId);
+  const active = (team.rosterIds || []).filter(id => state.players[id] && state.players[id].group !== 'il').length;
+  return active + pendingArrivals(state, teamId).length;
+}
+// All arrivals ever seen (the ledger prunes old records).
+const txSeen = new Map();
+function recordTx(st) { for (const t of st.transactions || []) txSeen.set(t.id, { ...t }); }
+// Was `playerId` with `teamId` at moment `atMs`? (false while in transit to it,
+// or after leaving it.) Built from every arrival record.
+function onTeamAt(playerId, teamId, atMs) {
+  const moves = [...txSeen.values()].filter(t => t.kind === 'arrival' && t.playerId === playerId)
+    .sort((a, b) => a.createdAt - b.createdAt);
+  let team = null, known = false;
+  for (const m of moves) {
+    if (m.createdAt > atMs) break;
+    known = true;
+    team = m.effectiveAt <= atMs && m.status === 'done' ? m.teamId : null;   // in transit = nobody's
+  }
+  return known ? team === teamId : true;   // no move before atMs → original team (checked elsewhere)
 }
 
 // ── Batch 2: roster-integrity fault injection ────────────────────
@@ -98,7 +196,7 @@ function forceInjureSlot(state, team, slotLabel) {
   const entry = (team.lineupSlots || []).find(s => s.slot === slotLabel && s.playerId);
   if (!entry) return null;
   const p = state.players[entry.playerId];
-  p.isInjured = true; p.group = 'il'; p.ilReturnGame = (state.currentGameIndex || 0) + 20;
+  p.isInjured = true; p.group = 'il'; p.injury = { status: 'il', days: 20, injuredAt: clock.get(), eligibleAt: clock.get() + 20 * 86400000 };
   return entry.playerId;
 }
 function assertTeamIntegrity(state, team, label) {
@@ -107,8 +205,9 @@ function assertTeamIntegrity(state, team, label) {
   for (const s of (team.lineupSlots || [])) {
     if (!s.playerId) continue;
     const p = state.players[s.playerId];
+    // An out-of-position fill is legal only as the manager's emergency move.
     if (!p || p.isInjured || G(p) !== 'bh' || !team.rosterIds.includes(s.playerId)
-        || seen.has(s.playerId) || !eligibleSlotsFor(p).includes(s.slot)) slotsOk = false;
+        || seen.has(s.playerId) || !(eligibleSlotsFor(p).includes(s.slot) || s.emergency)) slotsOk = false;
     seen.add(s.playerId);
   }
   for (const id of (team.rotation?.order || [])) {
@@ -142,7 +241,7 @@ function runFaultInjection(base) {
     const st = JSON.parse(JSON.stringify(base));
     const spId = st.userTeam.rotation.order[1];
     const p = st.players[spId];
-    p.isInjured = true; p.group = 'il'; p.ilReturnGame = (st.currentGameIndex || 0) + 20;
+    p.isInjured = true; p.group = 'il'; p.injury = { status: 'il', days: 20, injuredAt: clock.get(), eligibleAt: clock.get() + 20 * 86400000 };
     applyRosterMutation(st, reconcileRoster(st, 'user'));
     check('fault(user SP): injured SP dropped from rotation.order',
           !st.userTeam.rotation.order.includes(spId));
@@ -159,11 +258,13 @@ function runFaultInjection(base) {
     if (cpu) {
       forceInjureSlot(st, cpu, 'C') || forceInjureSlot(st, cpu, 'SS')
         || forceInjureSlot(st, cpu, 'OF');
-      const mut = reconcileRoster(st, cpu.id, { autoManage: true });
+      const mut = reconcileRoster(st, cpu.id, { autoManage: true, atMs: clock.get() });
       applyRosterMutation(st, mut);
       const t = teamOf(st, cpu.id);
-      check('fault(cpu hitter): active roster back to 28',
-            nonIL(st, t) === ROSTER_LIMITS.ACTIVE_TOTAL, `got ${nonIL(st, t)}`);
+      check('fault(cpu hitter): active + arriving back to 28 (call-up reports tomorrow)',
+            rosterSpotsHeld(st, cpu.id) === ROSTER_LIMITS.ACTIVE_TOTAL, `got ${rosterSpotsHeld(st, cpu.id)}`);
+      check('fault(cpu hitter): lineup still fields nine (manager covers today)',
+            t.lineupSlots.every(sl => sl.playerId));
       assertTeamIntegrity(st, t, 'fault(cpu hitter)');
     }
   }
@@ -178,12 +279,12 @@ function runFaultInjection(base) {
       if (gone) {
         t0.rosterIds = t0.rosterIds.filter(id => id !== gone);
         delete st.players[gone];
-        applyRosterMutation(st, reconcileRoster(st, cpu.id, { autoManage: true }));
+        applyRosterMutation(st, reconcileRoster(st, cpu.id, { autoManage: true, atMs: clock.get() }));
         const t = teamOf(st, cpu.id);
         check('fault(cpu departure): departed id gone from lineup',
               !t.lineupSlots.some(s => s.playerId === gone));
-        check('fault(cpu departure): active roster back to 28',
-              nonIL(st, t) === ROSTER_LIMITS.ACTIVE_TOTAL, `got ${nonIL(st, t)}`);
+        check('fault(cpu departure): active + arriving back to 28',
+              rosterSpotsHeld(st, cpu.id) === ROSTER_LIMITS.ACTIVE_TOTAL, `got ${rosterSpotsHeld(st, cpu.id)}`);
         assertTeamIntegrity(st, t, 'fault(cpu departure)');
       }
     }
@@ -290,6 +391,7 @@ async function main() {
 
   // ── Play through GAMES games ──────────────────────────────────
   const target = Math.min(GAMES, s0.schedule.length);
+  const injuriesSeen = new Map();
   let committed = 0, crossedToRegular = false, phaseAtCross = null, faultDone = false;
   let gamesWithRelief = 0; // r51: games where at least one side used >1 pitcher
   let seasonRuns = 0, seasonHits = 0, seasonGames = 0; // §60 run environment
@@ -328,6 +430,7 @@ async function main() {
     }
 
     await commitGame(idx);
+    releaseDueCards();   // the App's next tick
     const post = SM.get();
     const g = post.schedule[idx];
     check(`game ${idx} committed (result+score)`,
@@ -372,10 +475,45 @@ async function main() {
     // roster-integrity canary — phase-aware:
     //   SPRING: 28–38 (28 + up to 10 invitees).  REGULAR: exactly 28 (post-cuts).
     const ac = activeCount(post);
+    if (process.env.DBG) {
+      const ids = new Set(post.userTeam.rosterIds.filter(id => post.players[id].group !== 'il'));
+      const gone = [...(globalThis.__prevActive || [])].filter(id => !ids.has(id));
+      const joined = [...ids].filter(id => !(globalThis.__prevActive || new Set()).has(id));
+      if (joined.length && idx > 9) console.log(`g${idx}: joined:`, joined.map(id => post.players[id].name).join(', '), `| active ${ids.size} arriving ${pendingArrivals(post, 'user').length}`);
+      if (gone.length) console.log(`g${idx}: left active:`, gone.map(id => { const p = post.players[id]; return `${p.name}/${p.pos} grp=${p.group} team=${p.teamId} inj=${p.injury?.status}`; }).join(' | '));
+      globalThis.__prevActive = ids;
+    }
     if (post.phase === PHASE.SPRING_TRAINING) {
       check(`game ${idx} (spring): active roster 28–38`, ac >= ROSTER_LIMITS.ACTIVE_TOTAL && ac <= ROSTER_LIMITS.SPRING_TOTAL, `got ${ac}`);
     } else {
-      check(`game ${idx} (${post.phase}): active roster = ${ROSTER_LIMITS.ACTIVE_TOTAL}`, ac === ROSTER_LIMITS.ACTIVE_TOTAL, `got ${ac}`);
+      const held = rosterSpotsHeld(post, 'user');
+      check(`game ${idx} (${post.phase}): active + arriving = ${ROSTER_LIMITS.ACTIVE_TOTAL}`, held === ROSTER_LIMITS.ACTIVE_TOTAL,
+            `active ${ac} + arriving ${held - ac}; dl ${post.userTeam.vacancyDeadlineAt}; farm ${post.userTeam.farmIds.map(id => post.players[id]?.pos).join('')}; phase ${post.phase}; clock ${clock.get()} next ${post.schedule[post.currentGameIndex]?.gameTime}`);
+      const cpuBad = post.leagueTeams.filter(t => rosterSpotsHeld(post, t.id) !== ROSTER_LIMITS.ACTIVE_TOTAL);
+      check(`game ${idx}: every CPU club active + arriving = 28`, cpuBad.length === 0,
+            cpuBad.map(t => `${t.abbr} ${rosterSpotsHeld(post, t.id)}`).join(', '));
+      check(`game ${idx}: every lineup fields nine`, [post.userTeam, ...post.leagueTeams]
+        .every(t => (t.lineupSlots || []).filter(sl => sl.playerId).length === 9));
+    }
+    // §65: one player, one place — every team, every game.
+    const audit = auditRosters(post);
+    check(`game ${idx}: no player on two rosters / stranded in transit`, audit.length === 0, audit.slice(0, 4).join('; '));
+    // §65: nobody plays for a club he was not with at first pitch.
+    recordTx(post);
+    if (box && box.away && box.home && g.gameTime) {
+      const oppT = post.leagueTeams.find(t => t.name === g.opponent);
+      const userSide = box.userIsHome ? box.home : box.away;
+      const oppSide  = box.userIsHome ? box.away : box.home;
+      const wrong = [
+        ...[...userSide.hitters, ...userSide.pitchers].filter(x => !onTeamAt(x.id, 'user', g.gameTime)),
+        ...(oppT ? [...oppSide.hitters, ...oppSide.pitchers].filter(x => !onTeamAt(x.id, oppT.id, g.gameTime)) : []),
+      ];
+      check(`game ${idx}: nobody plays before reporting / after leaving`, wrong.length === 0,
+            wrong.map(x => x.name).join(', '));
+    }
+    assertNoGhosts(`after game ${idx}`);
+    for (const pl of Object.values(post.players)) {
+      if (pl.injury) injuriesSeen.set(`${pl.id}:${pl.injury.injuredAt}`, { team: pl.teamId, status: pl.injury.status });
     }
 
     // phase-transition canary: once the NEXT game is a regular-season game,
@@ -402,6 +540,46 @@ async function main() {
   }
 
   check(`committed ${committed} game(s)`, committed > 0, `${committed}`);
+
+  // ── §65: transactions, injuries and vacancies over the run ─────────────────
+  {
+    const st = SM.get();
+    recordTx(st);
+    check('roster cards: no ghost message at any point (inbox ⇄ Team screen in sync)',
+          gm.ghostFails.length === 0, gm.ghostFails.slice(0, 5).join(' | '));
+    const regGames = Math.max(0, committed - SPRING_TRAINING_GAME_COUNT);
+    if (regGames >= 60) {
+      const perTeam = new Map();
+      for (const { team } of injuriesSeen.values()) perTeam.set(team, (perTeam.get(team) || 0) + 1);
+      const teams = ['user', ...st.leagueTeams.map(t => t.id)];
+      const counts = teams.map(t => perTeam.get(t) || 0);
+      const scaled = counts.map(c => c * 142 / regGames);
+      // Every club that actually plays a full slate gets hurt. (Until Batch 2
+      // fixes the CPU schedule some clubs play only ~40 games, so require 8/10.)
+      check(`injuries: clubs get hurt (${counts.join('/')})`, counts.filter(c => c > 0).length >= 8);
+      const avg = scaled.reduce((a, b) => a + b, 0) / scaled.length;
+      check(`injuries: ~${avg.toFixed(1)} per club per 142 games (8–30)`, avg >= 8 && avg <= 30);
+      const userCards = (st.inbox || []).filter(c => c.cardId === 'injury_act2').length;
+      check(`injuries: user diagnoses delivered (${userCards})`, userCards > 0);
+    }
+    const trades = [...txSeen.values()].filter(t => t.kind === 'trade');
+    check('trades: every accepted trade executed or was voided (none stuck pending)',
+          trades.every(t => t.status !== 'pending' || t.effectiveAt > clock.get()),
+          trades.filter(t => t.status === 'pending').map(t => t.id).join(','));
+    for (const acc of gm.tradesAccepted) {
+      const tx = trades.find(t => t.fromTeamId === acc.team && t.createdAt === acc.at);
+      if (!tx || tx.status !== 'done') continue;
+      const arrivals = [...txSeen.values()].filter(t => t.kind === 'arrival' && t.reason === 'trade'
+        && [...acc.offer.incomingIds, ...acc.offer.outgoingIds].includes(t.playerId) && t.createdAt === tx.doneAt);
+      check(`trade ${tx.id.slice(-13)}: every player reports the next calendar day`,
+            arrivals.length === acc.offer.incomingIds.length + acc.offer.outgoingIds.length
+            && arrivals.every(a => a.effectiveAt === nextCalendarDay(tx.doneAt)));
+    }
+    if (committed >= 40) {
+      check(`GM simulation exercised inbox + Team screen + deadlines (acted ${gm.acted}, team screen ${gm.teamScreen}, ignored ${gm.ignored})`,
+            gm.acted > 0 && gm.ignored >= 0);
+    }
+  }
 
   // ── §60: EVERY deliverable pool card resolves fully (not just those drawn) ──
   {
@@ -443,8 +621,10 @@ async function main() {
     const arrived = (st.inbox || []).filter(c => Number.isFinite(c.arrivedAtMs));
     check(`timed delivery: cards arrive over time (${arrived.length} released)`,
           arrived.length > 20, `${arrived.length}`);
-    const quiet = arrived.filter(c => inQuietHours(c.arrivedAtMs, st.push?.quietStart, st.push?.quietEnd));
-    check('timed delivery: no card arrives during quiet hours', quiet.length === 0,
+    // Pool cards are planned outside quiet hours. Real-time roster cards (an
+    // injury after a night game) arrive when they happen; their ALERT waits.
+    const quiet = arrived.filter(c => !c._rosterKey && inQuietHours(c.arrivedAtMs, st.push?.quietStart, st.push?.quietEnd));
+    check('timed delivery: no pool card arrives during quiet hours', quiet.length === 0,
           quiet.slice(0, 5).map(c => new Date(c.arrivedAtMs).toISOString()).join(','));
     const hours = new Set(arrived.map(c => new Date(c.arrivedAtMs).getHours()));
     check(`timed delivery: arrival times vary (${hours.size} distinct hours)`, hours.size >= 8);
@@ -453,6 +633,8 @@ async function main() {
     check('timed delivery: seed cards are never pushed',
           !getPushSchedule(st, 0).some(i => (st.scheduledCards || []).find(c => c.instanceId === i.id)?._seed));
     const ps = getPushSchedule(st, clock.get());
+    check('push schedule: no alert sounds during quiet hours',
+          getPushSchedule(st, 0).every(i => !inQuietHours(i.deliverAt, st.push?.quietStart, st.push?.quietEnd)));
     check('push schedule: only future items, each with id/title/body',
           ps.every(i => i.deliverAt > clock.get() - 60000 && i.id && i.title && i.body), `${ps.length} items`);
 
@@ -509,7 +691,7 @@ async function main() {
             || !snap.incomingPlayers?.every(p => p.teamId === c._proposingTeamId);
       });
       check('inbox: every CPU offer sends a user player and receives a CPU player',
-            badDir.length === 0, badDir.map(c => c.cardId).join(','));
+            badDir.length === 0, badDir.map(c => `${c.cardId} out:${c._tradeEval?.outgoingPlayers?.map(p => p.teamId)} in:${c._tradeEval?.incomingPlayers?.map(p => p.teamId)}`).join(','));
     }
   }
   // r51: relievers must actually enter — most full games hook the starter.
@@ -530,6 +712,15 @@ async function main() {
           SM.get().phase === PHASE.PLAYOFF_BRACKET_BUILD, `phase=${SM.get().phase}`);
   }
 
+  if (process.env.DBG) {
+    const st = SM.get();
+    for (const t of [st.userTeam, ...st.leagueTeams]) {
+      const f = (t.farmIds || []).map(id => st.players[id]);
+      console.log(`${t.abbr || 'USR'} farm H${f.filter(p => !['SP','RP'].includes(p.pos)).length} P${f.filter(p => ['SP','RP'].includes(p.pos)).length}`);
+    }
+    console.log('FA pool', (st.freeAgentPool || []).length, 'waivers', (st.waiverPool || []).length,
+      (st.freeAgentPool || []).map(id => { const p = st.players[id]; return `${p.pos}/${p.tier}/${p.teamId}/${p.isInjured ? 'inj' : ''}`; }).join(' '));
+  }
   const ok = summarize();
   console.log(`\nseed=${SEED} games=${target}`);
   process.exit(ok ? 0 : 1);

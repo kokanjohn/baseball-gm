@@ -109,7 +109,10 @@ export function createPlayer(config) {
     teamId = null,
   } = config;
 
-  const isPitcher = _isPitcherGroup(group);
+  // Position decides hitter vs pitcher. (Deciding by group made every farm
+  // HITTER a pitcher — PRACTICE_SQUAD holds both — so farm call-ups came up
+  // with stuff/control/stamina and no contact/power/speed.)
+  const isPitcher = pos ? ['SP', 'RP'].includes(pos) : _isPitcherGroup(group);
   const dob       = _generateDob(ageMin, ageMax);
   const age       = computeAge(dob);
   const trait     = _generateTrait(age, targetOvr);
@@ -164,10 +167,9 @@ export function createPlayer(config) {
     isTraining:       false,
     onPersonalLeave:  false,
     onWaivers:        false,
-    _pendingDeparture:false,
 
-    // IL tracking
-    ilReturnGame: null,
+    // Injury timeline on the real clock (§65) — null when healthy.
+    injury: null,
 
     // Stats
     stats,

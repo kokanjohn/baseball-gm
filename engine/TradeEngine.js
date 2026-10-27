@@ -7,8 +7,8 @@
  *   - No cash in trades (LOCKED — Section 9.1). Fairness communicated via rating signal.
  *   - evaluateTrade() is the single place trade value is assessed — used for both
  *     CPU-proposed trades and user-initiated trades. No special casing.
- *   - executeTrade() returns mutations using the markPendingDeparture / pendingAcquisitions
- *     pattern — actual roster swap happens at commitGame() via drainPendingTrades().
+ *   - Accepting a trade queues ONE ledger transaction (queueTrade); the roster
+ *     moves happen on the real-clock transaction ledger (TransactionEngine, §65).
  *   - Trade deadline window (games 88–92) modulates CPU aggressiveness.
  *
  * Section references: Section 9 (trade system), Section 22 (GM relationship)
@@ -293,7 +293,7 @@ export function generateCPUTradeOffer(teamId, state, context = {}) {
   const offering = _assembleCPUOffer(team, target, state, gmRel, isDeadlineWindow);
   if (!offering) return null;
 
-  // Direction is from the USER's perspective (see evaluateTrade / executeTrade):
+  // Direction is from the USER's perspective (see evaluateTrade / queueTrade):
   //   incomingIds = players the user RECEIVES (the CPU's offered player)
   //   outgoingIds = players the user SENDS    (the user player the CPU targets)
   // This was previously inverted, so accepting would have "acquired" the user's
@@ -322,101 +322,56 @@ export function generateCPUTradeOffer(teamId, state, context = {}) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * executeTrade(offer, state)
- * Prepares a trade for game-day execution.
- * Does NOT immediately swap rosters — uses pending departure pattern.
- * GameEngine calls drainPendingTrades() at commitGame() to finalize.
+ * queueTrade(offer, proposingTeamId, atMs)
+ * Accepting a trade records ONE 'trade' transaction (§65). It executes when
+ * the roster clock reaches `atMs` — immediately between games, or right after
+ * the final out if a game is in progress (the clock never moves mid-game).
+ * TransactionEngine.applyDue() then moves every player in the deal off his
+ * roster and puts him IN_TRANSIT, reporting to his new team the next
+ * calendar day. Pure.
  *
  * @param {Object} offer  — { incomingIds, outgoingIds, proposingTeamId }
- * @param {Object} state
- * @returns {Object} mutations
+ * @param {String} proposingTeamId
+ * @param {Number} atMs   — the real moment the GM accepted
+ * @returns {Object} transaction record
  */
-export function executeTrade(offer, state) {
-  const { incomingIds = [], outgoingIds = [], proposingTeamId } = offer;
-
-  const playerMutations = {};
-
-  // Mark outgoing players as pending departure
-  for (const playerId of outgoingIds) {
-    const player = state.players[playerId];
-    if (!player) continue;
-    playerMutations[playerId] = {
-      _pendingDeparture: true,
-    };
-  }
-
-  // Stage incoming players as pending acquisitions
-  const pendingAcquisitions = [...(state._pendingAcquisitions || [])];
-  for (const playerId of incomingIds) {
-    const player = state.players[playerId];
-    if (!player) continue;
-    pendingAcquisitions.push({
-      ...player,
-      id:     playerId,
-      teamId: 'user',
-      // GM relationship starts slightly lower for newly acquired players (Section 22.3)
-      gmRelationship: player._previouslyWithOrg
-        ? Math.min(100, (player.gmRelationship || GM_RELATIONSHIP_DEFAULT) + 5)
-        : 45,
-      _previouslyWithOrg: player.teamId === 'user' || player._previouslyWithOrg,
-      _pendingDeparture:  false,
-    });
-  }
-
-  // Update the CPU team roster (remove incoming, add outgoing)
-  const leagueTeams = state.leagueTeams ? [...state.leagueTeams] : [];
-  const teamIdx     = leagueTeams.findIndex(t => t.id === proposingTeamId);
-
-  if (teamIdx >= 0) {
-    const team        = { ...leagueTeams[teamIdx] };
-    const newRosterIds = team.rosterIds.filter(id => !incomingIds.includes(id));
-    for (const playerId of outgoingIds) {
-      newRosterIds.push(playerId);
-    }
-    team.rosterIds        = newRosterIds;
-    leagueTeams[teamIdx]  = team;
-
-    // Update player teamIds
-    for (const playerId of incomingIds) {
-      playerMutations[playerId] = {
-        ...(playerMutations[playerId] || {}),
-        teamId: 'user',
-      };
-    }
-    for (const playerId of outgoingIds) {
-      playerMutations[playerId] = {
-        ...(playerMutations[playerId] || {}),
-        teamId: proposingTeamId,
-      };
-    }
-  }
-
-  // gmRelationship boost for completed trade (Section 22.5)
-  const newGmRels = { ...(state.userTeam.gmRelationships || {}) };
-  if (proposingTeamId && proposingTeamId !== 'user') {
-    newGmRels[proposingTeamId] = Math.min(100,
-      (newGmRels[proposingTeamId] ?? GM_RELATIONSHIP_DEFAULT) + 1
-    );
-  }
-
+export function queueTrade(offer, proposingTeamId, atMs) {
   return {
-    players:              playerMutations,
-    _pendingAcquisitions: pendingAcquisitions,
-    leagueTeams,
-    userTeam: {
-      gmRelationships: newGmRels,
+    id:          `tx-trade-${proposingTeamId}-${atMs}`,
+    kind:        'trade',
+    teamId:      'user',
+    fromTeamId:  proposingTeamId,
+    offer: {
+      incomingIds: [...(offer.incomingIds || [])],
+      outgoingIds: [...(offer.outgoingIds || [])],
     },
+    createdAt:   atMs,
+    effectiveAt: atMs,
+    status:      'pending',
   };
 }
 
 /**
- * deferTrade(offer, state)
- * Same as executeTrade but marks the trade as game-day-deferred.
- * Used when a trade is accepted mid-game — roster swap happens at commit.
- * This is the normal path — same as executeTrade since it uses pending departures.
+ * tradePlayerPatches(state, tx)
+ * The player-level effects of an executed trade (relationship reset for the
+ * new arrivals). Used by TransactionEngine when the trade executes. Pure.
  */
-export function deferTrade(offer, state) {
-  return executeTrade(offer, state);
+export function tradePlayerPatches(state, tx) {
+  const patches = {};
+  for (const id of tx.offer.incomingIds) {
+    const p = state.players[id];
+    if (!p) continue;
+    // GM relationship starts slightly lower for newly acquired players (Section 22.3)
+    patches[id] = {
+      gmRelationship: p._previouslyWithOrg
+        ? Math.min(100, (p.gmRelationship || GM_RELATIONSHIP_DEFAULT) + 5)
+        : 45,
+    };
+  }
+  for (const id of tx.offer.outgoingIds) {
+    if (state.players[id]) patches[id] = { _previouslyWithOrg: true };
+  }
+  return patches;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -505,7 +460,7 @@ function _identifyCPUNeed(team, state) {
 function _findTradeTarget(need, state) {
   const userRoster = state.userTeam.rosterIds
     .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && !p._pendingDeparture);
+    .filter(p => p && !p.isInjured);
 
   const isPitcher = need === 'starters' || need === 'bullpen';
 

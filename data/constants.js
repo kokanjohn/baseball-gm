@@ -111,6 +111,10 @@ export const PLAYER_GROUP = Object.freeze({
   PRACTICE_SQUAD:   'pp',   // farm/minors
   PITCHER_BENCH:    'pb',   // 2 SP bench + 2 RP bench (not on active rotation)
   IL:               'il',
+  // Between teams: traded or called up, reporting the next calendar day (§65).
+  // On no roster or farm list; player.teamId is the DESTINATION and exactly
+  // one pending 'arrival' transaction in state.transactions carries him.
+  IN_TRANSIT:       'transit',
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -1123,6 +1127,56 @@ export const INJURY_IL_DAYS_MINOR          = [7,  14];
 export const INJURY_IL_DAYS_MODERATE       = [15, 30];
 export const INJURY_IL_DAYS_SIGNIFICANT    = [31, 60];
 export const INJURY_IL_DAYS_SEASON         = [999, 999]; // rest of season
+
+// ── Real-clock injury timeline (§65) ─────────────────────────
+// Injury lengths are REAL days measured from the moment of injury (one game
+// per real day). The IL has a minimum stay, like MLB's 10-day (position
+// players) and 15-day (pitchers) lists; an IL stint is backdated to the
+// injury, so a 6-day hamstring still costs a hitter 10 days on the IL.
+export const IL_MIN_DAYS_HITTER            = 10;
+export const IL_MIN_DAYS_PITCHER           = 15;
+// "Season-ending" is stored as a long real-day stint so every timeline stays
+// numeric; the offseason clears all injuries anyway.
+export const INJURY_SEASON_ENDING_DAYS     = 200;
+// Day-to-day is only offered when the confirmed timeline is this short —
+// beyond it the physician will not sign off on keeping him active.
+export const INJURY_DTD_MAX_DAYS           = 10;
+// Act 2 diagnosis can revise the timeline (Act 1 is the on-field read).
+export const INJURY_ACT2_BETTER_MULT       = 0.6;
+export const INJURY_ACT2_WORSE_MULT        = 1.4;
+// Act 1 choice: MRI tonight (diagnosis in 60–120 min, so a move made before
+// midnight reports tomorrow) vs. wait for the morning exam (diagnosis 9:00–10:30).
+export const INJURY_MRI_COST_K             = 15;      // $15K, charged to operating budget
+export const INJURY_MRI_RESULT_MIN_MS      = 60 * 60_000;
+export const INJURY_MRI_RESULT_MAX_MS      = 120 * 60_000;
+export const INJURY_MORNING_EXAM_HOUR      = 9;       // local, + up to 90 min
+
+// ── Roster transactions on a real clock (§65) ────────────────
+// Every arrival — traded player, farm call-up — reports the next calendar
+// day (local midnight after the move). Roster decisions on open spots are
+// due this long before the next first pitch; after that the field manager
+// makes the call-up himself (by position and seniority, not best rating)
+// and the front office takes a small hit for not acting.
+export const ROSTER_DECISION_LEAD_MS       = 60 * 60_000;   // 1 hour before first pitch
+export const MANAGER_FILL_PENALTY          = Object.freeze({ ownerTrust: -2, atmosphere: -1 });
+// Fallback length of a game when its plays are not available (3 hours).
+export const GAME_DURATION_FALLBACK_MS     = 3 * 60 * 60_000;
+// Waiver wire (Section 20.2 — LOCKED): 72-hour real-world claim window. A
+// claimed player reports to his new club the next calendar day; an unclaimed
+// player is outrighted to the placing team's farm (farm-overflow displacements
+// go to free agency instead).
+export const WAIVER_CLAIM_WINDOW_MS        = 72 * 60 * 60_000;
+// A CPU club claims only a real upgrade: at least this many OVR points over
+// the weakest active player he would replace.
+export const WAIVER_CLAIM_MIN_UPGRADE      = 3;
+// Organizational depth (§65): every club's farm director keeps the system
+// stocked. When a farm falls below these floors (or loses its last C / CI /
+// MI / OF, or drops under 2 SP / 2 RP — the locked minimums), he signs the
+// best matching free agent to a minor-league deal at the tier-1 minimum.
+export const FARM_DEPTH_FLOOR_HITTERS      = 6;
+export const FARM_DEPTH_FLOOR_PITCHERS     = 5;
+// Completed transactions kept for the Team screen's recent list.
+export const TRANSACTION_HISTORY_KEEP      = 60;
 
 // Sub-rating penalty per severity
 export const INJURY_SR_PENALTY_MINOR       = 3;

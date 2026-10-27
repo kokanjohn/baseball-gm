@@ -18,6 +18,7 @@ import {
   PLAYER_GROUP,
   ROSTER_LIMITS,
   ACTIVITY_FEED_RETENTION_HOURS,
+  WAIVER_CLAIM_MIN_UPGRADE,
 } from '../data/constants.js';
 
 import {
@@ -28,9 +29,6 @@ import {
 
 import {
   placeOnWaivers,
-  callUpFromFarm,
-  checkDepth,
-  autoResolveDepth,
   reconcileRoster,
 } from './RosterEngine.js';
 
@@ -170,85 +168,38 @@ export function processCPUDay(state, dateStr) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * processCPURosterDecisions(state, dateStr)
- * Evaluates roster decisions for all CPU teams:
- *   - Auto-resolve critical depth gaps (call up from farm)
- *   - Place excess roster players on waivers if overfull
- *   - Return players from IL when return game is reached
- *
- * Returns mutations to apply.
+ * processCPURosterDecisions(state, dateStr, atMs)
+ * Every CPU GM's end-of-day roster pass: restore lineup + rotation integrity
+ * and hold the active roster at a legal 28 (players already on their way
+ * count). Call-ups go through the transaction ledger and report the next
+ * calendar day; IL clearances and day-to-day returns run on the roster
+ * clock (TransactionEngine.applyDue, §65) — the same rules as the user.
  *
  * @param {Object} state
  * @param {String} dateStr
+ * @param {Number} atMs   — roster-clock time of the end of the game day
  * @returns {Object} mutations
  */
-export function processCPURosterDecisions(state, dateStr) {
-  const mutations = {
-    players:    {},
-    leagueTeams: [...state.leagueTeams],
-    waiverPool: [...(state.waiverPool || [])],
-    activityFeed: [...(state.activityFeed || [])],
-  };
+export function processCPURosterDecisions(state, dateStr, atMs) {
+  let leagueTeams  = [...state.leagueTeams];
+  let waiverPool   = [...(state.waiverPool || [])];
+  let transactions = [...(state.transactions || [])];
+  const players    = {};
 
   for (const team of state.leagueTeams) {
-    // IL returns — check each IL player
-    const ilPlayers = team.rosterIds
-      .map(id => state.players[id])
-      .filter(p => p && p.isInjured && p.ilReturnGame !== null
-               && p.ilReturnGame <= (state.currentGameIndex || 0));
-
-    for (const player of ilPlayers) {
-      // CPU teams auto-activate returning IL players (no decision card for CPU)
-      const isPitcher = ['SP', 'RP'].includes(player.pos);
-      const targetGroup = isPitcher ? PLAYER_GROUP.BULLPEN : PLAYER_GROUP.BENCH_HITTERS;
-      mutations.players[player.id] = {
-        isInjured:        false,
-        ilReturnGame:     null,
-        _pendingILReturn: false,
-        group:            targetGroup,
-        injuryPenalty:    null,
-      };
-    }
-
-    // Depth check — auto-resolve CRITICAL gaps (emergency callups).
-    const depthIssues = checkDepth(state, team.id);
-    const criticalIssues = depthIssues.filter(i => i.type === 'CRITICAL');
-    if (criticalIssues.length > 0) {
-      const depthFix = autoResolveDepth(state, team.id);
-      Object.assign(mutations.players, depthFix.players || {});
-      if (depthFix.leagueTeams) mutations.leagueTeams = depthFix.leagueTeams;
-
-      if (criticalIssues.length > 0) {
-        mutations.activityFeed.push(buildActivityFeedEntry(
-          'roster',
-          team.abbr,
-          `${team.abbr} called up a player to address a roster gap`
-        ));
-      }
-    }
-
-    // Reconcile: restore lineup + rotation integrity and hold the active roster
-    // at a legal 28 (CPU auto-manages — farm call-ups + waiving surplus). Runs on
-    // a patched view so it sees this team's IL-return / depth changes above and
-    // every earlier team's changes in this pass.
     const patchedPlayers = { ...state.players };
-    for (const [id, upd] of Object.entries(mutations.players)) {
+    for (const [id, upd] of Object.entries(players)) {
       patchedPlayers[id] = { ...patchedPlayers[id], ...upd };
     }
-    const patched = {
-      ...state,
-      players:     patchedPlayers,
-      leagueTeams: mutations.leagueTeams,
-      waiverPool:  mutations.waiverPool,
-    };
-    const rec = reconcileRoster(patched, team.id, { autoManage: true });
-    if (rec.players)     Object.assign(mutations.players, rec.players);
-    if (rec.leagueTeams) mutations.leagueTeams = rec.leagueTeams;
-    if (rec.waiverPool)  mutations.waiverPool  = rec.waiverPool;
+    const patched = { ...state, players: patchedPlayers, leagueTeams, waiverPool, transactions };
+    const rec = reconcileRoster(patched, team.id, { autoManage: true, atMs });
+    for (const [id, upd] of Object.entries(rec.players || {})) players[id] = { ...(players[id] || {}), ...upd };
+    if (rec.leagueTeams)  leagueTeams  = rec.leagueTeams;
+    if (rec.waiverPool)   waiverPool   = rec.waiverPool;
+    if (rec.transactions) transactions = rec.transactions;
   }
 
-  mutations.activityFeed = pruneActivityFeed(mutations.activityFeed);
-  return mutations;
+  return { players, leagueTeams, waiverPool, transactions };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -256,19 +207,19 @@ export function processCPURosterDecisions(state, dateStr) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * processWaiverClaims(state)
- * Evaluates pending waiver claims in priority order (inverse standings).
- * CPU teams claim players who fill a need at a position they're thin at.
- *
- * Returns mutations.
+ * cpuWaiverClaimant(state, playerId)
+ * Section 20.2 (LOCKED): CPU clubs claim only what they need — a real upgrade
+ * over the weakest active player at his position — and the highest-priority
+ * club (worst record first) wins. The placing team cannot reclaim him.
+ * Returns the claiming team id, or null if he goes unclaimed. Pure.
  *
  * @param {Object} state
- * @returns {Object} mutations
+ * @param {String} playerId
+ * @returns {String|null}
  */
-export function processWaiverClaims(state) {
-  const waiverPool = state.waiverPool || [];
-  if (waiverPool.length === 0) return {};
-
+export function cpuWaiverClaimant(state, playerId) {
+  const player = state.players[playerId];
+  if (!player) return null;
   const standings = _computeStandingsBase(state.leagueTeams, {
     name:       state.userTeam?.city + ' ' + state.userTeam?.nickname,
     abbr:       state.userTeam?.abbr,
@@ -276,58 +227,24 @@ export function processWaiverClaims(state) {
     wins:       state.userTeam?.wins   || 0,
     losses:     state.userTeam?.losses || 0,
   });
-
-  // Priority order: worst record first (inverse standings)
-  const claimPriority = [...standings.all].reverse();
-
-  const mutations  = { players: {}, leagueTeams: [...state.leagueTeams], waiverPool: [...waiverPool], activityFeed: [...(state.activityFeed || [])] };
-  const claimed    = new Set();
-
-  for (const teamEntry of claimPriority) {
-    if (teamEntry.id === 'user') continue; // user claims handled by CardEngine
-
-    const team = state.leagueTeams.find(t => t.id === teamEntry.id);
-    if (!team) continue;
-
-    for (const playerId of waiverPool) {
-      if (claimed.has(playerId)) continue;
-
-      const player = state.players[playerId];
-      if (!player) continue;
-
-      // CPU claims if they have a need at this position
-      if (_cpuTeamNeedsPlayer(team, player, state.players)) {
-        // Claim the player
-        claimed.add(playerId);
-        mutations.waiverPool = mutations.waiverPool.filter(id => id !== playerId);
-
-        const teamIdx = mutations.leagueTeams.findIndex(t => t.id === team.id);
-        if (teamIdx >= 0) {
-          mutations.leagueTeams[teamIdx] = {
-            ...mutations.leagueTeams[teamIdx],
-            rosterIds: [...mutations.leagueTeams[teamIdx].rosterIds, playerId],
-          };
-        }
-
-        mutations.players[playerId] = {
-          onWaivers: false,
-          teamId:    team.id,
-          group:     _isPitcher(player) ? PLAYER_GROUP.BULLPEN : PLAYER_GROUP.BENCH_HITTERS,
-        };
-
-        mutations.activityFeed.push(buildActivityFeedEntry(
-          'waiver',
-          team.abbr,
-          `${team.abbr} claimed ${player.name} off waivers`
-        ));
-
-        break; // each team claims at most one player per waiver run
-      }
-    }
+  for (const entry of [...standings.all].reverse()) {
+    if (entry.id === 'user' || entry.id === player._waivedBy) continue;
+    const team = state.leagueTeams.find(t => t.id === entry.id);
+    if (team && _isUpgradeFor(team, player, state.players)) return team.id;
   }
+  return null;
+}
 
-  mutations.activityFeed = pruneActivityFeed(mutations.activityFeed);
-  return mutations;
+/** Would this player be a real upgrade over the weakest active player he'd replace? */
+function _isUpgradeFor(team, player, players) {
+  const isP = ['SP', 'RP'].includes(player.pos);
+  const peers = (team.rosterIds || []).map(id => players[id]).filter(p =>
+    p && p.group !== PLAYER_GROUP.IL && !p.isInjured
+    && (isP ? p.pos === player.pos
+            : !['SP', 'RP'].includes(p.pos) && (p.nativePos || p.pos) === (player.nativePos || player.pos)));
+  if (!peers.length) return !isP || player.pos === 'SP';   // a hole at his position
+  const weakest = Math.min(...peers.map(p => p.ovr || 0));
+  return (player.ovr || 0) >= weakest + WAIVER_CLAIM_MIN_UPGRADE;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -386,28 +303,6 @@ function _teamOvr(team, players) {
   return (avgOvr(hitters)  * SIM_HITTER_OVR_WEIGHT)
        + (avgOvr(starters) * SIM_SP_OVR_WEIGHT)
        + (avgOvr(bullpen)  * SIM_BP_OVR_WEIGHT);
-}
-
-function _cpuTeamNeedsPlayer(team, player, players) {
-  const rosterPlayers = (team.rosterIds || []).map(id => players[id]).filter(Boolean);
-  const isPitcherNeeded = _isPitcher(player);
-
-  if (isPitcherNeeded) {
-    const activePitchers = rosterPlayers.filter(p =>
-      _isPitcher(p) && !p.isInjured && !p.isSuspended
-    ).length;
-    return activePitchers < (ROSTER_LIMITS.STARTING_PITCHERS + ROSTER_LIMITS.BULLPEN - 2);
-  }
-
-  const activeHitters = rosterPlayers.filter(p =>
-    !_isPitcher(p) && !p.isInjured && !p.isSuspended
-  ).length;
-  return activeHitters < (ROSTER_LIMITS.STARTING_HITTERS + ROSTER_LIMITS.BENCH_HITTERS - 2);
-}
-
-function _isPitcher(player) {
-  return [PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PRACTICE_SQUAD].includes(player.group)
-      || ['SP', 'RP'].includes(player.pos);
 }
 
 function _rng(lo, hi) {

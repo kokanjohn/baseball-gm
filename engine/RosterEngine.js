@@ -121,62 +121,11 @@ export function placePlayer(state, playerId, group) {
 // IL SYSTEM
 // ─────────────────────────────────────────────────────────────
 
-/**
- * injurePlayer(state, playerId, ilGames)
- * Moves a player to the IL, sets their return game index, clears active flags.
- *
- * @param {Object} state
- * @param {String} playerId
- * @param {Number} ilGames      — number of games on IL
- * @returns {Object} mutations
- */
-export function injurePlayer(state, playerId, ilGames) {
-  _assertPlayerExists(state, playerId);
-  const player = state.players[playerId];
-  const returnGame = (state.currentGameIndex ?? 0) + ilGames;
-
-  return {
-    players: {
-      [playerId]: {
-        group:         PLAYER_GROUP.IL,
-        isInjured:     true,
-        isResting:     false,
-        ilReturnGame:  returnGame,
-        _pendingILReturn: false,
-      },
-    },
-  };
-}
-
-/**
- * returnFromIL(state, playerId)
- * Flags a player as ready to return. NEVER auto-activates.
- * Adds to ilReturnQueue — CardEngine (Phase 9) will generate the decision card
- * presenting the GM with: activate, send to farm (spring only), or place on waivers.
- *
- * @param {Object} state
- * @param {String} playerId
- * @returns {Object} mutations
- */
-export function returnFromIL(state, playerId) {
-  _assertPlayerExists(state, playerId);
-
-  const alreadyQueued = (state.ilReturnQueue || []).includes(playerId);
-
-  return {
-    players: {
-      [playerId]: {
-        isInjured:        false,
-        ilReturnGame:     null,
-        _pendingILReturn: true,
-      },
-    },
-    // Add to ilReturnQueue if not already there
-    ilReturnQueue: alreadyQueued
-      ? state.ilReturnQueue
-      : [...(state.ilReturnQueue || []), playerId],
-  };
-}
+// IL placement, day-to-day, and the return-to-eligibility moment all run on
+// the real-clock injury timeline (§65): InjuryEngine builds the updates and
+// TransactionEngine.applyDue() moves them along the roster clock. When a USER
+// player becomes eligible he is flagged _pendingILReturn and queued in
+// ilReturnQueue for the GM's decision card — never auto-activated.
 
 /**
  * activateFromIL(state, playerId, targetGroup)
@@ -225,7 +174,7 @@ export function activateFromIL(state, playerId, targetGroup) {
  * @param {String} playerId
  * @returns {Object} mutations
  */
-export function placeOnWaivers(state, playerId) {
+export function placeOnWaivers(state, playerId, { atMs = Date.now(), reason = null } = {}) {
   _assertPlayerExists(state, playerId);
   const player = state.players[playerId];
   const teamId = player.teamId;
@@ -238,10 +187,13 @@ export function placeOnWaivers(state, playerId) {
         group:            'waivers',
         tier:             'waivers',
         onWaivers:        true,
-        waiverStartTime:  Date.now(),
+        waiverStartTime:  atMs,
         _pendingILReturn: false,
-        _pendingDeparture:false,
         teamId:           null,
+        // Section 20.2: unclaimed after 72h → outrighted to this team's farm
+        // (a farm-overflow displacement goes to free agency instead).
+        _waivedBy:        teamId || null,
+        _waiveReason:     reason,
       },
     },
     waiverPool: [...(state.waiverPool || []), playerId],
@@ -265,9 +217,9 @@ export function claimFromWaivers(state, playerId, claimingTeamId) {
   _assertPlayerExists(state, playerId);
 
   const isUserTeam = claimingTeamId === 'user';
-  const group = isUserTeam
-    ? PLAYER_GROUP.BENCH_HITTERS  // CardEngine will prompt for exact slot
-    : PLAYER_GROUP.BENCH_HITTERS; // CPU teams slot in Phase 10
+  // Pitchers join the staff, hitters the bench — never a pitcher in a
+  // hitter group (that made a claimed pitcher eligible to DH).
+  const group = defaultActiveGroup(state.players[playerId]);
 
   // Add to claiming team's rosterIds
   const teamMutation = isUserTeam
@@ -294,7 +246,10 @@ export function claimFromWaivers(state, playerId, claimingTeamId) {
 
 /**
  * clearWaivers(state, playerId)
- * Player clears waivers unclaimed — moves to free agent pool.
+ * Player clears waivers unclaimed (Section 20.2 step 7 — LOCKED): he is
+ * outrighted to the farm of the team that placed him (composition caps and
+ * displacement apply). A farm-overflow displacement — or a player whose team
+ * no longer exists — goes to free agency instead.
  *
  * @param {Object} state
  * @param {String} playerId
@@ -302,18 +257,26 @@ export function claimFromWaivers(state, playerId, claimingTeamId) {
  */
 export function clearWaivers(state, playerId) {
   _assertPlayerExists(state, playerId);
+  const player = state.players[playerId];
+  const owner  = player._waivedBy;
+  const reset  = { onWaivers: false, waiverStartTime: null, _waivedBy: null, _waiveReason: null };
+  const pool   = (state.waiverPool || []).filter(id => id !== playerId);
+  const ownerExists = owner === 'user' || (state.leagueTeams || []).some(t => t.id === owner);
+
+  if (owner && ownerExists && player._waiveReason !== 'displaced') {
+    const farm = sendToFarm({ ...state, waiverPool: pool }, playerId, owner);
+    return {
+      ...farm,
+      players:    { ...(farm.players || {}), [playerId]: { ...reset, ...(farm.players?.[playerId] || {}) } },
+      waiverPool: farm.waiverPool || pool,
+    };
+  }
 
   return {
     players: {
-      [playerId]: {
-        group:            'freeAgent',
-        tier:             'farm',      // clears to farm when unclaimed (Section 20.1)
-        onWaivers:        false,
-        waiverStartTime:  null,
-        teamId:           null,
-      },
+      [playerId]: { ...reset, group: 'freeAgent', tier: 'farm', teamId: null },
     },
-    waiverPool:    (state.waiverPool || []).filter(id => id !== playerId),
+    waiverPool:    pool,
     freeAgentPool: [...(state.freeAgentPool || []), playerId],
   };
 }
@@ -356,7 +319,7 @@ export function sendToFarm(state, playerId, teamId) {
     const displaced = _findDisplacementCandidate(state, playerId, farmIds);
     if (displaced) {
       // Displaced player goes to waivers, not deeper farm
-      const waiversMutation = placeOnWaivers(state, displaced);
+      const waiversMutation = placeOnWaivers(state, displaced, { reason: 'displaced' });
       const farmMutation    = _buildSendToFarmMutation(state, playerId, teamId, farmIds.filter(id => id !== displaced));
       return _mergeMutations(waiversMutation, farmMutation);
     }
@@ -366,49 +329,67 @@ export function sendToFarm(state, playerId, teamId) {
 }
 
 /**
- * callUpFromFarm(state, playerId, teamId)
- * Promotes a farm player to the active roster.
- * Caller must ensure a roster slot is available.
- *
- * @param {Object} state
- * @param {String} playerId
- * @param {String} teamId
- * @returns {Object} mutations
+ * defaultActiveGroup(player)
+ * Where a player lands on the active roster when he reports (trade, call-up,
+ * IL activation). Starters reach the rotation through reconcileRoster, which
+ * tops a short rotation up from PITCHER_BENCH — so an arriving SP never
+ * creates a six-man rotation.
  */
-export function callUpFromFarm(state, playerId, teamId) {
-  _assertPlayerExists(state, playerId);
+export function defaultActiveGroup(player) {
+  if (player?.pos === 'SP') return PLAYER_GROUP.PITCHER_BENCH;
+  if (player?.pos === 'RP') return PLAYER_GROUP.BULLPEN;
+  return PLAYER_GROUP.BENCH_HITTERS;
+}
 
-  const isUserTeam = teamId === 'user';
-  const player     = state.players[playerId];
+/**
+ * pendingArrivals(state, teamId)
+ * Players already on their way to this team (traded or called up, reporting
+ * the next calendar day). They hold their roster spot: every count of the
+ * active roster adds them, so nobody calls up a second body for the same spot.
+ */
+export function pendingArrivals(state, teamId) {
+  return (state.transactions || []).filter(t =>
+    t.status === 'pending' && t.kind === 'arrival' && t.teamId === teamId);
+}
 
-  // Determine appropriate group for callup based on player type
-  const isPitcher = ['SP', 'RP'].includes(player.pos);
-  const targetGroup = isPitcher
-    ? PLAYER_GROUP.BULLPEN
-    : PLAYER_GROUP.BENCH_HITTERS;
+/**
+ * nextCalendarDay(ms)
+ * Local midnight after `ms` — when every arrival reports (§65).
+ */
+export function nextCalendarDay(ms) {
+  const d = new Date(ms);
+  d.setHours(24, 0, 0, 0);
+  return d.getTime();
+}
 
-  // Remove from farm
-  const farmRemoval = isUserTeam
-    ? { userTeam: { farmIds: (state.userTeam.farmIds || []).filter(id => id !== playerId) } }
-    : _removeFromLeagueTeamFarm(state, playerId, teamId);
-
-  // Add to active roster
-  const rosterAdd = isUserTeam
-    ? { userTeam: { rosterIds: [...state.userTeam.rosterIds, playerId] } }
-    : _addToLeagueTeamRoster(state, playerId, teamId);
-
+/**
+ * makeArrival({ player, teamId, fromTeamId, reason, atMs, by })
+ * Builds the ledger record + player patch for a player heading to `teamId`.
+ * The caller removes him from his old roster/farm list. Pure.
+ * @returns {{ tx: Object, patch: Object }}
+ */
+export function makeArrival({ player, teamId, fromTeamId = null, reason, atMs, by = null }) {
   return {
-    players: {
-      [playerId]: {
-        group:   targetGroup,
-        tier:    'active',
-        teamId,
-        _farmArc:        null,
-        _farmArcStart:   null,
-      },
+    tx: {
+      id:          `tx-${player.id}-${atMs}-${reason}`,
+      kind:        'arrival',
+      teamId,
+      playerId:    player.id,
+      fromTeamId,
+      toGroup:     defaultActiveGroup(player),
+      reason,                       // 'trade' | 'callup'
+      by,                           // 'gm' | 'manager' | 'cpu'
+      createdAt:   atMs,
+      effectiveAt: nextCalendarDay(atMs),
+      status:      'pending',
     },
-    ...farmRemoval,
-    ...rosterAdd,
+    patch: {
+      group:  PLAYER_GROUP.IN_TRANSIT,
+      teamId,
+      tier:   'active',
+      _farmArc: null,
+      _farmArcStart: null,
+    },
   };
 }
 
@@ -461,72 +442,6 @@ export function clearSuspension(state, playerId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// TRADE DEFERRAL
-// ─────────────────────────────────────────────────────────────
-
-/**
- * markPendingDeparture(state, playerId)
- * Locks a player in place on game day until drainPendingTrades() runs at commit.
- * Player stays on roster visually but is marked as traded.
- *
- * @param {Object} state
- * @param {String} playerId
- * @returns {Object} mutations
- */
-export function markPendingDeparture(state, playerId) {
-  _assertPlayerExists(state, playerId);
-
-  return {
-    players: {
-      [playerId]: { _pendingDeparture: true },
-    },
-  };
-}
-
-/**
- * drainPendingTrades(state)
- * Called at game commit. Removes all _pendingDeparture players from the roster
- * and places any _pendingAcquisitions onto the active roster.
- *
- * @param {Object} state
- * @returns {Object} mutations
- */
-export function drainPendingTrades(state) {
-  const mutations = { players: {} };
-  const newRosterIds = [...state.userTeam.rosterIds];
-
-  // Remove pending departures
-  for (const playerId of newRosterIds.slice()) {
-    const player = state.players[playerId];
-    if (player && player._pendingDeparture) {
-      const idx = newRosterIds.indexOf(playerId);
-      if (idx >= 0) newRosterIds.splice(idx, 1);
-      mutations.players[playerId] = {
-        _pendingDeparture: false,
-        teamId: null,
-        group:  'traded',
-      };
-    }
-  }
-
-  // Place pending acquisitions
-  const acquisitions = state._pendingAcquisitions || [];
-  for (const incoming of acquisitions) {
-    newRosterIds.push(incoming.id);
-    mutations.players[incoming.id] = {
-      ...incoming,
-      _pendingDeparture: false,
-    };
-  }
-
-  return {
-    ...mutations,
-    userTeam: { rosterIds: newRosterIds },
-    _pendingAcquisitions: [],
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
 // DEPTH CHECKS
 // ─────────────────────────────────────────────────────────────
 
@@ -555,7 +470,7 @@ export function checkDepth(state, teamId) {
   // as coverage, otherwise a CRITICAL gap is masked and auto-backfill never fires).
   const activePlayers = rosterIds
     .map(id => state.players[id])
-    .filter(p => p && !p.isInjured && !p.isSuspended && !p._pendingDeparture
+    .filter(p => p && !p.isInjured && !p.isSuspended
                   && p.group !== PLAYER_GROUP.IL
                   && p.group !== PLAYER_GROUP.PRACTICE_SQUAD);
 
@@ -604,46 +519,6 @@ export function checkDepth(state, teamId) {
   return issues;
 }
 
-/**
- * autoResolveDepth(state, teamId?)
- * Promotes farm players to fill CRITICAL depth gaps on the given team.
- * Only resolves Type 1 (CRITICAL) issues — Type 2 (WARNING) are left for the GM.
- * Returns mutations to apply.
- *
- * @param {Object} state
- * @param {String} [teamId]
- * @returns {Object} mutations
- */
-export function autoResolveDepth(state, teamId) {
-  const issues = checkDepth(state, teamId).filter(i => i.type === 'CRITICAL');
-  if (issues.length === 0) return {};
-
-  const isUserTeam = !teamId || teamId === 'user';
-  const farmIds    = isUserTeam
-    ? (state.userTeam.farmIds || [])
-    : _getLeagueTeamFarmIds(state, teamId);
-
-  const mutations = { players: {} };
-
-  for (const issue of issues) {
-    const compatible = POSITION_COVERAGE[issue.position] || [issue.position];
-    const candidate  = farmIds
-      .map(id => state.players[id])
-      .filter(p => p && !p.isInjured && compatible.includes(p.nativePos || p.pos))
-      .sort((a, b) => b.ovr - a.ovr)[0];
-
-    if (candidate) {
-      const callup = callUpFromFarm(state, candidate.id, teamId || 'user');
-      Object.assign(mutations.players, callup.players || {});
-      if (isUserTeam && callup.userTeam) {
-        mutations.userTeam = { ...(mutations.userTeam || {}), ...callup.userTeam };
-      }
-    }
-  }
-
-  return mutations;
-}
-
 // ─────────────────────────────────────────────────────────────
 // ROSTER RECONCILIATION (the single post-mutation invariant)
 // ─────────────────────────────────────────────────────────────
@@ -652,39 +527,39 @@ export function autoResolveDepth(state, teamId) {
  * reconcileRoster(state, teamId, options)
  *
  * The one invariant that must hold after ANY roster mutation (injury, IL
- * return/activation, trade, waiver, call-up, or a lineup/rotation edit). It is
- * pure: it reads `state`, works on local copies, and returns a mutation object
- * in the same shape the rest of RosterEngine returns. The caller applies it.
+ * placement/activation, trade departure/arrival, waiver, call-up, or a
+ * lineup/rotation edit). Pure: reads `state`, works on local copies, returns a
+ * mutation object in the same shape the rest of RosterEngine returns.
  *
  * Guarantees, for the given team:
- *   1. lineupSlots is exactly the 9 canonical slots in order; every non-null
- *      occupant is a healthy, rostered BENCH_HITTERS hitter eligible for that slot.
- *   2. Vacant slots are backfilled from eligible healthy bench hitters (manager
- *      domain — always automatic). If bench can't cover, the slot stays vacant
- *      and the need is reported (user) or filled from farm (CPU, autoManage).
- *   3. rotation.order = the rostered, healthy STARTING_PITCHERS (de-duped, no
- *      injured/departed ids); a short rotation is topped up from PITCHER_BENCH
- *      (manager domain — always automatic), then from farm (CPU only).
- *   4. Active-count invariant is GM domain: for CPU (autoManage) reconcile calls
- *      up from farm to reach ACTIVE_TOTAL and waives the lowest-OVR droppable
- *      surplus back down to it. For the USER, reconcile does NOT auto-call-up or
- *      auto-waive — it reports `pendingCallups` (open positions + how many bodies
- *      short of the cap) and `pendingSurplus` (drop candidates) so the card/UI
- *      layer can let the GM choose. (The window timer, "didn't act" penalty, and
- *      suboptimal auto-fallback call-up are the IL card flow — a later batch.)
+ *   1. lineupSlots is exactly the 9 canonical slots in order; every occupant is
+ *      a healthy, rostered BENCH_HITTERS hitter.
+ *   2. Manager domain (always automatic, every team): a vacant slot is filled
+ *      by the best ELIGIBLE healthy bench hitter; if nobody on the bench can
+ *      play the position, the manager puts the best remaining bench hitter
+ *      there out of position (`emergency: true`) — a real team always fields
+ *      nine. The open position is reported as a need.
+ *   3. rotation.order = the rostered, healthy STARTING_PITCHERS; a short
+ *      rotation is topped up from healthy PITCHER_BENCH starters.
+ *   4. Active-count invariant (GM domain, regular season and playoffs):
+ *      active (non-IL) players + players already on their way (pending
+ *      'arrival' transactions) == ACTIVE_TOTAL.
+ *        CPU (autoManage): its GM calls up from the farm at once — through
+ *          the transaction ledger, so the call-up reports the next calendar
+ *          day like everyone else's (needs options.atMs) — and waives the
+ *          lowest-OVR droppable surplus.
+ *        USER: never auto-moves. Reports `pendingCallups` / `pendingSurplus`;
+ *          TransactionEngine runs the decision deadline (§65).
  *      Spring: no cap enforcement.
  *   5. No id appears in both rosterIds and farmIds.
- *
- * The split follows the plan's manager-vs-GM ownership: lineup and rotation are
- * manager-owned (auto-arranged from the active roster for all teams); call-ups
- * and waivers are GM-owned (auto for CPU, gated for the user).
  *
  * @param {Object}  state
  * @param {String}  [teamId='user']
  * @param {Object}  [options]
- * @param {Boolean} [options.autoManage=false] — CPU teams pass true (full auto)
- * @returns {Object} mutation object: { players, userTeam|leagueTeams, waiverPool?,
- *                    pendingCallups?, pendingSurplus?, surplusCount? }
+ * @param {Boolean} [options.autoManage=false] — CPU teams pass true
+ * @param {Number}  [options.atMs]             — roster-clock time for CPU call-ups
+ * @returns {Object} mutation: { players, userTeam|leagueTeams, waiverPool?,
+ *                    transactions?, pendingCallups?, pendingSurplus?, surplusCount? }
  */
 export function reconcileRoster(state, teamId = 'user', options = {}) {
   const autoManage = !!options.autoManage;
@@ -693,30 +568,32 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     ? state.userTeam
     : (state.leagueTeams || []).find(t => t.id === teamId);
   if (!team) return {};
+  const tid = isUserTeam ? 'user' : teamId;
 
   const players   = state.players || {};
   const inSpring  = state.phase === PHASE.SPRING_TRAINING;
   const activeCap = ROSTER_LIMITS.ACTIVE_TOTAL;
+  const atMs      = Number.isFinite(options.atMs) ? options.atMs : null;
 
   // ── Working copies (never mutate state) ───────────────────────────────
   let rosterIds = [...(team.rosterIds || [])];
   let farmIds   = [...(team.farmIds   || [])];
   const patch   = {};                 // playerId -> partial player update
   const waived  = [];                 // playerIds moved to waivers this pass
+  const newTx   = [];                 // CPU call-ups created this pass
+  const inbound = pendingArrivals(state, tid);
 
-  // Effective (post-patch) group / availability helpers.
   const groupOf = (id) => (patch[id] && patch[id].group !== undefined)
     ? patch[id].group
     : players[id]?.group;
   const isHealthy = (id) => {
     const p = players[id];
-    return !!p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave && !p._pendingDeparture;
+    return !!p && !p.isInjured && !p.isSuspended && !p.onPersonalLeave;
   };
   const setPatch = (id, upd) => { patch[id] = { ...(patch[id] || {}), ...upd }; };
+  const isP = (p) => ['SP', 'RP'].includes(p?.pos);
 
   // ── Normalize lineupSlots to the 9 canonical slots in fixed order ─────
-  // Carry over existing occupants slot-for-slot when the array is already the
-  // canonical shape; otherwise re-seat surviving occupants by eligibility.
   const existing = team.lineupSlots || [];
   const canonical = existing.length === LINEUP_SLOTS.length
     && existing.every((e, i) => e && e.slot === LINEUP_SLOTS[i]);
@@ -727,7 +604,6 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   }));
 
   if (!canonical) {
-    // Re-seat any valid occupants from the old (possibly malformed) array.
     const survivors = existing
       .map(e => e && e.playerId)
       .filter(id => id && rosterIds.includes(id) && isHealthy(id)
@@ -735,7 +611,9 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     _seatByEligibility(slots, survivors, players);
   }
 
-  // ── Vacate invalid occupants (injured/departed/wrong-group/dup/ineligible) ──
+  // ── Vacate invalid occupants (injured/departed/wrong-group/dup/ineligible).
+  // An emergency (out-of-position) occupant is always re-evaluated, so a real
+  // option takes the slot the moment one is on the bench.
   const seen = new Set();
   for (const s of slots) {
     const id = s.playerId;
@@ -748,7 +626,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     if (ok) { seen.add(id); } else { s.playerId = null; }
   }
 
-  // ── Fill vacant slots: bench first, then a farm call-up ───────────────
+  // ── Fill vacant slots (manager domain) ─────────────────────────────────
   const seatedIds = () => new Set(slots.map(s => s.playerId).filter(Boolean));
   const benchPool = () => rosterIds
     .filter(id => isHealthy(id)
@@ -760,31 +638,16 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
 
   for (const slot of slots) {
     if (slot.playerId) continue;
-
-    // Manager domain: seat the best eligible healthy bench hitter (already active).
     const benchPick = benchPool().find(p => eligibleSlotsFor(p).includes(slot.slot));
-    if (benchPick) { slot.playerId = benchPick.id; continue; }
-
-    // GM domain: no bench cover. CPU calls up the best eligible farm hitter to
-    // keep fielding a full lineup; the user's need is reported (pendingCallups).
-    if (autoManage) {
-      const farmPick = farmIds
-        .map(id => players[id])
-        .filter(p => p && isHealthy(p.id)
-                  && !['SP', 'RP'].includes(p.pos)
-                  && eligibleSlotsFor(p).includes(slot.slot))
-        .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
-      if (farmPick) {
-        farmIds = farmIds.filter(id => id !== farmPick.id);
-        rosterIds.push(farmPick.id);
-        setPatch(farmPick.id, {
-          group: PLAYER_GROUP.BENCH_HITTERS, tier: 'active', teamId,
-          _farmArc: null, _farmArcStart: null,
-        });
-        slot.playerId = farmPick.id;
-      }
-    }
-    // If still unfilled, leave vacant — reported for the user, rare for CPU.
+    if (benchPick) slot.playerId = benchPick.id;
+  }
+  // Nobody eligible: the manager plays someone out of position.
+  const openPositions = [];
+  for (const slot of slots) {
+    if (slot.playerId) continue;
+    openPositions.push(slot.slot);
+    const anyPick = benchPool()[0];
+    if (anyPick) { slot.playerId = anyPick.id; slot.emergency = true; }
   }
 
   // ── Rebuild rotation.order from healthy, rostered STARTING_PITCHERS ────
@@ -797,12 +660,9 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   for (const id of (oldRotation.order || [])) {
     if (validSP(id) && !inOrder.has(id)) { order.push(id); inOrder.add(id); }
   }
-  // Append any healthy rostered SP not already in the order (e.g. after a swap).
   for (const id of rosterIds) {
     if (validSP(id) && !inOrder.has(id)) { order.push(id); inOrder.add(id); }
   }
-  // Manager domain: a short rotation is topped up from healthy PITCHER_BENCH
-  // starters already on the active roster (non-destructive — no size change).
   while (order.length < REQUIRED_SP_COUNT) {
     const pbSP = rosterIds
       .map(id => players[id])
@@ -815,52 +675,56 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     order.push(pbSP.id);
     inOrder.add(pbSP.id);
   }
-  // GM domain (CPU only): still short → call up the best farm SP.
-  while (autoManage && order.length < REQUIRED_SP_COUNT) {
-    const farmSP = farmIds
-      .map(id => players[id])
-      .filter(p => p && isHealthy(p.id) && p.pos === 'SP')
-      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
-    if (!farmSP) break;
-    farmIds = farmIds.filter(id => id !== farmSP.id);
-    rosterIds.push(farmSP.id);
-    setPatch(farmSP.id, {
-      group: PLAYER_GROUP.STARTING_PITCHERS, tier: 'active', teamId,
-      _farmArc: null, _farmArcStart: null,
-    });
-    order.push(farmSP.id);
-    inOrder.add(farmSP.id);
-  }
+  const rotationShort = Math.max(0, REQUIRED_SP_COUNT - order.length);
   const currentIndex = order.length ? (oldRotation.currentIndex || 0) % order.length : 0;
 
-  // ── Active-count invariant (GM domain; regular season only) ───────────
+  // ── Active-count invariant (GM domain; not in spring) ─────────────────
   let pendingSurplus = null;
   let pendingCallups = null;
   let surplusCount   = 0;
 
   if (!inSpring) {
-    let nonIL = _nonILCount(rosterIds, groupOf);
+    let count = _nonILCount(rosterIds, groupOf) + inbound.length;
 
     if (autoManage) {
-      // CPU: top up from farm to reach the cap (best available body).
-      while (nonIL < activeCap) {
-        const filler = farmIds
-          .map(id => players[id])
-          .filter(p => p && isHealthy(p.id))
-          .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
-        if (!filler) break;
-        farmIds = farmIds.filter(id => id !== filler.id);
-        rosterIds.push(filler.id);
-        const isP = ['SP', 'RP'].includes(filler.pos);
-        setPatch(filler.id, {
-          group: isP ? PLAYER_GROUP.BULLPEN : PLAYER_GROUP.BENCH_HITTERS,
-          tier: 'active', teamId, _farmArc: null, _farmArcStart: null,
-        });
-        nonIL++;
+      // CPU GM: call up to the cap — position need first (open lineup
+      // positions, a short rotation), then by roster balance, best OVR.
+      const sideCounts = _sideCounts(rosterIds, groupOf, players, inbound);
+      const wants = [...openPositions.map(pos => ({ side: 'hitter', pos })),
+                     ...Array.from({ length: rotationShort }, () => ({ side: 'pitcher', pos: 'SP' }))];
+      while (count < activeCap) {
+        const want = wants.shift() || {
+          side: sideCounts.hitter < HITTER_TARGET ? 'hitter'
+              : sideCounts.pitcher < PITCHER_TARGET ? 'pitcher'
+              : (sideCounts.hitter <= sideCounts.pitcher ? 'hitter' : 'pitcher'),
+          pos: null,
+        };
+        const pool = farmIds.map(id => players[id])
+          .filter(p => p && isHealthy(p.id) && (want.side === 'pitcher') === isP(p));
+        const fit  = (p) => !want.pos ? 0
+          : want.side === 'pitcher' ? (p.pos === want.pos ? 1 : 0)
+          : (eligibleSlotsFor(p).includes(want.pos) ? 1 : 0);
+        const pick = pool.sort((a, b) => fit(b) - fit(a) || (b.ovr || 0) - (a.ovr || 0))[0]
+          || farmIds.map(id => players[id]).filter(p => p && isHealthy(p.id))
+               .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+        if (!pick) break;
+        farmIds = farmIds.filter(id => id !== pick.id);
+        if (atMs !== null) {
+          const { tx, patch: tp } = makeArrival({ player: pick, teamId: tid, fromTeamId: tid,
+                                                  reason: 'callup', atMs, by: 'cpu' });
+          newTx.push(tx);
+          setPatch(pick.id, tp);
+        } else {
+          // No clock (league build / offseason): the roster is set directly.
+          rosterIds.push(pick.id);
+          setPatch(pick.id, { group: defaultActiveGroup(pick), tier: 'active', teamId: tid,
+                              _farmArc: null, _farmArcStart: null });
+        }
+        sideCounts[isP(pick) ? 'pitcher' : 'hitter']++;
+        count++;
       }
-      // CPU: waive the lowest-OVR droppable surplus back down to the cap.
-      if (nonIL > activeCap) {
-        surplusCount = nonIL - activeCap;
+      if (count > activeCap) {
+        surplusCount = count - activeCap;
         const droppable = _droppable(rosterIds, order, slots, groupOf, isHealthy, players);
         for (let i = 0; i < surplusCount && i < droppable.length; i++) {
           const id = droppable[i];
@@ -868,21 +732,18 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
           waived.push(id);
           setPatch(id, {
             group: 'waivers', tier: 'waivers', onWaivers: true,
-            waiverStartTime: Date.now(), _pendingILReturn: false,
-            _pendingDeparture: false, teamId: null,
+            waiverStartTime: atMs ?? Date.now(), _pendingILReturn: false, teamId: null,
+            _waivedBy: tid, _waiveReason: null,
           });
         }
       }
     } else {
-      // USER: don't auto-call-up or auto-waive. Report the needs so the card/UI
-      // layer can let the GM choose (and a later batch can time-box + penalize).
-      const vacant = slots.filter(s => !s.playerId).map(s => s.slot);
-      const shortBy = Math.max(0, activeCap - nonIL);
-      if (vacant.length || shortBy > 0) {
-        pendingCallups = { slots: vacant, count: shortBy };
+      const shortBy = Math.max(0, activeCap - count);
+      if (openPositions.length || shortBy > 0) {
+        pendingCallups = { slots: openPositions, count: shortBy };
       }
-      if (nonIL > activeCap) {
-        surplusCount = nonIL - activeCap;
+      if (count > activeCap) {
+        surplusCount = count - activeCap;
         pendingSurplus = _droppable(rosterIds, order, slots, groupOf, isHealthy, players);
       }
     }
@@ -900,22 +761,33 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   if (isUserTeam) {
     mutation.userTeam = teamPatch;
   } else {
-    const updatedTeams = (state.leagueTeams || []).map(t =>
-      t.id === teamId ? { ...t, ...teamPatch } : t
-    );
-    mutation.leagueTeams = updatedTeams;
+    mutation.leagueTeams = (state.leagueTeams || []).map(t =>
+      t.id === teamId ? { ...t, ...teamPatch } : t);
   }
-  if (waived.length) {
-    mutation.waiverPool = [...(state.waiverPool || []), ...waived];
-  }
-  if (pendingCallups) {
-    mutation.pendingCallups = pendingCallups;
-  }
+  if (waived.length) mutation.waiverPool = [...(state.waiverPool || []), ...waived];
+  if (newTx.length)  mutation.transactions = [...(state.transactions || []), ...newTx];
+  if (pendingCallups) mutation.pendingCallups = pendingCallups;
   if (pendingSurplus && pendingSurplus.length) {
     mutation.pendingSurplus = pendingSurplus;
     mutation.surplusCount   = surplusCount;
   }
   return mutation;
+}
+
+// Active-roster composition targets (Section 20 — LOCKED): 14 hitters
+// (9 starters + 5 bench) and 14 pitchers (5 SP + 5 RP + 4 bench).
+export const HITTER_TARGET  = ROSTER_LIMITS.STARTING_HITTERS + ROSTER_LIMITS.BENCH_HITTERS;
+export const PITCHER_TARGET = ROSTER_LIMITS.STARTING_PITCHERS + ROSTER_LIMITS.BULLPEN + ROSTER_LIMITS.PITCHER_BENCH;
+
+/** Hitters / pitchers on the active roster plus those already on the way. */
+function _sideCounts(rosterIds, groupOf, players, inbound) {
+  const c = { hitter: 0, pitcher: 0 };
+  for (const id of rosterIds) {
+    if (groupOf(id) === PLAYER_GROUP.IL) continue;
+    c[['SP', 'RP'].includes(players[id]?.pos) ? 'pitcher' : 'hitter']++;
+  }
+  for (const t of inbound) c[['SP', 'RP'].includes(players[t.playerId]?.pos) ? 'pitcher' : 'hitter']++;
+  return c;
 }
 
 /**
@@ -936,6 +808,8 @@ export function applyRosterMutation(state, mutation) {
   if (!mutation) return;
   for (const [key, value] of Object.entries(mutation)) {
     if (key === 'pendingSurplus' || key === 'surplusCount' || key === 'pendingCallups') continue;
+    // Never write `undefined` over a real collection.
+    if (value === undefined) continue;
     if (key === 'players' && value && typeof value === 'object') {
       for (const [id, upd] of Object.entries(value)) {
         if (state.players[id]) Object.assign(state.players[id], upd);
@@ -1045,23 +919,26 @@ export function toggleKeeperTag(state, playerId) {
  * @returns {Object} mutations
  */
 export function applySpringCuts(state) {
-  const rosterIds  = state.userTeam.rosterIds || [];
   const players    = state.players;
+  // Injured players stay on the IL (and on rosterIds); only the active
+  // roster is cut to 28.
+  const ilIds      = (state.userTeam.rosterIds || []).filter(id => players[id]?.group === PLAYER_GROUP.IL);
+  const rosterIds  = (state.userTeam.rosterIds || []).filter(id => players[id]?.group !== PLAYER_GROUP.IL);
+  // A player already on his way (traded / called up in spring) holds one of
+  // the 28 Opening Day spots (§65).
+  const cap        = ROSTER_LIMITS.ACTIVE_TOTAL - pendingArrivals(state, 'user').length;
 
   // Build keeper list from flags
   let keepers = rosterIds.filter(id => players[id]?._isKeeper);
 
-  // Auto-fill if under 28
-  if (keepers.length < ROSTER_LIMITS.ACTIVE_TOTAL) {
-    const nonKeepers = rosterIds
-      .filter(id => !players[id]?._isKeeper)
-      .sort((a, b) => (players[b]?.ovr || 0) - (players[a]?.ovr || 0));
-    const needed = ROSTER_LIMITS.ACTIVE_TOTAL - keepers.length;
-    keepers = [...keepers, ...nonKeepers.slice(0, needed)];
+  // Auto-fill if under 28 — balanced like a real Opening Day roster
+  // (14 position players incl. every position + a backup catcher, 14 arms).
+  if (keepers.length < cap) {
+    keepers = _openingDayFill(keepers, rosterIds, cap, players, pendingArrivals(state, 'user'));
   }
 
-  // Hard cap at 28
-  keepers = keepers.slice(0, ROSTER_LIMITS.ACTIVE_TOTAL);
+  // Hard cap at 28 (less anyone already on his way)
+  keepers = keepers.slice(0, cap);
 
   const keepSet   = new Set(keepers);
   const toRelease = rosterIds.filter(id => !keepSet.has(id));
@@ -1108,7 +985,7 @@ export function applySpringCuts(state) {
   return {
     ...mutations,
     userTeam: {
-      rosterIds: keepers,
+      rosterIds: [...keepers, ...ilIds],
       farmIds:   newFarmIds,
     },
   };
@@ -1123,18 +1000,13 @@ export function applySpringCuts(state) {
  * @returns {Object} mutations
  */
 export function autoResolveSpringCuts(state) {
-  const allIds = state.userTeam.rosterIds || [];
-  const sorted = allIds
-    .map(id => state.players[id])
-    .filter(Boolean)
-    .sort((a, b) => b.ovr - a.ovr)
-    .map(p => p.id);
+  const allIds = (state.userTeam.rosterIds || []).filter(id => state.players[id]?.group !== PLAYER_GROUP.IL);
+  const cap    = ROSTER_LIMITS.ACTIVE_TOTAL - pendingArrivals(state, 'user').length;
+  const keep   = new Set(_openingDayFill([], allIds, cap, state.players, pendingArrivals(state, 'user')));
 
-  // Tag top 28 as keepers in a temp state copy for applySpringCuts
+  // Tag the balanced 28 as keepers in a temp state copy for applySpringCuts
   const tempMutations = { players: {} };
-  sorted.forEach((id, i) => {
-    tempMutations.players[id] = { _isKeeper: i < ROSTER_LIMITS.ACTIVE_TOTAL };
-  });
+  for (const id of allIds) tempMutations.players[id] = { _isKeeper: keep.has(id) };
 
   // Build a patched state to pass to applySpringCuts
   const patchedState = {
@@ -1146,6 +1018,51 @@ export function autoResolveSpringCuts(state) {
   }
 
   return applySpringCuts(patchedState);
+}
+
+/**
+ * _openingDayFill(keepers, pool, cap, players, inbound)
+ * Completes an Opening Day roster the way a club builds one: every lineup
+ * position covered plus a backup catcher, then the best players on each side
+ * up to the 14 / 14 composition, then best available. Pure.
+ */
+function _openingDayFill(keepers, pool, cap, players, inbound = []) {
+  const keep = [...keepers];
+  const has  = new Set(keep);
+  const isP  = (id) => ['SP', 'RP'].includes(players[id]?.pos);
+  const side = { hitter: 0, pitcher: 0 };
+  for (const id of keep) side[isP(id) ? 'pitcher' : 'hitter']++;
+  for (const t of inbound) side[isP(t.playerId) ? 'pitcher' : 'hitter']++;
+  const byOvr = pool.filter(id => players[id]).sort((a, b) => (players[b].ovr || 0) - (players[a].ovr || 0));
+  const add = (id) => { if (!id || has.has(id) || keep.length >= cap) return; keep.push(id); has.add(id); side[isP(id) ? 'pitcher' : 'hitter']++; };
+
+  // 1. Every lineup position, best eligible first; a second catcher.
+  for (const slot of ['C', 'SS', '2B', '3B', '1B', 'OF', 'OF', 'OF']) {
+    const covered = keep.filter(id => !isP(id) && eligibleSlotsFor(players[id]).includes(slot)).length;
+    const needHere = slot === 'OF' ? 3 : 1;
+    if (covered >= needHere) continue;
+    add(byOvr.find(id => !has.has(id) && !isP(id) && eligibleSlotsFor(players[id]).includes(slot)));
+  }
+  if (keep.filter(id => (players[id]?.nativePos || players[id]?.pos) === 'C').length < 2) {
+    add(byOvr.find(id => !has.has(id) && (players[id].nativePos || players[id].pos) === 'C'));
+  }
+  // 2. Five starters plus the two spot starters on the pitcher bench
+  //    (Section 20 composition: PITCHER_BENCH = 2 SP + 2 RP).
+  while (keep.filter(id => players[id]?.pos === 'SP').length < ROSTER_LIMITS.STARTING_PITCHERS + 2) {
+    const sp = byOvr.find(id => !has.has(id) && players[id].pos === 'SP');
+    if (!sp || keep.length >= cap) break;
+    add(sp);
+  }
+  // 3. Each side to its target, best first; then best available.
+  for (const want of ['hitter', 'pitcher']) {
+    const target = want === 'hitter' ? HITTER_TARGET : PITCHER_TARGET;
+    for (const id of byOvr) {
+      if (side[want] >= target || keep.length >= cap) break;
+      if (!has.has(id) && (want === 'pitcher') === isP(id)) add(id);
+    }
+  }
+  for (const id of byOvr) add(id);
+  return keep.slice(0, cap);
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -189,6 +189,7 @@ export function mount() {
 
   wire('card:delivered',   () => { if (_activeTab === 'todo') refresh(); });
   wire('card:resolved',    () => refresh());
+  wire('inbox:changed',    () => refresh());   // roster clock: new or withdrawn cards (§65)
   wire('nav:tabActivated', ({ tab }) => { if (tab === 'decisions') refresh(); });
 
   refresh();
@@ -335,6 +336,13 @@ function _renderCard(card, gameIdx) {
 }
 
 function _renderTTL(card, gameIdx) {
+  // Real-time deadline (roster decisions, §65): show the clock time it's due.
+  if (Number.isFinite(card.expiresAtMs) && card.autoResolve === 'roster') {
+    const left = card.expiresAtMs - Date.now();
+    const at   = new Date(card.expiresAtMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const cls  = left < 3 * 3600_000 ? 'ttl-badge ttl-warn' : 'ttl-badge';
+    return `<span class="${cls}">⏰ by ${at}</span>`;
+  }
   if (!card.expiresAt) return '';
   const gamesLeft = card.expiresAt - gameIdx;
   if (gamesLeft <= 0) return `<span class="ttl-badge">⏰ Expiring</span>`;
@@ -370,7 +378,7 @@ function _renderCompleted(state) {
   const cards = history.map(card => {
     const choiceLabel = card.choice === 'yes' ? card.yesLabel || 'Accepted'
                       : card.choice === 'no'  ? card.noLabel  || 'Declined'
-                      : card.choice === 'auto' ? 'Auto-resolved'
+                      : card.choice === 'auto' ? (card._autoLabel || 'Auto-resolved')
                       : 'Dismissed';
     const choiceCls   = card.choice === 'yes' ? 'yes'
                       : card.choice === 'no'  ? 'no'
@@ -598,11 +606,24 @@ function _attachTabListeners(state) {
 async function _resolveCard(instanceId, choice) {
   try {
     const card = getInbox().find(c => c.instanceId === instanceId);
+    if (!card) {
+      // Withdrawn while open — its situation was already handled (§65).
+      App.showToast('That message is no longer needed — it was already taken care of.', 'neutral', 3000);
+      _expandedCard = null;
+      refresh();
+      return;
+    }
     const { resolve } = await import('../../engine/CardEngine.js');
     const before = snapshotMetrics(StateManager.get());
     resolve(instanceId, choice);
     const after  = snapshotMetrics(StateManager.get());
     EventBus.emit('card:resolved', { instanceId, choice });
+    if (card._rosterKey || card._tradeOffer) {
+      // Roster decisions take effect on the roster clock right away (§65).
+      const { advanceClock } = await import('../../engine/GameEngine.js');
+      advanceClock(Date.now());
+      EventBus.emit('roster:changed', { source: 'inbox', instanceId });
+    }
     _expandedCard = null;
     // Outcome line ("Upgrades complete. Players will notice.") as the headline,
     // with animated bars for every metric the decision moved (§63). Falls back

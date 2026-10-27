@@ -46,21 +46,23 @@ import {
 import {
   processCPUDay,
   processCPURosterDecisions,
-  processWaiverClaims,
   computeFullStandings,
 } from './LeagueEngine.js';
 
 import {
-  drainPendingTrades,
   checkDepth,
   autoResolveSpringCuts,
   applySpringCuts,
   toggleKeeperTag,
   computePayroll,
-  returnFromIL,
   reconcileRoster,
   applyRosterMutation,
+  defaultActiveGroup,
+  pendingArrivals,
 } from './RosterEngine.js';
+
+import { rosterClock, applyDue, hasDue, callUp } from './TransactionEngine.js';
+import { rollGameInjuries, beginInjury, clearInjuryUpdate } from './InjuryEngine.js';
 
 import { computeOVR, computeAge } from './PlayerFactory.js';
 import { STAFF_NAMES } from '../data/player-names.js';
@@ -68,6 +70,7 @@ import {
   generatePlays,
   accumulateStats,
   computeWinProbability,
+  leagueNorms,
 } from './SimEngine.js';
 import * as CardEngine from './CardEngine.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
@@ -91,6 +94,7 @@ import {
   PHASE,
   GAME_STATUS,
   GAME_TICK_MS,
+  GAME_DURATION_FALLBACK_MS,
   MILESTONE_SCREENS,
   PLAYOFF_WILD_CARD_GAMES,
   PLAYOFF_FIRST_ROUND_BEST_OF,
@@ -543,6 +547,12 @@ export async function startNewGame(config) {
  * @returns {Object|null} updated game object
  */
 export function tick() {
+  // The roster clock runs first (§65): every trade, arrival, IL clearance and
+  // roster deadline due before this moment — and never past the first pitch
+  // of a game not yet played — so the game below starts with the roster it
+  // really has.
+  advanceClock(Date.now());
+
   const state = StateManager.get();
   const game  = getNextGame();
 
@@ -686,7 +696,8 @@ function _activateGame(game) {
     userTeam,
     opponentTeam,
     players,
-    { phase: state.phase, isSpring, winProb }
+    { phase: state.phase, isSpring, winProb,
+      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players) }
   );
 
   // Write plays to state and transition to LIVE
@@ -734,7 +745,8 @@ function _silentlyCommitGame(game) {
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
   const { plays, boxScore, liveLineups } = generatePlays(
     game, userTeam, opponentTeam, players,
-    { phase: state.phase, isSpring, winProb }
+    { phase: state.phase, isSpring, winProb,
+      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players) }
   );
 
   // Extract final score from last play
@@ -793,6 +805,8 @@ export async function commitGame(gameIndex) {
 
   if (!game) throw new Error(`GameEngine.commitGame: no game at index ${gameIndex}`);
 
+  const result = { phaseChanged: false, newPhase: null, milestone: null };
+
   // Guard — only commit FINAL or POSTPONED games
   // Return silently rather than throwing — startTick catches errors but a throw
   // would stop the tick loop from retrying on the next cycle.
@@ -805,7 +819,10 @@ export async function commitGame(gameIndex) {
   // Still run CPU/standings/card processing even for silent commits.
   const alreadyCommitted = game._committed && game.result && game.score;
 
-  const result = { phaseChanged: false, newPhase: null, milestone: null };
+  // The moment this game ended on the real clock (§65). For a game the GM
+  // watched it is ~now; for one simulated while the app was closed it is in
+  // the past, so everything it triggers is dated when it really happened.
+  const endMs = Math.min(Date.now(), _gameEndMs(game));
 
   StateManager.mutate(s => {
     const g = s.schedule[gameIndex];
@@ -868,8 +885,10 @@ export async function commitGame(gameIndex) {
     }
 
     // ── Step 1c: Stat accumulation from plays ──────────────
-    // Skip if already done by _silentlyCommitGame.
-    if (!alreadyCommitted && g.plays && g.plays.length > 0) {
+    // Gated on its own flag (like _recordApplied): a silently committed game
+    // arrives here with _committed already set and must still credit stats.
+    if (!g._statsApplied && g.plays && g.plays.length > 0) {
+      g._statsApplied = true;
       const opponentTeam = s.leagueTeams.find(t => t.name === g.opponent) || null;
       const statMutations = accumulateStats(
         g.plays, s.userTeam, opponentTeam, s.players, g.isSpring || false
@@ -914,45 +933,8 @@ export async function commitGame(gameIndex) {
         (s.userTeam.rotation.currentIndex + 1) % s.userTeam.rotation.order.length;
     }
 
-    // ── Step 3: Drain pending trades ──────────────────────
-    // Record trade history entries BEFORE draining — pending data still in state.
-    const pendingOut = (s.userTeam.rosterIds || [])
-      .map(id => s.players[id])
-      .filter(p => p && p._pendingDeparture);
-    const pendingIn  = s._pendingAcquisitions || [];
-
-    if (pendingOut.length > 0 || pendingIn.length > 0) {
-      const outNames = pendingOut.map(p => p.name).join(', ') || '—';
-      const inNames  = pendingIn.map(p => p.name).join(', ')  || '—';
-      const headline = pendingIn.length === 1 && pendingOut.length === 1
-        ? `${pendingIn[0].name} acquired, ${pendingOut[0].name} traded away`
-        : `Trade: received ${inNames} — sent ${outNames}`;
-
-      s.history = [...(s.history || []), {
-        id:       crypto.randomUUID(),
-        type:     'trade',
-        season:   s.seasonNum || 1,
-        gameIdx:  s.currentGameIndex || 0,
-        headline,
-        detail:   `Acquired: ${inNames}. Traded away: ${outNames}. Standing at time of trade: ${s.userTeam.wins || 0}–${s.userTeam.losses || 0}.`,
-        playerId: pendingIn[0]?.id || null,
-        icon:     '🔄',
-        userNote: '',
-      }];
-    }
-
-    const tradeMutations = drainPendingTrades(s);
-    _applyMutations(s, tradeMutations);
-
-    // ── Step 4: IL return checks ───────────────────────────
-    const gameIdx = gameIndex - SPRING_TRAINING_GAME_COUNT; // regular season index
-    for (const playerId of Object.keys(s.players)) {
-      const p = s.players[playerId];
-      if (p.isInjured && p.ilReturnGame !== null && p.ilReturnGame <= gameIdx) {
-        const ilMutations = returnFromIL(s, playerId);
-        _applyMutations(s, ilMutations);
-      }
-    }
+    // (Trades, arrivals and IL clearances are no longer tied to a commit —
+    //  they run on the real-time roster clock: advanceClock(), §65.)
 
     // ── Step 5: Reconcile roster invariants ────────────────
     // After trades/IL returns, restore lineup + rotation integrity: pull any
@@ -998,16 +980,16 @@ export async function commitGame(gameIndex) {
   const cpuDayMutations = processCPUDay(StateManager.get(), dateStr);
   StateManager.mutate(s => _applyMutations(s, cpuDayMutations));
 
-  const cpuRosterMutations = processCPURosterDecisions(StateManager.get(), dateStr);
+  const cpuRosterMutations = processCPURosterDecisions(StateManager.get(), dateStr, endMs);
   StateManager.mutate(s => _applyMutations(s, cpuRosterMutations));
 
-  const waiverMutations = processWaiverClaims(StateManager.get());
-  StateManager.mutate(s => _applyMutations(s, waiverMutations));
+  // (Waivers run on the roster clock: 72-hour claim window, §65 / §20.2.)
 
   // ── Update standings ──────────────────────────────────────
   StateManager.mutate(s => {
     s.standings = computeFullStandings(s);
   });
+
 
   // ── Recompute IMP scores for all active players ────────────
   const impMutations = computeAllIMP(StateManager.get(), gameIndex);
@@ -1039,6 +1021,24 @@ export async function commitGame(gameIndex) {
     result.phaseChanged = true;
     result.newPhase     = newPhase;
   }
+
+  // ── Injuries (all ten teams) + the roster clock up to the final out (§65) ──
+  // The players who took the field today risk injury; then every roster move
+  // due by the end of this game happens, and the inbox is brought in line.
+  // Runs AFTER the phase transition so Opening Day rosters are reconciled
+  // under the 28-man rule on the day they become legal rosters.
+  let injuryEvents = [];
+  if (game.status !== GAME_STATUS.POSTPONED) {
+    const st  = StateManager.get();
+    const inj = rollGameInjuries(st, _appearances(st, gameIndex), endMs);
+    if (Object.keys(inj.players).length) {
+      StateManager.mutate(s => {
+        for (const [id, upd] of Object.entries(inj.players)) Object.assign(s.players[id], upd);
+      });
+    }
+    injuryEvents = inj.events.map(e => ({ ...e, atMs: endMs }));
+  }
+  advanceClock(endMs, { events: injuryEvents, reconcileAll: true });
 
   // ── Milestone check ───────────────────────────────────────
   const milestone = checkMilestone();
@@ -1176,6 +1176,7 @@ export function getNextGame() {
  */
 export async function advancePhase(newPhase) {
   const state = StateManager.get();
+  const fromPhase = state.phase;
 
   StateManager.mutate(s => {
     s.phase = newPhase;
@@ -1190,11 +1191,15 @@ export async function advancePhase(newPhase) {
       break;
 
     case PHASE.REGULAR_SEASON: {
-      // Apply keeper-based spring cuts before Opening Day.
-      // applySpringCuts reads _isKeeper flags directly.
-      // autoResolveSpringCuts handles the case where < 28 are tagged.
+      // Opening Day only (§65): the regular season is re-entered after the
+      // trade deadline and must not re-run spring cuts. Cuts count the ACTIVE
+      // roster — players on the IL keep their 40-man spot, not a 28-man one.
+      // applySpringCuts reads _isKeeper flags directly; autoResolveSpringCuts
+      // handles the case where none are tagged.
+      if (fromPhase !== PHASE.SPRING_TRAINING) break;
       const preState = StateManager.get();
-      if (preState.userTeam.rosterIds.length > ROSTER_LIMITS.ACTIVE_TOTAL) {
+      const activeIds = preState.userTeam.rosterIds.filter(id => preState.players[id]?.group !== PLAYER_GROUP.IL);
+      if (activeIds.length + pendingArrivals(preState, 'user').length > ROSTER_LIMITS.ACTIVE_TOTAL) {
         const anyTagged = preState.userTeam.rosterIds.some(
           id => preState.players[id]?._isKeeper
         );
@@ -1881,6 +1886,130 @@ function _applyMutations(state, mutations) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// ROSTER CLOCK (§65)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * advanceClock(nowMs = Date.now(), { events, reconcileAll })
+ * Moves the league's roster clock forward to min(nowMs, first pitch of the
+ * next unplayed game) and makes everything due by then happen, in order:
+ *   1. roster cards past their deadline auto-resolve (at their deadline);
+ *   2. TransactionEngine.applyDue — trades, arrivals, IL clearances,
+ *      day-to-day returns, the GM's vacancy deadline / manager call-up;
+ *   3. the inbox is synced to the roster (new cards, withdrawn ghosts).
+ * Cheap and write-free when nothing is due (called every app tick).
+ *
+ * @param {Number} [nowMs]
+ * @param {Object} [opts]
+ * @param {Object[]} [opts.events]       extra events for the card sync (injuries)
+ * @param {Boolean}  [opts.reconcileAll] reconcile every team (commit)
+ * @returns {{ changed: Boolean, events: Object[], clockMs: Number }}
+ */
+export function advanceClock(nowMs = Date.now(), opts = {}) {
+  const state = StateManager.get();
+  if (!state?.userTeam) return { changed: false, events: [], clockMs: nowMs };
+  const clockMs = rosterClock(state, nowMs);
+
+  const expired = CardEngine.expireDueRosterCards(clockMs);
+  let applied = { changed: false, events: [] };
+  if (expired || opts.reconcileAll || hasDue(StateManager.get(), clockMs)) {
+    StateManager.mutate(s => {
+      applied = applyDue(s, clockMs, { reconcileAll: !!opts.reconcileAll });
+      if (applied.changed || opts.reconcileAll) s.userTeam.finances.payroll = computePayroll(s);
+    });
+  }
+  const events = [...(opts.events || []), ...applied.events];
+  const cards  = CardEngine.syncRosterCards(events, clockMs);
+  return {
+    changed: expired > 0 || applied.changed || cards.delivered > 0 || cards.withdrawn > 0,
+    events,
+    cards,
+    clockMs,
+  };
+}
+
+/**
+ * gmCallUp(playerId, nowMs)
+ * The GM calls a farm player up (Team screen dashed spot or farm row). Same
+ * ledger path as an inbox call-up: he reports the next calendar day, and the
+ * roster clock withdraws whatever inbox card was asking for that spot.
+ * @returns {{ ok: Boolean, error?: String, tx?: Object }}
+ */
+export function gmCallUp(playerId, nowMs = Date.now()) {
+  let res = { ok: false, error: 'No team loaded.' };
+  if (!StateManager.get()?.userTeam) return res;
+  StateManager.mutate(s => { res = callUp(s, playerId, 'user', nowMs, 'gm'); });
+  if (res.ok) {
+    const rec = reconcileRoster(StateManager.get(), 'user');
+    StateManager.mutate(s => applyRosterMutation(s, rec));
+    advanceClock(nowMs);
+  }
+  return res;
+}
+
+/**
+ * debugInjure(playerId, nowMs) — DEV ONLY (Developer Menu).
+ * Injures a user player through the real path: 'evaluating' now, Act 1 in
+ * the inbox right away, then the normal two-act flow and roster clock.
+ */
+export function debugInjure(playerId, nowMs = Date.now()) {
+  const st = StateManager.get();
+  const p  = st?.players?.[playerId];
+  if (!p || p.injury || p.teamId !== 'user') return false;
+  StateManager.mutate(s => Object.assign(s.players[playerId], beginInjury(p, nowMs)));
+  const rec = reconcileRoster(StateManager.get(), 'user');
+  StateManager.mutate(s => applyRosterMutation(s, rec));
+  // Event dated 20 minutes back so Act 1 (5–20 min after the injury) is due now.
+  CardEngine.syncRosterCards([{ type: 'INJURY', teamId: 'user', playerId, atMs: nowMs - 20 * 60_000 }], nowMs);
+  return true;
+}
+
+/** When a game ended on the real clock: its last play, else first pitch + 3h. */
+function _gameEndMs(game) {
+  const last = game?.plays?.[game.plays.length - 1];
+  if (last && Number.isFinite(last._timestamp)) return last._timestamp + (game._tickOffset || 0);
+  return (game?.gameTime || Date.now()) + GAME_DURATION_FALLBACK_MS;
+}
+
+/**
+ * _appearances(state, gameIndex)
+ * Who took the field on this game day, per team — the injury exposure.
+ * User + opponent from the committed box score (actual appearances); the
+ * other CPU teams playing that date from their active lineup, today's
+ * starter and a few relievers (their games have no box score).
+ */
+function _appearances(state, gameIndex) {
+  const g   = state.schedule[gameIndex];
+  const out = [];
+  const opp = (state.leagueTeams || []).find(t => t.name === g?.opponent) || null;
+  const box = g?.boxScore;
+  const fromBox = (teamId, side) => side && out.push({
+    teamId,
+    hitterIds:   (side.hitters  || []).map(h => h.id),
+    starterId:   side.pitchers?.[0]?.id || null,
+    relieverIds: (side.pitchers || []).slice(1).map(p => p.id),
+  });
+  if (box) {
+    fromBox('user', box.userIsHome ? box.home : box.away);
+    if (opp) fromBox(opp.id, box.userIsHome ? box.away : box.home);
+  }
+  const slate   = state.leagueSchedule?.dayMap?.[g?.date];
+  const playing = new Set(slate ? slate.flatMap(cg => [cg.homeId, cg.awayId]) : (state.leagueTeams || []).map(t => t.id));
+  for (const t of state.leagueTeams || []) {
+    if (t.id === opp?.id || !playing.has(t.id)) continue;
+    const rot = t.rotation?.order || [];
+    const pen = (t.rosterIds || []).filter(id => state.players[id]?.group === PLAYER_GROUP.BULLPEN);
+    out.push({
+      teamId:      t.id,
+      hitterIds:   (t.lineupSlots || []).map(s => s.playerId).filter(Boolean),
+      starterId:   rot.length ? rot[Math.floor(Math.random() * rot.length)] : null,
+      relieverIds: pen.sort(() => Math.random() - 0.5).slice(0, 3),
+    });
+  }
+  return out;
+}
+
 function _computeRosterAvgOvr(state) {
   const ids = state.userTeam.rosterIds || [];
   if (ids.length === 0) return 55;
@@ -1979,7 +2108,11 @@ function _applyAgeAndDevelopment(player, seasonNum) {
     sr[key] = _clamp(sr[key] + finalChange, SUB_RATING_MIN, SUB_RATING_MAX);
   }
 
-  // Clear injury penalty — new season, clean slate
+  // New season, clean slate: injuries heal over the winter (§65).
+  if (player.injury || player.group === PLAYER_GROUP.IL) {
+    Object.assign(player, clearInjuryUpdate());
+    if (player.group === PLAYER_GROUP.IL) player.group = defaultActiveGroup(player);
+  }
   player.injuryPenalty = null;
 
   // Recompute OVR from updated sub-ratings

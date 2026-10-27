@@ -158,7 +158,7 @@ export function computeWinProbability(userRoster, opponentTeam, players, context
  * @returns {Object} { plays, boxScore }
  */
 export function generatePlays(game, userTeam, opponentTeam, players, context) {
-  const { isSpring = false, phase = PHASE.REGULAR_SEASON } = context;
+  const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null } = context;
 
   // When opponentTeam is null (lookup failed), build a synthetic CPU opponent
   // from any available league team so the game can still produce scoring plays.
@@ -191,7 +191,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     userLineup, oppLineup,
     userSP, oppSP,
     players,
-    { game, fieldMod, isHome: game.isHome, phase, isSpring }
+    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms }
   );
 
   // Prepend a game_start announcement play — first thing shown in PBP.
@@ -258,7 +258,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
 // ─────────────────────────────────────────────────────────────
 
 function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
-  const { game, fieldMod, isHome, phase, isSpring } = ctx;
+  const { game, fieldMod, isHome, phase, isSpring, norms = null } = ctx;
 
   const plays = [];
 
@@ -281,6 +281,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     oppFatigued:  false,
     userBullpenIdx: 0,
     oppBullpenIdx:  0,
+    norms,          // league averages the PA model measures against (§65)
   };
 
   // User team bats in bottom (home) or top (away)
@@ -552,7 +553,7 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     if (!activeBatter) { outs++; continue; }
 
     const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
-      { inning, isSpring });
+      { inning, isSpring, norms: gs.norms });
     // Increment the THROWING pitcher's batters-faced count. When the user is
     // batting the opponent is pitching (and vice-versa) — this must match the
     // fatigue check below, which reads the same throwing-pitcher counter.
@@ -644,6 +645,45 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
   return plays;
 }
 
+/**
+ * leagueNorms(teams, players)
+ * The league's current average active hitter (contact / power / speed — the
+ * nine in every lineup) and active pitcher (stuff / control — every rotation
+ * and bullpen arm), from effective sub-ratings. Pure; GameEngine computes it
+ * when a game starts and passes it in as context.norms.
+ *
+ * @param {Object[]} teams   — user team + league teams
+ * @param {Object}   players — registry
+ * @returns {{ contact, power, speed, stuff, control }}
+ */
+export function leagueNorms(teams, players) {
+  const sum = { contact: 0, power: 0, speed: 0, stuff: 0, control: 0 };
+  let nh = 0, np = 0;
+  const ok = (p) => p && !p.isInjured && !p.isSuspended;
+  for (const t of teams || []) {
+    for (const sl of t.lineupSlots || []) {
+      const p = players[sl.playerId];
+      if (!ok(p)) continue;
+      sum.contact += _effectiveSR(p, 'contact', p.subRatings?.contact);
+      sum.power   += _effectiveSR(p, 'power',   p.subRatings?.power);
+      sum.speed   += _effectiveSR(p, 'speed',   p.subRatings?.speed);
+      nh++;
+    }
+    for (const id of t.rosterIds || []) {
+      const p = players[id];
+      if (!ok(p) || ![PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN].includes(p.group)) continue;
+      sum.stuff   += _effectiveSR(p, 'stuff',   p.subRatings?.stuff);
+      sum.control += _effectiveSR(p, 'control', p.subRatings?.control);
+      np++;
+    }
+  }
+  if (!nh || !np) return null;
+  return {
+    contact: sum.contact / nh, power: sum.power / nh, speed: sum.speed / nh,
+    stuff:   sum.stuff / np,   control: sum.control / np,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // AT-BAT RESOLUTION — all sub-rating → outcome mappings
 // ─────────────────────────────────────────────────────────────
@@ -707,12 +747,20 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   // nothing is rescaled after the game (§60).
   const envMod = fieldMod;
 
-  // Rating gaps from the league average (§60 plate-appearance model).
-  const A = SIM_RATING_AVG;
+  // Rating gaps from the league average (§60 plate-appearance model). The
+  // average is the CURRENT league's (§65, leagueNorms): baseball rates are
+  // relative to the league. Injuries, call-ups and aging move every team's
+  // talent, and a club full of replacement players does worse than the
+  // others — but the league's run environment stays where baseball is.
+  // Without norms (tests, previews) the fixed SIM_RATING_AVG is used.
+  const N  = context.norms || {};
+  const A  = SIM_RATING_AVG;
+  const Ac = N.contact ?? A, Ap = N.power ?? A, As = N.speed ?? A;
+  const Ast = N.stuff ?? A, Act = N.control ?? A;
   const r = _roll();
 
   // 1. Walk — control below average → more walks
-  const walkProb = _clamp(SIM_PA_WALK_BASE + (A - control) * SIM_PA_WALK_PER_PT,
+  const walkProb = _clamp(SIM_PA_WALK_BASE + (Act - control) * SIM_PA_WALK_PER_PT,
                           SIM_PA_WALK_MIN, SIM_PA_WALK_MAX) * fatigueWalkMod * pitcherMod;
   if (r < walkProb) return { type: 'walk' };
 
@@ -725,18 +773,18 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
 
   // 3. Strikeout — stuff vs contact
   const kProb = _clamp(SIM_PA_K_BASE
-                       + (A - contact) * SIM_PA_K_PER_CONTACT_PT
-                       + (stuff - A)   * SIM_PA_K_PER_STUFF_PT,
+                       + (Ac - contact) * SIM_PA_K_PER_CONTACT_PT
+                       + (stuff - Ast)  * SIM_PA_K_PER_STUFF_PT,
                        SIM_PA_K_MIN, SIM_PA_K_MAX) * fatigueKMod * pitcherMod * batterMod;
   if (r < pos + kProb) return { type: 'strikeout' };
   pos += kProb;
 
   // 4. Hit vs out — contact vs stuff, plus speed-driven infield hits
   const hitProb = _clamp(SIM_PA_HIT_BASE
-                         + (contact - A) * SIM_PA_HIT_PER_CONTACT_PT
-                         - (stuff - A)   * SIM_PA_HIT_PER_STUFF_PT,
+                         + (contact - Ac) * SIM_PA_HIT_PER_CONTACT_PT
+                         - (stuff - Ast)  * SIM_PA_HIT_PER_STUFF_PT,
                          SIM_PA_HIT_MIN, SIM_PA_HIT_MAX) * fatigueHitMod * batterMod * envMod;
-  const infieldBonus = Math.max(0, (speed - A) * SIM_PA_INFIELD_HIT_PER_SPEED_PT);
+  const infieldBonus = Math.max(0, (speed - As) * SIM_PA_INFIELD_HIT_PER_SPEED_PT);
   const adjHitProb   = Math.min(0.45, hitProb + infieldBonus);
 
   if (r >= pos + adjHitProb) {
@@ -746,11 +794,11 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   }
 
   // 5. Hit type: HR / triple / double / single — power sets the extra-base share
-  const hrShare  = _clamp(SIM_HIT_HR_SHARE_BASE + (power - A) * SIM_HIT_HR_SHARE_PER_PT,
+  const hrShare  = _clamp(SIM_HIT_HR_SHARE_BASE + (power - Ap) * SIM_HIT_HR_SHARE_PER_PT,
                           SIM_HIT_HR_SHARE_MIN, SIM_HIT_HR_SHARE_MAX) * envMod;
-  const xbhShare = _clamp(SIM_HIT_XBH_SHARE_BASE + (power - A) * SIM_HIT_XBH_SHARE_PER_PT,
+  const xbhShare = _clamp(SIM_HIT_XBH_SHARE_BASE + (power - Ap) * SIM_HIT_XBH_SHARE_PER_PT,
                           SIM_HIT_XBH_SHARE_MIN, SIM_HIT_XBH_SHARE_MAX);
-  const tripleShare = SIM_HIT_TRIPLE_SHARE * _clamp(speed / A, 0.5, 1.8);
+  const tripleShare = SIM_HIT_TRIPLE_SHARE * _clamp(speed / As, 0.5, 1.8);
 
   const hitRoll = _roll();
   if (hitRoll < hrShare)                          return { type: 'hr' };
