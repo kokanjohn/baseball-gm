@@ -33,6 +33,7 @@ import {
 } from './RosterEngine.js';
 
 import { computeOVR, isAvailable } from './PlayerFactory.js';
+import { canAddSalary } from './FinanceEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // CPU GAME SIMULATION
@@ -104,7 +105,9 @@ export function cpuWaiverClaimant(state, playerId) {
     // reverse order of the standings — worst record first.
     if (entry.id === 'user') { if (player._userClaim) return 'user'; continue; }
     const team = state.leagueTeams.find(t => t.id === entry.id);
-    if (team && _isUpgradeFor(team, player, state.players)) return team.id;
+    // §78.5 a claim takes on his contract: only a club whose owner can carry it.
+    if (team && _isUpgradeFor(team, player, state.players)
+        && canAddSalary(state, player.contractSalary || 0, 0, team.id)) return team.id;
   }
   return null;
 }

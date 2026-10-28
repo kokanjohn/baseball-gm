@@ -63,6 +63,7 @@ import {
 import { cpuWaiverClaimant } from './LeagueEngine.js';
 
 import { tradePlayerPatches } from './TradeEngine.js';
+import { payrollRoom, contractToMove, cutOrderAmount } from './FinanceEngine.js';
 import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate } from './InjuryEngine.js';
 import { computeAge, createPlayer, baseballYear } from './PlayerFactory.js';
 import { PLAYER_NAME_POOL } from '../data/player-names.js';
@@ -508,6 +509,40 @@ function _resolveWaiver(draft, player, atMs, events, touched) {
   applyRosterMutation(draft, clearWaivers(draft, player.id));
   if (from) touched.add(from);
   events.push({ type: 'WAIVER_CLEARED', playerId: player.id, teamId: draft.players[player.id]?.teamId || null, atMs });
+}
+
+/**
+ * cpuSalaryMove(draft, fromId, atMs)
+ * §78.5: a CPU club whose owner has ordered cuts moves a contract — the
+ * smallest salary (outside its core five) that covers the cut — to the club
+ * with the most payroll room that can absorb it, for nothing back (a salary
+ * dump). He reports the next day like any trade; the club that sent him fills
+ * his spot from its farm on the vacancy clock. Returns the move, or null when
+ * no club can take the contract. Pure (mutates the draft).
+ */
+export function cpuSalaryMove(draft, fromId, atMs) {
+  const from = (draft.leagueTeams || []).find(t => t.id === fromId);
+  if (!from) return null;
+  const amountK = cutOrderAmount(draft, fromId);
+  if (!(amountK > 0)) return null;
+  const p = contractToMove(draft, amountK, fromId);
+  if (!p) return null;
+  const taker = (draft.leagueTeams || [])
+    .filter(t => t.id !== fromId)
+    .map(t => ({ t, room: payrollRoom(draft, t.id) }))
+    .filter(x => x.room >= (p.contractSalary || 0))
+    .sort((a, b) => b.room - a.room)[0]?.t;
+  if (!taker) return null;
+  from.rosterIds = from.rosterIds.filter(x => x !== p.id);
+  const { tx, patch } = makeArrival({ player: p, teamId: taker.id, fromTeamId: fromId, reason: 'trade', atMs, by: 'cpu' });
+  Object.assign(p, patch, { _previouslyWithOrg: false });
+  draft.transactions = [...(draft.transactions || []), tx, {
+    id: `tx-cpudump-${fromId}-${atMs}`, kind: 'cpu_trade', teamId: taker.id, fromTeamId: fromId,
+    offer: { incomingIds: [p.id], outgoingIds: [] }, createdAt: atMs, effectiveAt: atMs, doneAt: atMs,
+    status: 'done', note: 'salary', amountK: p.contractSalary || 0,
+  }];
+  _reconcile(draft, fromId, atMs);          // the lineup / rotation / a call-up fill his spot
+  return { playerId: p.id, fromId, toId: taker.id, salaryK: p.contractSalary || 0 };
 }
 
 /** The weakest healthy same-side player not in the lineup / rotation. */

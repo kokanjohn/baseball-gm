@@ -382,6 +382,12 @@ export function displacementFor(draft, teamId, player) {
 export function beginOffseason(draft, atMs) {
   if (draft.allStar) AllStar.closeSeason(draft);   // §75: the season's hosting impression + record
   if (draft.userTeam?.finances) Finance.seasonEndReview(draft, atMs, 'user');   // §78: the books close; funds carry over
+  // §78.5 every CPU club's books close too; its owner sets next year's target.
+  for (const t of draft.leagueTeams || []) {
+    if (!t.finances) continue;
+    Finance.seasonEndReview(draft, atMs, t.id);
+    Finance.cpuNextTarget(draft, t.id);
+  }
   _lockSeason(draft, atMs);
   _archiveStats(draft);
   const nextYear = baseballYear(draft) + 1;
@@ -593,8 +599,10 @@ export function contractDay(draft, atMs) {
       const age = computeAge(p.dob, nextYear);
       let pr = CPU_RESIGN_ODDS.find(o => rel >= o.minRel).p;
       if (age >= 34) pr *= CPU_RESIGN_AGE_34_MULT;
-      if (Math.random() < pr) {
-        applyContract(draft, id, marketTerms(draft, p));
+      // §78.5 his owner has to be able to carry the new deal (his old one comes off).
+      const terms = marketTerms(draft, p);
+      if (Math.random() < pr && Finance.canAddSalary(draft, terms.salary, p.contractSalary || 0, t.id)) {
+        applyContract(draft, id, terms);
         events.push({ type: 'RESIGNED', playerId: id, teamId: t.id, atMs });
         continue;
       }
@@ -656,10 +664,13 @@ export function cpuFreeAgencyRound(draft, atMs) {
   const events = [];
   const order = _shuffle([...(draft.leagueTeams || [])]);
   for (const t of order) {
+    // §78.5 only the free agents this club's owner can pay for.
+    const pool = freeAgents(draft).filter(fa =>
+      Finance.canAddSalary(draft, (fa._ask || marketTerms(draft, fa)).salary, 0, t.id));
     if (activeCount(draft, t.id) >= ROSTER_LIMITS.ACTIVE_TOTAL) {
       // A full club still upgrades: the best free agent who beats its weakest
       // same-side reserve by FA_UPGRADE_MIN sends that man to the farm.
-      for (const fa of freeAgents(draft).sort((a, b) => (b.ovr || 0) - (a.ovr || 0))) {
+      for (const fa of [...pool].sort((a, b) => (b.ovr || 0) - (a.ovr || 0))) {
         const out = displacementFor(draft, t.id, fa);
         if (out && (fa.ovr || 0) >= (out.ovr || 0) + FA_UPGRADE_MIN) {
           events.push(...(signFreeAgent(draft, fa.id, t.id, atMs, { displaceId: out.id }) || []));
@@ -671,8 +682,8 @@ export function cpuFreeAgencyRound(draft, atMs) {
     const need = teamNeed(draft, t.id);
     if (!need) continue;
     const byOvr = (a, b) => (b.ovr || 0) - (a.ovr || 0);
-    const best = freeAgents(draft).filter(p => _fits(p, need)).sort(byOvr)[0]
-      || freeAgents(draft).filter(p => _fits(p, { side: need.side, pos: null })).sort(byOvr)[0];
+    const best = pool.filter(p => _fits(p, need)).sort(byOvr)[0]
+      || pool.filter(p => _fits(p, { side: need.side, pos: null })).sort(byOvr)[0];
     if (!best) continue;
     const farmBest = (t.farmIds || []).map(id => draft.players[id])
       .filter(p => p && !p.isInjured && _fits(p, need))

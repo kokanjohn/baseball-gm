@@ -6947,3 +6947,26 @@ Cash moves between club funds, usually covering part of the traded player's **re
 - **New tokens:** `{team_name}`, `{team_city}`, `{team_nickname}`, `{gm_name}`, `{last_record}`.
 - **Fix:** the same card can never be pending twice (unanswered in the inbox or scheduled). The selection filter excludes it, which found a setup card being picked again.
 - **Harness:** the takeover and Opening Day cards arrive in season 1; a second season opens camp with a card.
+
+## 81. Phase 2 — CPU clubs keep books (r76, §78.5 built)
+- **Every CPU club has a real account.** `FinanceEngine.initClubBooks` sets each club up at league creation, or on the first clock pass for saves from before r76:
+  - An owner personality, `ownerArchetype`, drawn from the six archetypes and kept for the franchise's life.
+  - A park atmosphere from the club's strength, and a win target of 142 × str.
+  - A payroll target 8% over its opening payroll (`FIN_CPU.targetHeadroom`), so the owner has budgeted for call-ups and injuries.
+  - A coaching-staff budget of 3% of payroll (`staffK`; `staffAnnual` falls back to it).
+  - A market calibrated like ours on what the club really carries: opening payroll +5% (`inSeasonLift`), with no front-office card budget. A club playing to its owner's expectations breaks even.
+- **The same calendar as ours.** Daily accrual, paydays on the 1st and 15th plus the settling day, media and local installments. `advanceClock` merges every club's due steps in time order. The guard was raised to 12,000 to cover ten clubs' days.
+- **Gates.** A CPU home game posts its gate at the final (`_finishLeagueGame`). When we play on the road, the home club's crowd pays the home club (`commitGame` Step 1b). The projection counts home games from banked gates, the same for any club.
+- **Owner functions take a `teamId`:** patience, strain, allowance, stage, tolerance, `canAddSalary`, `canSpend`, `ownerReview`, `cutOrderAmount` and `contractToMove`. A CPU owner's trust sits at the pivot, and only our owner's trust moves. `payrollRoom(state, teamId)` is new.
+- **Owners hold the purse:**
+  - CPU waiver claims (`cpuWaiverClaimant`), offseason re-signings (new deal minus old) and free-agent signings, including the full-club upgrade, all require the owner to carry the salary.
+  - CPU trade offers to us must fit both owners (`_tradeSalaryOk(state, offer, cpuId)`).
+  - Our salary dump goes to the club with the most room that can take the contract. If none can, a notice says so and the order stands.
+- **CPU owners cut.** At a CPU payday, an owner at 'cuts' before the trade deadline has the club move a contract (`TransactionEngine.cpuSalaryMove`): the smallest non-core salary covering the cut goes to the club with the most room, for nothing back. The move is a `cpu_trade` transaction and a feed line, and the sending club's roster is reconciled. After the deadline he waits for winter.
+- **Season's end.** Each CPU club's books close (red ink covered by its owner), and `cpuNextTarget` moves its target ± with the books (`booksOfferAdjustment(state, teamId)`).
+- **Debug screen:** a League Books section showing each club's funds, payroll/target, season net and owner stage.
+- **Harness (8 seeds):**
+  - Every club opens and closes reconciled books, with gates, media, local money and salaries.
+  - CPU seasons run about −2.5M to +4M on 10–38M targets, with occasional owner-covered red ink.
+  - Trade offers continue (8–10 a season). An owner ordering cuts moves a contract to a club with room (mechanism test on a copy).
+  - Our own operating-net bound widens to 50% for a historic .650+ season.

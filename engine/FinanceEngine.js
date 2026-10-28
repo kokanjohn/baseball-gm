@@ -47,7 +47,7 @@ import {
   FIN_PAYDAYS, FIN_PAYDAY_HOUR, FIN_PLAYOFF_GATE_MULT, FIN_START_FUNDS_SHARE,
   FIN_CAPACITY_BASE, FIN_CAPACITY_PER_M, FIN_ATTENDANCE,
   OWNER_PROFILE, OWNER_PATIENCE, OWNER_STAGE, OWNER_TRUST_FX, OWNER_ORDER_TARGET_PENALTY,
-  FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER,
+  FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER, FIN_CPU,
 } from '../data/constants.js';
 import { dayOf } from './PitchingEngine.js';
 
@@ -78,7 +78,9 @@ function _club(state, teamId) {
 
 /** Annual coaching-staff salaries ($K). */
 export function staffAnnual(team) {
-  return Object.values(team?.coachingStaff || {}).reduce((a, s) => a + (s?.salary || 0), 0);
+  const named = Object.values(team?.coachingStaff || {}).reduce((a, s) => a + (s?.salary || 0), 0);
+  // A CPU club's staff is not modelled person by person: a budget line (§78.5).
+  return named || team?.finances?.staffK || 0;
 }
 
 /** The crowd's response to the club's winning percentage. */
@@ -100,9 +102,10 @@ function _fill(atmo, form = 1, dayMult = 1, noise = 1) {
  * at its starting payroll level and atmosphere; from there, winning and a
  * livelier park earn more.
  */
-export function initFinances(team, { payrollTarget, atmosphere = 60, startFundsShare = FIN_START_FUNDS_SHARE, winPct = 0.5 }) {
+export function initFinances(team, { payrollTarget, atmosphere = 60, startFundsShare = FIN_START_FUNDS_SHARE, winPct = 0.5,
+                                     calibrateOn = payrollTarget, cardsAllowance = FIN_CARDS_ALLOWANCE }) {
   const P = payrollTarget;
-  const spend  = P + staffAnnual(team) + P * FIN_CARDS_ALLOWANCE;
+  const spend  = calibrateOn + staffAnnual(team) + calibrateOn * cardsAllowance;
   const income = spend * FIN_BREAK_EVEN_MARGIN;
   const nonMedia = Math.max(0, income - FIN_MEDIA_SHARE_K);
   const localAnnual = nonMedia * FIN_LOCAL_SHARE;
@@ -122,6 +125,37 @@ export function initFinances(team, { payrollTarget, atmosphere = 60, startFundsS
     owner: { stage: 'content', mood: 0, order: null, targetPenalty: 0, lastReviewAt: null },
   };
   return team.finances;
+}
+
+/**
+ * initClubBooks(draft, teamId, { atMs }) — §78.5 a CPU club's books: its
+ * owner's personality (one of the archetypes, kept for the franchise's life),
+ * a payroll target at the payroll it opened with, a park whose atmosphere
+ * follows the club's standing, and a market calibrated like ours — the club
+ * breaks even when it plays to its owner's expectations.
+ */
+export function initClubBooks(draft, teamId) {
+  const t = _club(draft, teamId);
+  if (!t || teamId === 'user') return null;
+  const types = Object.keys(OWNER_PROFILE);
+  t.ownerArchetype ||= types[Math.floor(Math.random() * types.length)];
+  t.atmosphere     ??= Math.round(clamp(50 + ((t.str ?? 0.5) - 0.5) * 120, 35, 75));
+  t._ownerWinTarget ??= Math.round(REGULAR_SEASON_GAME_COUNT * clamp(t.str ?? 0.5, 0.4, 0.6));
+  const payroll = payrollOf(draft, teamId);
+  // The owner budgets a little over the opening payroll for the season's
+  // call-ups and injuries; the market is calibrated on what the club really
+  // spends (no front-office card budget), so it breaks even at its pace.
+  t.finances = { ...(t.finances || {}), staffK: Math.round(payroll * FIN_CPU.staffShare) };
+  initFinances(t, {
+    payrollTarget:   Math.max(1000, Math.round(payroll * (1 + FIN_CPU.targetHeadroom) / 50) * 50),
+    calibrateOn:     payroll * (1 + FIN_CPU.inSeasonLift),
+    cardsAllowance:  0,
+    atmosphere:      t.atmosphere,
+    startFundsShare: startFundsShareFor(t.ownerArchetype),
+    winPct:          t._ownerWinTarget / REGULAR_SEASON_GAME_COUNT,
+  });
+  t.finances.payroll = payroll;
+  return t.finances;
 }
 
 /** Opening-funds share for an archetype (the Gambler's is a roll). */
@@ -336,9 +370,8 @@ export function projection(state, teamId = 'user') {
   const remPay = (payrollOf(state, teamId) + staffAnnual(t)) * remDays / cal.days
                + (fin.dead || []).reduce((a, d) => a + d.salary * Math.max(0, d.endDay - cal.accruedThrough) / cal.days, 0);
   const remPaydays = cal.paydays.length - cal.paid;
-  const playedHome = teamId === 'user'
-    ? (state.schedule || []).filter(g => !g.isSpring && !g.isPlayoff && g.isHome && g._committed).length
-    : 0;
+  // Home games played this season = home gates banked (any club).
+  const playedHome = (fin.ledger || []).filter(e => e.cat === 'gate' && e.label === 'Home gate').length;
   const remHome = Math.max(0, REGULAR_SEASON_GAME_COUNT / 2 - playedHome);
   const remIn = remPaydays * (cal.mediaPer + cal.localPer) + remHome * _avgGate(fin);
   return round((fin.funds || 0) - owed - remPay + remIn);
@@ -348,11 +381,15 @@ export function projection(state, teamId = 'user') {
 // THE OWNER
 // ─────────────────────────────────────────────────────────────
 
-const _profile = (state) => OWNER_PROFILE[state.archetype] || OWNER_PROFILE.contender;
+/** The club's owner personality: ours is the franchise archetype; a CPU club's is its own. */
+const _profile = (state, teamId = 'user') =>
+  OWNER_PROFILE[teamId === 'user' ? state.archetype : _club(state, teamId)?.ownerArchetype] || OWNER_PROFILE.contender;
+/** A CPU owner has no trust relationship with a GM: he sits at the pivot. */
+const _trust = (state, teamId) => (teamId === 'user' ? (state.userTeam.ownerTrust ?? 60) : OWNER_PATIENCE.trustPivot);
 
 /** How the season is going against the win target, in projected wins (null early on). */
-export function paceVsTarget(state) {
-  const u = state.userTeam;
+export function paceVsTarget(state, teamId = 'user') {
+  const u = _club(state, teamId) || {};
   const n = (u.wins || 0) + (u.losses || 0);
   if (n < OWNER_PATIENCE.paceAfterGames) return null;
   const projected = (u.wins || 0) / n * REGULAR_SEASON_GAME_COUNT;
@@ -360,30 +397,32 @@ export function paceVsTarget(state) {
 }
 
 /** The owner's patience: his personality, the season's pace, his trust in you, his mood. */
-export function patience(state) {
+export function patience(state, teamId = 'user') {
   const P = OWNER_PATIENCE;
-  const u = state.userTeam;
-  const pace = paceVsTarget(state);
-  return _profile(state).patienceBase
+  const u = _club(state, teamId) || {};
+  const pace = paceVsTarget(state, teamId);
+  return _profile(state, teamId).patienceBase
     + (pace == null ? 0 : clamp(pace * P.pacePerWin, -P.paceMax, P.paceMax))
-    + ((u.ownerTrust ?? 60) - P.trustPivot) * P.trustWeight
+    + (_trust(state, teamId) - P.trustPivot) * P.trustWeight
     + (u.finances?.owner?.mood || 0);
 }
 
 /** Financial strain (points ≈ percent): payroll over target, projected red ink, cost per win. */
-export function strain(state) {
-  const fin = state.userTeam.finances || {};
+export function strain(state, teamId = 'user') {
+  const u = _club(state, teamId) || {};
+  const fin = u.finances || {};
   const target = fin.payrollTarget || 1;
-  const payroll = payrollOf(state, 'user');
-  const projected = projection(state, 'user');
+  const payroll = payrollOf(state, teamId);
+  const projected = projection(state, teamId);
   // Money the club is projected to have covers some of the payroll over the
   // target — as much as this owner's personality allows.
-  const cushion = Math.max(0, projected) * (_profile(state).cushionUse ?? 0.5);
+  const prof = _profile(state, teamId);
+  const cushion = Math.max(0, projected) * (prof.cushionUse ?? 0.5);
   const over = Math.max(0, (payroll - cushion) / target - 1) * 100;
-  const red  = Math.max(0, -projected) / target * 100 * _profile(state).redWeight;
+  const red  = Math.max(0, -projected) / target * 100 * prof.redWeight;
   let cpw = 0;
-  if (_profile(state).costPerWin) {
-    const u = state.userTeam, n = (u.wins || 0) + (u.losses || 0);
+  if (prof.costPerWin) {
+    const n = (u.wins || 0) + (u.losses || 0);
     const lg = _leaguePayrollPerWin(state);
     if (n >= OWNER_PATIENCE.paceAfterGames && lg && (u.wins || 0) > 0
         && (payroll / u.wins) > lg * OWNER_PATIENCE.costPerWinOver) cpw = OWNER_PATIENCE.costPerWinStrain;
@@ -399,14 +438,14 @@ function _leaguePayrollPerWin(state) {
 }
 
 /** The strain he lets pass without a word. */
-export function allowance(state) {
+export function allowance(state, teamId = 'user') {
   const P = OWNER_PATIENCE;
-  return clamp((patience(state) - P.allowanceFrom) * P.allowancePerPt, 0, P.allowanceMax);
+  return clamp((patience(state, teamId) - P.allowanceFrom) * P.allowancePerPt, 0, P.allowanceMax);
 }
 
 /** The stage his patience is at, given the strain. */
-export function ownerStage(state) {
-  const excess = strain(state).total - allowance(state);
+export function ownerStage(state, teamId = 'user') {
+  const excess = strain(state, teamId).total - allowance(state, teamId);
   return excess <= OWNER_STAGE.watching ? 'content'
        : excess <= OWNER_STAGE.concerned ? 'watching'
        : excess <= OWNER_STAGE.cuts ? 'concerned' : 'cuts';
@@ -416,23 +455,29 @@ export function ownerStage(state) {
  * tolerance(state) — how far over the payroll target he'll let you go to add
  * salary right now (0 when he's concerned or worse).
  */
-export function tolerance(state) {
-  const stage = state.userTeam.finances?.owner?.stage || 'content';
+export function tolerance(state, teamId = 'user') {
+  const stage = _club(state, teamId)?.finances?.owner?.stage || 'content';
   if (stage === 'concerned' || stage === 'cuts') return 0;
-  return clamp((allowance(state) - strain(state).total) / 100, 0, FIN_TOLERANCE_MAX);
+  return clamp((allowance(state, teamId) - strain(state, teamId).total) / 100, 0, FIN_TOLERANCE_MAX);
 }
 
 /** Can the club add this much annual salary (and send this much out)? */
-export function canAddSalary(state, addK, outK = 0) {
-  const fin = state.userTeam.finances || {};
-  const room = (fin.payrollTarget || 0) * (1 + tolerance(state)) - payrollOf(state, 'user');
-  return addK - outK <= Math.max(0, room);
+export function canAddSalary(state, addK, outK = 0, teamId = 'user') {
+  const fin = _club(state, teamId)?.finances;
+  if (!fin) return true;                       // a club without books (old save, mid-migration)
+  return addK - outK <= Math.max(0, payrollRoom(state, teamId));
+}
+
+/** Annual salary the club could still add with the owner's blessing ($K). */
+export function payrollRoom(state, teamId = 'user') {
+  const fin = _club(state, teamId)?.finances || {};
+  return (fin.payrollTarget || 0) * (1 + tolerance(state, teamId)) - payrollOf(state, teamId);
 }
 
 /** Can the club spend this much now (a bonus)? A happy owner lets funds dip a little. */
-export function canSpend(state, costK) {
-  const fin = state.userTeam.finances || {};
-  const overdraft = (fin.payrollTarget || 0) * tolerance(state) * FIN_OVERDRAFT_SHARE;
+export function canSpend(state, costK, teamId = 'user') {
+  const fin = _club(state, teamId)?.finances || {};
+  const overdraft = (fin.payrollTarget || 0) * tolerance(state, teamId) * FIN_OVERDRAFT_SHARE;
   return (fin.funds || 0) - costK >= -overdraft;
 }
 
@@ -441,24 +486,26 @@ export function canSpend(state, costK) {
  * Moves his mood (the Gambler), applies trust for the stage, settles a cut
  * order that came due. Returns { stage, prev, strain, order, orderResult }.
  */
-export function ownerReview(draft, atMs) {
-  const u = draft.userTeam, fin = u.finances, o = fin.owner || (fin.owner = { stage: 'content', mood: 0, order: null, targetPenalty: 0 });
-  const prof = _profile(draft);
+export function ownerReview(draft, atMs, teamId = 'user') {
+  const u = _club(draft, teamId), fin = u.finances, o = fin.owner || (fin.owner = { stage: 'content', mood: 0, order: null, targetPenalty: 0 });
+  const isUser = teamId === 'user';
+  const prof = _profile(draft, teamId);
   if (prof.moodStep) o.mood = clamp((o.mood || 0) + (Math.random() * 2 - 1) * prof.moodStep, -prof.moodMax, prof.moodMax);
   let orderResult = null;
   if (o.order && atMs >= o.order.dueAt) {
-    const cut = o.order.fromPayroll - payrollOf(draft, 'user');
+    const cut = o.order.fromPayroll - payrollOf(draft, teamId);
     const met = cut >= o.order.amountK * 0.8;
-    u.ownerTrust = clamp((u.ownerTrust ?? 60) + (met ? OWNER_TRUST_FX.orderMet : OWNER_TRUST_FX.orderMissed), 0, 100);
+    if (isUser) u.ownerTrust = clamp((u.ownerTrust ?? 60) + (met ? OWNER_TRUST_FX.orderMet : OWNER_TRUST_FX.orderMissed), 0, 100);
     if (!met) o.targetPenalty = (o.targetPenalty || 0) + OWNER_ORDER_TARGET_PENALTY;
     orderResult = { met, ...o.order, cutK: cut };
     o.order = null;
   }
   const prev = o.stage || 'content';
-  const s = strain(draft);
-  const stage = ownerStage(draft);
+  const s = strain(draft, teamId);
+  const stage = ownerStage(draft, teamId);
   o.stage = stage;
   o.lastReviewAt = atMs;
+  if (!isUser) return { stage, prev, strain: s, order: o.order, orderResult };
   if (stage === 'concerned') u.ownerTrust = clamp((u.ownerTrust ?? 60) + OWNER_TRUST_FX.concernedPerPayday, 0, 100);
   if (stage === 'cuts')      u.ownerTrust = clamp((u.ownerTrust ?? 60) + OWNER_TRUST_FX.cutsPerPayday, 0, 100);
   return { stage, prev, strain: s, order: o.order, orderResult };
@@ -469,22 +516,22 @@ export function ownerReview(draft, atMs) {
  * back within what he'd tolerate, or enough salary off to close the projected
  * red over the rest of the season.
  */
-export function cutOrderAmount(state) {
-  const s = strain(state);
-  const allowPct = allowance(state);
+export function cutOrderAmount(state, teamId = 'user') {
+  const s = strain(state, teamId);
+  const allowPct = allowance(state, teamId);
   const overBy = s.payroll - s.target * (1 + allowPct / 100);
-  const cal = state.userTeam.finances?.cal;
+  const cal = _club(state, teamId)?.finances?.cal;
   const remShare = cal ? Math.max(0.15, (cal.endDay - cal.accruedThrough) / cal.days) : 1;
   const redBy = Math.max(0, -s.projected) / remShare;
   return Math.max(0, round(Math.max(overBy, redBy) / 50) * 50);
 }
 
 /** The contract the owner wants moved: the smallest salary that covers the cut (not a core player). */
-export function contractToMove(state, amountK) {
-  const u = state.userTeam;
+export function contractToMove(state, amountK, teamId = 'user') {
+  const u = _club(state, teamId) || {};
   // Someone on the active roster (a trade moves rostered players), healthy.
   const mine = (u.rosterIds || []).map(id => state.players[id])
-    .filter(p => p && p.teamId === 'user' && isPaid(p) && !p.isInjured
+    .filter(p => p && p.teamId === teamId && isPaid(p) && !p.isInjured
               && p.group !== PLAYER_GROUP.IL && p.group !== PLAYER_GROUP.IN_TRANSIT);
   const core = new Set([...mine].sort((a, b) => (b.ovr || 0) - (a.ovr || 0)).slice(0, 5).map(p => p.id));
   const pool = mine.filter(p => !core.has(p.id) && (p.contractSalary || 0) > 0);
@@ -531,10 +578,25 @@ export function seasonEndReview(draft, atMs, teamId = 'user') {
 }
 
 /** The books' effect on next season's payroll target (± a few percent) and the missed-order penalty. */
-export function booksOfferAdjustment(state) {
-  const fin = state.userTeam.finances || {};
+export function booksOfferAdjustment(state, teamId = 'user') {
+  const fin = _club(state, teamId)?.finances || {};
   const last = (fin.history || [])[fin.history.length - 1];
   const margin = last ? last.net / (last.payrollTarget || 1) : 0;
   const books = clamp(margin * FIN_BOOKS_OFFER.perMargin, -FIN_BOOKS_OFFER.max, FIN_BOOKS_OFFER.max);
   return { books, penalty: fin.owner?.targetPenalty || 0, net: last?.net ?? 0 };
 }
+
+/**
+ * cpuNextTarget(draft, teamId) — §78.5 a CPU owner sets next season's payroll
+ * target from the season's books: a profit lets the payroll grow, a loss
+ * pulls it in (the same ± range as ours). Applied at the season's end.
+ */
+export function cpuNextTarget(draft, teamId) {
+  const t = _club(draft, teamId);
+  if (!t?.finances || teamId === 'user') return null;
+  const { books } = booksOfferAdjustment(draft, teamId);
+  const target = Math.max(1000, Math.round(t.finances.payrollTarget * (1 + books) / 50) * 50);
+  t.finances.payrollTarget = target;
+  return target;
+}
+

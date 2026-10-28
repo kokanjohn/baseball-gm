@@ -25,6 +25,7 @@
 import * as StateManager from '../../store/StateManager.js';
 import * as EventBus     from '../EventBus.js';
 import { hostingStatus } from '../../engine/AllStarEngine.js';
+import * as Finance from '../../engine/FinanceEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // PUBLIC API
@@ -99,6 +100,7 @@ function _render(overlay) {
         ${_renderPostponedGames(state)}
         ${_renderNarrativeFlags(state)}
         ${_renderPlayoffs(state)}
+        ${_renderLeagueBooks(state)}
         ${_renderSeasonHistory(state)}
         ${_renderAllStarHosting(state)}
         ${_renderActions(state)}
@@ -150,6 +152,23 @@ function _renderStateSnapshot(s) {
       </div>`
     ).join('')}</div>`
   );
+}
+
+/** §78.5 every CPU club's books: funds, payroll vs target, owner, season so far. */
+function _renderLeagueBooks(s) {
+  const fmt$ = v => '$' + (Math.round((v || 0) / 100) / 10).toFixed(1) + 'M';
+  const sum = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+  const rows = (s.leagueTeams || []).map(t => {
+    const f = t.finances;
+    if (!f) return `<div class="debug-gate-row"><span class="debug-gate-label">${t.abbr}</span><span>no books yet</span></div>`;
+    const net = sum(f.season?.income) - sum(f.season?.spend);
+    const payroll = Finance.payrollOf(s, t.id);
+    return `<div class="debug-gate-row">
+      <span class="debug-gate-label">${t.abbr} · ${t.ownerArchetype || '—'} · ${t.wins || 0}–${t.losses || 0}</span>
+      <span>${fmt$(f.funds)} · pay ${fmt$(payroll)}/${fmt$(f.payrollTarget)} · ${net >= 0 ? '+' : '−'}${fmt$(Math.abs(net))} · ${f.owner?.stage || 'content'}</span>
+    </div>`;
+  }).join('');
+  return _section('League Books (funds · payroll/target · season net · owner)', rows);
 }
 
 // ─────────────────────────────────────────────────────────────

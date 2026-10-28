@@ -1163,7 +1163,7 @@ function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = fals
       force,
     });
     // §78: only offers ownership would pay for.
-    if (result && _tradeSalaryOk(state, result.offer)) {
+    if (result && _tradeSalaryOk(state, result.offer, team.id)) {
       deliverTradeOffer(result.offer, result.evaluation, team.id, { seed, intro });
       return true;
     }
@@ -1182,7 +1182,14 @@ function _tradeSalaryDelta(state, offer) {
     .reduce((a, id) => a + (state.players[id]?.contractSalary || 0), 0);
   return { inK, outK };
 }
-const _tradeSalaryOk = (state, offer) => { const d = _tradeSalaryDelta(state, offer); return Finance.canAddSalary(state, d.inK, d.outK); };
+/** Both owners can carry the deal: ours (§78), and the CPU club's (§78.5) when named. */
+const _tradeSalaryOk = (state, offer, cpuId = null) => {
+  const d = _tradeSalaryDelta(state, offer);
+  if (!Finance.canAddSalary(state, d.inK, d.outK)) return false;
+  if (!cpuId) return true;
+  const toCpu = (offer.outgoingIds || []).reduce((a, id) => a + (state.players[id]?.contractSalary || 0), 0);
+  return Finance.canAddSalary(state, toCpu, d.inK, cpuId);
+};
 
 /**
  * deliverSeedTradeOffer(context)
@@ -2134,10 +2141,22 @@ function _applyFinanceAction(action, instance, atMs) {
   const pid = instance._targetPlayerId;
   const p = st.players[pid];
   if (!p || p.teamId !== 'user' || !(st.userTeam.rosterIds || []).includes(pid)) return;
-  // The taker: the club with the most room under its payroll.
+  // The taker (§78.5): the club whose owner has the most payroll room for him.
   const taker = [...(st.leagueTeams || [])]
-    .sort((a, b) => Finance.payrollOf(st, a.id) - Finance.payrollOf(st, b.id))[0];
-  if (!taker) return;
+    .map(t => ({ t, room: Finance.payrollRoom(st, t.id) }))
+    .filter(x => x.room >= (p.contractSalary || 0))
+    .sort((a, b) => b.room - a.room)[0]?.t;
+  if (!taker) {
+    _deliverNotice(`owner:noTaker:${instance.instanceId}`, {
+      cardId: 'owner_no_taker', tag: 'OWNERSHIP', sender: st.userTeam.ownerName || 'Ownership', avatar: '📞', type: 'normal',
+      subject: `No club can take ${p.name}'s contract`,
+      preview: `We called around — nobody has ${formatK(p.contractSalary || 0)} of room right now.`,
+      body: `We called every club about ${p.name} (${formatK(p.contractSalary || 0)} a year). Nobody's owner has the payroll room to take him on right now. `
+          + `The order stands; the payroll will have to come down another way.`,
+      yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
+    }, atMs);
+    return;
+  }
   StateManager.mutate(s => {
     s.transactions = [...(s.transactions || []), queueTrade({ incomingIds: [], outgoingIds: [pid] }, taker.id, atMs)];
   });

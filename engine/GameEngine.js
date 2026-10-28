@@ -59,7 +59,7 @@ import {
   pendingArrivals,
 } from './RosterEngine.js';
 
-import { rosterClock, applyDue, hasDue, callUp } from './TransactionEngine.js';
+import { rosterClock, applyDue, hasDue, callUp, cpuSalaryMove } from './TransactionEngine.js';
 import {
   seedDivision, buildBracket, prepareRound, recordGame, roundComplete, roundSeries,
   roundForPhase, nextRound, seriesGames, ROUND_PHASE, ROUND_LABEL,
@@ -517,6 +517,8 @@ export async function startNewGame(config) {
       winPct:          (s.userTeam._ownerWinTarget || 66) / REGULAR_SEASON_GAME_COUNT,
     });
     s.userTeam.finances.payroll = Finance.payrollOf(s, 'user');
+    // §78.5 every CPU club keeps books of its own.
+    for (const t of s.leagueTeams || []) Finance.initClubBooks(s, t.id);
 
     // Geographic region — set from setup config, persists for lifetime of franchise
     if (config.region)        s.settings.region        = config.region;
@@ -909,11 +911,17 @@ export async function commitGame(gameIndex) {
     }
 
     // ── Step 1b: the gate (§78) — a home game's crowd pays (not in spring).
-    if (g.isHome && !g.isSpring && !g._gateApplied && g.status !== GAME_STATUS.POSTPONED) {
+    if (!g.isSpring && !g._gateApplied && g.status !== GAME_STATUS.POSTPONED) {
       g._gateApplied = true;
-      const crowd = g.attendance ? { attendance: g.attendance, gateK: g.gateK, sellout: !!g.sellout } : null;
-      const gate = Finance.homeGate(s, 'user', { atMs: _gameEndMs(g), playoff: !!g.isPlayoff, crowd });
-      if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
+      if (g.isHome) {
+        const crowd = g.attendance ? { attendance: g.attendance, gateK: g.gateK, sellout: !!g.sellout } : null;
+        const gate = Finance.homeGate(s, 'user', { atMs: _gameEndMs(g), playoff: !!g.isPlayoff, crowd });
+        if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
+      } else {
+        // §78.5 on the road, the home club's crowd pays the home club.
+        const host = (s.leagueTeams || []).find(t => t.name === g.opponent);
+        if (host?.finances) Finance.homeGate(s, host.id, { atMs: _gameEndMs(g), playoff: !!g.isPlayoff });
+      }
     }
 
     // ── Step 1c: Stat accumulation from plays ──────────────
@@ -1900,6 +1908,11 @@ function _finishLeagueGame(date, i) {
     }
     _advanceRotation(home);
     _advanceRotation(away);
+    // §78.5 the home club's gate (not in spring).
+    if (!g.isSpring && home?.finances) {
+      const gate = Finance.homeGate(s, home.id, { atMs: endMs, playoff: !!g.isPlayoff });
+      if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
+    }
     if (home) Development.countGame(s, home.id);
     if (away) Development.countGame(s, away.id);
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
@@ -1989,6 +2002,36 @@ function _payday(i, atMs) {
   return [{ type: 'PAYDAY', atMs, ...res }];
 }
 const FinanceStages = Finance.STAGES;
+
+/**
+ * _cpuPayday(teamId, i, atMs) — §78.5 a CPU club's payday: salaries and staff
+ * paid, media and local money in, and its owner looks at the books. An owner
+ * who orders cuts gets them before the trade deadline: the club moves a
+ * contract to the club with the most room (a salary dump). After the
+ * deadline he can only wait for the winter.
+ */
+function _cpuPayday(teamId, i, atMs) {
+  let move = null;
+  StateManager.mutate(s => {
+    const res = Finance.payday(s, i, atMs, teamId);
+    if (!res) return;
+    const t = s.leagueTeams.find(x => x.id === teamId);
+    t.finances.payroll = Finance.payrollOf(s, teamId);
+    const review = Finance.ownerReview(s, atMs, teamId);
+    const regPlayed = (s.schedule || []).filter(g => g._committed && !g.isSpring && !g.isPlayoff).length;
+    if (review.stage === 'cuts' && regPlayed <= TRADE_DEADLINE_CLOSE) {
+      move = cpuSalaryMove(s, teamId, atMs);
+      if (move) {
+        const name = s.players[move.playerId]?.name || 'A player';
+        const to = s.leagueTeams.find(x => x.id === move.toId);
+        s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+          buildActivityFeedEntry('trade', t.abbr,
+            `${t.name} send ${name} (${formatK(move.salaryK)}) to ${to?.name || move.toId} — a salary move`, atMs)]);
+      }
+    }
+  });
+  return move ? [{ type: 'CPU_SALARY_MOVE', ...move, atMs }] : [];
+}
 
 // ─────────────────────────────────────────────────────────────
 // THE ALL-STAR GAME (§75)
@@ -2378,15 +2421,22 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
   // CPU first pitch / final out, everything due by that moment happens first.
   const events = [...(opts.events || [])];
   let changed = false;
-  // §78: this season's pay calendar (built once per season from the schedule).
-  if (state.userTeam.finances?.cal?.seasonNum !== (state.seasonNum || 1)) {
-    StateManager.mutate(s => { Finance.ensureSeason(s, 'user'); });
+  // §78: every club's books (a save from before r76 opens the CPU clubs'),
+  // and this season's pay calendar (built once per season from the schedule).
+  const season = state.seasonNum || 1;
+  const clubIds = ['user', ...(state.leagueTeams || []).map(t => t.id)];
+  if ((state.leagueTeams || []).some(t => !t.finances)
+      || [state.userTeam, ...(state.leagueTeams || [])].some(t => t.finances?.cal?.seasonNum !== season)) {
+    StateManager.mutate(s => {
+      for (const t of s.leagueTeams || []) if (!t.finances) Finance.initClubBooks(s, t.id);
+      for (const id of clubIds) Finance.ensureSeason(s, id);
+    });
   }
-  for (let guard = 0; guard < 4000; guard++) {
+  for (let guard = 0; guard < 12000; guard++) {
     const st   = StateManager.get();
     const game = _leagueGameEvents(st, clockMs)[0];
     const os   = Offseason.dueSteps(st, clockMs)[0];
-    const fin  = Finance.dueSteps(st, clockMs)[0];
+    const fin  = clubIds.flatMap(id => Finance.dueSteps(st, clockMs, id)).sort((a, b) => a.at - b.at)[0];
     const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
@@ -2394,8 +2444,8 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
     events.push(...step.events);
     if (next.kind === 'start') _startLeagueGame(next.date, next.i);
     else if (next.kind === 'final') events.push(..._finishLeagueGame(next.date, next.i));
-    else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, 'user'); });
-    else if (next.kind === 'fin:payday') events.push(..._payday(next.i, next.at));
+    else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, next.teamId); });
+    else if (next.kind === 'fin:payday') events.push(...(next.teamId === 'user' ? _payday(next.i, next.at) : _cpuPayday(next.teamId, next.i, next.at)));
     else events.push(..._runOffseasonStep(next.step, next.at));
     events.push(..._seasonProgress(next.at));
     changed = true;

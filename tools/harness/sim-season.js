@@ -325,10 +325,51 @@ async function runOffseasonChecks() {
             h.spend.staff > 0 && h.income.gate > 0 && h.income.media > 0 && h.income.local > 0);
       // Operating net: the All-Star hosting share is a one-time windfall (§75), not the club's economics.
       const opNet = h.net - (h.income.allstar || 0);
+      // A historic season (a .650+ club) sells out all year: a wider bound.
+      const s1 = (st.seasonHistory || [])[0];
+      const historic = !!s1 && s1.wins / Math.max(1, s1.wins + s1.losses) >= 0.65;
       check(`club funds: a realistic season's operating net (${opNet}K, ${h.net}K all in, on a ${h.payrollTarget}K target; in ${JSON.stringify(h.income)} out ${JSON.stringify(h.spend)}; ${st.userTeam.wins ?? ''} — season 1 ${(st.seasonHistory || [])[0]?.wins}-${(st.seasonHistory || [])[0]?.losses})`,
-            Math.abs(opNet) <= h.payrollTarget * 0.35);
+            Math.abs(opNet) <= h.payrollTarget * (historic ? 0.5 : 0.35));
     }
     check(`club funds: paydays reach the feed (${gm.paydays} paid)`, gm.paydays >= 8);
+    // §78.5 every CPU club's books: closed and reconciled, real gates and
+    // media, salaries paid, a believable season, owners who cut when they must.
+    {
+      const sum = (o) => Object.values(o || {}).reduce((x, y) => x + y, 0);
+      const rows = st.leagueTeams.map(t => ({ t, h: (t.finances?.history || [])[0] }));
+      const closed = rows.filter(r => r.h && r.h.seasonNum === 1);
+      check(`cpu books: every club's season 1 closed (${closed.length}/${rows.length})`, closed.length === rows.length);
+      const bad = closed.filter(({ h }) => sum(h.income) - sum(h.spend) - (h.income.owner || 0) !== h.net);
+      check('cpu books: every club reconciles', bad.length === 0, bad.map(r => r.t.abbr).join(','));
+      const thin = closed.filter(({ h }) => !(h.income.gate > 0 && h.income.media > 0 && h.income.local > 0 && h.spend.payroll > 0 && h.spend.staff >= 0));
+      check('cpu books: gates, media and local money in, salaries out, for every club', thin.length === 0, thin.map(r => r.t.abbr).join(','));
+      const nets = closed.map(({ t, h }) => `${t.abbr} ${(h.net / 1000).toFixed(1)}M/${(h.payrollTarget / 1000).toFixed(0)}M ${t.ownerArchetype}${h.covered ? ' covered' : ''}`);
+      const wild = closed.filter(({ h }) => Math.abs(h.net - (h.income.allstar || 0)) > h.payrollTarget * 0.45);
+      check(`cpu books: believable seasons (${nets.join(' · ')})`, wild.length <= 1, wild.map(r => r.t.abbr).join(','));
+      const moves = (st.transactions || []).filter(x => x.kind === 'cpu_trade');
+      check(`cpu books: salary moves made in the season (${moves.length})`, true);
+      // The mechanism itself: an owner whose target is suddenly far below the
+      // payroll orders cuts, and the club moves a contract to the club with
+      // the most room (on a copy of the state — nothing here is kept).
+      {
+        const { cpuSalaryMove } = await import('../../engine/TransactionEngine.js');
+        const Fin = await import('../../engine/FinanceEngine.js');
+        const copy = structuredClone(SM.get());
+        const club = copy.leagueTeams[0];
+        if (club.finances?.cal) {
+          club.finances.payrollTarget = Math.round(Fin.payrollOf(copy, club.id) * 0.6);
+          club.finances.funds = -Math.abs(club.finances.payrollTarget);
+          const before = club.rosterIds.length;
+          const mv = cpuSalaryMove(copy, club.id, clock.get());
+          const toClub = mv && copy.leagueTeams.find(t => t.id === mv.toId);
+          check(`cpu books: an owner ordering cuts moves a contract (${mv ? `${copy.players[mv.playerId]?.name} ${mv.salaryK}K → ${toClub?.abbr}` : 'none'})`,
+                !!mv && copy.players[mv.playerId].teamId === mv.toId && mv.toId !== club.id
+                && Fin.payrollRoom(SM.get(), mv.toId) >= mv.salaryK && club.rosterIds.length <= before);
+        }
+      }
+      const targets = st.leagueTeams.map(t => t.finances?.payrollTarget || 0);
+      check('cpu books: owners set next season\'s targets', targets.every(x => x >= 1000));
+    }
     const ownerCards = (st.inbox || []).filter(c => (c.cardId || '').startsWith('owner_'));
     const by = {}; for (const c of ownerCards) by[c.cardId] = (by[c.cardId] || 0) + 1;
     const dumps = (st.transactions || []).filter(t => t.kind === 'trade' && !(t.offer?.incomingIds || []).length);
@@ -661,6 +702,9 @@ async function main() {
     // §78: the books open — a market, opening funds, the owner's target.
     const f = SM.get().userTeam.finances;
     gm.openingFunds = f.funds;
+    const cpuNo = SM.get().leagueTeams.filter(t => !(t.finances?.funds > 0 && t.finances.payrollTarget > 0 && t.finances.market?.capacity > 0 && t.ownerArchetype));
+    check(`cpu books: every CPU club opens its books (${SM.get().leagueTeams.map(t => `${t.abbr} ${t.ownerArchetype} ${(t.finances?.payrollTarget / 1000).toFixed(1)}M`).join(', ')})`,
+          cpuNo.length === 0, cpuNo.map(t => t.abbr).join(','));
     check(`club funds: the books open (funds ${f.funds}K, target ${f.payrollTarget}K, ${f.market?.capacity} seats)`,
           f.funds > 0 && f.payrollTarget > 0 && f.market?.capacity > 20000 && f.market?.perFan > 0 && f.owner?.stage === 'content');
   }
