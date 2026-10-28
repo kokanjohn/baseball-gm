@@ -32,6 +32,7 @@ import { contractIsUp } from '../../engine/OffseasonEngine.js';
 import { developmentStatus } from '../../engine/DevelopmentEngine.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
 import { bullpenRoles, armStatus, ROLE_ABBR } from '../../engine/PitchingEngine.js';
+import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
 import { eligibleSlotsFor, reconcileRoster, applyRosterMutation }
@@ -218,7 +219,7 @@ export function refresh() {
 
   const team      = state.userTeam;
   const payroll   = team.finances?.payroll    || 0;
-  const cap       = team.finances?.payrollCap || 22000;
+  const cap       = team.finances?.payrollTarget || 22000;   // §78: the owner's payroll target
   const capPct    = Math.min(100, Math.round((payroll / cap) * 100));
   const capColor  = capPct > 90 ? 'pf-red' : capPct > 75 ? '' : 'pf-green';
 
@@ -235,7 +236,7 @@ export function refresh() {
           <div class="roster-rating-card">
             <div class="rrc-label">Payroll</div>
             <div class="rrc-value" style="font-size:15px;margin-top:2px;">${formatMoney(payroll)}</div>
-            <div class="rrc-sub">${formatMoney(cap)} cap</div>
+            <div class="rrc-sub">${formatMoney(cap)} target</div>
           </div>
           <div class="roster-rating-card">
             <div class="rrc-label">Team OVR</div>
@@ -265,11 +266,12 @@ export function refresh() {
       <div class="team-subtabs">
         <button class="team-subtab ${_activeTab === 'players' ? 'active' : ''}" id="tsubtab-players">Players</button>
         <button class="team-subtab ${_activeTab === 'staff'   ? 'active' : ''}" id="tsubtab-staff">Staff</button>
+        <button class="team-subtab ${_activeTab === 'finances' ? 'active' : ''}" id="tsubtab-finances">Finances</button>
       </div>
     </div>
 
     <div id="team-tab-body">
-      ${_activeTab === 'players' ? _renderPlayers(state) : _renderStaff(state)}
+      ${_activeTab === 'players' ? _renderPlayers(state) : _activeTab === 'finances' ? _renderFinances(state) : _renderStaff(state)}
     </div>
   `;
 
@@ -868,6 +870,94 @@ function _renderStaff(state) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// FINANCES (§78) — Club Funds, the owner, the season's books
+// ─────────────────────────────────────────────────────────────
+
+const _OWNER_STAGE_TEXT = {
+  content:   ['Content',        'Ownership is happy with the books.'],
+  watching:  ['Watching',       'Ownership has noticed the spending. Winning helps.'],
+  concerned: ['Concerned',      "No new salary until the books improve."],
+  cuts:      ['Ordering cuts',  'Ownership wants payroll down.'],
+};
+
+function _renderFinances(state) {
+  const u = state.userTeam, fin = u.finances || {};
+  const m = (k) => (k < 0 ? `−${formatMoney(-k)}` : formatMoney(k));
+  const funds = fin.funds || 0;
+  const projected = Finance.projection(state, 'user');
+  const payroll = Finance.payrollOf(state, 'user');
+  const target = fin.payrollTarget || 0;
+  const room = Math.max(0, Math.round(target * (1 + Finance.tolerance(state)) - payroll));
+  const stage = fin.owner?.stage || 'content';
+  const [stageName, stageText] = _OWNER_STAGE_TEXT[stage] || _OWNER_STAGE_TEXT.content;
+  const order = fin.owner?.order;
+  const cal = fin.cal;
+  const nextPay = cal && cal.paid < cal.paydays.length ? cal.paydays[cal.paid] : null;
+  const inSeason = cal && cal.seasonNum === (state.seasonNum || 1);
+  const pct = Math.min(100, Math.round(payroll / Math.max(1, target) * 100));
+  // Red only past what ownership tolerates; over the target but tolerated is amber.
+  const tolerated = target * (1 + Finance.tolerance(state));
+  const barCls = payroll > tolerated && payroll > target ? 'fin-bar-over' : payroll > target || pct > 90 ? 'fin-bar-near' : 'fin-bar-ok';
+
+  const lines = (obj, labels) => Object.entries(obj || {}).filter(([, v]) => v)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<div class="fin-line"><span>${_escape(labels[k] || k)}</span><span>${formatMoney(v)}</span></div>`).join('')
+    || '<div class="fin-line fin-muted"><span>Nothing yet this season</span><span></span></div>';
+  const inc = Object.values(fin.season?.income || {}).reduce((a, b) => a + b, 0);
+  const out = Object.values(fin.season?.spend || {}).reduce((a, b) => a + b, 0);
+
+  const homeGames = (state.schedule || []).filter(g => g.isHome && !g.isSpring && g.attendance);
+  const avgAtt = homeGames.length ? Math.round(homeGames.reduce((a, g) => a + g.attendance, 0) / homeGames.length) : null;
+  const sellouts = homeGames.filter(g => g.sellout).length;
+
+  const recent = [...(fin.ledger || [])].slice(-10).reverse().map(e => `
+    <div class="fin-line">
+      <span>${_escape(e.label)}<span class="fin-when">${new Date(e.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span></span>
+      <span class="${e.k < 0 ? 'fin-neg' : 'fin-pos'}">${e.k < 0 ? '−' : '+'}${formatMoney(Math.abs(e.k))}</span>
+    </div>`).join('');
+
+  const history = (fin.history || []).slice().reverse().map(h => `
+    <div class="fin-line"><span>Season ${h.seasonNum}${h.covered ? ' · owner covered ' + formatMoney(h.covered) : ''}</span>
+      <span class="${h.net < 0 ? 'fin-neg' : 'fin-pos'}">${h.net < 0 ? '−' : '+'}${formatMoney(Math.abs(h.net))}</span></div>`).join('');
+
+  return `
+    <div class="fin-wrap">
+      <div class="fin-card fin-hero">
+        <div class="fin-label">Club funds</div>
+        <div class="fin-big ${funds < 0 ? 'fin-neg' : ''}">${m(funds)}</div>
+        ${inSeason ? `<div class="fin-sub">Projected at season's end: <b class="${projected < 0 ? 'fin-neg' : ''}">${m(projected)}</b></div>` : ''}
+        ${nextPay ? `<div class="fin-sub">Next payday: ${new Date(nextPay).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</div>` : ''}
+      </div>
+
+      <div class="fin-card">
+        <div class="fin-row-head"><span class="fin-label">Ownership</span><span class="fin-stage fin-stage-${stage}">${stageName}</span></div>
+        <div class="fin-sub">${_escape(stageText)}</div>
+        ${order ? `<div class="fin-order">Ordered: ${formatMoney(order.amountK)} off the payroll by ${new Date(order.dueAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>` : ''}
+      </div>
+
+      <div class="fin-card">
+        <div class="fin-row-head"><span class="fin-label">Payroll</span><span>${formatMoney(payroll)} / ${formatMoney(target)} target</span></div>
+        <div class="fin-bar"><div class="${barCls}" style="width:${pct}%"></div></div>
+        <div class="fin-sub">${room > 0 ? `Ownership would approve about ${formatMoney(room)} more in salary right now.` : 'Ownership won\'t approve more salary right now.'}</div>
+      </div>
+
+      <div class="fin-card">
+        <div class="fin-row-head"><span class="fin-label">This season</span><span class="${inc - out < 0 ? 'fin-neg' : 'fin-pos'}">${inc - out < 0 ? '−' : '+'}${formatMoney(Math.abs(inc - out))}</span></div>
+        <div class="fin-sect">Money in</div>${lines(fin.season?.income, Finance.INCOME_LABELS)}
+        <div class="fin-sect">Money out</div>${lines(fin.season?.spend, Finance.SPEND_LABELS)}
+      </div>
+
+      ${avgAtt ? `<div class="fin-card">
+        <div class="fin-row-head"><span class="fin-label">The ballpark</span><span>${(fin.market?.capacity || 0).toLocaleString()} seats</span></div>
+        <div class="fin-sub">Average crowd ${avgAtt.toLocaleString()}${sellouts ? ` · ${sellouts} sellout${sellouts === 1 ? '' : 's'}` : ''} over ${homeGames.length} home game${homeGames.length === 1 ? '' : 's'}.</div>
+      </div>` : ''}
+
+      ${recent ? `<div class="fin-card"><div class="fin-label">Recent</div>${recent}</div>` : ''}
+      ${history ? `<div class="fin-card"><div class="fin-label">Past seasons</div>${history}</div>` : ''}
+    </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────
 // EVENT LISTENERS
 // ─────────────────────────────────────────────────────────────
 
@@ -875,6 +965,8 @@ function _attachListeners(state) {
   // Sub-tab switching
   const pBtn = document.getElementById('tsubtab-players');
   const sBtn = document.getElementById('tsubtab-staff');
+  const fBtn = document.getElementById('tsubtab-finances');
+  if (fBtn) fBtn.addEventListener('click', () => { _activeTab = 'finances'; refresh(); });
   if (pBtn) pBtn.addEventListener('click', () => { _activeTab = 'players'; refresh(); });
   if (sBtn) sBtn.addEventListener('click', () => { _activeTab = 'staff';   refresh(); });
 
@@ -1411,6 +1503,28 @@ function _injectCSS() {
       border:1px solid var(--accent);border-radius:4px;
       padding:1px 4px;margin-left:5px;vertical-align:middle;}
 
+    .fin-wrap{padding:8px 16px 20px;display:flex;flex-direction:column;gap:10px;}
+    .fin-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;}
+    .fin-hero{text-align:center;}
+    .fin-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
+    .fin-big{font-family:'Bebas Neue',sans-serif;font-size:40px;line-height:1.1;color:var(--accent2);margin:2px 0;}
+    .fin-sub{font-size:12px;color:var(--muted);margin-top:4px;}
+    .fin-row-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--text);font-weight:600;}
+    .fin-stage{font-size:11px;font-weight:800;padding:2px 8px;border-radius:10px;border:1px solid var(--border);}
+    .fin-stage-content{color:#22C55E;border-color:#22C55E;}
+    .fin-stage-watching{color:#fbbf24;border-color:#fbbf24;}
+    .fin-stage-concerned{color:#f97316;border-color:#f97316;}
+    .fin-stage-cuts{color:var(--danger);border-color:var(--danger);}
+    .fin-order{margin-top:6px;font-size:12px;font-weight:700;color:var(--danger);}
+    .fin-bar{height:6px;border-radius:3px;background:var(--surface2);margin-top:8px;overflow:hidden;}
+    .fin-bar > div{height:100%;border-radius:3px;}
+    .fin-bar-ok{background:#22C55E;} .fin-bar-near{background:#fbbf24;} .fin-bar-over{background:var(--danger);}
+    .fin-sect{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin:10px 0 2px;}
+    .fin-line{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--text);padding:4px 0;border-top:1px solid var(--border);}
+    .fin-line:first-of-type{border-top:none;}
+    .fin-muted{color:var(--muted);}
+    .fin-when{font-size:11px;color:var(--muted);margin-left:6px;}
+    .fin-neg{color:var(--danger);} .fin-pos{color:#22C55E;}
     .rp-role{font-size:9px;font-weight:800;letter-spacing:.5px;border-radius:4px;padding:1px 4px;
       margin-left:5px;vertical-align:middle;color:var(--muted);border:1px solid var(--border);}
     .rp-role-closer{color:#fbbf24;border-color:#fbbf24;}

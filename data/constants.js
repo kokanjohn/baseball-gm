@@ -236,26 +236,26 @@ export const GM_RELATIONSHIP_REACQUIRED_START = 45;  // re-acquired players star
 // moved linearly by the rating gap and clamped. Targets ≈ modern MLB per PA:
 // BB 8.5%, K 22.5%, H 22.5%, HR ≈ 3% → ~4.5 runs / team / game.
 export const SIM_RATING_AVG                 = 55;    // league-average sub-rating (generator mean)
-export const SIM_PA_WALK_BASE               = 0.085; // walk rate at average control
+export const SIM_PA_WALK_BASE               = 0.080; // walk rate at average control
 export const SIM_PA_WALK_PER_PT             = 0.0025;// per point of control BELOW average
 export const SIM_PA_WALK_MIN                = 0.025;
 export const SIM_PA_WALK_MAX                = 0.170;
-export const SIM_PA_K_BASE                  = 0.245; // K rate, average contact vs average stuff
+export const SIM_PA_K_BASE                  = 0.226; // K rate, average contact vs average stuff
 export const SIM_PA_K_PER_CONTACT_PT        = 0.0040;// per point of contact BELOW average
 export const SIM_PA_K_PER_STUFF_PT          = 0.0040;// per point of stuff ABOVE average
 export const SIM_PA_K_MIN                   = 0.080;
 export const SIM_PA_K_MAX                   = 0.380;
-export const SIM_PA_HIT_BASE                = 0.200; // hit rate (non-infield), average vs average
+export const SIM_PA_HIT_BASE                = 0.212; // hit rate (non-infield), average vs average
 export const SIM_PA_HIT_PER_CONTACT_PT      = 0.0035;// per point of contact above average
 export const SIM_PA_HIT_PER_STUFF_PT        = 0.0030;// per point of stuff above average (reduces)
 export const SIM_PA_HIT_MIN                 = 0.110;
 export const SIM_PA_HIT_MAX                 = 0.340;
 export const SIM_PA_INFIELD_HIT_PER_SPEED_PT = 0.0006;// per point of speed above average
-export const SIM_HIT_HR_SHARE_BASE          = 0.105; // share of hits that are HR at average power
+export const SIM_HIT_HR_SHARE_BASE          = 0.128; // share of hits that are HR at average power
 export const SIM_HIT_HR_SHARE_PER_PT        = 0.0050;
 export const SIM_HIT_HR_SHARE_MIN           = 0.030;
 export const SIM_HIT_HR_SHARE_MAX           = 0.300;
-export const SIM_HIT_XBH_SHARE_BASE         = 0.175; // share of hits that are doubles at average power
+export const SIM_HIT_XBH_SHARE_BASE         = 0.195; // share of hits that are doubles at average power
 export const SIM_HIT_XBH_SHARE_PER_PT       = 0.0030;
 export const SIM_HIT_XBH_SHARE_MIN          = 0.090;
 export const SIM_HIT_XBH_SHARE_MAX          = 0.320;
@@ -672,8 +672,11 @@ export const ALLSTAR_HOSTING_THRESHOLD_THIRD  = 2200;  // dynasty-level
 export const ALLSTAR_HOSTING_MIN_SEASONS_BETWEEN = 3;  // second hosting: min 3 seasons since last
 export const ALLSTAR_HOSTING_MIN_SEASONS_THIRD   = 4;  // third hosting: min 4 seasons since last
 
-export const ALLSTAR_HOSTING_REVENUE_BONUS_MIN   = 10000;  // $10M (in $K)
-export const ALLSTAR_HOSTING_REVENUE_BONUS_MAX   = 15000;  // $15M (in $K)
+// The host's share, as a share of the club's payroll target (§78: §17.3's
+// "$10–15M" was written before money moved — in this league's economy, a
+// $22M-payroll club, that was 60% of payroll. A host's take is a few percent).
+export const ALLSTAR_HOSTING_REVENUE_SHARE_MIN   = 0.05;
+export const ALLSTAR_HOSTING_REVENUE_SHARE_MAX   = 0.08;
 export const ALLSTAR_HOSTING_ATMOS_BUMP          = 15;
 export const ALLSTAR_HOSTING_OWNER_TRUST_BUMP    = 10;
 export const ALLSTAR_HOSTING_GM_REL_BUMP         =  5;  // with all league teams
@@ -1417,5 +1420,61 @@ export const OWNERSHIP_OFFER = Object.freeze({
   autoTrust:  -3,
 });
 export const CONTRACT_AUTO_WALK_MORALE = -1;  // per player let go by default
+
+// ─────────────────────────────────────────────────────────────
+// CLUB FUNDS — the money model (§78)
+// One account per club. All amounts in $K.
+// ─────────────────────────────────────────────────────────────
+// Economy: a club that meets its owner's expectations (its starting payroll
+// level, its starting atmosphere, a win-target pace) runs near break-even —
+// income ≈ FIN_BREAK_EVEN_MARGIN × expected spending. Market differences show
+// in local revenue and gates; winning and a livelier park earn more.
+export const FIN_MEDIA_SHARE_K        = 3000;   // league media share, equal for every club, per season
+export const FIN_BREAK_EVEN_MARGIN    = 1.0;
+export const FIN_CARDS_ALLOWANCE      = 0.06;   // expected discretionary spending, share of payroll
+export const FIN_LOCAL_SHARE          = 0.45;   // of non-media income: local media & sponsors (the rest is gate)
+export const FIN_LOCAL_PER_TIER       = 0.05;   // local income grows with prestige tier
+export const FIN_PAYDAYS              = Object.freeze([1, 15]);   // days of the month, regular season
+export const FIN_PAYDAY_HOUR          = 10;
+export const FIN_PLAYOFF_GATE_MULT    = 1.5;    // the club's share (the players' pool and the league take the rest)
+export const FIN_START_FUNDS_SHARE    = 0.15;   // default opening funds, share of the payroll target
+// Ballparks and crowds.
+export const FIN_CAPACITY_BASE        = 26000;  // + per $1M of starting payroll level
+export const FIN_CAPACITY_PER_M       = 450;
+export const FIN_ATTENDANCE = Object.freeze({
+  base: 0.44, perAtmo: 0.0045,                 // fill from atmosphere (40 → 62%, 68 → 75%, 95 → 87%)
+  formWeight: 0.6, formMin: 0.85, formMax: 1.15, formAfterGames: 10,   // the club's form vs .500
+  weekend: 1.08, weekday: 0.95, noise: 0.05, min: 0.25, playoffLift: 0.15,
+});
+
+// The owner (§78.4). patienceBase: how much financial strain he tolerates
+// before saying anything; redWeight: how much red ink counts against you;
+// startFunds: opening funds as a share of the payroll target.
+export const OWNER_PROFILE = Object.freeze({
+  // cushionUse: how much of the money the club itself is projected to have
+  // he'll let cover payroll over the target ("you've earned it — spend it").
+  ember:       { patienceBase: 55, redWeight: 2.0, startFunds: 0.10, cushionUse: 0.3 },
+  contender:   { patienceBase: 50, redWeight: 1.2, startFunds: 0.15, cushionUse: 0.6 },
+  empire:      { patienceBase: 45, redWeight: 0.8, startFunds: 0.20, cushionUse: 1.0 },
+  gambler:     { patienceBase: 50, redWeight: 1.0, startFunds: [0.05, 0.25], moodStep: 8, moodMax: 20, cushionUse: 0.8 },
+  lab:         { patienceBase: 60, redWeight: 1.2, startFunds: 0.12, costPerWin: true, cushionUse: 0.5 },
+  institution: { patienceBase: 50, redWeight: 1.8, startFunds: 0.18, cushionUse: 0.4 },
+});
+export const OWNER_PATIENCE = Object.freeze({
+  pacePerWin: 1.5, paceMax: 30, paceAfterGames: 15,   // projected wins above/below target
+  trustWeight: 0.5, trustPivot: 60,
+  allowanceFrom: 35, allowancePerPt: 0.6, allowanceMax: 25,   // strain (%) he lets pass silently
+  costPerWinOver: 1.2, costPerWinStrain: 5,                   // the Lab: payroll per win vs league
+});
+// Strain beyond his allowance → stage (points of strain over the allowance).
+export const OWNER_STAGE = Object.freeze({ watching: 0, concerned: 8, cuts: 18 });
+export const OWNER_TRUST_FX = Object.freeze({
+  concernedPerPayday: -2, cutsPerPayday: -3, orderMet: 3, orderMissed: -10,
+  redInkPerPct: -0.5, redInkMax: -15,          // season-end red ink the owner covers
+});
+export const OWNER_ORDER_TARGET_PENALTY = 0.05;  // next season's payroll target, per missed order
+export const FIN_TOLERANCE_MAX        = 0.15;    // most he'll let payroll run over target when happy
+export const FIN_OVERDRAFT_SHARE      = 0.5;     // of that tolerance, as red ink he'll allow for a bonus
+export const FIN_BOOKS_OFFER = Object.freeze({ perMargin: 0.5, max: 0.05 });  // season's profit margin → next target
 export const MANAGER_EXTENSION_YEARS   = 2;
 export const MANAGER_AUTO_CONFIDENCE   = -5;

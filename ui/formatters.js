@@ -81,9 +81,8 @@ export function snapshotMetrics(state) {
     morale:      t.morale     ?? 50,
     atmosphere:  t.atmosphere ?? 50,
     ownerTrust:  t.ownerTrust ?? 60,
-    budgetLeft:  (fin.operatingBudget || 0) - (fin.operatingSpent || 0),
-    budgetTotal: fin.operatingBudget || 0,
-    revenue:     fin.revenue || 0,
+    funds:       fin.funds || 0,                                   // §78 Club Funds
+    fundsScale:  Math.max(1, (fin.payrollTarget || 0) * 0.25),      // a quarter of the payroll target fills the bar
   };
 }
 

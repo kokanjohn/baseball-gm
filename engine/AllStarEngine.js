@@ -34,13 +34,14 @@ import {
   ALLSTAR_SUBS_FROM_INNING, ALLSTAR_INFLUENCE_BOOST, ALLSTAR_MAX_PER_CLUB,
   ALLSTAR_HOSTING_THRESHOLD_BASE, ALLSTAR_HOSTING_THRESHOLD_SECOND, ALLSTAR_HOSTING_THRESHOLD_THIRD,
   ALLSTAR_HOSTING_MIN_SEASONS_BETWEEN, ALLSTAR_HOSTING_MIN_SEASONS_THIRD, ALLSTAR_HOSTING_MIN_ATMOSPHERE,
-  ALLSTAR_HOSTING_REVENUE_BONUS_MIN, ALLSTAR_HOSTING_REVENUE_BONUS_MAX,
+  ALLSTAR_HOSTING_REVENUE_SHARE_MIN, ALLSTAR_HOSTING_REVENUE_SHARE_MAX,
   ALLSTAR_HOSTING_ATMOS_BUMP, ALLSTAR_HOSTING_OWNER_TRUST_BUMP, ALLSTAR_HOSTING_GM_REL_BUMP,
   HOSTING_PTS_PER_ATMO_POINT, HOSTING_ATMO_FLOOR, HOSTING_SEASON_ATMO_TARGET,
   HOSTING_SEASON_ATMO_BONUS, HOSTING_SCORE_CARRYOVER,
 } from '../data/constants.js';
 import { eligibleSlotsFor } from './RosterEngine.js';
 import { isAvailable } from './PlayerFactory.js';
+import * as Finance from './FinanceEngine.js';
 
 const SQUAD_IDS = new Set(Object.values(ALLSTAR_SQUAD_IDS));
 const HOST_TIER  = [2, 3, 5];                 // prestige tier for 1st / 2nd / 3rd+ hosting
@@ -234,8 +235,9 @@ function _hostingPayoff(draft) {
   const atmo = u.atmosphere ?? 50;
   const tier = draft.prestigeTier || 1;
   const scale = clamp(0.5 * (atmo / 100) + 0.5 * (tier / 5), 0, 1);
-  const bonus = Math.round(ALLSTAR_HOSTING_REVENUE_BONUS_MIN + (ALLSTAR_HOSTING_REVENUE_BONUS_MAX - ALLSTAR_HOSTING_REVENUE_BONUS_MIN) * scale);
-  u.finances.revenue = (u.finances.revenue || 0) + bonus;
+  const share = ALLSTAR_HOSTING_REVENUE_SHARE_MIN + (ALLSTAR_HOSTING_REVENUE_SHARE_MAX - ALLSTAR_HOSTING_REVENUE_SHARE_MIN) * scale;
+  const bonus = Math.round((u.finances?.payrollTarget || 0) * share / 10) * 10;
+  Finance.post(u.finances, bonus, 'allstar', "All-Star Game — the host's share", Date.now());   // §78
   u.atmosphere = clamp(atmo + ALLSTAR_HOSTING_ATMOS_BUMP, 0, 100);
   u.ownerTrust = clamp((u.ownerTrust ?? 60) + ALLSTAR_HOSTING_OWNER_TRUST_BUMP, 0, 100);
   const rels = { ...(u.gmRelationships || {}) };

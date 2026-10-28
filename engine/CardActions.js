@@ -21,7 +21,8 @@ import { PLAYER_GROUP, PHASE, ROSTER_LIMITS } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
 import { setUnavailable, setCondition, startPlan } from './DevelopmentEngine.js';
 import { callUp, rosterIsFull, sideOf } from './TransactionEngine.js';
-import { sendToFarm, applyRosterMutation, eligibleSlotsFor, defaultActiveGroup, computePayroll } from './RosterEngine.js';
+import { sendToFarm, applyRosterMutation, eligibleSlotsFor, defaultActiveGroup } from './RosterEngine.js';
+import * as Finance from './FinanceEngine.js';
 import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { queueTrade } from './TradeEngine.js';
@@ -96,7 +97,9 @@ const train = {
 const extend = {
   feasible: (st, c) => {
     const p = st.players[c._targetPlayerId];
-    return ours(st, c._targetPlayerId) && contractIsUp(p, st.seasonNum || 1) && !p.pendingContract && !p._willWalk;
+    // §78: no fee — the extension's cost is the raise, and ownership has to tolerate it.
+    return ours(st, c._targetPlayerId) && contractIsUp(p, st.seasonNum || 1) && !p.pendingContract && !p._willWalk
+      && Finance.canAddSalary(st, Math.max(0, marketTerms(st, p).salary - (p.contractSalary || 0)));
   },
   apply(d, c) {
     const p = d.players[c._targetPlayerId];
@@ -243,11 +246,17 @@ const isFA = (st, id) => st.players[id]?.group === PLAYER_GROUP.FREE_AGENT;
 // Money is the real limit on adding players (§74): salaries must fit under the
 // payroll cap (a player optioned to make room comes off it), bonuses under the
 // operating budget that's left.
-const payrollRoom = (st) => (st.userTeam.finances?.payrollCap || 0) - computePayroll(st);
-const opRoom = (st) => (st.userTeam.finances?.operatingBudget || 0) - (st.userTeam.finances?.operatingSpent || 0);
+// §78 Club Funds: added salary must fit what the owner will tolerate over his
+// payroll target (FinanceEngine.canAddSalary); money spent now must fit the
+// funds (canSpend — a happy owner lets them dip a little).
 const salaryOf = (st, id) => st.players[id]?.contractSalary || 0;
-// Room on the incoming player's side (§76); a player who goes down to make it frees his salary.
-const affords = (st, addK, outId = null, side = null) => addK <= payrollRoom(st) + (outId && fullFor(st, side) ? salaryOf(st, outId) : 0);
+// Room on the incoming player's side (§76). A player who goes down to make it
+// frees his salary only on a minor-league deal — a major-league contract is
+// paid in the farm too (§78).
+const affords = (st, addK, outId = null, side = null) => Finance.canAddSalary(st, addK,
+  outId && fullFor(st, side) && !st.players[outId]?.contractMLB ? salaryOf(st, outId) : 0);
+const spends = (st, k) => Finance.canSpend(st, k);
+const payBonus = (d, k, label, atMs) => { if (k) Finance.post(d.userTeam.finances, -k, 'bonus', label, atMs); };
 const fullFor = (st, side = null) => rosterIsFull(st, 'user', side);
 const between = (lo, hi) => lo + Math.random() * (hi - lo);
 
@@ -270,12 +279,12 @@ const signStarter = {
 /** A prospect signs a bonus and reports to the farm. */
 const signProspect = (r) => ({
   feasible: (st, c) => isFA(st, role(c, r))
-    && (c.cardId === 'sc3_fail' || (signingTerms(st, st.players[role(c, r)]).bonus || 0) <= opRoom(st)),
+    && (c.cardId === 'sc3_fail' || spends(st, signingTerms(st, st.players[role(c, r)]).bonus || 0)),
   apply(d, c, atMs) {
     const id = role(c, r);
     const t = signingTerms(d, d.players[id]);
     const ev = signToClub(d, id, 'user', atMs, { toFarm: true, terms: t });
-    if (c.cardId !== 'sc3_fail') d.userTeam.finances.operatingSpent = (d.userTeam.finances.operatingSpent || 0) + (t.bonus || 0);
+    if (c.cardId !== 'sc3_fail') payBonus(d, t.bonus || 0, `Signing bonus — ${d.players[id]?.name}`, atMs);
     return ev;
   },
 });
@@ -333,7 +342,7 @@ const inviteNRI = {
 const workout = {
   // Don't fly a player in we couldn't afford to sign afterwards.
   feasible: (st, c) => isFA(st, role(c, 'intl_player'))
-    && (signingTerms(st, st.players[role(c, 'intl_player')]).bonus || 0) <= opRoom(st) - (c._budgetCost || 0),
+    && spends(st, (signingTerms(st, st.players[role(c, 'intl_player')]).bonus || 0) + (c._budgetCost || 0)),
   apply(d, c, atMs) {
     const id = role(c, 'intl_player');
     const p = d.players[id];
@@ -347,7 +356,7 @@ const workout = {
 /** An international scouting trip: 1–2 workout leads over the next week. */
 const intlTrip = {
   // A trip only makes sense if there'd be money left to fly a lead in and sign him.
-  feasible: (st, c) => opRoom(st) - (c._budgetCost || 0) >= TRIP_FOLLOW_THROUGH_K,
+  feasible: (st, c) => spends(st, (c._budgetCost || 0) + TRIP_FOLLOW_THROUGH_K),
   apply(d, c, atMs) {
     const n = 1 + (Math.random() < 0.5 ? 1 : 0);
     return Array.from({ length: n }, (_, i) => ({ type: 'SCHEDULE_CARD', defId: 'sc3', preset: { _country: c._intlCountry },
@@ -362,10 +371,10 @@ const indieTip = {
 };
 
 const indieSign = {
-  feasible: (st, c) => isFA(st, c._targetPlayerId) && (signingTerms(st, st.players[c._targetPlayerId]).bonus || 0) <= opRoom(st),
+  feasible: (st, c) => isFA(st, c._targetPlayerId) && spends(st, signingTerms(st, st.players[c._targetPlayerId]).bonus || 0),
   apply(d, c, atMs) {
     const t = signingTerms(d, d.players[c._targetPlayerId]);
-    d.userTeam.finances.operatingSpent = (d.userTeam.finances.operatingSpent || 0) + (t.bonus || 0);
+    payBonus(d, t.bonus || 0, `Signing bonus — ${d.players[c._targetPlayerId]?.name}`, atMs);
     return signToClub(d, c._targetPlayerId, 'user', atMs, { toFarm: true, terms: t });
   },
 };
@@ -410,7 +419,7 @@ const scoutingQuiet = (days, refund = false) => ({
     d.userTeam.scoutingQuietUntil = Math.max(d.userTeam.scoutingQuietUntil || 0, atMs + days * DAY);
     if (refund) {
       const saved = c._amountsK?.misc_cost_lg || 0;
-      d.userTeam.finances.operatingSpent = Math.max(0, (d.userTeam.finances.operatingSpent || 0) - saved);
+      if (saved) Finance.post(d.userTeam.finances, saved, 'cards', 'Scouting travel cut — savings', atMs);
     }
     return [{ type: 'SCOUTING_QUIET', untilMs: d.userTeam.scoutingQuietUntil }];
   },

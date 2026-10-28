@@ -496,9 +496,10 @@ export function applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams) {
   const arch = ARCHETYPE[archetypeId];
   if (!arch) throw new Error(`applyArchetypeToUserTeam: unknown archetype '${archetypeId}'`);
 
-  // Financial parameters
-  userTeam.finances.payrollCap      = arch.payrollCap;
-  userTeam.finances.operatingBudget = arch.operatingBudget;
+  // Financial parameters — the owner's opening payroll target (§78). The
+  // market and opening funds are set by FinanceEngine.initFinances once the
+  // coaching staff exists (GameEngine.startNewGame).
+  userTeam.finances.payrollTarget = arch.payrollCap;
 
   // Soft metrics
   userTeam.ownerTrust        = arch.ownerTrustStart;

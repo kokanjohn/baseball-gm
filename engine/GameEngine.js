@@ -79,6 +79,8 @@ import { computeAllIMP, appendGameLog } from './IMPEngine.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
 import * as AllStar from './AllStarEngine.js';
 import { recordOutings } from './PitchingEngine.js';
+import * as Finance from './FinanceEngine.js';
+import { formatK } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Development from './DevelopmentEngine.js';
 
@@ -443,6 +445,12 @@ export async function startNewGame(config) {
     // League teams
     s.leagueTeams = league.leagueTeams;
 
+    // §78: everyone on a club's active roster now is on a major-league deal
+    // (paid wherever he is); the farm and the spring invitees are not.
+    for (const t of [s.userTeam, ...s.leagueTeams]) {
+      for (const id of t.rosterIds || []) if (s.players[id]) s.players[id].contractMLB = true;
+    }
+
     // Add spring training invitees
     _addSpringInvitees(s);
 
@@ -499,6 +507,16 @@ export async function startNewGame(config) {
     s.schedule       = schedule;
     s.leagueSchedule = leagueSchedule;
     s.allStar        = AllStar.createAllStarState(s, baseYear);   // §75
+
+    // §78 Club Funds: the market (ballpark, local revenue, ticket yield) and the
+    // opening funds, from the archetype — now that the staff's salaries exist.
+    Finance.initFinances(s.userTeam, {
+      payrollTarget:   s.userTeam.finances.payrollTarget,
+      atmosphere:      s.userTeam.atmosphere,
+      startFundsShare: Finance.startFundsShareFor(config.archetypeId),
+      winPct:          (s.userTeam._ownerWinTarget || 66) / REGULAR_SEASON_GAME_COUNT,
+    });
+    s.userTeam.finances.payroll = Finance.payrollOf(s, 'user');
 
     // Geographic region — set from setup config, persists for lifetime of franchise
     if (config.region)        s.settings.region        = config.region;
@@ -714,6 +732,11 @@ function _activateGame(game) {
     // Pre-computed full-game box (promoted to g.boxScore at commit) + seed lineups.
     g._precomputedBoxScore = boxScore;
     g.liveLineups          = liveLineups;
+    // §78: the crowd is in the seats at first pitch (the gate is banked at the final).
+    if (g.isHome && !isSpring && !g.attendance) {
+      const crowd = Finance.crowdFor(s, 'user', { atMs: g.gameTime || Date.now(), playoff: !!g.isPlayoff });
+      if (crowd) { g.attendance = crowd.attendance; g.gateK = crowd.gateK; g.sellout = crowd.sellout; }
+    }
   });
 }
 
@@ -877,6 +900,14 @@ export async function commitGame(gameIndex) {
       }
 
       g._recordApplied = true;
+    }
+
+    // ── Step 1b: the gate (§78) — a home game's crowd pays (not in spring).
+    if (g.isHome && !g.isSpring && !g._gateApplied && g.status !== GAME_STATUS.POSTPONED) {
+      g._gateApplied = true;
+      const crowd = g.attendance ? { attendance: g.attendance, gateK: g.gateK, sellout: !!g.sellout } : null;
+      const gate = Finance.homeGate(s, 'user', { atMs: _gameEndMs(g), playoff: !!g.isPlayoff, crowd });
+      if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
     }
 
     // ── Step 1c: Stat accumulation from plays ──────────────
@@ -1622,10 +1653,10 @@ export function buildCardContext() {
 
     // Finances
     payroll:            userTeam.finances.payroll,
-    payrollCap:         userTeam.finances.payrollCap,
-    operatingBudget:    userTeam.finances.operatingBudget,
-    operatingSpent:     userTeam.finances.operatingSpent,
-    payrollHeadroom:    userTeam.finances.payrollCap - userTeam.finances.payroll,
+    payrollTarget:      userTeam.finances.payrollTarget,
+    funds:              userTeam.finances.funds,                        // §78 Club Funds
+    payrollHeadroom:    (userTeam.finances.payrollTarget || 0) - (userTeam.finances.payroll || 0),
+    ownerStage:         userTeam.finances.owner?.stage || 'content',
 
     // Record
     wins:               userTeam.wins,
@@ -1876,6 +1907,52 @@ function _finishLeagueGame(date, i) {
   }
   return inj.events.map(e => ({ ...e, atMs: endMs }));
 }
+
+// ─────────────────────────────────────────────────────────────
+// CLUB FUNDS ON THE CLOCK (§78)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * _payday(i, atMs) — the 1st / 15th (and once after the last game): salaries
+ * and staff are paid, the media and local installments come in, and the
+ * owner looks at the books. A worse mood (or an order) reaches the inbox.
+ */
+function _payday(i, atMs) {
+  let res = null, review = null, amountK = 0, playerId = null;
+  StateManager.mutate(s => {
+    res = Finance.payday(s, i, atMs, 'user');
+    if (!res) return;
+    s.userTeam.finances.payroll = Finance.payrollOf(s, 'user');
+    review = Finance.ownerReview(s, atMs);
+    const sign = res.total >= 0 ? '+' : '−';
+    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+      buildActivityFeedEntry('payday', s.userTeam.abbr,
+        `Payday: ${formatK(res.paid.payroll)} in salaries${res.paid.staff ? `, ${formatK(res.paid.staff)} staff` : ''}`
+        + `${res.paid.dead ? `, ${formatK(res.paid.dead)} dead money` : ''} · `
+        + `${formatK(res.received.media + res.received.local)} media & sponsors (${sign}${formatK(Math.abs(res.total))})`, atMs)]);
+    // The owner orders cuts: name the contract to move, due the next payday.
+    if (review.stage === 'cuts' && !s.userTeam.finances.owner.order) {
+      amountK = Finance.cutOrderAmount(s);
+      const p = amountK > 0 ? Finance.contractToMove(s, amountK) : null;
+      const cal = s.userTeam.finances.cal;
+      const dueAt = cal?.paydays?.[cal.paid] ?? atMs + 14 * 86_400_000;
+      if (p) {
+        playerId = p.id;
+        s.userTeam.finances.owner.order = { amountK, fromPayroll: Finance.payrollOf(s, 'user'), dueAt, playerId };
+      }
+    }
+  });
+  if (!res) return [];
+  const rank = (st) => FinanceStages.indexOf(st);
+  if (review.orderResult) CardEngine.deliverOwnerOrderResult(review.orderResult, atMs + _rng(30, 90) * 60_000);
+  if (review.stage === 'cuts' && playerId) {
+    CardEngine.deliverOwnerCutOrder(playerId, amountK, atMs + _rng(30, 120) * 60_000);
+  } else if (rank(review.stage) > rank(review.prev) && review.stage !== 'content') {
+    CardEngine.deliverOwnerFinanceCard(review.stage, review.strain, atMs + _rng(30, 120) * 60_000);
+  }
+  return [{ type: 'PAYDAY', atMs, ...res }];
+}
+const FinanceStages = Finance.STAGES;
 
 // ─────────────────────────────────────────────────────────────
 // THE ALL-STAR GAME (§75)
@@ -2265,16 +2342,24 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
   // CPU first pitch / final out, everything due by that moment happens first.
   const events = [...(opts.events || [])];
   let changed = false;
-  for (let guard = 0; guard < 2000; guard++) {
+  // §78: this season's pay calendar (built once per season from the schedule).
+  if (state.userTeam.finances?.cal?.seasonNum !== (state.seasonNum || 1)) {
+    StateManager.mutate(s => { Finance.ensureSeason(s, 'user'); });
+  }
+  for (let guard = 0; guard < 4000; guard++) {
     const st   = StateManager.get();
     const game = _leagueGameEvents(st, clockMs)[0];
     const os   = Offseason.dueSteps(st, clockMs)[0];
-    const next = game && (!os || game.at <= os.at) ? game : os ? { kind: 'offseason', ...os } : null;
+    const fin  = Finance.dueSteps(st, clockMs)[0];
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }].filter(Boolean);
+    const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     const step = _rosterStep(next.at, {});
     events.push(...step.events);
     if (next.kind === 'start') _startLeagueGame(next.date, next.i);
     else if (next.kind === 'final') events.push(..._finishLeagueGame(next.date, next.i));
+    else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, 'user'); });
+    else if (next.kind === 'fin:payday') events.push(..._payday(next.i, next.at));
     else events.push(..._runOffseasonStep(next.step, next.at));
     events.push(..._seasonProgress(next.at));
     changed = true;

@@ -511,14 +511,30 @@ function _resolveWaiver(draft, player, atMs, events, touched) {
 }
 
 /** The weakest healthy same-side player not in the lineup / rotation. */
-function _weakestReserve(draft, incoming, teamId = 'user') {
+function _weakestReserve(draft, incoming, teamId = 'user', exceptId = null) {
   const u = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(t => t.id === teamId);
   if (!u) return null;
   const isP = (p) => ['SP', 'RP'].includes(p?.pos);
   const busy = new Set([...(u.lineupSlots || []).map(s => s.playerId), ...(u.rotation?.order || [])]);
   return (u.rosterIds || []).map(id => draft.players[id])
-    .filter(p => p && isP(p) === isP(incoming) && !busy.has(p.id) && p.group !== PLAYER_GROUP.IL)
+    .filter(p => p && p.id !== exceptId && isP(p) === isP(incoming) && !busy.has(p.id) && p.group !== PLAYER_GROUP.IL)
     .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0] || null;
+}
+
+/** More players on this side of the active roster than its share (14, or 19 in camp). */
+function _sideOver(draft, teamId, side) {
+  if (!CAP_PHASES.has(draft.phase) && draft.phase !== PHASE.SPRING_TRAINING) return false;
+  const team = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(t => t.id === teamId);
+  const spring = draft.phase === PHASE.SPRING_TRAINING;
+  let n = 0;
+  for (const id of team?.rosterIds || []) {
+    const p = draft.players[id];
+    if (p && p.group !== PLAYER_GROUP.IL && sideOf(p) === side) n++;
+  }
+  const target = side === 'pitcher'
+    ? PITCHER_TARGET + (spring ? ROSTER_LIMITS.SPRING_INVITEE_PITCHERS : 0)
+    : HITTER_TARGET  + (spring ? ROSTER_LIMITS.SPRING_INVITEE_HITTERS  : 0);
+  return n > target;
 }
 
 function _arrive(draft, tx, events, touched) {
@@ -533,6 +549,17 @@ function _arrive(draft, tx, events, touched) {
   }
   if (!team.rosterIds.includes(player.id)) team.rosterIds = [...team.rosterIds, player.id];
   Object.assign(player, { group: tx.toGroup || defaultActiveGroup(player), teamId: tx.teamId, tier: 'active' });
+  // The corresponding move (§78 roster balance): a player reporting to a side
+  // that's already full — a bat for an arm in a trade — sends that side's
+  // weakest reserve down, so his club keeps its 14 and 14 and the side he
+  // left opens for a call-up.
+  if (_sideOver(draft, tx.teamId, sideOf(player))) {
+    const out = _weakestReserve(draft, player, tx.teamId, player.id);
+    if (out) {
+      applyRosterMutation(draft, sendToFarm(draft, out.id, tx.teamId));
+      events.push({ type: 'OPTIONED', playerId: out.id, teamId: tx.teamId, atMs: tx.effectiveAt, reason: 'corresponding move' });
+    }
+  }
   tx.status = 'done';
   touched.add(tx.teamId);
   events.push({ type: 'ARRIVED', tx, playerId: player.id, teamId: tx.teamId, atMs: tx.effectiveAt });
@@ -630,6 +657,7 @@ function _maintainFarmDepth(draft, atMs, events) {
         contractSalary: SALARY_BY_OVR.tier1.salMin,
         contractYears:  1,
         contractExpiry: draft.seasonNum || 1,
+        contractMLB:    false,          // a minor-league depth deal (§78)
         _farmArc: null, _farmArcStart: atMs,
       });
       events.push({ type: 'FARM_SIGNING', teamId, playerId: sign.id, atMs });

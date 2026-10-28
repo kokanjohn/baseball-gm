@@ -365,14 +365,19 @@ export function createUserTeamObject(config = {}) {
 
     // Finances
     finances: {
-      // All financial values in $K — set by archetype at game creation
-      payroll:           0,
-      payrollCap:        8000,    // $8K default (Ember floor) — overwritten by archetype
-      payrollCapHistory: [],
-      operatingBudget:    500,    // $500K default (Ember floor) — overwritten by archetype
-      operatingSpent:    0,
-      revenue:           0,
-      revenueHistory:    [],
+      // Club Funds (§78) — all values in $K. Set at game creation by
+      // FinanceEngine.initFinances (market, opening funds) from the archetype.
+      funds:             0,         // the club's one account
+      payrollTarget:     8000,      // the owner's soft payroll target (was the payroll cap)
+      payroll:           0,         // annual payroll of everyone the club is paying (computed)
+      payrollTargetHistory: [],
+      market:            null,      // { capacity, perFan, localAnnual }
+      ledger:            [],        // this season's money in and out
+      season:            { income: {}, spend: {} },
+      history:           [],        // one summary per season
+      cal:               null,      // this season's pay calendar
+      dead:              [],        // released players still owed this season
+      owner:             { stage: 'content', mood: 0, order: null, targetPenalty: 0, lastReviewAt: null },
     },
 
     // Coaching staff
@@ -536,11 +541,16 @@ function _fillDefaults(state) {
       state.userTeam.rotation = { order: [], currentIndex: 0 };
     }
     if (state.userTeam.finances) {
+      const f = state.userTeam.finances;
+      // §78: saves from before Club Funds — the cap becomes the target, the
+      // unspent operating budget the opening funds.
+      if (f.payrollTarget === undefined && f.payrollCap !== undefined) f.payrollTarget = f.payrollCap;
+      if (f.funds === undefined && f.operatingBudget !== undefined) f.funds = (f.operatingBudget || 0) - (f.operatingSpent || 0);
+      if (f.payrollTargetHistory === undefined && f.payrollCapHistory) f.payrollTargetHistory = f.payrollCapHistory;
+      for (const k of ['payrollCap', 'payrollCapHistory', 'operatingBudget', 'operatingSpent', 'revenue', 'revenueHistory']) delete f[k];
       const finDefaults = createUserTeamObject().finances;
       for (const key of Object.keys(finDefaults)) {
-        if (state.userTeam.finances[key] === undefined) {
-          state.userTeam.finances[key] = finDefaults[key];
-        }
+        if (f[key] === undefined) f[key] = finDefaults[key];
       }
     }
   }

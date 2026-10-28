@@ -3614,6 +3614,7 @@ When the announcement fires, the following are applied or queued:
 
 **Immediate (on card resolution):**
 - One-time revenue bonus: $10–15M (scaled by atmosphere and prestige tier)
+  - *Superseded (§78, r72):* the hosting share is 5–8% of the payroll target, posted to Club Funds — $10–15M was more than a season's gate.
 - Atmosphere bump: +15, sustained for the remainder of the hosting season
 - OwnerTrust: +10
 - GM relationship boost: +5 with all league teams (organizational prestige signal)
@@ -6906,3 +6907,14 @@ Cash moves between club funds, usually covering part of the traded player's **re
 2. **Phase 2 — CPU books:** markets, funds, paydays and gates; spending limits on CPU signings and claims; CPU clubs shedding salary.
 3. **Phase 3 — the card pool:** the audit list above (rework, reframe, retire), the new families, and variants by archetype, record, funds, owner mood and CPU situations.
 4. **Phase 4 — cash in trades and B7** (trades the GM starts).
+
+### 78.10 Phase 1 as built (r72)
+- **`engine/FinanceEngine.js`** (pure; imports only `dayOf`): `initFinances`, `ensureSeason` (the season calendar: paydays the 1st and 15th plus a settling payday at season end), `dueSteps` / `accrueDay` / `payday`, `crowdFor` / `homeGate`, `projection`, `patience` / `strain` / `ownerStage`, `tolerance`, `canAddSalary` / `canSpend`, `ownerReview`, `cutOrderAmount` / `contractToMove`, `seasonEndReview`, `booksOfferAdjustment`. Every dollar is a ledger line (`post`), so the books always reconcile.
+- **Who gets paid:** `player.contractMLB` — a major-league deal is paid wherever he plays, including in the farm. A prospect on a minor-league deal is paid only while he is on the active roster. Signings in the spring flag the active roster; `applyContract` sets the flag from the terms; depth signings are minor-league deals. Releasing a player mid-season leaves dead money for the rest of his salary that season.
+- **Income:** a media share equal for every club (`FIN_MEDIA_SHARE_K`). Local revenue and the gate come from a market calibrated so a club at its owner's win target and starting atmosphere breaks even (`FIN_BREAK_EVEN_MARGIN` 1.0). Attendance comes from atmosphere, recent form and the day of the week. The crowd is set at first pitch (`g.attendance`, `gateK`, `sellout`; shown on the live line) and banked at the final. Playoff gates are ×1.5. Spring and postponed games bring in no gate.
+- **Owner:** patience (archetype + pace vs win target + trust + Gambler mood) against strain (payroll over target net of a projected-funds cushion × `cushionUse`, red ink × `redWeight`, Lab cost per win). Stages: content → watching → concerned → cuts. A cut order names a contract (`contractToMove`) and is due at the next payday. The GM either moves it (a salary dump to the lowest-payroll CPU club) or the target is lowered next winter (`OWNER_ORDER_TARGET_PENALTY`). At season end the owner covers any red ink, and the books adjust the ownership offer.
+- **Every salary path asks the owner:** card signings (`affords` → `canAddSalary`), FA cards, extensions (for the raise), and CPU trade offers (`_tradeSalaryOk` both at delivery and at execution; a blocked deal sends `owner_trade_blocked`).
+- **Roster arrivals make a corresponding move:** a full side sheds its over-represented side first, otherwise the weakest reserve is optioned out.
+- **Calibration found by the harness (8 seeds, a 142-game season):** season nets run from about −1.3M to +6.5M operating on a $22M target. The All-Star hosting share is a separate, one-time line. Harness check: |operating net| ≤ 35% of target.
+- **Run environment recalibrated (r72).** The harness had only measured the user's games. Measured across the league, CPU-vs-CPU games — an average lineup against an average staff — ran 3.4–3.8 R/G. That was the same at r71, so it was not a money regression; the PA model's base rates were simply below MLB (H/PA .197, HR/H .10, K .242). New base rates: walk .080, K .226, hit .212, HR share of hits .128, doubles .195. League play now runs about 4.0–4.3 R/G, .243 AVG, ~1.0 HR, ~8.4 K and ~3.5 BB per team-game. The harness now checks the league environment (3.8–5.2) as well as the user's games (3.2–6.0).
+

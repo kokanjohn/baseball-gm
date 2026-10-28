@@ -71,8 +71,9 @@ export function evaluateTrade(offer, state) {
   // Payroll impact (all in $K)
   const payrollDelta   = _payrollDelta(incomingPlayers, outgoingPlayers);
   const newPayroll     = (state.userTeam.finances.payroll || 0) + payrollDelta;
-  const payrollCap     = state.userTeam.finances.payrollCap || 22000;
-  const overCap        = newPayroll > payrollCap;
+  // §78: the owner's (soft) payroll target, not a cap.
+  const payrollTarget  = state.userTeam.finances.payrollTarget || 22000;
+  const overTarget     = newPayroll > payrollTarget;
 
   // GM relationship with proposing team
   const gmRel = proposingTeamId && proposingTeamId !== 'user'
@@ -88,7 +89,7 @@ export function evaluateTrade(offer, state) {
     depthImpact,      // 'CRITICAL'|'WARNING'|'NEUTRAL'|'IMPROVEMENT'
     payrollDelta,     // $K — positive = more payroll
     newPayroll,       // $K
-    overCap,
+    overTarget,
     gmRel,
     incomingPlayers,
     outgoingPlayers,

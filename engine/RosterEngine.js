@@ -30,6 +30,7 @@ import {
   FARM_PITCHER_MIN_RP,
 } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
+import { payrollOf } from './FinanceEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // POSITION COMPATIBILITY MAP
@@ -1096,7 +1097,7 @@ function _openingDayFill(keepers, pool, cap, players, inbound = []) {
 
 /**
  * computePayroll(state)
- * Recomputes user team payroll from active roster + IL players.
+ * The user's annual payroll (§78: FinanceEngine.payrollOf).
  * Called whenever a roster change affects salaries.
  * Returns the payroll value — caller applies via StateManager.
  *
@@ -1104,21 +1105,9 @@ function _openingDayFill(keepers, pool, cap, players, inbound = []) {
  * @returns {Number} payroll in $K (same unit as contractSalary)
  */
 export function computePayroll(state) {
-  const countGroups = new Set([
-    PLAYER_GROUP.BENCH_HITTERS,    // all active hitters (formerly STARTING_HITTERS too)
-    PLAYER_GROUP.STARTING_PITCHERS,
-    PLAYER_GROUP.BULLPEN,
-    PLAYER_GROUP.PITCHER_BENCH,
-    PLAYER_GROUP.IL,
-  ]);
-
-  return state.userTeam.rosterIds.reduce((sum, id) => {
-    const p = state.players[id];
-    if (p && countGroups.has(p.group)) {
-      return sum + (p.contractSalary || 0);
-    }
-    return sum;
-  }, 0);
+  // §78: everyone the club is paying — active roster and IL, and farm players
+  // on major-league deals (FinanceEngine.payrollOf is the one definition).
+  return payrollOf(state, 'user');
 }
 
 // ─────────────────────────────────────────────────────────────

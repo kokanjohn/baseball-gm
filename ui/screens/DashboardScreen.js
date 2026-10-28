@@ -706,6 +706,13 @@ function _oppAbbr(state, game) {
 function _oppFull(game) {
   return game?.opponent || 'Opponent';
 }
+/** §78: the crowd at our home game (and, at the final, the gate). */
+function _crowdLine(game, ds) {
+  if (!game?.attendance || game.isAllStar) return '';
+  const gate = ds?.isFinal && game.gateK ? ` · Gate ${formatMoney(game.gateK)}` : '';
+  return `<div class="lgv-crowd">Attendance ${game.attendance.toLocaleString()}${game.sellout ? ' · Sellout' : ''}${gate}</div>`;
+}
+
 /** Labels for our own game's live card. */
 function _userView(state, game) {
   const uA = _userAbbr(state), uF = _userFull(state), oA = _oppAbbr(state, game), oF = _oppFull(game);
@@ -755,6 +762,7 @@ function _renderLiveGameCard(game, state, view = null, ds = null, footer = '') {
         ${_renderLinescore({ ...ds, isHome: view.userIsHome }, awayAbbr, homeAbbr)}
       </div>
       ${footer}
+      ${_crowdLine(game, ds)}
 
       <div class="live-tabs">
         <div class="live-tab${_liveTab === 'pbp' ? ' active' : ''}" data-tab="pbp">Play by Play</div>
@@ -1160,7 +1168,7 @@ function _renderHotColdStrip(state) {
 const _FEED_ICONS = {
   trade:'🔄',injury:'🏥',promotion:'⬆️',demotion:'⬇️',
   signing:'✍️',release:'👋',milestone:'🏆',card:'📋',
-  waiver:'📋',win:'✅',loss:'❌',weather:'⛈️',result:'⚾',allstar:'⭐',
+  waiver:'📋',win:'✅',loss:'❌',weather:'⛈️',result:'⚾',allstar:'⭐',payday:'💵',
 };
 
 /** Real-time label for a feed entry (the league runs on the real clock). */
@@ -1355,6 +1363,7 @@ function _injectCSS() {
     .lgv-final{color:var(--muted);border-color:var(--border);}
     .lgv-delay{color:#f97316;border-color:rgba(249,115,22,.4);}
     .lgv-linescore-wrap{overflow-x:auto;padding:8px 16px;border-bottom:1px solid var(--border);}
+    .lgv-crowd{font-size:11px;color:var(--muted);padding:6px 16px;border-bottom:1px solid var(--border);}
     .linescore-live table{width:100%;border-collapse:collapse;}
     .ls-inn-head{color:var(--muted);font-weight:600;text-align:center;min-width:18px;font-size:10px;padding:2px 3px;}
     .ls-inn-head.ls-active-head{color:var(--accent);}

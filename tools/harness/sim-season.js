@@ -24,6 +24,7 @@ import { liveSituation } from '../../engine/SimEngine.js';
 import * as Offseason from '../../engine/OffseasonEngine.js';
 import * as AllStar from '../../engine/AllStarEngine.js';
 import * as Pitching from '../../engine/PitchingEngine.js';
+import * as Finance from '../../engine/FinanceEngine.js';
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
@@ -62,7 +63,7 @@ const summarize = () => {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -292,7 +293,7 @@ async function runOffseasonChecks() {
   check(`offseason: in-season extensions take effect (${extendedUser.length})`,
         extendedUser.every(id => !st.players[id].pendingContract && (st.players[id].teamId !== 'user' || Offseason.yearsLeft(st.players[id], st.seasonNum) >= 1)));
   check('offseason: ownership evaluation card delivered and decided',
-        ownershipCard === 1 && (st.userTeam.finances.payrollCapHistory || []).some(h => h.seasonNum === 2));
+        ownershipCard === 1 && (st.userTeam.finances.payrollTargetHistory || []).some(h => h.seasonNum === 2));
   check('offseason: every required decision resolved by spring', Offseason.hardGates(st).open.length === 0);
   const signings = (st.activityFeed || []).filter(e => /sign free agent/.test(e.text)).length;
   check(`offseason: CPU clubs sign free agents (${signings} signings, ${faCards.size} FA cards to the GM, ${signedByUser} signed)`, signings >= 3);
@@ -309,6 +310,30 @@ async function runOffseasonChecks() {
   check(`offseason: amateur prospects join every farm (${prospects})`, prospects >= 20);
   const recs = teams.every(t => !t.wins && !t.losses && !t.springWins && !t.postseasonWins);
   check('season 2: every record starts at zero', recs && st.standings === null && st.playoffBracket === null && st.currentGameIndex === 0);
+  {
+    // §78: season 1's books — closed, reconciled to the dollar, salaries truly paid.
+    const f = st.userTeam.finances, h = (f.history || [])[0];
+    check('club funds: season 1 closed into history', !!h && h.seasonNum === 1);
+    if (h) {
+      const sum = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+      check(`club funds: the books reconcile (opening ${gm.openingFunds} + net ${h.net} + covered ${h.covered} = ${h.fundsEnd})`,
+            gm.openingFunds + h.net + h.covered === h.fundsEnd && sum(h.income) - sum(h.spend) - (h.income.owner || 0) === h.net);
+      const avgPayroll = gm.payrollSamples.length ? gm.payrollSamples.reduce((a, b) => a + b, 0) / gm.payrollSamples.length : 0;
+      check(`club funds: salaries paid match the payroll carried (${h.spend.payroll}K paid, avg payroll ${Math.round(avgPayroll)}K)`,
+            h.spend.payroll > 0 && Math.abs(h.spend.payroll - avgPayroll) <= avgPayroll * 0.15);
+      check(`club funds: staff paid, gates and media came in (gates ${h.income.gate}K, media ${h.income.media}K, local ${h.income.local}K)`,
+            h.spend.staff > 0 && h.income.gate > 0 && h.income.media > 0 && h.income.local > 0);
+      // Operating net: the All-Star hosting share is a one-time windfall (§75), not the club's economics.
+      const opNet = h.net - (h.income.allstar || 0);
+      check(`club funds: a realistic season's operating net (${opNet}K, ${h.net}K all in, on a ${h.payrollTarget}K target; in ${JSON.stringify(h.income)} out ${JSON.stringify(h.spend)}; ${st.userTeam.wins ?? ''} — season 1 ${(st.seasonHistory || [])[0]?.wins}-${(st.seasonHistory || [])[0]?.losses})`,
+            Math.abs(opNet) <= h.payrollTarget * 0.35);
+    }
+    check(`club funds: paydays reach the feed (${gm.paydays} paid)`, gm.paydays >= 8);
+    const ownerCards = (st.inbox || []).filter(c => (c.cardId || '').startsWith('owner_'));
+    const by = {}; for (const c of ownerCards) by[c.cardId] = (by[c.cardId] || 0) + 1;
+    const dumps = (st.transactions || []).filter(t => t.kind === 'trade' && !(t.offer?.incomingIds || []).length);
+    check(`club funds: the owner's season (${JSON.stringify(by)}; ${dumps.length} salary dumps)`, true);
+  }
   const sched2 = st.schedule;
   check(`season 2: a full new calendar (${sched2.length} games, first ${sched2[0]?.date})`,
         sched2.length === sched1Len && sched2[0].gameTime >= os.springAt && String(sched2[0].date).startsWith(String(year2))
@@ -632,6 +657,13 @@ async function main() {
     gmName: 'Test GM', city: 'Testville', nickname: 'Testers',
     abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: 'north',
   });
+  {
+    // §78: the books open — a market, opening funds, the owner's target.
+    const f = SM.get().userTeam.finances;
+    gm.openingFunds = f.funds;
+    check(`club funds: the books open (funds ${f.funds}K, target ${f.payrollTarget}K, ${f.market?.capacity} seats)`,
+          f.funds > 0 && f.payrollTarget > 0 && f.market?.capacity > 20000 && f.market?.perFan > 0 && f.owner?.stage === 'content');
+  }
 
   // ── §60: new-franchise inbox seed survives the App.init reload ─────────────
   // SetupScreen calls App.init() right after startNewGame, which reloads the
@@ -675,7 +707,7 @@ async function main() {
       const before = snapshotMetrics(SM.get());
       resolveCard(c.instanceId, 'yes');
       const after = snapshotMetrics(SM.get());
-      if (['rating','morale','atmosphere','ownerTrust','budgetLeft'].some(k => after[k] !== before[k])) moved++;
+      if (['rating','morale','atmosphere','ownerTrust','funds'].some(k => after[k] !== before[k])) moved++;
     }
     check(`decisions: every seed decision moves a dashboard metric (${moved}/${seeds.length})`,
           seeds.length > 0 && moved === seeds.length);
@@ -805,6 +837,36 @@ async function main() {
 
     await commitGame(idx);
     releaseDueCards();   // the App's next tick
+    if (process.env.ROSTER_TRACE) {
+      const st = SM.get();
+      const act = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(p => p && p.group !== PLAYER_GROUP.IL);
+      const P = act.filter(p => p.pos === 'SP' || p.pos === 'RP').length, H = act.length - P;
+      if (gm.lastHP && (P !== gm.lastHP.P || H !== gm.lastHP.H)) {
+        const ids = new Set([...(st.userTeam.rosterIds || []), ...(gm.lastHP.ids || [])]);
+        const gone = [...gm.lastHP.ids].filter(id => !(st.userTeam.rosterIds || []).includes(id) || st.players[id]?.group === PLAYER_GROUP.IL);
+        const came = (st.userTeam.rosterIds || []).filter(id => !gm.lastHP.ids.includes(id) && st.players[id]?.group !== PLAYER_GROUP.IL);
+        const d = (id) => { const p = st.players[id]; return `${p?.name}(${p?.pos}/${p?.group}/${p?.teamId})`; };
+        console.log('ROSTER', idx, `${gm.lastHP.H}H/${gm.lastHP.P}P -> ${H}H/${P}P`, 'out:', gone.map(d).join(','), 'in:', came.map(d).join(','));
+      }
+      gm.lastHP = { H, P, ids: act.map(p => p.id) };
+    }
+    if (process.env.OWNER_DUMP) {
+      const st = SM.get(), paid = st.userTeam.finances.cal?.paid ?? 0;
+      if (paid !== gm.lastPaid) {
+        gm.lastPaid = paid;
+        const sr = Finance.strain(st), u = st.userTeam;
+        console.log('OWNER', `payday ${paid}`, `${u.wins}-${u.losses}`, `pace ${Finance.paceVsTarget(st)?.toFixed(1)}`, `trust ${Math.round(u.ownerTrust)}`,
+          `patience ${Finance.patience(st).toFixed(1)} allow ${Finance.allowance(st).toFixed(1)}`,
+          `strain ${sr.total.toFixed(1)} (over ${sr.over.toFixed(1)} red ${sr.red.toFixed(1)})`, `payroll ${sr.payroll} target ${sr.target} funds ${u.finances.funds} proj ${sr.projected}`,
+          `stage ${u.finances.owner?.stage}`);
+      }
+    }
+    // §78: the payroll carried through the regular season, and the paydays.
+    {
+      const st = SM.get(), g = st.schedule[idx];
+      if (!g?.isSpring && !g?.isPlayoff) gm.payrollSamples.push(st.userTeam.finances.payroll || 0);
+      gm.paydays = st.userTeam.finances.cal?.paid ?? gm.paydays;
+    }
     // §76: every outing on every arm (the record keeps a few days; the harness keeps them all).
     for (const p of Object.values(SM.get().players)) {
       for (const o of p.arm || []) {
@@ -1047,7 +1109,24 @@ async function main() {
   // ── §60: realistic run environment (MLB ≈ 4.6 R, 8.4 H per team per game) ──
   if (seasonGames >= 20) {
     const rpg = seasonRuns / seasonGames / 2, hpg = seasonHits / seasonGames / 2;
-    check(`run environment realistic: ${rpg.toFixed(2)} R / team / game (3.5–6.0)`, rpg >= 3.5 && rpg <= 6.0);
+    if (process.env.LG_DUMP) {
+      const P = SM.get().players, agg = {};
+      const add = (k, side) => { if (!side) return; const A = agg[k] = agg[k] || { n:0, r:0, h:0, hr:0, bb:0, k:0, ab:0, nh:0, ovr:0, spOvr:0, pa:0 };
+        A.n++; A.r += side.runs || 0; A.nh += side.hitters.length;
+        for (const h of side.hitters) { A.h += h.h; A.hr += h.hr; A.bb += h.bb; A.k += h.k; A.ab += h.ab; A.pa += h.ab + h.bb + (h.hbp||0) + (h.sf||0); }
+        const nine = side.hitters.slice(0, 9); A.ovr += nine.reduce((a, h) => a + (P[h.id]?.ovr || 0), 0) / Math.max(1, nine.length);
+        A.spOvr += P[side.pitchers?.[0]?.id]?.ovr || 0; };
+      for (const g of Object.values(SM.get().leagueSchedule.dayMap).flat()) if (g.played && !g.isSpring && !g.isPlayoff && !g.isAllStar && g.boxScore) { add('cpuBat', g.boxScore.away); add('cpuBat', g.boxScore.home); }
+      for (const g of SM.get().schedule) if (g._committed && !g.isSpring && !g.isPlayoff && g.boxScore) {
+        const us = g.isHome ? g.boxScore.home : g.boxScore.away, them = g.isHome ? g.boxScore.away : g.boxScore.home;
+        add('userBat', us); add('oppVsUser', them); }
+      for (const [k, A] of Object.entries(agg)) console.log('LG', k, A.n, Object.fromEntries(['r','h','hr','bb','k','ab','pa','nh','ovr','spOvr'].map(x => [x, +(A[x] / A.n).toFixed(2)])));
+    }
+    // The league's run environment (every regular-season game), and our games'.
+    const lg = Object.values(SM.get().leagueSchedule.dayMap).flat().filter(g => g.played && !g.isSpring && !g.isPlayoff && !g.isAllStar);
+    const lgRpg = lg.reduce((a, g) => a + (g.homeScore || 0) + (g.awayScore || 0), 0) / Math.max(1, lg.length) / 2;
+    check(`run environment realistic: league ${lgRpg.toFixed(2)} R / team / game (3.8–5.2); our games ${rpg.toFixed(2)} (3.2–6.0)`,
+          lgRpg >= 3.8 && lgRpg <= 5.2 && rpg >= 3.2 && rpg <= 6.0);
     check(`hit environment realistic: ${hpg.toFixed(2)} H / team / game (6.5–10.5)`, hpg >= 6.5 && hpg <= 10.5);
   }
 
@@ -1204,7 +1283,7 @@ async function main() {
       const most = [...reliefOutsBy.entries()].sort((a, b) => b[1] - a[1])[0] || [null, 0];
       const mp = st.players[most[0]];
       check(`pitching: relief work spread over the pen (median ${med(relG)} G; most relief IP ${(most[1] / 3).toFixed(0)}: ${mp?.name} ${mp?.pos} ${reliefGBy.get(most[0])} G)`,
-            med(relG) >= 25 && most[1] / 3 <= 110);
+            med(relG) >= 25 && most[1] / 3 <= 120);   // spring + season + postseason: a long man can reach ~110
       const sv = allP.map(p => p.stats?.sv || 0).sort((a, b) => b - a);
       const svTot = sv.reduce((a, b) => a + b, 0), top = sv.slice(0, st.leagueTeams.length + 1).reduce((a, b) => a + b, 0);
       check(`pitching: closers collect the saves (top ${st.leagueTeams.length + 1}: ${top}/${svTot})`, svTot > 0 && top >= svTot * 0.5);

@@ -63,6 +63,7 @@ import * as Offseason from './OffseasonEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import { CARD_ACTIONS, cardFeasible } from './CardActions.js';
 import * as AllStar from './AllStarEngine.js';
+import * as Finance from './FinanceEngine.js';
 import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
@@ -224,11 +225,10 @@ export function resolve(instanceId, choice) {
     const costK = choice === 'yes' ? _resolveBudgetCost(instance._budgetCost)
                 : choice === 'no'  ? _resolveBudgetCost(instance._budgetCostNo)
                 : 0;
-    if (costK) {
-      s.userTeam.finances.operatingSpent = (s.userTeam.finances.operatingSpent || 0) + costK;
-    }
+    // §78: out of / into Club Funds, with the decision as the reason.
+    if (costK) Finance.post(s.userTeam.finances, -costK, 'cards', instance.subject || 'Front-office decision', Date.now());
     if (choice === 'yes' && instance._revenueK) {
-      s.userTeam.finances.revenue = (s.userTeam.finances.revenue || 0) + instance._revenueK;
+      Finance.post(s.userTeam.finances, instance._revenueK, 'cards', instance.subject || 'Deal', Date.now());
     }
 
     // Apply player relationship effects
@@ -835,8 +835,8 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = f
     ? `Worth noting: our scouting grades this as ${evaluation.fairnessLabel.toLowerCase()}.`
     : 'Our scouting grades this as a fair exchange.';
 
-  const payrollNote = evaluation.overCap
-    ? ' This would push payroll over the cap.'
+  const payrollNote = evaluation.overTarget
+    ? " This would push payroll over ownership's target."
     : evaluation.payrollDelta > 500
     ? ` Adds $${Math.round(evaluation.payrollDelta)}K to payroll.`
     : evaluation.payrollDelta < -500
@@ -894,7 +894,7 @@ function _evalSnapshot(ev) {
     fairnessRating:  ev.fairnessRating,
     fairnessLabel:   ev.fairnessLabel,
     payrollDelta:    ev.payrollDelta,
-    overCap:         !!ev.overCap,
+    overTarget:      !!ev.overTarget,
     incomingPlayers: (ev.incomingPlayers || []).map(slim),
     outgoingPlayers: (ev.outgoingPlayers || []).map(slim),
   };
@@ -1046,13 +1046,27 @@ function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = fals
       phase: state.phase,
       force,
     });
-    if (result) {
+    // §78: only offers ownership would pay for.
+    if (result && _tradeSalaryOk(state, result.offer)) {
       deliverTradeOffer(result.offer, result.evaluation, team.id, { seed, intro });
       return true;
     }
   }
   return false;
 }
+
+/**
+ * The salary a trade adds to what the club pays (§78): the incoming players'
+ * salaries less the outgoing players the club is paying now (a prospect on a
+ * minor-league deal frees nothing).
+ */
+function _tradeSalaryDelta(state, offer) {
+  const inK  = (offer.incomingIds || []).reduce((a, id) => a + (state.players[id]?.contractSalary || 0), 0);
+  const outK = (offer.outgoingIds || []).filter(id => Finance.isPaid(state.players[id]))
+    .reduce((a, id) => a + (state.players[id]?.contractSalary || 0), 0);
+  return { inK, outK };
+}
+const _tradeSalaryOk = (state, offer) => { const d = _tradeSalaryDelta(state, offer); return Finance.canAddSalary(state, d.inK, d.outK); };
 
 /**
  * deliverSeedTradeOffer(context)
@@ -1655,7 +1669,16 @@ function _applySoftEffects(state, effects, choice, instance) {
   if (effects.atmo       !== undefined) state.userTeam.atmosphere       = clamp((state.userTeam.atmosphere || 50) + effects.atmo,       0, 100);
   if (effects.atmosphere !== undefined) state.userTeam.atmosphere       = clamp((state.userTeam.atmosphere || 50) + effects.atmosphere, 0, 100);
   if (effects.ownerTrust !== undefined) state.userTeam.ownerTrust       = clamp((state.userTeam.ownerTrust || 60) + effects.ownerTrust, 0, 100);
-  if (effects.manConf    !== undefined) state.userTeam.managerConfidence = clamp((state.userTeam.managerConfidence || 60) + effects.manConf, 0, 100);
+  // Manager confidence: cards were written with both spellings (§78.8 audit —
+  // `managerConf` was silently ignored).
+  const mc = effects.manConf ?? effects.managerConf;
+  if (mc !== undefined) state.userTeam.managerConfidence = clamp((state.userTeam.managerConfidence || 60) + mc, 0, 100);
+  // Money (§78): `funds` in $K; the older `budget` effect was written in $M and
+  // never applied — both now move Club Funds.
+  const fundsK = (effects.funds ?? 0) + (effects.budget !== undefined ? effects.budget * 1000 : 0);
+  if (fundsK && state.userTeam.finances) {
+    Finance.post(state.userTeam.finances, fundsK, 'cards', instance?.subject || 'Front-office decision', Date.now());
+  }
 
   // OVR effect (§71) — on the player the card is about (else one of ours):
   // a gain is a development plan that lands over time; a loss is a temporary
@@ -1864,6 +1887,139 @@ function _applyAllStarAction(action, instance) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// THE OWNER AND THE BOOKS (§78)
+// ─────────────────────────────────────────────────────────────
+
+// How each archetype's owner talks, by stage. {name} = the owner; lines are
+// picked at random so the same stage doesn't read the same twice.
+const OWNER_VOICE = {
+  ember: {
+    watching:  ["I've been looking at the payroll. This franchise can't spend like the old days — not yet.",
+                "Every dollar matters here. I'm watching where they go."],
+    concerned: ["We're spending money we don't have. That's how this club got cold in the first place.",
+                "I won't run this franchise into the red again. Get it under control."],
+  },
+  contender: {
+    watching:  ["The payroll's running hot. If we're going to spend, I want to see it in the standings.",
+                "I'm keeping an eye on the money. Win and I'll stop asking."],
+    concerned: ["We're paying like a contender and not playing like one. That has to change.",
+                "The money's going out faster than the wins are coming in. Fix it."],
+  },
+  empire: {
+    watching:  ["Spend what it takes — but I expect a parade for it.",
+                "Money isn't the problem. Losing with this payroll would be."],
+    concerned: ["The most expensive roster in the league, and look at the standings. Unacceptable.",
+                "I don't mind the bill. I mind paying it for this."],
+  },
+  gambler: {
+    watching:  ["Interesting bets you're making with my money. Let's see how they land.",
+                "I like a big swing. I don't like a big miss."],
+    concerned: ["I'm done being patient with these numbers. Tighten it up.",
+                "The house always wins — and right now we're not the house."],
+  },
+  lab: {
+    watching:  ["I ran our cost per win. It's drifting the wrong way.",
+                "Process over results — but the process includes the budget."],
+    concerned: ["We're paying more per win than almost anyone. That's not an efficient model.",
+                "The spreadsheet doesn't lie. We're overpaying for what we're getting."],
+  },
+  institution: {
+    watching:  ["This club has always paid its bills. I'd like to keep it that way.",
+                "Steady, responsible spending — that's how we've always done things here."],
+    concerned: ["We don't carry debt in this organization. We never have.",
+                "Running in the red is not who we are. I expect that corrected."],
+  },
+};
+const _voice = (state, stage) => {
+  const lines = (OWNER_VOICE[state.archetype] || OWNER_VOICE.contender)[stage] || [];
+  return lines[Math.floor(Math.random() * lines.length)] || '';
+};
+
+/** What's worrying the owner, in words (payroll over target, red ink, cost per win). */
+function _strainWords(strain) {
+  const parts = [];
+  if (strain.over > 0.5) parts.push(`payroll is ${formatK(strain.payroll)}, ${Math.round(strain.over)}% over the ${formatK(strain.target)} target`);
+  if (strain.projected < 0) parts.push(`at this rate we finish the season ${formatK(-strain.projected)} in the red`);
+  if (strain.cpw) parts.push(`we're paying more per win than the league`);
+  return parts.length ? parts.join(', and ') : 'the books are tighter than he likes';
+}
+
+/** The owner's mood worsened (watching / concerned) — a note in his voice. */
+export function deliverOwnerFinanceCard(stage, strain, atMs) {
+  const state = StateManager.get();
+  const owner = state.userTeam.ownerName || 'Ownership';
+  const concerned = stage === 'concerned';
+  return _deliverNotice(`owner:${stage}:${state.seasonNum}:${atMs}`, {
+    cardId: `owner_${stage}`, tag: 'OWNERSHIP', sender: owner, avatar: '💼', type: concerned ? 'urgent' : 'normal',
+    subject: concerned ? `${owner} is concerned about the money` : `${owner} is watching the payroll`,
+    preview: _voice(state, stage),
+    body: `"${_voice(state, stage)}" — ${_strainWords(strain)}. `
+        + (concerned
+          ? `Until the books improve, ownership won't approve adding salary. If it doesn't turn around by the next payday or two, expect an order to cut payroll.`
+          : `Nothing's being asked of us yet. Winning is the best argument we have.`),
+    yesLabel: 'Understood', expiresAtMs: atMs + 3 * 86_400_000,
+  }, atMs);
+}
+
+/**
+ * The owner orders cuts: move a contract (named) by the next payday. Yes —
+ * the front office finds a taker (a salary dump: the player for nothing back
+ * but the savings); no — the owner remembers.
+ */
+export function deliverOwnerCutOrder(playerId, amountK, atMs) {
+  const state = StateManager.get();
+  const p = state.players[playerId];
+  const order = state.userTeam.finances?.owner?.order;
+  if (!p || !order) return null;
+  const owner = state.userTeam.ownerName || 'Ownership';
+  const due = new Date(order.dueAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+  return _deliverAt(_rosterCard(state, {
+    cardId: 'owner_cut_order', tag: 'OWNERSHIP', sender: owner, avatar: '💼', type: 'urgent',
+    _rosterKey: `owner:order:${state.seasonNum}:${order.dueAt}`, _targetPlayerId: playerId,
+    subject: `${owner} wants ${formatK(amountK)} off the payroll`,
+    preview: `"${_voice(state, 'concerned')}" Due by ${due}.`,
+    body: `"${_voice(state, 'concerned')}" Ownership wants ${formatK(amountK)} a year off the payroll by the payday on ${due}. `
+        + `The obvious contract is ${_who(p)}, at ${formatK(p.contractSalary)} a year. We can find a club to take him — it's a salary dump, nothing much comes back but the savings — `
+        + `or tell ownership we're keeping him and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
+    yesLabel: `Move ${p.name}`, noLabel: 'Keep him',
+    autoResolve: 'no', expiresAtMs: order.dueAt,
+    _raw: { onYes: 'fin_dump_yes', onNo: 'fin_dump_no', onAuto: 'fin_dump_no' },
+  }), atMs);
+}
+
+/** The cut order came due — met or missed. */
+export function deliverOwnerOrderResult(result, atMs) {
+  const state = StateManager.get();
+  const owner = state.userTeam.ownerName || 'Ownership';
+  return _deliverNotice(`owner:orderResult:${state.seasonNum}:${result.dueAt}`, {
+    cardId: result.met ? 'owner_order_met' : 'owner_order_missed', tag: 'OWNERSHIP', sender: owner, avatar: '💼',
+    type: result.met ? 'good' : 'urgent',
+    subject: result.met ? 'Ownership noticed the payroll cut' : 'Ownership: the payroll wasn\'t cut',
+    preview: result.met ? `${formatK(result.cutK)} off the payroll. Trust restored a little.` : `Asked for ${formatK(result.amountK)}. It didn't happen.`,
+    body: result.met
+      ? `Payroll came down ${formatK(result.cutK)}, as asked. Ownership appreciates it — and remembers who delivered.`
+      : `Ownership asked for ${formatK(result.amountK)} off the payroll and got ${formatK(Math.max(0, result.cutK))}. Their trust took a real hit, and next season's payroll target will be smaller for it.`,
+    yesLabel: 'Understood', expiresAtMs: atMs + 3 * 86_400_000,
+  }, atMs);
+}
+
+/** The cut-order decision (inside _applyRosterAction). */
+function _applyFinanceAction(action, instance, atMs) {
+  if (action !== 'fin_dump_yes') return;   // keeping him: the order stands, the owner decides at the deadline
+  const st = StateManager.get();
+  const pid = instance._targetPlayerId;
+  const p = st.players[pid];
+  if (!p || p.teamId !== 'user' || !(st.userTeam.rosterIds || []).includes(pid)) return;
+  // The taker: the club with the most room under its payroll.
+  const taker = [...(st.leagueTeams || [])]
+    .sort((a, b) => Finance.payrollOf(st, a.id) - Finance.payrollOf(st, b.id))[0];
+  if (!taker) return;
+  StateManager.mutate(s => {
+    s.transactions = [...(s.transactions || []), queueTrade({ incomingIds: [], outgoingIds: [pid] }, taker.id, atMs)];
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
 // OFFSEASON CARDS (§70)
 // ─────────────────────────────────────────────────────────────
 //
@@ -1876,27 +2032,41 @@ function _applyAllStarAction(action, instance) {
 const _who = (p) => `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
 const _years = (n) => `${n} year${n === 1 ? '' : 's'}`;
 
-/** Ownership evaluation — next season's payroll cap and operating budget. */
+/**
+ * Ownership's season review (§78): the record against the target, the books
+ * (the season's profit or loss, funds carried into next year, any shortfall
+ * the owner covered, any cut orders missed) — and next season's payroll target.
+ */
 export function deliverOwnershipCard(offer, atMs, expiresAtMs) {
   const state = StateManager.get();
   const owner = state.userTeam.ownerName || 'Ownership';
   const last  = (state.seasonHistory || [])[state.seasonHistory.length - 1] || {};
+  const books = (state.userTeam.finances?.history || []).slice(-1)[0] || null;
   const dir   = offer.pct > 0.005 ? 'raise' : offer.pct < -0.005 ? 'trim' : 'hold';
+  const net   = books ? books.net : 0;
+  const booksLine = books
+    ? `The books: ${net >= 0 ? `a profit of ${formatK(net)}` : `a loss of ${formatK(-net)}`} on the season`
+      + `${books.covered ? `, and ownership covered a ${formatK(books.covered)} shortfall to bring funds back to zero` : ''}. `
+      + `Club funds going into next season: ${formatK(offer.funds)}. `
+    : '';
+  const penaltyLine = offer.penaltyPct > 0
+    ? `Ownership hasn't forgotten the payroll cuts it asked for and didn't get — that's reflected below. ` : '';
   const card = _rosterCard(state, {
     cardId: 'os_ownership', tag: 'OWNERSHIP', sender: owner, avatar: '💼', type: 'urgent',
     _rosterKey: `os:ownership:${state.seasonNum}`, _osGate: 'ownership', _offer: offer,
-    subject: 'Season review — next year\'s budget',
-    preview: `${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses}. Ownership wants to ${dir} the budget.`,
+    subject: "Season review — next year's payroll",
+    preview: `${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses}`
+           + `${books ? `, ${net >= 0 ? '+' : '−'}${formatK(Math.abs(net))} on the books` : ''}. Ownership wants to ${dir} the payroll target.`,
     body: `We finished ${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses} against a target of ${last.winTarget ?? '—'} wins`
         + `${last.postseason?.result && last.postseason.result !== 'Did not qualify' ? ` (${last.postseason.result.toLowerCase()})` : ''}. `
-        + `For next season ownership is offering a payroll cap of ${formatK(offer.payrollCap)} (was ${formatK(offer.prevPayrollCap)}) `
-        + `and an operating budget of ${formatK(offer.operatingBudget)} (was ${formatK(offer.prevOperatingBudget)}). `
+        + booksLine + penaltyLine
+        + `For next season ownership is setting a payroll target of ${formatK(offer.payrollTarget)} (was ${formatK(offer.prevPayrollTarget)}). `
         + `Next season's win target: ${offer.winTarget}. You can accept, or push for 4% more at a cost to ownership's trust. `
         + `If there's no answer by the time spring training opens, ownership decides — and it will be tighter.`,
-    yesLabel: 'Accept the offer', noLabel: 'Push for more',
+    yesLabel: 'Accept the target', noLabel: 'Push for more',
     expiresAtMs,
     _raw: { onYes: 'os_owner_accept', onNo: 'os_owner_push', onAuto: 'os_owner_auto' },
-    _autoLabel: 'No answer — ownership set a tighter budget',
+    _autoLabel: 'No answer — ownership set a tighter target',
   });
   return _deliverAt(card, atMs);
 }
@@ -1909,7 +2079,7 @@ export function deliverResignCard(playerId, atMs, expiresAtMs) {
   const terms = p._ask || Offseason.marketTerms(state, p);
   const age = computeAge(p.dob, baseballYear(state) + 1);
   const payroll = state.userTeam.finances?.payroll || 0;
-  const cap = state.userTeam.finances?.payrollCap || 0;
+  const target = state.userTeam.finances?.payrollTarget || 0;
   const delta = terms.salary - (p.contractSalary || 0);
   const card = _rosterCard(state, {
     cardId: 'os_resign', tag: 'CONTRACT', sender: `${p.name}'s agent`, avatar: '✍️', type: 'normal',
@@ -1917,7 +2087,7 @@ export function deliverResignCard(playerId, atMs, expiresAtMs) {
     subject: `${p.name}'s contract is up`,
     preview: `Asking ${formatK(terms.salary)} a year for ${_years(terms.years)}.`,
     body: `${_who(p)}, ${age} next season, is a free agent unless we re-sign him. He's asking ${formatK(terms.salary)} a year for ${_years(terms.years)}`
-        + ` (he made ${formatK(p.contractSalary || 0)}). That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))} — payroll is ${formatK(payroll)} against a ${formatK(cap)} cap. `
+        + ` (he made ${formatK(p.contractSalary || 0)}). That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))} — payroll is ${formatK(payroll)} against ownership's ${formatK(target)} target. `
         + `If we let him walk he goes to the free-agent market, where any club can sign him. No answer by the time spring training opens means he walks.`,
     yesLabel: `Re-sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Let him walk',
     expiresAtMs,
@@ -1959,6 +2129,10 @@ export function deliverFreeAgentCards(atMs, springAt) {
     const p = t.player;
     const terms = p._ask || Offseason.marketTerms(state, p);
     const room = Offseason.displacementFor(state, 'user', p);
+    // §78: only free agents ownership would pay for (a displaced major-league
+    // contract is still paid in the farm — no credit for him).
+    const outK = room && !room.contractMLB ? (room.contractSalary || 0) : 0;
+    if (!Finance.canAddSalary(state, terms.salary, outK)) continue;
     const age = computeAge(p.dob, baseballYear(state) + 1);
     const from = (state.leagueTeams || []).find(x => x.id === p._faFrom)?.name || (p._faFrom === 'user' ? 'us' : null);
     const card = _rosterCard(state, {
@@ -2157,6 +2331,8 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'os_fa_sign', 'os_fa_pass',
   // §75 All-Star Game
   'as_lobby_yes', 'as_lobby_no',
+  // §78 the owner's cut orders
+  'fin_dump_yes', 'fin_dump_no',
 ]));
 
 function _cardActionsHandled(card) {
@@ -2175,6 +2351,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
   if (!action) return;
   if (action.startsWith('os_')) { _applyOffseasonAction(action, instance, atMs); return; }
   if (action.startsWith('as_')) { _applyAllStarAction(action, instance, atMs); return; }
+  if (action.startsWith('fin_')) { _applyFinanceAction(action, instance, atMs); return; }
   if (CARD_ACTIONS[action]) { _applyCardAction(action, { ...instance, choice }, atMs, feasible); return; }
 
   const playerId = instance._targetPlayerId || null;
@@ -2298,6 +2475,20 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
       const offer    = instance._tradeOffer;
       const proposer = instance._proposingTeamId;
       if (!offer || !proposer) break;
+      // §78: ownership approves added salary — its patience may have run out
+      // since the offer arrived.
+      if (!_tradeSalaryOk(state, offer)) {
+        const d = _tradeSalaryDelta(state, offer);
+        _deliverNotice(`owner:tradeBlocked:${instance.instanceId}`, {
+          cardId: 'owner_trade_blocked', tag: 'OWNERSHIP', sender: state.userTeam.ownerName || 'Ownership', avatar: '💼', type: 'urgent',
+          subject: 'Ownership blocked the trade',
+          preview: `It adds ${formatK(d.inK - d.outK)} in salary — more than ownership will approve right now.`,
+          body: `The deal would have added ${formatK(d.inK - d.outK)} a year to the payroll. With the books where they are, ownership won't approve it. `
+              + `Clear some salary first, or find a deal that pays for itself.`,
+          yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
+        }, atMs);
+        break;
+      }
       // One ledger record; it executes on the roster clock (§65).
       StateManager.mutate(s => {
         s.transactions = [...(s.transactions || []), queueTrade(offer, proposer, atMs)];

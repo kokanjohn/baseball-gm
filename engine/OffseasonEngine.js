@@ -69,6 +69,7 @@ import {
 } from './RosterEngine.js';
 import { PLAYER_NAME_POOL, STAFF_NAMES } from '../data/player-names.js';
 import * as AllStar from './AllStarEngine.js';
+import * as Finance from './FinanceEngine.js';
 
 export const OFFSEASON_STEPS = Object.freeze(['day1', 'day2', 'day3', 'day4', 'day5', 'day6', 'spring']);
 
@@ -286,6 +287,11 @@ export function applyContract(draft, playerId, terms, { startNow = false } = {})
     contractExpired:       false,
     _contractExpiringNext: false,
     _ask:                  null,
+    // §78: a major-league deal is paid wherever he is; a prospect's minor-league
+    // deal only while he's up (terms.toFarm / terms.mlb === false).
+    // A farm player re-signed keeps his kind of deal.
+    contractMLB:           terms.mlb ?? (terms.toFarm ? false
+                             : p.group === PLAYER_GROUP.PRACTICE_SQUAD ? !!p.contractMLB : true),
   });
 }
 
@@ -375,6 +381,7 @@ export function displacementFor(draft, teamId, player) {
  */
 export function beginOffseason(draft, atMs) {
   if (draft.allStar) AllStar.closeSeason(draft);   // §75: the season's hosting impression + record
+  if (draft.userTeam?.finances) Finance.seasonEndReview(draft, atMs, 'user');   // §78: the books close; funds carry over
   _lockSeason(draft, atMs);
   _archiveStats(draft);
   const nextYear = baseballYear(draft) + 1;
@@ -726,15 +733,17 @@ export function ownershipOffer(draft) {
   let pct = Math.max(-OWNERSHIP_OFFER.maxSwing, Math.min(OWNERSHIP_OFFER.maxSwing, perf * OWNERSHIP_OFFER.perWin));
   if (last.champion?.id === 'user') pct += OWNERSHIP_OFFER.champion;
   pct += roundsWon * OWNERSHIP_OFFER.perRound;
-  const cap = u.finances?.payrollCap || 8000;
-  const ob  = u.finances?.operatingBudget || 500;
+  // §78: the books count too — the season's profit or loss, and any cut
+  // order the owner gave that wasn't met.
+  const books = Finance.booksOfferAdjustment(draft);
+  pct += books.books - books.penalty;
+  const payTarget = u.finances?.payrollTarget || 8000;
   return {
-    pct,
-    payrollCap:      Math.round(cap * (1 + pct) / 10) * 10,
-    operatingBudget: Math.round(ob * (1 + pct) / 5) * 5,
-    prevPayrollCap:  cap,
-    prevOperatingBudget: ob,
-    winTarget:       u._ownerWinTarget,
+    pct, booksPct: books.books, penaltyPct: books.penalty, net: books.net,
+    payrollTarget:     Math.round(payTarget * (1 + pct) / 10) * 10,
+    prevPayrollTarget: payTarget,
+    funds:             u.finances?.funds || 0,
+    winTarget:         u._ownerWinTarget,
   };
 }
 
@@ -742,14 +751,13 @@ export function ownershipOffer(draft) {
 export function applyOwnership(draft, offer, mode) {
   const u = draft.userTeam;
   const mult = mode === 'push' ? 1 + OWNERSHIP_OFFER.pushExtra : mode === 'auto' ? 1 + OWNERSHIP_OFFER.autoCut : 1;
-  const cap = Math.round(offer.payrollCap * mult / 10) * 10;
-  const ob  = Math.round(offer.operatingBudget * mult / 5) * 5;
-  u.finances.payrollCap = cap;
-  u.finances.operatingBudget = ob;
-  u.finances.payrollCapHistory = [...(u.finances.payrollCapHistory || []), { seasonNum: (draft.seasonNum || 1) + 1, payrollCap: cap }];
+  const target = Math.round(offer.payrollTarget * mult / 10) * 10;
+  u.finances.payrollTarget = target;
+  u.finances.payrollTargetHistory = [...(u.finances.payrollTargetHistory || []), { seasonNum: (draft.seasonNum || 1) + 1, payrollTarget: target }];
+  if (u.finances.owner) u.finances.owner.targetPenalty = 0;   // the missed orders were counted in this offer
   const trust = mode === 'push' ? OWNERSHIP_OFFER.pushTrust : mode === 'auto' ? OWNERSHIP_OFFER.autoTrust : 0;
   if (trust) u.ownerTrust = Math.max(0, Math.min(100, (u.ownerTrust || 50) + trust));
-  return { payrollCap: cap, operatingBudget: ob, trust };
+  return { payrollTarget: target, trust };
 }
 
 export function managerContractIsUp(draft) {
@@ -844,10 +852,7 @@ export function openNewSeason(draft, atMs) {
   const u = draft.userTeam;
   u.vacancyDeadlineAt = null;
   u._hostedAllStarThisSeason = false;
-  u.finances.payroll = computePayroll(draft);
-  u.finances.operatingSpent = 0;
-  u.finances.revenueHistory = [...(u.finances.revenueHistory || []), { seasonNum: draft.seasonNum - 1, revenue: u.finances.revenue || 0 }];
-  u.finances.revenue = 0;
+  u.finances.payroll = computePayroll(draft);   // (the books closed at the season's end — §78)
   draft.currentGameIndex = 0;
   draft.standings      = null;
   draft.playoffBracket = null;

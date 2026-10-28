@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r71';
+export const APP_VERSION = 'tfo-v2-r72';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -237,9 +237,11 @@ export function updateHeader(state) {
   }
 
   if (budgetEl) {
-    const remaining = (state.userTeam?.finances?.operatingBudget || 0)
-                    - (state.userTeam?.finances?.operatingSpent  || 0);
-    budgetEl.textContent = formatMoney(remaining);
+    // §78: Club Funds — the club's one account (red when it's in the red).
+    const funds = state.userTeam?.finances?.funds || 0;
+    budgetEl.textContent = funds < 0 ? `−${formatMoney(-funds)}` : formatMoney(funds);
+    budgetEl.classList.toggle('funds-negative', funds < 0);
+    budgetEl.title = 'Club funds';
   }
 
   // Update team icon and badge background with primary team color
@@ -578,7 +580,7 @@ const _EFFECT_METRICS = [
   { key: 'morale',     label: 'Team Morale' },
   { key: 'atmosphere', label: 'Atmosphere'  },
   { key: 'ownerTrust', label: 'Owner Trust' },
-  { key: 'budgetLeft', label: 'Budget'      },
+  { key: 'funds',      label: 'Club Funds'  },
 ];
 let _effectsTimer = null;
 const _effectsAnimTimers = [];
@@ -592,8 +594,7 @@ const _effectsAnimTimers = [];
 export function showDecisionEffects({ title, before, after, positive = true }) {
   if (!before || !after) return false;
   const rows = _EFFECT_METRICS.filter(m => Math.abs((after[m.key] ?? 0) - (before[m.key] ?? 0)) >= 0.5);
-  const revenueDelta = (after.revenue ?? 0) - (before.revenue ?? 0);
-  if (!rows.length && revenueDelta < 0.5) return false;
+  if (!rows.length) return false;
 
   let panel = document.getElementById('effects-panel');
   if (!panel) {
@@ -606,13 +607,13 @@ export function showDecisionEffects({ title, before, after, positive = true }) {
   }
 
   const pctOf = (m, v, snap) => {
-    if (m.key === 'budgetLeft') {
-      const total = snap.budgetTotal || before.budgetTotal || 1;
-      return Math.max(0, Math.min(100, Math.round((v / total) * 100)));
+    if (m.key === 'funds') {
+      const scale = snap.fundsScale || before.fundsScale || 1;
+      return Math.max(0, Math.min(100, Math.round((v / scale) * 100)));
     }
     return Math.max(0, Math.min(100, Math.round(v)));   // 0–100 metrics; rating is 0–99
   };
-  const deltaText = (m, d) => m.key === 'budgetLeft'
+  const deltaText = (m, d) => m.key === 'funds'
     ? `${d > 0 ? '+' : '−'}${formatMoney(Math.abs(d))}`
     : `${d > 0 ? '+' : ''}${Math.round(d)}`;
 
@@ -629,11 +630,6 @@ export function showDecisionEffects({ title, before, after, positive = true }) {
         <div class="ep-delta ${d > 0 ? 'pos' : 'neg'}">${deltaText(m, d)}</div>
       </div>`;
     }).join('')}
-    ${revenueDelta >= 0.5 ? `<div class="ep-row ep-rev">
-        <div class="ep-label">Revenue</div>
-        <div class="ep-revtext">Counts toward ownership's season review</div>
-        <div class="ep-delta pos">+${formatMoney(revenueDelta)}</div>
-      </div>` : ''}
   `;
 
   // Animate bars one at a time (v1 timing: 60ms settle, 750ms stagger, .7s transition)
