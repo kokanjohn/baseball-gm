@@ -15,7 +15,7 @@
 
 import * as StateManager from '../../store/StateManager.js';
 import { GAME_STATUS } from '../../data/constants.js';
-import { accumulateBox, liveSituation } from '../../engine/SimEngine.js';
+import { accumulateBox, liveSituation, playRuns } from '../../engine/SimEngine.js';
 import { renderBoxScore } from './BoxScore.js';
 import { clubFor } from '../../engine/AllStarEngine.js';
 
@@ -59,7 +59,7 @@ export function leagueGameState(g, nowMs = Date.now()) {
       if (!p.inning || (p.half !== 'TOP' && p.half !== 'BOT') || p.type === 'game_end') continue;
       runs[p.inning] = runs[p.inning] || { top: null, bot: null };
       const k = p.half === 'TOP' ? 'top' : 'bot';
-      runs[p.inning][k] = (runs[p.inning][k] || 0) + (p.rbi || 0);
+      runs[p.inning][k] = (runs[p.inning][k] || 0) + playRuns(p);
     }
   }
   return { final, revealed, homeScore, awayScore, inning, half, outs, bases, runs };
@@ -125,13 +125,26 @@ export function openLeagueGame(date, id) {
   const close = () => { clearInterval(_viewerTimer); overlay.remove(); };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
+  // Redraw only when the game itself moved (a new play, first pitch, the
+  // final) — never on a quiet poll, so the viewer holds its scroll. The
+  // sheet keeps its position across a redraw; the play-by-play list opens
+  // on its newest play, which is the one that just arrived.
+  let shown = null;
   const render = () => {
     const state = StateManager.get();
     const g = (state?.leagueSchedule?.dayMap?.[date] || []).find(x => x.id === id);
     const body = overlay.querySelector('#lg-viewer-body');
     if (!g || !body) return;
-    body.innerHTML = _viewerHtml(state, g);
-    body.querySelector('#lg-close')?.addEventListener('click', close);
+    const now = Date.now();
+    const sig = `${g.status}|${g.played ? 'F' : ''}|${leagueGameState(g, now).revealed.length}`;
+    if (sig !== shown) {
+      shown = sig;
+      const sheet = overlay.querySelector('.lg-sheet');
+      const keep = sheet ? sheet.scrollTop : 0;
+      body.innerHTML = _viewerHtml(state, g, now);
+      body.querySelector('#lg-close')?.addEventListener('click', close);
+      if (sheet) sheet.scrollTop = keep;
+    }
     if (g.played) clearInterval(_viewerTimer);
   };
   render();
@@ -141,8 +154,7 @@ export function openLeagueGame(date, id) {
   }, 5000);
 }
 
-function _viewerHtml(state, g) {
-  const now = Date.now();
+function _viewerHtml(state, g, now = Date.now()) {
   const ls  = leagueGameState(g, now);
   const away = _team(state, g.awayId), home = _team(state, g.homeId);
   const notStarted = !ls.final && g.status !== GAME_STATUS.LIVE;
@@ -162,7 +174,7 @@ function _viewerHtml(state, g) {
   const pbp = ls.revealed
     .filter(p => p.description && !['inning_end', 'game_end'].includes(p.type))
     .slice(-30).reverse()
-    .map(p => `<div class="lg-pbp${p.type === 'hr' ? ' hr' : (p.rbi ? ' run' : '')}">
+    .map(p => `<div class="lg-pbp${p.type === 'hr' ? ' hr' : ''}">
         <span class="lg-pbp-inn">${p.half === 'TOP' ? '▲' : '▼'}${p.inning}</span>
         <span>${_esc(p.description)}</span></div>`).join('');
 
@@ -207,7 +219,7 @@ function _team(state, id) { return clubFor(state, id); }
 function _abbr(state, id) { return (_team(state, id)?.abbr || String(id).slice(0, 3)).toUpperCase(); }
 
 function _diamond(bases, size) {
-  const f = (b) => (b ? 'var(--accent)' : 'transparent');
+  const f = (b) => (b ? 'var(--text)' : 'transparent');
   return `<svg viewBox="0 0 44 38" width="${size}" height="${Math.round(size * 0.86)}" aria-hidden="true">
     <rect x="17" y="3" width="10" height="10" rx="1" fill="${f(bases?.second)}" stroke="var(--muted)" stroke-width="1.5" transform="rotate(45,22,8)"/>
     <rect x="30" y="16" width="10" height="10" rx="1" fill="${f(bases?.first)}" stroke="var(--muted)" stroke-width="1.5" transform="rotate(45,35,21)"/>
@@ -236,7 +248,7 @@ function _injectCSS() {
     .lg-mini-row b{font-family:'Bebas Neue',sans-serif;font-size:17px;line-height:1;color:var(--muted);}
     .lg-mini-row.lg-lead,.lg-mini-row.lg-lead b{color:var(--text);}
     .lg-mini-foot{display:flex;justify-content:space-between;align-items:center;}
-    .lg-mini-inn{font-size:10px;font-weight:700;color:var(--accent);}
+    .lg-mini-inn{font-size:10px;font-weight:700;color:var(--text);}
     .lg-sheet{max-height:88dvh;overflow-y:auto;padding-bottom:max(16px,env(safe-area-inset-bottom));}
     .lg-head{display:flex;align-items:flex-start;gap:10px;padding:6px 16px 12px;border-bottom:1px solid var(--border);}
     .lg-teams{flex:1;min-width:0;}
@@ -260,7 +272,7 @@ function _injectCSS() {
     .lg-sec{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);padding:12px 16px 4px;}
     .lg-pbp-list{padding:0 16px;max-height:260px;overflow-y:auto;}
     .lg-pbp{display:flex;gap:8px;font-size:12px;color:var(--text);padding:4px 0;border-bottom:1px solid var(--border);}
-    .lg-pbp.run{color:var(--accent);} .lg-pbp.hr{color:var(--accent);font-weight:700;}
+    .lg-pbp.hr{font-weight:700;}
     .lg-pbp-inn{color:var(--muted);font-size:10px;font-weight:700;min-width:22px;}
     .lg-empty{padding:24px 16px;text-align:center;color:var(--muted);font-size:13px;}
   `;

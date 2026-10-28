@@ -20,7 +20,7 @@ import { getRosterNeeds, auditRosters, rankCallupCandidates } from '../../engine
 import { CARD_ACTIONS } from '../../engine/CardActions.js';
 import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
-import { liveSituation } from '../../engine/SimEngine.js';
+import { liveSituation, playRuns } from '../../engine/SimEngine.js';
 import * as Offseason from '../../engine/OffseasonEngine.js';
 import * as AllStar from '../../engine/AllStarEngine.js';
 import * as Pitching from '../../engine/PitchingEngine.js';
@@ -793,7 +793,7 @@ async function main() {
 
       // §60 real-baseball structure (pre-commit, plays still present)
       const ps      = pre.plays;
-      const runs    = ps.reduce((s, p) => s + (p.rbi || 0), 0);
+      const runs    = ps.reduce((s, p) => s + playRuns(p), 0);
       const maxInn  = Math.max(...ps.map(p => (p.type === 'game_end' ? 0 : (p.inning || 0))));
       const halves  = new Set(ps.filter(p => p.half === 'TOP' || p.half === 'BOT').map(p => `${p.half}${p.inning}`));
       const homeR   = pre.isHome ? pre.ourScore : pre.theirScore;
@@ -814,7 +814,7 @@ async function main() {
         const halfIp = {}, halfOuts = {};
         for (let k = 0; k < ps.length; k++) {
           const p = ps[k];
-          if (p.half === userHalf) ours += p.rbi || 0; else if (p.half === 'TOP' || p.half === 'BOT') theirs += p.rbi || 0;
+          if (p.half === userHalf) ours += playRuns(p); else if (p.half === 'TOP' || p.half === 'BOT') theirs += playRuns(p);
           if (!scoreBad && p.type !== 'game_end' && (p.cumOurScore !== ours || p.cumTheirScore !== theirs))
             scoreBad = `play ${k} ${p.type} ${p.cumOurScore}-${p.cumTheirScore} vs ${ours}-${theirs}`;
           const sit = liveSituation(ps.slice(0, k + 1), ps[k + 1] ?? null);

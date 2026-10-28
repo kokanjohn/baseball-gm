@@ -79,12 +79,12 @@ function _injectCSS() {
   .bxs-tot { color:var(--muted); font-weight:600; }
   .bxs-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:6px; }
   .bxs-tbl { width:100%; border-collapse:collapse; min-width:300px; }
-  .bxs-tbl th, .bxs-tbl td { text-align:center; padding:3px 5px; font-size:12px; color:var(--soft); white-space:nowrap; }
+  .bxs-tbl th, .bxs-tbl td { text-align:center; padding:3px 5px; font-size:12px; color:var(--text); white-space:nowrap; }
   .bxs-tbl thead th { font-size:10px; color:var(--muted); font-weight:700; border-bottom:1px solid var(--border); }
   .bxs-tbl td.bxs-name, .bxs-tbl th.bxs-name { text-align:left; position:sticky; left:0; background:var(--surface,#161616); font-weight:600; color:var(--text); min-width:78px; }
   .bxs-pos { color:var(--muted); font-weight:400; font-size:10px; }
-  .bxs-dec { color:var(--accent,#F5D253); font-weight:700; }
-  .bxs-rate { color:#60a5fa; }
+  .bxs-dec { color:var(--text); font-weight:700; }
+  .bxs-rate { color:var(--text); }
   `;
   const el = document.createElement('style');
   el.id = 'bxs-css';

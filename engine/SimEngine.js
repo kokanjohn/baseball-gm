@@ -334,7 +334,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     plays.push(...topPlays);
 
     _stampRunningScore(topPlays, gs.userScore, gs.oppScore, topIsUser);
-    const topRuns = topPlays.reduce((s, p) => s + (p.rbi || 0), 0);
+    const topRuns = topPlays.reduce((s, p) => s + playRuns(p), 0);
     if (userBatsBottom) gs.oppScore += topRuns;
     else                gs.userScore += topRuns;
     gs[userBatsBottom ? 'userRuns' : 'oppRuns'] += topRuns;   // off the home side's pitcher
@@ -365,7 +365,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     plays.push(...botPlays);
 
     _stampRunningScore(botPlays, gs.userScore, gs.oppScore, botIsUser);
-    const botRuns = botPlays.reduce((s, p) => s + (p.rbi || 0), 0);
+    const botRuns = botPlays.reduce((s, p) => s + playRuns(p), 0);
     if (userBatsBottom) gs.userScore += botRuns;
     else                gs.oppScore  += botRuns;
     gs[userBatsBottom ? 'oppRuns' : 'userRuns'] += botRuns;   // off the away side's pitcher
@@ -618,7 +618,9 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     halfRuns += runsScored;
 
     const effectiveType = playMod || atBat.type;
-    const rbi           = runsScored;
+    // Runs that scored on the play vs the batter's official RBI: no RBI when
+    // he grounds into a double play or the run scores on an error.
+    const rbi           = (effectiveType === 'double_play' || effectiveType === 'error') ? 0 : runsScored;
     const isScoring     = runsScored > 0;
     const isBigPlay     = atBat.type === 'hr'
       || rbi >= 3
@@ -644,7 +646,8 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       batterId:     activeBatter.id,
       pitcherId:    pitcher.id,
       type:         effectiveType,
-      description:  _buildDescription(atBat, activeBatter, pitcher, playMod),
+      description:  _buildDescription(atBat, activeBatter, pitcher, playMod, { rbi, runs: runsScored }),
+      runs:         runsScored,
       rbi,
       isScoring,
       isBigPlay,
@@ -1689,7 +1692,7 @@ function _assignPitcherDecisions(plays, userScore, oppScore, isHome) {
   for (let i = plays.length - 1; i >= 0; i--) {
     const p = plays[i];
     if (lead(p, winner) <= 0) break;
-    if ((p.rbi || 0) > 0) goAhead = p;
+    if (playRuns(p) > 0) goAhead = p;
   }
   if (!goAhead) goAhead = plays.find(p => lead(p, winner) > 0) || plays[plays.length - 1];
   const at = goAhead.playIndex ?? 0;
@@ -1752,7 +1755,7 @@ function _assignTimestamps(plays, gameTime, tickOffset) {
 function _stampRunningScore(plays, userStart, oppStart, battingIsUser) {
   let user = userStart, opp = oppStart;
   for (const play of plays) {
-    if (battingIsUser) user += play.rbi || 0; else opp += play.rbi || 0;
+    if (battingIsUser) user += playRuns(play); else opp += playRuns(play);
     play.cumOurScore   = user;
     play.cumTheirScore = opp;
   }
@@ -2026,7 +2029,10 @@ function _buildStatDeltas(atBat, batter, pitcher, rbi, runsScored, runnerIds, ef
   if (atBat.type === 'hr') addDelta(pitcher.id, 'hr_allowed', 1);
   if (atBat.type === 'walk' || atBat.type === 'hbp') addDelta(pitcher.id, 'bb', 1);
   if (atBat.type === 'strikeout') addDelta(pitcher.id, 'k', 1);
-  if (rbi > 0) addDelta(pitcher.id, 'er', rbi);
+  // Earned runs: every run that scored, except on an error (unearned) — a
+  // run in on a double play is earned though the batter gets no RBI.
+  const earned = type === 'error' ? 0 : runsScored;
+  if (earned > 0) addDelta(pitcher.id, 'er', earned);
 
   return deltas;
 }
@@ -2035,13 +2041,36 @@ function _buildStatDeltas(atBat, batter, pitcher, rbi, runsScored, runnerIds, ef
 // PLAY DESCRIPTION BUILDER
 // ─────────────────────────────────────────────────────────────
 
-function _buildDescription(atBat, batter, pitcher, playMod = null) {
+/**
+ * Runs that scored on a play (the score and the linescore count these; the
+ * batter's RBI can be fewer). Plays saved before r73 carried only `rbi`.
+ */
+export function playRuns(p) {
+  return p?.runs ?? p?.rbi ?? 0;
+}
+
+const _HR_CALL = { 1: 'hits a solo home run', 2: 'hits a two-run home run',
+                   3: 'hits a three-run home run', 4: 'hits a grand slam' };
+
+/**
+ * The play-by-play line: what happened, then the runs it drove in — a
+ * home run named for how many it brought home, any other play followed by
+ * its RBI (or, with none credited, that a run scored).
+ */
+function _buildDescription(atBat, batter, pitcher, playMod = null, { rbi = 0, runs = 0 } = {}) {
+  const bn = batter?.name || 'Batter';
+  const type = playMod || atBat.type;
+  if (type === 'hr') return `${bn} ${_HR_CALL[runs] || 'homers'}`;
+  const base = _basePlayCall(atBat, batter, pitcher, type);
+  if (rbi > 0)  return `${base}, ${rbi === 1 ? 'RBI' : `${rbi} RBI`}`;
+  if (runs > 0) return `${base}, ${runs === 1 ? 'a run scores' : `${runs} runs score`}`;
+  return base;
+}
+
+function _basePlayCall(atBat, batter, pitcher, type) {
   const bn = batter?.name  || 'Batter';
   const pn = pitcher?.name || 'Pitcher';
-  const type = playMod || atBat.type;
-
   switch (type) {
-    case 'hr':              return `${bn} homers`;
     case 'triple':          return `${bn} triples`;
     case 'double':          return `${bn} doubles`;
     case 'single':          return `${bn} singles`;

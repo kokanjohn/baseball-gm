@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r72';
+export const APP_VERSION = 'tfo-v2-r73';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -446,6 +446,11 @@ export async function init() {
     import('./screens/ScheduleScreen.js'),
   ]);
 
+  // Catch the clocks up to now BEFORE the first render: the roster clock,
+  // anything that came due while the app was closed, and the game — so a
+  // game already underway opens straight onto the full live view.
+  await _runTick({ quiet: true });
+
   mountDashboard();
   mountInbox();
   mountTeam();
@@ -461,8 +466,6 @@ export async function init() {
   // Catch the roster clock up to now and deliver anything that came due
   // while the app was closed, then make sure the push worker has this
   // device's current schedule.
-  await _advanceRosterClock();
-  await _releaseDueCards({ quiet: true });
   _syncPush({ immediate: true });
 
   // Restore the dev live-speed multiplier into GameEngine's reveal clock (it
@@ -769,34 +772,39 @@ export function startTick() {
   // The Developer Menu can raise _devTimeScale to watch games play out faster.
   const intervalMs = Math.max(50, Math.round(TICK_INTERVAL_MS / _devTimeScale));
 
-  _tickInterval = setInterval(async () => {
-    _lastActiveTime = Date.now();
+  _tickInterval = setInterval(() => { _lastActiveTime = Date.now(); _runTick(); }, intervalMs);
+}
 
-    // Lazy import to avoid circular dep at module load time
+/**
+ * _runTick({ quiet })
+ * One pass of the app clock: the roster clock, due cards, then the game —
+ * every play whose time has passed is revealed in a single call, and a game
+ * that reached its final out is committed. Run by the interval, once at boot
+ * BEFORE the first render, and immediately on resume, so the screen always
+ * opens on the game as it stands (never a "game is live" placeholder while
+ * waiting for the first interval). Re-entrancy guarded: a commit is never
+ * started twice.
+ */
+let _tickBusy = false;
+async function _runTick({ quiet = false } = {}) {
+  if (_tickBusy) return;
+  _tickBusy = true;
+  try {
     const { tick, commitGame } = await import('../engine/GameEngine.js');
     const state   = StateManager.get();
     if (!state) return;
 
-    // The roster clock (§65): trades, arrivals, IL clearances, deadlines —
-    // then timed inbox delivery (§61). Both independent of a live game.
     await _advanceRosterClock();
-    await _releaseDueCards();
+    await _releaseDueCards({ quiet });
 
-    const gameIdx = state?.currentGameIndex ?? 0;
-    const game    = state?.schedule?.[gameIdx];
-
+    const gameIdx = StateManager.get()?.currentGameIndex ?? 0;
+    const game    = StateManager.get()?.schedule?.[gameIdx];
     if (!game) return;
 
-    // Reveal next play(s)
     const play = tick();
-    if (play) {
-      EventBus.emit('game:tick', { play, game: StateManager.get().schedule[gameIdx] });
-    }
+    if (play) EventBus.emit('game:tick', { play, game: StateManager.get().schedule[gameIdx] });
 
-    // Re-read game after tick() — status may have just changed to FINAL
     const freshGame = StateManager.get()?.schedule?.[gameIdx];
-
-    // Auto-commit when game reaches FINAL
     if (freshGame?.status === GAME_STATUS.FINAL && !freshGame._committed) {
       try {
         const result = await commitGame(gameIdx);
@@ -808,11 +816,14 @@ export function startTick() {
         }
         if (result?.milestone) showMilestone(result.milestone);
       } catch (err) {
-        console.error('App.startTick: auto-commit error:', err);
+        console.error('App._runTick: auto-commit error:', err);
       }
     }
-  }, intervalMs);
+  } finally {
+    _tickBusy = false;
+  }
 }
+
 
 /**
  * setDevTimeScale(n) — DEV ONLY (Developer Menu).
@@ -846,61 +857,10 @@ document.addEventListener('visibilitychange', async () => {
     return;
   }
 
-  // Resuming — check how much time elapsed
-  const elapsed = Date.now() - _lastActiveTime;
-  if (elapsed < TICK_INTERVAL_MS * 2) return; // less than 2 ticks — nothing to catch up
-
-  const state   = StateManager.get();
-  const gameIdx = state?.currentGameIndex ?? 0;
-  const game    = state?.schedule?.[gameIdx];
-
-  // Only fast-forward if a game is currently live and not yet committed
-  if (!game || game.status === GAME_STATUS.FINAL || game._committed) return;
-  if (!game.plays || game.livePlayIndex === undefined) return;
-
-  const totalPlays   = game.plays.length;
-  const currentIndex = game.livePlayIndex ?? 0;
-  if (currentIndex >= totalPlays - 1) return; // already at end
-
-  // Calculate how many ticks should have elapsed
-  const ticksElapsed = Math.floor(elapsed / TICK_INTERVAL_MS);
-  if (ticksElapsed <= 0) return;
-
-  // Fast-forward: advance plays silently without emitting per-play events
-  const { tick, commitGame } = await import('../engine/GameEngine.js');
-
-  let playsAdvanced = 0;
-  for (let i = 0; i < ticksElapsed; i++) {
-    const play = tick();
-    if (!play) break;
-    playsAdvanced++;
-
-    // Check if game reached FINAL during fast-forward
-    const freshGame = StateManager.get()?.schedule?.[gameIdx];
-    if (freshGame?.status === GAME_STATUS.FINAL) {
-      if (!freshGame._committed) {
-        try {
-          const result = await commitGame(gameIdx);
-          EventBus.emit('game:committed', { result, gameIndex: gameIdx });
-          if (result?.milestone) showMilestone(result.milestone);
-        } catch (err) {
-          console.error('App visibilitychange: auto-commit error:', err);
-        }
-      }
-      _lastActiveTime = Date.now();
-      return;
-    }
-  }
-
-  // Emit a single tick event with the latest play so the dashboard refreshes
-  if (playsAdvanced > 0) {
-    const freshGame = StateManager.get()?.schedule?.[gameIdx];
-    const latestPlay = freshGame?.plays?.[freshGame.livePlayIndex];
-    if (latestPlay) {
-      EventBus.emit('game:tick', { play: latestPlay, game: freshGame });
-    }
-  }
-
+  // Resuming: one catch-up pass reveals every play that came due while away
+  // (tick() reveals all due plays at once), starts a game whose first pitch
+  // passed, and commits one that ended — before the next interval.
+  await _runTick({ quiet: true });
   _lastActiveTime = Date.now();
 });
 
@@ -935,6 +895,7 @@ async function _openTeamSelect() {
         import('./screens/LeagueScreen.js'),
         import('./screens/ScheduleScreen.js'),
       ]);
+      await _runTick({ quiet: true });   // open on the game as it stands
       mountDashboard();
       mountInbox();
       mountTeam();

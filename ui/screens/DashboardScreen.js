@@ -27,7 +27,7 @@ import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
-import { accumulateBox, liveSituation } from '../../engine/SimEngine.js';
+import { accumulateBox, liveSituation, playRuns } from '../../engine/SimEngine.js';
 import { renderBoxScore } from '../components/BoxScore.js';
 import { renderLeagueLiveRow, wireLeagueGameTaps } from '../components/LiveGame.js';
 import { renderOffseasonCard, updateOffseasonCountdown } from '../components/OffseasonCard.js';
@@ -49,6 +49,7 @@ import { renderRadarWidget } from '../components/RadarWidget.js';
 let _mounted      = false;
 let _listeners    = [];       // { event, handler } pairs for cleanup
 let _liveTab      = 'pbp';
+let _shownGameKey = null;   // which game the live card last showed (refresh keeps its tab/scroll)
 let _pbpRenderedIdx = 0;   // count of plays already placed in the live PBP feed
 let _firstPitchSounded  = false;
 let _countdownInterval  = null; // 1-second interval for fp countdown display
@@ -233,13 +234,21 @@ export function refresh() {
     return;
   }
 
-  _liveTab = 'pbp';
+  // A redraw for some other reason (a roster move elsewhere, a card) keeps
+  // the viewer where they were in the same game: the tab they chose and the
+  // play-by-play's scroll. A different game starts fresh on Play by Play.
+  const game   = _getNextGame(state);
+  const gameKey = game ? `${game.index ?? ''}|${game.date ?? ''}|${game.opponent ?? ''}` : null;
+  const sameGame = gameKey !== null && gameKey === _shownGameKey;
+  const feedScroll = sameGame ? (document.getElementById('lgv-pbp-feed')?.scrollTop || 0) : 0;
+  if (!sameGame) _liveTab = 'pbp';
+  _shownGameKey = gameKey;
   _stopCountdown();
   container.innerHTML = _renderDashboard(state);
   _attachListeners(state);
+  if (feedScroll) { const f = document.getElementById('lgv-pbp-feed'); if (f) f.scrollTop = feedScroll; }
 
   // Start 1-second countdown if pre-game and gameTime is set
-  const game = _getNextGame(state);
   // The feed was just rebuilt with all currently-revealed plays; subsequent
   // ticks only append plays beyond this index.
   _pbpRenderedIdx = game?.livePlayIndex || 0;
@@ -400,7 +409,7 @@ function _deriveGameState(game) {
     if (p.type !== 'inning_end' && p.type !== 'pitching_change'
         && p.type !== 'game_start' && p.type !== 'stolen_base'
         && p.type !== 'caught_stealing') {
-      if ((p.rbi || 0) > 0) runsByHalf[key] = (runsByHalf[key] || 0) + p.rbi;
+      if (playRuns(p) > 0) runsByHalf[key] = (runsByHalf[key] || 0) + playRuns(p);
 
       // Hits — batter batting for our team vs their team
       const isOurBatter = isHome
@@ -855,7 +864,7 @@ function _renderLinescore(ds, awayAbbr, homeAbbr) {
 
 function _renderDiamond(bases) {
   const on   = b => b !== null && b !== undefined;
-  const fill = b => on(b) ? 'var(--accent)' : 'transparent';
+  const fill = b => on(b) ? 'var(--text)' : 'transparent';
   return `
     <svg viewBox="0 0 44 38" width="36" height="31"
       style="flex-shrink:0;display:block;overflow:visible;">
@@ -1349,7 +1358,7 @@ function _injectCSS() {
     .live-teams{flex:1;}
     .live-team-row{display:flex;align-items:center;justify-content:space-between;padding:2px 0;}
     .live-team-name{font-size:14px;font-weight:600;color:var(--text);}
-    .live-team-name.our-team{color:var(--accent);}
+    .live-team-name.our-team{color:var(--text);}
     .live-score-val{font-family:'Bebas Neue',sans-serif;font-size:28px;line-height:1;color:var(--text);min-width:28px;text-align:right;}
     .lgv-diamond-col{display:flex;flex-direction:column;align-items:center;gap:5px;flex-shrink:0;padding:0 10px;}
     .lgv-outs-row{display:flex;gap:4px;align-items:center;}
@@ -1366,34 +1375,34 @@ function _injectCSS() {
     .lgv-crowd{font-size:11px;color:var(--muted);padding:6px 16px;border-bottom:1px solid var(--border);}
     .linescore-live table{width:100%;border-collapse:collapse;}
     .ls-inn-head{color:var(--muted);font-weight:600;text-align:center;min-width:18px;font-size:10px;padding:2px 3px;}
-    .ls-inn-head.ls-active-head{color:var(--accent);}
+    .ls-inn-head.ls-active-head{color:var(--text);}
     .ls-team-head{min-width:28px;}
     .ls-total-head{border-left:1px solid var(--border);color:var(--muted);font-size:10px;font-weight:700;text-align:center;padding:2px 4px;}
     .ls-team{font-size:11px;font-weight:700;color:var(--text);padding-right:6px;white-space:nowrap;}
-    .ls-team.ls-team-user{color:var(--accent);}
+    .ls-team.ls-team-user{color:var(--text);}
     .ls-cell{text-align:center;font-size:11px;color:var(--muted);padding:2px 3px;}
     .ls-cell.ls-scoring{color:var(--text);font-weight:700;}
-    .ls-cell.ls-active-cell{color:var(--accent);font-weight:700;}
+    .ls-cell.ls-active-cell{color:var(--text);font-weight:700;}
     .ls-total{border-left:1px solid var(--border);text-align:center;font-size:12px;font-weight:700;color:var(--text);padding:2px 4px;}
-    .ls-total.ls-winner{color:var(--accent2);}
+    .ls-total.ls-winner{color:var(--text);}
     .ls-err-head{color:var(--danger);opacity:.7;}
     .ls-err{color:var(--muted);}
     .ls-has-err{color:var(--danger) !important;}
     .live-tabs{display:flex;border-bottom:1px solid var(--border);}
-    .live-tab{flex:1;text-align:center;padding:8px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:color .15s,border-color .15s;}
-    .live-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+    .live-tab{flex:1;text-align:center;padding:8px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text);opacity:.55;cursor:pointer;border-bottom:2px solid transparent;transition:opacity .15s,border-color .15s;}
+    .live-tab.active{color:var(--text);opacity:1;border-bottom-color:var(--text);}
     .live-tab-content{display:none;}
     .live-tab-content.active{display:block;}
     .pbp-feed{padding:10px 16px 12px;max-height:280px;overflow-y:auto;}
     .pbp-empty{padding:16px 0;color:var(--muted);font-size:13px;}
-    .pbp-inning-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);padding:10px 0 4px;}
+    .pbp-inning-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text);padding:10px 0 4px;}
     .pbp-play{display:flex;align-items:flex-start;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);}
     .pbp-play:last-child{border-bottom:none;}
     .pbp-play-icon{font-size:12px;flex-shrink:0;width:16px;text-align:center;margin-top:1px;}
-    .pbp-play-text{font-size:13px;color:var(--soft);line-height:1.4;}
+    .pbp-play-text{font-size:13px;color:var(--text);line-height:1.4;}
     .pbp-play.pbp-homer .pbp-play-text{color:var(--text);font-weight:700;}
-    .pbp-play.pbp-hit .pbp-play-text{color:var(--accent2);}
-    .pbp-play.pbp-pitching{opacity:.6;}
+    .pbp-play.pbp-hit .pbp-play-text{color:var(--text);}
+    .pbp-play.pbp-pitching .pbp-play-text{font-style:italic;}
     .live-box-wrap{padding:12px 16px;}
     .bs-section-label{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;}
     .bs-table-wrap{overflow-x:auto;}
