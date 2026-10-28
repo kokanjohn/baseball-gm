@@ -13,6 +13,7 @@
  *     sensible default so nothing needs to guard against undefined.
  */
 
+import { renameLeague, lastNameOnly } from '../engine/Names.js';
 import {
   SCHEMA_VERSION,
   PHASE,
@@ -52,6 +53,7 @@ export function createGameState(config = {}) {
   return {
     // ── Schema versioning ──────────────────────────────────
     _version: SCHEMA_VERSION,
+    _lastNamesOnly: true,   // §82: names are last names (a save without this is converted once)
     _savedAt:  now,
 
     // ── Season ────────────────────────────────────────────
@@ -522,6 +524,15 @@ const MIGRATIONS = [
 // Does NOT overwrite existing values.
 function _fillDefaults(state) {
   const defaults = createGameState();
+
+  // §82 last names only: a save from before r77 drops every first name once
+  // (players kept unique with an initial where two share a last name; the
+  // coaching staff by last name). The GM's own name is left as typed.
+  if (state.players && state._lastNamesOnly !== true) {
+    renameLeague(state.players);
+    for (const m of Object.values(state.userTeam?.coachingStaff || {})) if (m?.name) m.name = lastNameOnly(m.name);
+    state._lastNamesOnly = true;
+  }
 
   for (const key of Object.keys(defaults)) {
     if (state[key] === undefined) {

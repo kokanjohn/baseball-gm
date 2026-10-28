@@ -36,15 +36,15 @@ export const BROADCAST_MARKET_MULTIPLIER = Object.freeze({ min: 1.25, max: 1.6 }
 export const CARD_TOKEN_POOLS = Object.freeze({
 
   // ── Outside players (§73) ───────────────────────────────────
-  sr2_read: ['The at-bats are flat and the dugout is quiet', 'Guys are pressing — everybody is trying to hit a five-run homer',
+  sr2_read: ['The at-bats are flat and the dugout is quiet', 'The hitters are pressing — everybody is trying to hit a five-run homer',
              'The bullpen is gassed and the lineup has stopped grinding', 'Nobody is talking in the clubhouse'],
   intl_country: ['the Dominican Republic', 'Venezuela', 'Cuba', 'Japan', 'South Korea', 'Taiwan',
                  'Panama', 'Colombia', 'Mexico', 'Curaçao', 'Nicaragua', 'Australia'],
   indie_league_name: ['Atlantic League', 'American Association', 'Frontier League', 'Pioneer League'],
   s2_pitch_type: ['a heavy sinker that already plays', 'a wipeout slider', 'a plus changeup',
                   'mid-90s velocity from a loose arm', 'a big-breaking curveball'],
-  s2_concern: ['the delivery has a lot of moving parts', 'he walks too many hitters',
-               'there\'s an old elbow issue in the medicals', 'he tires after the third inning',
+  s2_concern: ['the delivery has a lot of moving parts', 'too many walks',
+               'there\'s an old elbow issue in the medicals', 'the stuff fades after the third inning',
                'the breaking ball comes and goes'],
   prospect_slide_reason: ['after a club backed out of a verbal agreement', 'because of a signability scare',
                           'after a quiet showcase season', 'once a bigger club spent its pool elsewhere'],
@@ -83,8 +83,8 @@ export const CARD_TOKEN_POOLS = Object.freeze({
 
   // ── Between games / travel ──────────────────────────────────
   bg2_player_note: [
-    'A couple of the younger guys took the last loss personally.',
-    'The veterans are fine. A few of the bench guys are restless about playing time.',
+    'A couple of the younger players took the last loss personally.',
+    'The veterans are fine. A few of the bench players are restless about playing time.',
     'There was some grumbling at the back of the plane about the schedule.',
     'Everyone is tired more than anything — it has been a long stretch.',
   ],
@@ -95,7 +95,7 @@ export const CARD_TOKEN_POOLS = Object.freeze({
     'drainage work behind home plate and a new tarp',
   ],
   bg8_context: [
-    'short tempers in the clubhouse and guys skipping the team breakfast',
+    'short tempers in the clubhouse and empty seats at the team breakfast',
     'a lot of headphones on and not much conversation',
     'a couple of sharp words after the last loss',
     'late nights and sluggish early work',
@@ -105,7 +105,7 @@ export const CARD_TOKEN_POOLS = Object.freeze({
     'they signed a veteran slugger to a two-year deal',
     'they fired their manager and promoted the bench coach',
     'they traded their closer for a young everyday shortstop',
-    'they called up their top prospect and put him straight into the lineup',
+    'they called up their top prospect and put the kid straight into the lineup',
   ],
   bg11_relevance: [
     'we play them in a series soon',
@@ -120,10 +120,10 @@ export const CARD_TOKEN_POOLS = Object.freeze({
     'how we line up our rotation against them',
   ],
   bg12_observation: [
-    'his front shoulder is flying open early',
-    'he is a tick late on velocity up in the zone',
-    'his load has gotten deeper and slower',
-    'he is chasing more breaking balls away than he was a month ago',
+    'the front shoulder is flying open early',
+    'the bat is a tick late on velocity up in the zone',
+    'the load has gotten deeper and slower',
+    'there\'s more chasing of breaking balls away than a month ago',
   ],
 
   // ── Staff and people ────────────────────────────────────────
@@ -201,7 +201,7 @@ export const CARD_TOKEN_POOLS = Object.freeze({
   ],
   ms6_reason: [
     'a jersey design that did not catch on', 'over-ordering ahead of a slow start',
-    'a player traded right after his jersey restock', 'a weather-hit summer of attendance',
+    'a player traded right after a jersey restock', 'a weather-hit summer of attendance',
   ],
   ms8_era: [
     'the franchise’s first decade', 'the club’s last championship run',
@@ -247,9 +247,4 @@ export const CARD_TOKEN_POOLS = Object.freeze({
 
   // Name pool for one-off people (attendant, legends, outside coaches). Kept
   // separate from STAFF_NAMES so they never collide with the coaching staff.
-  person_name: [
-    'Marty Delgado', 'Jim Kowalczyk', 'Bobby Ruiz', 'Ernie Watts', 'Sam Okafor',
-    'Leo Brennan', 'Charlie Haddad', 'Tom Fitzgerald', 'Mike Varga', 'Dan Lindqvist',
-    'Rich Moreau', 'Steve Tanaka',
-  ],
 });

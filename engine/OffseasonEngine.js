@@ -67,7 +67,8 @@ import {
   HITTER_TARGET,
   PITCHER_TARGET,
 } from './RosterEngine.js';
-import { PLAYER_NAME_POOL, STAFF_NAMES } from '../data/player-names.js';
+import { STAFF_NAMES, PLAYER_SURNAMES } from '../data/player-names.js';
+import { uniqueName, namesInUse, surnameOf } from './Names.js';
 import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
 
@@ -882,7 +883,7 @@ function _signProspects(draft, team, atMs) {
   const events = [];
   const level = draft.leagueTalentOffset || 0;
   const n = PROSPECTS_PER_TEAM_MIN + Math.floor(Math.random() * (PROSPECTS_PER_TEAM_MAX - PROSPECTS_PER_TEAM_MIN + 1));
-  const used = new Set(Object.values(draft.players).map(p => p?.name));
+  const used = namesInUse(draft.players);
   const HITTER_POS = ['C', 'SS', '2B', '3B', '1B', 'OF', 'OF', 'OF'];
   for (let i = 0; i < n; i++) {
     const farm = (team.farmIds || []).map(id => draft.players[id]).filter(Boolean);
@@ -890,9 +891,7 @@ function _signProspects(draft, team, atMs) {
     const pitchers = farm.length - hitters;
     const wantPitcher = pitchers / ROSTER_LIMITS.FARM_PITCHER_MAX < hitters / ROSTER_LIMITS.FARM_HITTER_MAX;
     const pos = wantPitcher ? (Math.random() < 0.5 ? 'SP' : 'RP') : HITTER_POS[Math.floor(Math.random() * HITTER_POS.length)];
-    const name = _newName(used);
-    if (!name) break;
-    used.add(name);
+    const name = _newName(used);   // §82 (added to `used`)
     const p = createPlayer({
       id: _uuid(), name, pos, group: PLAYER_GROUP.PRACTICE_SQUAD,
       hand: wantPitcher ? (Math.random() < 0.28 ? 'L' : 'R') : null,
@@ -938,14 +937,12 @@ function _enforceFarmCaps(draft, team, atMs) {
 // UTILITIES
 // ─────────────────────────────────────────────────────────────
 
+/** §82 a new player's name: a last name nobody in `used` wears, else an initialed one. */
 function _newName(used) {
-  const first = () => PLAYER_NAME_POOL[Math.floor(Math.random() * PLAYER_NAME_POOL.length)].split(' ')[0];
-  const last  = () => PLAYER_NAME_POOL[Math.floor(Math.random() * PLAYER_NAME_POOL.length)].split(' ').slice(-1)[0];
-  for (let i = 0; i < 300; i++) {
-    const n = `${first()} ${last()}`;
-    if (!used.has(n)) return n;
-  }
-  return null;
+  const taken = new Set([...used].map(surnameOf));
+  const free = PLAYER_SURNAMES.filter(s => !taken.has(s));
+  const pool = free.length ? free : PLAYER_SURNAMES;
+  return uniqueName(pool[Math.floor(Math.random() * pool.length)], used);
 }
 
 function _shuffle(arr) {

@@ -21,7 +21,7 @@ import { createPlayer, computeAge, baseballYear, isAvailable } from './PlayerFac
 import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor } from './OffseasonEngine.js';
 import { defaultActiveGroup, eligibleSlotsFor } from './RosterEngine.js';
 import { rosterIsFull, sideOf } from './TransactionEngine.js';
-import { PLAYER_NAME_POOL } from '../data/player-names.js';
+import { newPlayerName } from './Names.js';
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const HITTER_POS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'OF', 'OF', '2B/SS', '1B/3B'];
@@ -201,12 +201,7 @@ function _inSeason(draft) {
   return ![PHASE.OFFSEASON, PHASE.SEASON_SUMMARY].includes(draft.phase);
 }
 
+/** §82 */
 function _newName(state) {
-  const used = new Set(Object.values(state.players || {}).map(p => p?.name));
-  const pick = () => PLAYER_NAME_POOL[Math.floor(Math.random() * PLAYER_NAME_POOL.length)];
-  for (let i = 0; i < 300; i++) {
-    const n = `${pick().split(' ')[0]} ${pick().split(' ').slice(-1)[0]}`;
-    if (!used.has(n)) return n;
-  }
-  return null;
+  return newPlayerName(state.players);
 }

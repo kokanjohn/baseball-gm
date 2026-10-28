@@ -6970,3 +6970,25 @@ Cash moves between club funds, usually covering part of the traded player's **re
   - CPU seasons run about −2.5M to +4M on 10–38M targets, with occasional owner-covered red ink.
   - Trade offers continue (8–10 a season). An owner ordering cuts moves a contract to a club with room (mechanism test on a copy).
   - Our own operating-net bound widens to 50% for a historic .650+ season.
+
+## 82. Last names only, and gender-neutral writing (Session 8 — GM decision)
+**The standard (GM, verbatim intent):** nothing in the game should imply who the players are. Anyone who picks the game up should be able to picture the team as women as easily as men. Gender-neutral text should never feel clunky. It should read as natural, ordinary baseball writing. Singular "they" only as a last resort: sentences are rewritten around the name or the role instead.
+
+### 82.1 Names (r77)
+- **No first names anywhere.** Players, coaches and the people cards mention are known by their last name. Your GM name is the only name left as typed.
+- **Data:** `data/player-names.js` is rebuilt as `PLAYER_SURNAMES` (1,201 distinct), `STAFF_NAMES` (67) and `PERSON_NAMES` (15).
+  - No name appears in two lists, so a coach is never mistaken for a player.
+  - Removed: last names that read as ordinary words in a sentence once the first name is gone (Price, Best, Young, Stone, Hill, Wood, King and others), names outside the file's own guidelines (Scandinavian, West African), first names that had slipped in, and the unused ACQ_* lists.
+  - `card-tokens.js` `person_name` is gone; the outside people come from `PERSON_NAMES`.
+- **`engine/Names.js`** (pure) is the one rule:
+  - `newPlayerName(players)` picks a last name nobody active in the league wears.
+  - When the pool runs out, `uniqueName` gives a first initial nobody has ("E. Tejada").
+  - A name is fixed for the player's career, and no two active players ever share one.
+  - Used by every creation point: the league's draw (all distinct), depth signings, amateur signings and generated players (MarketEngine).
+- **Old saves:** `_fillDefaults` converts once (`state._lastNamesOnly`).
+  - Every player becomes a last name. Two-word surnames such as "De Paula" are kept whole. Clashes get initials, active players first, in id order.
+  - The staff become last names.
+  - New saves are created already marked, so a two-word surname is never cut twice.
+  - Card text already in the inbox keeps its old wording.
+- **Screens:** the four places that shortened names themselves (box score, League leaders and search, the hot/cold strip) now show the stored name. That also fixes "De Paula" showing as "Paula".
+- **Harness:** every player's name is a pool last name (initial only where shared), no two active players share a name, and the staff are known by last name. Checked at the new league and again in season 2.

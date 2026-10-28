@@ -689,6 +689,26 @@ async function checkPrecache() {
   check('sw.js precaches every app module', missing.length === 0, missing.join(', '));
 }
 
+/** §82 last names only: every player a last name from the pool (with an
+ *  initial only where shared), no two active players alike, staff by last name. */
+async function checkNames(when) {
+  const { PLAYER_SURNAMES, STAFF_NAMES } = await import('../../data/player-names.js');
+  const pool = new Set(PLAYER_SURNAMES);
+  const st = SM.get();
+  const active = Object.values(st.players).filter(p => p && p.group !== 'departed');
+  const bad = active.filter(p => !(pool.has(p.name) || (/^[A-Z]\. /.test(p.name) && pool.has(p.name.slice(3)))));
+  check(`names (${when}): every player is known by a last name only (${active.length} players)`, bad.length === 0,
+        bad.slice(0, 6).map(p => p.name).join(', '));
+  const seen = new Map();
+  for (const p of active) seen.set(p.name, (seen.get(p.name) || 0) + 1);
+  const dup = [...seen].filter(([, n]) => n > 1);
+  check(`names (${when}): no two players in the league share a name`, dup.length === 0, dup.slice(0, 5).map(([n]) => n).join(', '));
+  const initialed = active.filter(p => /^[A-Z]\. /.test(p.name)).length;
+  check(`names (${when}): first initials only where a last name is shared (${initialed})`, true);
+  const staff = Object.values(st.userTeam.coachingStaff || {}).map(m => m?.name).filter(Boolean);
+  check(`names (${when}): the coaching staff by last name (${staff.join(', ')})`, staff.every(n => STAFF_NAMES.includes(n)));
+}
+
 async function main() {
   seedRandom(SEED);
   await checkPrecache();
@@ -714,6 +734,7 @@ async function main() {
   // active slot from IndexedDB. Reproduce that exactly and assert the seeds
   // are still there and are real (not debug-shaped) instances.
   await SM.init();
+  await checkNames('new league');
   { const s0 = SM.get();
     check(`card moments: the very first game day is planned at team creation (${(s0.scheduledCards || []).length} cards, plan ${s0.cardPlanKey})`,
           !!s0.cardPlanKey && (s0.scheduledCards || []).some(c => c._moment)); }
@@ -1494,6 +1515,7 @@ async function main() {
   // ── §70: the offseason on the league calendar → season 2 ────────
   if (SM.get().phase === PHASE.SEASON_SUMMARY) {
     await runOffseasonChecks();
+    await checkNames('season 2');
   }
 
   if (process.env.DBG) {

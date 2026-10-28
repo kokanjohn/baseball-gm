@@ -26,7 +26,7 @@ import {
   SPRING_TRAINING_GAME_COUNT,
   PHASE,
 } from '../data/constants.js';
-import { STAFF_NAMES } from '../data/player-names.js';
+import { STAFF_NAMES, PERSON_NAMES } from '../data/player-names.js';
 import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
 import { marketCandidate, signingTerms, rentalTarget, prospectToSend } from './MarketEngine.js';
 import { eligibleSlotsFor } from './RosterEngine.js';
@@ -300,7 +300,7 @@ function _nextRoadCity(state, nextGame) {
 function _outsideNames(state) {
   const taken = new Set(Object.values(state.userTeam?.coachingStaff || {}).map(s => s?.name));
   if (state.userTeam?.ownerName) taken.add(state.userTeam.ownerName);
-  return (CARD_TOKEN_POOLS.person_name || []).filter(n => !taken.has(n));
+  return PERSON_NAMES.filter(n => !taken.has(n));
 }
 
 function _pickPerson(state) {
@@ -443,7 +443,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       const isP = ['SP', 'RP'].includes(w.pos);
       values.dfa_dest = isP ? 'the bullpen' : 'the bench';
       values.dfa_preview_dest = values.dfa_dest;
-      values.dfa_yes_msg = 'Claim is in — he reports if no club ahead of us in the claiming order claims him.';
+      values.dfa_yes_msg = 'Claim is in. The player reports to us unless a club ahead of us in the claiming order puts in a claim.';
     }
   } else if (spec.pool === 'released') {
     const f = (state.freeAgentPool || []).map(id => state.players?.[id])
@@ -454,7 +454,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       const isP = ['SP', 'RP'].includes(f.pos);
       values.dfa_dest = isP ? 'the bullpen' : 'the bench';
       values.dfa_preview_dest = `open to a deal with us`;
-      values.dfa_yes_msg = 'He joins the active roster.';
+      values.dfa_yes_msg = 'Signed — straight onto the active roster.';
       money('sign_cost', signingTerms(state, f).salary);
     }
   } else if (spec.trade) {
@@ -478,7 +478,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       values.nri_subject = `Non-roster invitee ${vet.name} is turning heads`;
       values.nri_preview = `${vet.name} (${pos}, ${values.nri_age}) came to camp on a minor-league deal — and is making noise…`;
       values.nri_body = `${vet.name} (${pos}, ${values.nri_age}, OVR ${vet.ovr}) came to camp as a non-roster invitee and has been one of the stories of the spring. `
-        + `A camp spot costs ${values.nri_cost}; he'd compete for an Opening Day job.`;
+        + `A camp spot costs ${values.nri_cost}, with a real shot at an Opening Day job.`;
     }
   } else if (spec.intl) {
     const pl = take('intl_player', marketCandidate(state, { kind: 'intl', side }, new Set(state.freeAgentPool || [])));

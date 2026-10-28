@@ -66,7 +66,7 @@ import { tradePlayerPatches } from './TradeEngine.js';
 import { payrollRoom, contractToMove, cutOrderAmount } from './FinanceEngine.js';
 import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate } from './InjuryEngine.js';
 import { computeAge, createPlayer, baseballYear } from './PlayerFactory.js';
-import { PLAYER_NAME_POOL } from '../data/player-names.js';
+import { newPlayerName } from './Names.js';
 
 const MS_PER_DAY = 86_400_000;
 const isPitcher  = (p) => ['SP', 'RP'].includes(p?.pos);
@@ -435,7 +435,7 @@ function _executeTrade(draft, tx, events, touched) {
       !cpu ? 'team not found'
     : outgoingIds.some(id => !user.rosterIds.includes(id)) ? 'a player is no longer on your roster'
     : incomingIds.some(id => !cpu.rosterIds.includes(id))  ? 'a player is no longer on their roster'
-    : [...outgoingIds, ...incomingIds].some(id => draft.players[id]?.isInjured) ? 'a player failed his physical'
+    : [...outgoingIds, ...incomingIds].some(id => draft.players[id]?.isInjured) ? 'a player failed the physical'
     : null;
   if (problem) {
     tx.status = 'cancelled';
@@ -709,14 +709,7 @@ function _depthSigning(draft, want, pos) {
   const choices = pos ? [pos] : [...DEPTH_POSITIONS, 'SP', 'RP'].filter(probe);
   const position = choices[Math.floor(Math.random() * choices.length)];
   if (!position || !probe(position)) return null;
-  const used = new Set(Object.values(draft.players).map(p => p?.name));
-  let name = PLAYER_NAME_POOL.find(n => !used.has(n));
-  for (let i = 0; !name && i < 200; i++) {
-    const a = PLAYER_NAME_POOL[Math.floor(Math.random() * PLAYER_NAME_POOL.length)].split(' ')[0];
-    const b = PLAYER_NAME_POOL[Math.floor(Math.random() * PLAYER_NAME_POOL.length)].split(' ').slice(-1)[0];
-    if (!used.has(`${a} ${b}`)) name = `${a} ${b}`;
-  }
-  if (!name) return null;
+  const name = newPlayerName(draft.players);   // §82
   const p = createPlayer({
     id:        crypto.randomUUID(),
     name,

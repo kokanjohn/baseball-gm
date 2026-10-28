@@ -27,7 +27,7 @@ function _side(name, side) {
   </div>`;
 }
 
-function _lastName(n) { return (n || '—').split(' ').slice(-1)[0]; }
+function _lastName(n) { return n || '—'; }   // §82: a name is already the last name (with an initial if shared)
 function _avg(h, ab)  { return ab > 0 ? (h / ab).toFixed(3).replace(/^0/, '') : '—'; }
 function _era(er, o)  { return o > 0 ? ((er / (o / 3)) * 9).toFixed(2) : '—'; }
 

@@ -222,7 +222,7 @@ function _renderStatLeaders(state) {
       return `
         <div class="stat-leader-row ${isUser ? 'user-player' : ''}">
           <span class="slr-rank">${i+1}</span>
-          <span class="slr-name">${_escape(p.name.split(' ').pop())}</span>
+          <span class="slr-name">${_escape(p.name)}</span>
           <span class="slr-team">${_escape(p.teamId === 'user' ? state.userTeam?.abbr || 'YOU' : _teamAbbr(p.teamId, state))}</span>
           <span class="slr-stat">${statFn(p)}</span>
         </div>
@@ -367,7 +367,7 @@ function _renderPlayers(state) {
   if (isSearching) {
     const q = _lpSearch.trim().toLowerCase();
     allPlayers = allPlayers.filter(p =>
-      (p.name || '').split(' ').pop().toLowerCase().includes(q)
+      (p.name || '').toLowerCase().includes(q)
     );
   }
 

@@ -17,7 +17,7 @@
  *     No separate farm name pools.
  */
 
-import { PLAYER_NAME_POOL } from '../data/player-names.js';
+import { PLAYER_SURNAMES } from '../data/player-names.js';
 import { createPlayer, computeOVR, computeAge, clamp, _freshStats } from './PlayerFactory.js';
 import {
   PLAYER_GROUP,
@@ -131,7 +131,7 @@ const BP_HANDS = ['R','R','L','R','R'];  // 5 bullpen arms
  * @returns {{ userNames, cpuNames, farmNames, reserveNames }}
  */
 export function initNameRegistry() {
-  const shuffled = [...PLAYER_NAME_POOL];
+  const shuffled = [...PLAYER_SURNAMES];   // §82: every surname distinct — no repeats in a new league
   _shuffle(shuffled);
 
   return {

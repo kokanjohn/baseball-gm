@@ -1157,7 +1157,7 @@ function _renderHotColdStrip(state) {
     const imp7 = imp?.imp7;
     const sign = imp7 > 0 ? '+' : '';
     return `<div class="hot-cold-chip">
-      <span class="hot-cold-name">${_escape(player.name.split(' ').pop() || player.name)}</span>
+      <span class="hot-cold-name">${_escape(player.name)}</span>
       <span class="hot-cold-pos">${player.pos}</span>
       ${ind ? `<span class="imp-indicator">${ind}</span>` : ''}
       ${imp7 != null ? `<span class="imp-score ${imp7>0?'imp-pos':'imp-neg'}">${sign}${imp7.toFixed(1)}</span>` : ''}

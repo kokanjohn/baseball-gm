@@ -510,7 +510,7 @@ function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, all
 function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [], rosterIds = [], isNext = false, reliefRole = null) {
   if (!player) return '';
   // §76: his bullpen role, and whether his arm is ready today.
-  const roleBadge = reliefRole ? `<span class="rp-role rp-role-${reliefRole}" title="${{ closer: 'Closer', setup: 'Setup man', middle: 'Middle relief', long: 'Long relief' }[reliefRole]}">${ROLE_ABBR[reliefRole]}</span>` : '';
+  const roleBadge = reliefRole ? `<span class="rp-role rp-role-${reliefRole}" title="${{ closer: 'Closer', setup: 'Setup', middle: 'Middle relief', long: 'Long relief' }[reliefRole]}">${ROLE_ABBR[reliefRole]}</span>` : '';
   const now = Date.now();
   let armNote = '';
   if (isAvailable(player) && role !== 'rotation') {     // starters rest in turn (the rotation)
