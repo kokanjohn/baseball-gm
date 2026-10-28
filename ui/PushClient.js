@@ -10,10 +10,15 @@
  * sync sends the complete list of upcoming cards (CardEngine.getPushSchedule).
  * When notifications are paused in Settings the schedule is sent empty.
  *
+ * The VAPID public key always comes from the worker (GET /vapid-key) — never a
+ * copy bundled in the app, which went stale at every key rotation and, used
+ * offline, subscribed the device with a key that could receive nothing (§77).
+ * Without the worker, push can't be set up anyway (registration needs it).
+ *
  * Browser-only module (navigator / fetch). Not imported by engines or the harness.
  */
 
-import { PUSH_WORKER_URL, VAPID_PUBLIC_KEY } from '../data/constants.js';
+import { PUSH_WORKER_URL } from '../data/constants.js';
 import * as StateManager from '../store/StateManager.js';
 import { getPushSchedule } from '../engine/CardEngine.js';
 
@@ -37,7 +42,8 @@ export function pushPaused() {
 
 /**
  * enablePush()
- * @returns {Promise<'granted'|'denied'|'default'|'unsupported'|'error'>}
+ * @returns {Promise<'granted'|'denied'|'default'|'unsupported'|'unreachable'|'error'>}
+ *   'unreachable' — the push server couldn't be reached (offline): try again later.
  */
 export async function enablePush() {
   if (!pushSupported()) return 'unsupported';
@@ -50,7 +56,7 @@ export async function enablePush() {
     return 'granted';
   } catch (err) {
     console.error('[PushClient] enable failed:', err);
-    return 'error';
+    return err?.code === 'unreachable' ? 'unreachable' : 'error';
   }
 }
 
@@ -78,7 +84,9 @@ export function syncPushSchedule({ immediate = false } = {}) {
 export async function sendTestPush() {
   if (!pushSupported())                      return { ok: false, error: 'This browser does not support push.' };
   if (Notification.permission !== 'granted') return { ok: false, error: 'Notifications are not enabled.' };
-  const sub = await _getSubscription({ create: true });
+  let sub;
+  try { sub = await _getSubscription({ create: true }); }
+  catch (err) { return { ok: false, error: err?.code === 'unreachable' ? err.message : `could not subscribe this device (${err?.message})` }; }
   if (!sub) return { ok: false, error: 'Could not subscribe this device.' };
 
   let result;
@@ -155,13 +163,24 @@ async function _getSubscription({ create }) {
 }
 
 let _keyCache = null;
+/**
+ * The worker's current VAPID public key. Throws (code 'unreachable') when the
+ * worker can't be reached — the caller stops there, and an existing
+ * subscription is left alone (it is only replaced when the key is known to
+ * have changed). A failure is not cached, so the next attempt asks again.
+ */
 async function _vapidKey() {
   if (_keyCache) return _keyCache;
-  let b64 = VAPID_PUBLIC_KEY;
+  let b64 = '';
   try {
     const res = await fetch(`${PUSH_WORKER_URL}/vapid-key`);
-    if (res.ok) b64 = (await res.text()).trim() || b64;
-  } catch { /* offline — use the bundled key */ }
+    if (res.ok) b64 = (await res.text()).trim();
+  } catch { /* offline */ }
+  if (!b64) {
+    const err = new Error('could not reach the notification server — check your connection and try again');
+    err.code = 'unreachable';
+    throw err;
+  }
   _keyCache = _b64ToBytes(b64);
   return _keyCache;
 }

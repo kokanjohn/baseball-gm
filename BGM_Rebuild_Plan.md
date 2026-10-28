@@ -2191,6 +2191,8 @@ export const VAPID_PUBLIC_KEY = 'BPdBTqb92Gueg4-arpvFMQjD0rqcIABMYcIV7VAUbwepbsf
 export const FCM_SENDER_ID = '157200420537';
 ```
 
+> **Superseded (r71, §77):** the app no longer bundles the public key — it always fetches it from the worker's `GET /vapid-key`.
+
 **Security note — Phase 11 task:** Regenerate the VAPID key pair in Firebase after v2 push system is confirmed working. The private key was exposed during the setup audit. Steps: Firebase → Project Settings → Cloud Messaging → Web Push certificates → delete existing pair → generate new → update `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` in Cloudflare secrets immediately. Do not paste the new private key anywhere — copy directly from Firebase download into the Cloudflare secret field.
 
 **Checklist — all items complete:**
@@ -6391,7 +6393,7 @@ Every item below was verified against the code or by a headless probe (full-seas
 - **E1 (S2) All-Star hosting score never accumulates; announcement card never sent** (§17). Only the spring hint cards move atmosphere.
 - **E2 (S2) Weather + radar unwired**: every game is hardcoded "Clear"; `WeatherEngine` is never called; `RadarWidget` is imported by the Dashboard but never rendered; postponement/delay paths exist but nothing triggers them. (Planned flagship phase.)
 - **E3 (S3) `_simFatigued` is never set**, so in-at-bat fatigue modifiers never apply (the innings-based hook still pulls tired pitchers).
-- **E4 (S3) `constants.VAPID_PUBLIC_KEY`** offline fallback still holds the pre-rotation key.
+- **E4 (S3) `constants.VAPID_PUBLIC_KEY`** offline fallback still holds the pre-rotation key. *(Resolved r71, §77: the bundled key is removed.)*
 
 ### Verified working (no action)
 Opening Day keeper cut to 28; reconcile keeps lineup/rotation valid after roster changes (fault-injection checks); CPU teams hold 28 usable players absent trades; pitching changes; box score = plays; timed inbox + push.
@@ -6773,3 +6775,23 @@ Closes §64 **E3** (`_simFatigued` was never set, so the §7.4 fatigue modifiers
 Also fold in with B7: `TradeEngine._assessDepthImpact` still keys "improvement" on the `STARTING_HITTERS` group (§75).
 
 **Observed, not changed:** the harness GM (who says yes to nearly every helpful card) wins 70–100 with the contender. Worth watching once real play data exists.
+
+
+---
+
+## 77. r71 — Push key: always from the worker (Session 8, Batch 4 · E4)
+Closes §64 **E4**. `data/constants.js` bundled a copy of the VAPID public key as an "offline fallback" for subscribing. It still held the key from before the Oct 26 rotation.
+
+**Decision (GM, Session 8): remove the copy rather than update it.** It did nothing useful:
+- Setting up push needs the worker anyway (`POST /register`), so offline the fallback couldn't complete a sign-up.
+- Stale (as it was after every rotation), it subscribed the device with a key that could receive nothing, which the app then had to tear down and redo.
+
+**Now** `PushClient._vapidKey()` always asks the worker's `GET /vapid-key`.
+- If the worker can't be reached it throws (`code: 'unreachable'`); nothing is cached.
+- An existing subscription is never touched on a failed fetch: it is replaced only when the key is known to have changed.
+- `enablePush()` returns `'unreachable'`, and the app says "Couldn't reach the notification server. Check your connection and try again."
+- The test-push button reports the same reason.
+
+Key rotations no longer need an app change: rotate in Firebase, update the Cloudflare secrets, and devices re-subscribe on their next sync. `VAPID_PUBLIC_KEY` is removed from constants (the worker's binding of that name is unchanged).
+
+**Batch 4 status:** E1 (§75) and E3 (§76) are done, and E4 is now done. **B7 (user-initiated trades) is on hold** pending the cash-in-trades discussion (§76).

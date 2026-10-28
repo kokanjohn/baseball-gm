@@ -12,7 +12,6 @@
 // ─────────────────────────────────────────────────────────────
 
 export const PUSH_WORKER_URL  = 'https://baseball-gm-push.baseball-gm.workers.dev';
-export const VAPID_PUBLIC_KEY = 'BPdBTqb92Gueg4-arpvFMQjD0rqcIABMYcIV7VAUbwepbsffrN-1YR8XfsjaYpZVX6qZ2Dvn30sp4H0_xNJzQCE';
 export const FCM_SENDER_ID    = '157200420537';
 
 // ─────────────────────────────────────────────────────────────

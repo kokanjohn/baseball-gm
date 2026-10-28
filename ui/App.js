@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r70';
+export const APP_VERSION = 'tfo-v2-r71';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -1467,6 +1467,8 @@ async function _requestNotifPermission() {
   const result = await enablePush();
   if (result === 'granted') {
     showToast('Notifications on — new messages will reach this device.', 'positive', 3000);
+  } else if (result === 'unreachable') {
+    showToast('Couldn\'t reach the notification server. Check your connection and try again.', 'negative', 4000);
   } else if (result === 'error') {
     showToast('Could not register this device for notifications. Try again.', 'negative', 3500);
   } else if (result === 'unsupported') {
