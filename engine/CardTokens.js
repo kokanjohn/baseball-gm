@@ -90,6 +90,13 @@ export function buildTokenMap(cardDef, context, state) {
   values.physician_name      = 'The team physician';
   values.cfo_name            = 'The CFO';
   values.owner_name          = userTeam.ownerName || 'Ownership';
+  // §80 the club itself (first-moment cards speak to the franchise by name).
+  values.team_city     = userTeam.city || 'the city';
+  values.team_nickname = userTeam.nickname || 'the club';
+  values.team_name     = `${userTeam.city || ''} ${userTeam.nickname || ''}`.trim() || 'the club';
+  values.gm_name       = state.gmName || userTeam.gmName || 'the new GM';
+  const lastSeason     = (state.seasonHistory || [])[(state.seasonHistory || []).length - 1];
+  values.last_record   = lastSeason ? `${lastSeason.wins}–${lastSeason.losses}` : '';
   values.scout_name          = _pickPerson(state);
 
   // One-off outside people — distinct names within this card.

@@ -1347,6 +1347,12 @@ async function main() {
     const inGame = (st.inbox || []).filter(c => c._moment === 'ingame');
     check('card moments: in-game cards arrive while the game is on',
           inGame.every(c => (c.arrivedAtMs ?? c.deliverAtMs) <= c.expiresAtMs));
+    // §80 first moments: the takeover and Opening Day bring their own card;
+    // a second season opens camp with one.
+    const md = st.momentsDone || {};
+    check(`first moments: the takeover and Opening Day each brought a card (${Object.entries(md).map(([k, v]) => `${k}=${v.cardId}`).join(', ')})`,
+          !!md['1|takeover'] && !!md['1|opening_day']);
+    if ((st.cardPlanKey || '').startsWith('2|')) check('first moments: season 2 opens camp with a card', !!md['2|camp_open']);
     const springMoments = (st.inbox || []).filter(c => /^(pg30_sp|ig_sp)/.test(c.cardId || ''));
     check(`card moments: spring game-day cards can arrive (${springMoments.length}: ${[...new Set(springMoments.map(c => c.cardId))].join(',')})`,
           true);

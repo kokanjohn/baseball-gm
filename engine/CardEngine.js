@@ -68,6 +68,7 @@ import * as Finance from './FinanceEngine.js';
 import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
+import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { computeOVR } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -950,7 +951,10 @@ function _scheduleCards(instances, state, game = null) {
   const lead = 10 * 60_000;
   const timed = [], loose = [];
   for (const c of instances) {
-    if (c._moment === 'pregame' || (!c._moment && c._pool === 'PREGAME_POOL')) {
+    if (c._moment === 'soon') {
+      // A milestone happening now (the GM takes over, camp opens): within the hour.
+      timed.push({ ...c, deliverAtMs: nowMs + lead + Math.random() * 30 * 60_000 });
+    } else if (c._moment === 'pregame' || (!c._moment && c._pool === 'PREGAME_POOL')) {
       if (!Number.isFinite(T) || T - nowMs < lead + 15 * 60_000) continue;
       timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, T - (45 + Math.random() * 105) * 60_000), expiresAtMs: T });
     } else if (c._moment === 'ingame' || (!c._moment && c._pool === 'INGAME_POOL')) {
@@ -981,6 +985,96 @@ function _scheduleCards(instances, state, game = null) {
     s.scheduledCards = [...(s.scheduledCards || []), ...scheduled]
       .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
   });
+}
+
+// ─────────────────────────────────────────────────────────────
+// FIRST MOMENTS (§80)
+// ─────────────────────────────────────────────────────────────
+
+const SEEN_MOMENTS_KEY = 'bgm_seenMoments';
+
+/** Versions this device has shown, oldest first (across every team and season). */
+function _seenMoments() {
+  try {
+    const raw = globalThis.localStorage?.getItem(SEEN_MOMENTS_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+function _rememberMoment(id) {
+  try {
+    const list = _seenMoments().filter(x => x !== id);
+    list.push(id);
+    globalThis.localStorage?.setItem(SEEN_MOMENTS_KEY, JSON.stringify(list.slice(-200)));
+  } catch { /* private window / no storage: the save's own memory still applies */ }
+}
+
+/** The club's situation, as the `_when` conditions read it. */
+function _momentSituation(state) {
+  const fin  = state.userTeam?.finances;
+  const last = (state.seasonHistory || [])[(state.seasonHistory || []).length - 1];
+  const target = fin?.payrollTarget || 0;
+  return {
+    archetype: state.archetype,
+    season:    (state.seasonNum || 1) > 1 ? 'returning' : 'first',
+    last:      last ? ((last.wins || 0) > (last.losses || 0) ? 'winning' : 'losing') : null,
+    funds:     !fin || !target ? null
+             : fin.funds >= target * 0.25 ? 'flush'
+             : fin.funds < target * 0.10 ? 'tight' : null,
+  };
+}
+
+function _fitsMoment(card, sit) {
+  const w = card._when;
+  if (!w) return true;
+  if (w.archetypes && !w.archetypes.includes(sit.archetype)) return false;
+  if (w.season && w.season !== sit.season) return false;
+  if (w.last && w.last !== sit.last) return false;
+  if (w.funds && w.funds !== sit.funds) return false;
+  return true;
+}
+
+/**
+ * deliverMomentCard(moment, context, game, timing)
+ * §80: one card for a club milestone — 'takeover', 'camp_open',
+ * 'spring_opener', 'opening_day' — once per season. The version fits the
+ * club's situation; among those, one never shown on this device (or this save)
+ * is preferred, else the one shown longest ago, so a new team or a new season
+ * doesn't open on the same message. `timing` is the moment of delivery:
+ * 'soon' (within the hour) or 'pregame' (before `game`'s first pitch).
+ * @returns {Boolean} whether a card was scheduled
+ */
+export function deliverMomentCard(moment, context, game = null, timing = 'soon') {
+  const state = StateManager.get();
+  const doneKey = `${state.seasonNum || 1}|${moment}`;
+  if (state.momentsDone?.[doneKey]) return false;
+  const sit = _momentSituation(state);
+  const versions = (MOMENT_CARDS[moment] || []).filter(c => _fitsMoment(c, sit));
+  if (!versions.length) return false;
+  const seen = _seenMoments();
+  const inSave = new Set(Object.values(state.momentsDone || {}).map(d => d.cardId));
+  const fresh = versions.filter(c => !seen.includes(c.id) && !inSave.has(c.id));
+  // Situation-specific versions are the more telling ones: weight them up.
+  const weightOf = (c) => (c._when ? 2 : 1);
+  let pick;
+  if (fresh.length) {
+    const total = fresh.reduce((a, c) => a + weightOf(c), 0);
+    let r = Math.random() * total;
+    pick = fresh.find(c => (r -= weightOf(c)) <= 0) || fresh[fresh.length - 1];
+  } else {
+    pick = [...versions].sort((a, b) => seen.indexOf(a.id) - seen.indexOf(b.id))[0];
+  }
+  const { _when, ...def } = pick;
+  const instance = _createInstance({ ...def, autoResolve: def.autoResolve || 'skip' }, context, state);
+  if (!instance) return false;
+  _scheduleCards([{ ...instance, _moment: timing, _firstMoment: moment }], state, game);
+  const scheduled = (StateManager.get().scheduledCards || []).some(c => c.instanceId === instance.instanceId);
+  if (!scheduled) return false;    // the moment had already passed (planned too late)
+  StateManager.mutate(s => {
+    s.momentsDone = { ...(s.momentsDone || {}), [doneKey]: { cardId: pick.id, atMs: Date.now() } };
+  });
+  _rememberMoment(pick.id);
+  return true;
 }
 
 /**
@@ -1439,9 +1533,17 @@ function _filterEligible(pool, context, state) {
       .map(c => c.cardId)
   );
 
+  // Never two copies of one card at once: not while it waits in the inbox
+  // unanswered or is scheduled to arrive (§80).
+  const pendingIds = new Set([
+    ...(state.inbox || []).filter(c => !c.resolved).map(c => c.cardId),
+    ...(state.scheduledCards || []).map(c => c.cardId),
+  ]);
+
   return pool.filter(card => {
     // Retired content (kept in the pool for reference, never delivered)
     if (card._retired) return false;
+    if (pendingIds.has(card.id)) return false;
 
     // Never promise a roster action the engine cannot perform
     if (!_cardActionsHandled(card)) return false;

@@ -538,8 +538,9 @@ export async function startNewGame(config) {
     CardEngine.deliverSeedCards(NEW_TEAM_SEED_CARDS, ctx);
     // One real, engine-generated trade proposal (actual players from both rosters).
     CardEngine.deliverSeedTradeOffer(ctx);
-    // §80: the first game day's inbox is planned now — there is no game
-    // before it whose final would plan it.
+    // §80: the day the GM takes over is a moment of its own; then the first
+    // game day's inbox is planned now — there is no game before it to plan it.
+    CardEngine.deliverMomentCard('takeover', ctx, null, 'soon');
     planCardsForNextGame();
   } catch (err) {
     console.warn('[GameEngine.startNewGame] Card seeding failed:', err.message);
@@ -1195,7 +1196,18 @@ export function planCardsForNextGame() {
   const key = `${state.seasonNum ?? 1}|${g.index ?? ''}|${g.date ?? ''}`;
   if (state.cardPlanKey === key) return;
   StateManager.mutate(s => { s.cardPlanKey = key; });
-  CardEngine.checkAndDeliver(buildCardContext());
+  const ctx = buildCardContext();
+  CardEngine.checkAndDeliver(ctx);
+
+  // §80 First moments: the season's first spring game (and, after the first
+  // season, the day camp opens) and Opening Day each bring a card of their own.
+  const played = (pred) => (state.schedule || []).some(x => x._committed && pred(x));
+  if (g.isSpring && !played(x => x.isSpring)) {
+    if ((state.seasonNum || 1) > 1) CardEngine.deliverMomentCard('camp_open', ctx, g, 'soon');
+    CardEngine.deliverMomentCard('spring_opener', ctx, g, 'pregame');
+  } else if (!g.isSpring && !g.isPlayoff && !played(x => !x.isSpring && !x.isPlayoff)) {
+    CardEngine.deliverMomentCard('opening_day', ctx, g, 'pregame');
+  }
 }
 
 export function getNextGame() {
