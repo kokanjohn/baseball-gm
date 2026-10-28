@@ -405,6 +405,8 @@ GameEngine's `_applyAgeAndDevelopment()` currently applies a single delta to all
 
 ### 4.2 Financial Model (LOCKED)
 
+> **Superseded by §78 (Session 8): one Club Funds account.** Payroll is actually paid (prorated, biweekly paydays), revenue is real income, the operating budget is gone, and the payroll cap becomes the owner's soft payroll target.
+
 Four separate financial concepts. None of them is "budget" — that word is retired.
 
 #### Payroll
@@ -1848,7 +1850,9 @@ The user selects a region during team creation (Setup Step 2, between archetype 
 > Status: LOCKED — no cash in trades (decided Phase 8 pre-build).
 > Trade fairness communicated via a fairness rating signal, not cash exchange.
 >
-> **⚠ Under review (Session 8, before B7 user-initiated trades):** the GM wants to reconsider the no-cash rule — cash may need to be part of trades after all (as in real baseball, where clubs include money to balance salaries or a deal). **Discuss with the GM before implementing B7; do not build B7 on the no-cash assumption.** See §76.
+> **Decided (Session 8, §78): cash returns to trades** — money moves between club funds, usually one club covering part of a player's remaining salary. Built in §78 Phase 4.
+>
+> ~~Under review (Session 8, before B7 user-initiated trades):~~ the GM wants to reconsider the no-cash rule — cash may need to be part of trades after all (as in real baseball, where clubs include money to balance salaries or a deal). **Discuss with the GM before implementing B7; do not build B7 on the no-cash assumption.** See §76.
 > Cash considerations create budget complexity without adding meaningful strategy for a mobile GM sim.
 
 ### 9.1 Cash Direction (LOCKED)
@@ -6795,3 +6799,110 @@ Closes §64 **E4**. `data/constants.js` bundled a copy of the VAPID public key a
 Key rotations no longer need an app change: rotate in Firebase, update the Cloudflare secrets, and devices re-subscribe on their next sync. `VAPID_PUBLIC_KEY` is removed from constants (the worker's binding of that name is unchanged).
 
 **Batch 4 status:** E1 (§75) and E3 (§76) are done, and E4 is now done. **B7 (user-initiated trades) is on hold** pending the cash-in-trades discussion (§76).
+
+
+---
+
+## 78. Club Funds — the money model (Session 8 design, decided with the GM)
+Replaces §4.2's four separate concepts and §9's no-cash rule. **Why:** an audit (Session 8) found that salaries were never paid. Payroll was only a ceiling checked when a card added a player; re-signings and offseason free agents ignored it. The contender opened over its cap with no consequence. Revenue was tallied and fed nothing. Staff salaries were never charged. CPU clubs had no finances at all (payrolls $8.6M–$36.6M, unlimited signings). Extensions charged an invented "$200–500K fee" from the operating budget. 11 cards promised a `budget` effect the engine ignores, and 13 used `managerConf` while the engine reads `manConf`.
+
+### 78.1 Decisions (GM)
+- **Option B: one bank account — Club Funds** (the $ in the header). Every dollar in or out moves it. The operating budget and the revenue metric retire into its two sides.
+- **Profits carry over** season to season (a good season funds the next).
+- **Paydays every two weeks** in the regular season (the 1st and 15th), each a feed entry.
+- **Minor-league salaries are not modeled.** A farm player costs nothing until he joins the active roster or IL; from then he is paid like anyone.
+- **The GM never sets ticket prices.** Cards may still talk about prices (an owner wanting a discount, a premium-seating push), and their effects become real (gate multipliers for a stretch).
+- **The extension fee is retired.** An extension costs its salary.
+- **Owner strictness depends on the archetype and the season's record** (see 78.4).
+- **Cash in trades** moves between club funds (78.6).
+- **Cards are part of the model, not decoration.** Adjust the cards that no longer fit, retire the ones that can't, and add new card families the money model makes possible. Text varies by archetype, record, prior decisions, funds, the owner's mood and CPU clubs' situations, so the whole thing reads as one living franchise and never feels repetitious.
+
+### 78.2 Money in
+Scaled to each club's payroll level, so a club that meets its owner's expectations runs **near break-even** (tuning target: income ≈ 1.03 × expected spending at the archetype's starting atmosphere and a win-target pace). Market differences show in local revenue and gates. Constants live in `data/constants.js`.
+- **League media share:** equal for every club, paid in installments on paydays.
+- **Local media and sponsors:** by market/payroll level and prestige, on paydays. Sponsor and revenue cards add on top.
+- **Home gate,** at each home final: `gateBase × attendance factor`. Attendance comes from atmosphere (absolute), the club's form against expectations, the opponent's draw, and later weather. The final shows "Attendance 31,204 · Gate $162K". Playoff home games pay a multiple. An improving atmosphere raises income, so a rebuild's fan work pays off in money.
+- **Other:** All-Star hosting share, cash received in trades.
+
+### 78.3 Money out
+- **Payroll:** salaries accrue **daily** across the regular season (annual salary ÷ the season's days) for everyone on the active roster or IL that day, and are paid on paydays. A deadline pickup costs only the rest of the season; a departed player stops costing. Nothing in the offseason.
+- **Coaching staff salaries:** accrued and paid the same way.
+- **Immediate:** card costs, signing bonuses, scouting trips, cash sent in trades.
+- **A ledger** (`finances.ledger`) records every movement with its reason; the season's income and spending by category are summed from it. The books always reconcile to the dollar (harness check).
+
+### 78.4 The owner
+- **Payroll target** (replaces the payroll cap): set each spring. It is a soft limit; what happens when you exceed it depends on his patience.
+- **Patience** = the archetype's base + the season's pace against the win target + owner trust (+ the Gambler's mood, a random walk each payday).
+- **Financial stress** = how far payroll is over the target + how deep the projected year-end funds are in the red (as a share of payroll). For the Lab, cost per win also counts.
+- **Stages, evaluated each payday:**
+  1. **Content** (silent).
+  2. **Watching** (a note in his voice).
+  3. **Concerned** (a warning with a clear ask; trust slips each payday).
+  4. **Ordering cuts** ("payroll down $X by the next payday").
+  
+  An order met restores some trust. Missed: a sharp trust drop and a smaller target next season.
+- **Winning buys room:** a club well ahead of its target pace can run over the target, or into the red, and only reach Watching. A club well behind reaches Ordering cuts quickly.
+- **Archetype owners:**
+
+  | Archetype | Owner |
+  |---|---|
+  | Ember | Tight-fisted, hates red ink; patient with losing. |
+  | Contender | Middle; spends for a push, not for a losing team. |
+  | Empire | Deep pockets, little patience; overspending is fine, overspending and losing is not. |
+  | Gambler | Moody: generous some weeks, demanding others. |
+  | Lab | Patient with losing; strict about cost per win. |
+  | Institution | Conservative; dislikes debt more than overspending; values steadiness. |
+
+- **Adding salary in season** (signings, claims, trades): allowed while the club's payroll stays within the owner's current tolerance of the target (a function of patience: 0% for an unhappy owner up to about 15% for a delighted one), and funds can cover any immediate cost. This replaces r68's hard cap check, and it now also covers offseason signings and re-signings.
+- **Season review:** the owner covers any red ink (at a trust cost) and sets next season's target from results (the existing performance formula) **and the books** (profit or loss now matter, as §4.2 intended). "Push for more" stays.
+
+### 78.5 CPU clubs keep books
+Same model, simplified. Each CPU club has a payroll target (from its payroll at creation, i.e. its market), funds, gates and paydays. Their owners' tolerance limits their free-agent signings and waiver claims (today unlimited). A club over its target or in the red sheds salary: it offers players, sometimes with cash, which feeds trade offers and the card ecosystem ("RDC will cover $1.2M of his salary").
+
+### 78.6 Cash in trades (with B7)
+Cash moves between club funds, usually covering part of the traded player's **remaining** salary for the season. CPU clubs accept or offer cash by their books: a flush club takes on salary; a strapped one pays you to take it. User-initiated trade proposals (B7) are built on this. `TradeEngine._assessDepthImpact`'s `STARTING_HITTERS` check is fixed with it.
+
+### 78.7 What the GM sees
+- **The header chip:** Club Funds, red when negative.
+- **A Finances view:** funds now; the season's income and spending by category; payroll against the owner's target; the next payday and its size; projected year-end funds; the owner's mood in a line.
+- **Home finals:** attendance and gate.
+- **The feed:** paydays.
+- **Card text** names where the money goes or comes from.
+
+### 78.8 Card audit (Session 8) — what changes in the card pool
+156 card definitions touch money. 80 charge a cost and 28 pay revenue; these move to Club Funds automatically.
+- **Broken today (promise money that never moves) — fix:**
+  - `budget` effects on o1, fn1, sp_renew, sp_complaint, sp_slot_conflict, sth_group_conflict, sth_delinquency, fr4_followup;
+  - fn5 ("budget takes the hit" — no cost);
+  - bg4 (savings never credited);
+  - sr1 and ms2 (ownership "loosens the budget" — nothing happens).
+  
+  A real `funds` effect replaces `budget`. The engine's `manConf` / `managerConf` mismatch is fixed.
+- **Become real under Club Funds — rework:**
+  - o4: an owner-requested ticket discount becomes a gate multiplier and attendance lift for a stretch;
+  - season-ticket cards (sth_*): renewals and delinquency move real gate/STH money;
+  - sponsor renewals (sp_renew): recurring payday income gained or lost;
+  - broadcast renewal (fn3): media installments;
+  - attendance and crowd cards: tied to the real attendance figure;
+  - ownership push cards (sr1, o1, ms2): the owner actually raises or lowers the payroll target, or adds funds.
+- **Reframe (the operating budget no longer exists):** the CFO "budget review / overrun" family (fn1, fn5, sp10, bg4) speaks about club funds, paydays and the owner. fn6 (payroll error) ties to a real payday.
+- **Retire:** the extension fee on the retain cards (`_budgetCost: 'ext_cost'`).
+- **New card families the model makes possible** (each with variants by archetype voice, record, funds and owner mood):
+  - **The owner:** watching / concerned / ordering cuts; delight at a profitable winning season; red-ink conversations; a mid-season offer to fund a push. Varies by archetype personality.
+  - **Paydays and cash flow:** a tight-funds week (defer maintenance? pass on a promotion?); a windfall week.
+  - **Attendance:** sellout streaks, empty-seat concerns, giveaway and promotion nights that cost money and lift a gate, rivalry and weekend boosts.
+  - **CPU salary dumps:** a struggling club offering a good player plus cash; a flush club asking us to take a contract; a rival's payroll troubles in the news.
+  - **Contracts and money:** an agent's leverage when funds are visibly strong; a player asking for a raise after a big year; deferred-money offers.
+  - **Postseason money:** playoff gate windfalls, player playoff-share asks.
+  - **Media rights:** renewals tied to market and winning.
+
+### 78.9 Build phases (each its own release, 8 harness seeds green)
+1. **Phase 1 — FinanceEngine and the user's books:**
+   - funds, ledger, daily accrual, paydays, gates, media and local income;
+   - card costs and revenue into funds; the extension fee retired; a real `funds` effect replacing `budget`; the `manConf` fix;
+   - the payroll target and owner tolerance (replaces the cap checks everywhere);
+   - owner patience and the stage cards, season review and carry-over;
+   - the UI (chip, Finances view, gate on finals, payday feed).
+2. **Phase 2 — CPU books:** markets, funds, paydays and gates; spending limits on CPU signings and claims; CPU clubs shedding salary.
+3. **Phase 3 — the card pool:** the audit list above (rework, reframe, retire), the new families, and variants by archetype, record, funds, owner mood and CPU situations.
+4. **Phase 4 — cash in trades and B7** (trades the GM starts).
