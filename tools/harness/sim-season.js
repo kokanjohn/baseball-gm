@@ -63,7 +63,7 @@ const summarize = () => {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -133,6 +133,7 @@ function gmActs() {
       && (x.autoResolve === 'roster' || !!x._rosterKey || (!!x._tradeOffer && !x._seed)
           || PLAYER_CARD_ACTIONS.has(x._raw?.onYes)));
     if (!c) break;
+    gm.cardIdsSeen.add(c.cardId);
     // §71 player cards: the action lands on the player the card names.
     if (PLAYER_CARD_ACTIONS.has(c._raw?.onYes)) {
       gm.seen.add(c.instanceId);
@@ -466,7 +467,9 @@ async function runAllStarChecks() {
     check('all-star (host): a lobbying card for a bubble player, and the choice recorded',
           !!season.influence && (!season.influence.playerId
             || (lobby.length === 1 && lobby[0]._targetPlayerId === season.influence.playerId
-                && (!lobby[0].resolved || season.influence.choice === (lobby[0].choice === 'yes' ? 'yes' : 'no')))),
+                && (!lobby[0].resolved || season.influence.choice === (lobby[0].choice === 'yes' ? 'yes' : 'no')))
+            // Left unanswered, it is withdrawn when the rosters are named: the vote speaks.
+            || (lobby.length === 0 && gm.cardIdsSeen.has('as_lobby') && season.influence.choice === null)),
           `influence ${JSON.stringify(season.influence)} cards ${lobby.length}`);
   } else {
     const last = new Map(st.leagueTeams.map(t => [t.id, -Infinity]));
@@ -707,6 +710,31 @@ async function checkNames(when) {
   check(`names (${when}): first initials only where a last name is shared (${initialed})`, true);
   const staff = Object.values(st.userTeam.coachingStaff || {}).map(m => m?.name).filter(Boolean);
   check(`names (${when}): the coaching staff by last name (${staff.join(', ')})`, staff.every(n => STAFF_NAMES.includes(n)));
+}
+
+/** §82 gender-neutral writing: no he/him/his (or "guys", "a man short"…) in
+ *  any card the game can send — every pool, moment and token phrase — and
+ *  none in any card actually delivered this season. */
+const GENDERED = /\b(he|him|his|himself|he's|he'll|he'd|she|her|hers|herself|guy|guys|fella|fellas|paternity|maternity|father|mother|man|men|wife|husband|son|daughter|brother|sister|boys)\b/i;
+async function checkNeutralText(st) {
+  const strs = (o, out = []) => {
+    if (typeof o === 'string') out.push(o);
+    else if (Array.isArray(o)) o.forEach(x => strs(x, out));
+    else if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) { if (!k.startsWith('_') && k !== 'id' && k !== 'situation') strs(v, out); }
+    return out;
+  };
+  const pools = await import('../../data/cards-pool.js');
+  const moments = await import('../../data/cards-moments.js');
+  const tokens = await import('../../data/card-tokens.js');
+  const authored = [...strs(Object.values(pools)), ...strs(moments.MOMENT_CARDS), ...strs(Object.values(tokens))];
+  const badA = authored.filter(t => GENDERED.test(t));
+  check(`neutral text: every card written reads gender-neutral (${authored.length} strings)`, badA.length === 0,
+        badA.slice(0, 4).map(t => t.slice(0, 90)).join(' | '));
+  const fields = ['subject', 'preview', 'body', 'yesLabel', 'noLabel', 'yesMsg', 'noMsg', 'sender'];
+  const sent = (st.inbox || []).flatMap(c => fields.map(f => c[f]).filter(x => typeof x === 'string'));
+  const badS = sent.filter(t => GENDERED.test(t));
+  check(`neutral text: every card delivered reads gender-neutral (${(st.inbox || []).length} cards)`, badS.length === 0,
+        badS.slice(0, 4).map(t => t.slice(0, 90)).join(' | '));
 }
 
 async function main() {
@@ -1516,6 +1544,7 @@ async function main() {
   if (SM.get().phase === PHASE.SEASON_SUMMARY) {
     await runOffseasonChecks();
     await checkNames('season 2');
+    await checkNeutralText(SM.get());
   }
 
   if (process.env.DBG) {

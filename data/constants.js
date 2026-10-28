@@ -1388,10 +1388,15 @@ export const FA_CARDS_PER_ROUND      = 3;
 // §80 The game day's inbox: how many cards each moment of a game day brings.
 // Planned once per game (at the final of the one before, at team creation, or
 // on the first tick that finds the next game unplanned).
+// §78.5 A minimum-salary move ($K, a 50–54 player) is always allowed, however
+// tight the books: any club can fill a hole with depth at the league minimum.
+export const FIN_MIN_MOVE_K = 150;
+
 // §78.5 CPU clubs' books.
 export const FIN_CPU = Object.freeze({
   staffShare:     0.03,   // coaching staff budget, as a share of the opening payroll
   targetHeadroom: 0.08,   // the owner's target sits this far over the opening payroll
+  targetFloorShare: 0.70, // no owner budgets below this share of the league's median payroll
   inSeasonLift:   0.05,   // call-ups and IL replacements: what a club really carries over its opening payroll
 });
 

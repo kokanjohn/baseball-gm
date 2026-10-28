@@ -481,7 +481,7 @@ export function deliverInjuryAct1(playerId, atMs = Date.now()) {
     _targetPlayerId: playerId,
     subject:  `${player.name} hurt — evaluation needed`,
     preview:  `${player.name}${_hand(player)} came out of tonight's game with a possible ${label}.`,
-    body:     `${player.name}${_hand(player)} (${player.pos}) came out of tonight's game with what looks like a ${label}. He's unavailable until we know more. We can send him for an MRI tonight — results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a call-up made tomorrow won't report until the day after.`,
+    body:     `${player.name}${_hand(player)} (${player.pos}) came out of tonight's game with what looks like a ${label}. ${player.name} is unavailable until we know more. An MRI tonight returns results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a call-up made tomorrow won't report until the day after.`,
     yesLabel: `MRI tonight (${'$'}${INJURY_MRI_COST_K}K)`,
     noLabel:  'Wait for the morning exam',
     _budgetCost: INJURY_MRI_COST_K,
@@ -525,16 +525,16 @@ export function deliverInjuryAct2(playerId, atMs = Date.now()) {
   const deadline   = decisionDeadlineAfter(state, atMs);
 
   const ilLine = seasonEnding
-    ? 'He is out for the rest of the season.'
-    : `On the ${ilMinDays(player)}-day IL (backdated to the injury) he's eligible to return ${_day(eligibleAt)}.`;
+    ? `${player.name} is out for the rest of the season.`
+    : `On the ${ilMinDays(player)}-day IL (backdated to the injury), ${player.name} is eligible to return ${_day(eligibleAt)}.`;
   const dtdLine = dtd
-    ? ` Or we manage it day-to-day: he keeps his roster spot and should be available in about ${inj.days} days, but we play a man short until then.`
+    ? ` Or we manage it day-to-day: the roster spot stays put and ${player.name} should be available in about ${inj.days} days, but we play a player short until then.`
     : '';
   const bestLine = best
-    ? ` Best fit on the farm: ${best.name}${_hand(best)} (${best.nativePos || best.pos}, OVR ${best.ovr}) — he'd report tomorrow.`
+    ? ` Best fit on the farm: ${best.name}${_hand(best)} (${best.nativePos || best.pos}, OVR ${best.ovr}), who would report tomorrow.`
     : ' There is no healthy fit on the farm right now.';
   const dlLine = deadline
-    ? ` We need a decision by ${_clock(deadline)} (${_day(deadline)}) or ${_managerName(state)} will make the move himself.`
+    ? ` We need a decision by ${_clock(deadline)} (${_day(deadline)}) or ${_managerName(state)} will make the call.`
     : '';
 
   const card = _rosterCard(state, {
@@ -550,7 +550,7 @@ export function deliverInjuryAct2(playerId, atMs = Date.now()) {
     preview:  `${varianceNote} ${seasonEnding ? 'Season-ending.' : `About ${inj.days} days.`}`,
     body:     `${report?.detailedText || ''} ${varianceNote} ${ilLine}${dtdLine}${bestLine}${dlLine}`.replace(/\s+/g, ' ').trim(),
     yesLabel: best ? `Place on IL — call up ${best.name}` : 'Place on IL',
-    noLabel:  dtd ? 'Day-to-day — keep his roster spot' : `Place on IL — I'll pick the call-up`,
+    noLabel:  dtd ? 'Day-to-day — keep the roster spot' : `Place on IL — I'll pick the call-up`,
     expiresAtMs: deadline,
     _raw: {
       onYes:  best ? 'il_placement' : 'il_placement_only',
@@ -612,16 +612,16 @@ function _deliverILReturnCard(playerId, atMs) {
     _dropId:  drop?.id || null,
     subject:  `${player.name} cleared to return`,
     preview:  `${ref} has been cleared — roster decision needed.`,
-    body:     `${ref} has completed his recovery and is cleared for game action.`
-            + (drop ? ` The active roster is full, so activating him means a corresponding move: ${drop.name} (${drop.nativePos || drop.pos}, OVR ${drop.ovr}) is the player who'd be ${isSpring ? 'optioned to the farm' : 'placed on waivers'}.`
-                    : ' There is room on the active roster for him.')
-            + (deadline ? ` If we haven't decided by ${_clock(deadline)} (${_day(deadline)}), ${_managerName(state)} will activate him.` : ''),
+    body:     `${ref} has completed the recovery and is cleared for game action.`
+            + (drop ? ` The active roster is full, so activating ${player.name} means a corresponding move: ${drop.name} (${drop.nativePos || drop.pos}, OVR ${drop.ovr}) is the player who'd be ${isSpring ? 'optioned to the farm' : 'placed on waivers'}.`
+                    : ' There is room on the active roster.')
+            + (deadline ? ` If we haven't decided by ${_clock(deadline)} (${_day(deadline)}), ${_managerName(state)} will make the activation.` : ''),
     yesLabel: drop ? `Activate ${player.name} — ${isSpring ? 'option' : 'waive'} ${drop.name}` : `Activate ${player.name}`,
     noLabel:  isSpring ? `Send ${player.name} to the farm` : `Place ${player.name} on waivers`,
     type:     'urgent',
     expiresAtMs: deadline,
     _raw: { onYes: 'il_return_activate', onNo: isSpring ? 'il_return_farm' : 'il_return_waive', onAuto: 'il_return_activate' },
-    _autoLabel: `No decision — ${_managerName(state)} activated him`,
+    _autoLabel: `No decision — ${_managerName(state)} made the activation`,
   });
   return _deliverAt(card, atMs);
 }
@@ -656,7 +656,7 @@ function _deliverNeedCard(state, need, index, needs, atMs) {
     subject:  needs.short > 1 ? `${needs.short} open roster spots` : 'Open roster spot',
     preview:  `We're ${needs.short} short of 28 — I need ${what}.`,
     body:     `We're carrying ${28 - needs.short} active players. I need ${what}.`
-            + (best ? ` The best fit on the farm is ${best.name}${_hand(best)} (${best.nativePos || best.pos}, OVR ${best.ovr}); he'd report tomorrow.` : ' Nobody on the farm fits — look at the waiver wire or make a trade.')
+            + (best ? ` The best fit on the farm is ${best.name}${_hand(best)} (${best.nativePos || best.pos}, OVR ${best.ovr}), who would report tomorrow.` : ' Nobody on the farm fits — look at the waiver wire or make a trade.')
             + ` You can also pick someone else from the dashed spot on the Team screen.`
             + (deadline ? ` If nothing's done by ${_clock(deadline)} (${_day(deadline)}), I'll call someone up myself.` : ''),
     yesLabel: best ? `Call up ${best.name}` : 'Understood',
@@ -703,7 +703,7 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
         subject: names.length ? `I called up ${names.join(' and ')}` : 'We are playing short',
         preview: 'No move was made before the deadline, so I made it.',
         body:    names.length
-          ? `Nobody made a move on the open roster spot before the deadline, so I called up ${names.join(' and ')}. ${names.length > 1 ? 'They report' : 'He reports'} tomorrow. Ownership noticed (Owner Trust ${ev.penalty?.ownerTrust ?? -2}, Atmosphere ${ev.penalty?.atmosphere ?? -1}).`
+          ? `Nobody made a move on the open roster spot before the deadline, so I called up ${names.join(' and ')}. ${names.length > 1 ? 'Both report' : 'The call-up reports'} tomorrow. Ownership noticed (Owner Trust ${ev.penalty?.ownerTrust ?? -2}, Atmosphere ${ev.penalty?.atmosphere ?? -1}).`
           : `Nobody made a move on the open roster spot before the deadline, and there's no one on the farm who can fill it. We'll play short until something changes. Ownership noticed.`,
       }, ev.atMs)) delivered++;
     } else if (ev.type === 'FARM_SIGNING' && ev.teamId === 'user') {
@@ -713,7 +713,7 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
         sender:  'Farm Director',
         subject: `Signed ${p.name} to a minor-league deal`,
         preview: `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) joins the farm system.`,
-        body:    `Our farm system was getting thin, so I signed ${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) to a minor-league deal. He's available as a call-up if we need him.`,
+        body:    `Our farm system was getting thin, so I signed ${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) to a minor-league deal — available as a call-up whenever we need one.`,
       }, ev.atMs)) delivered++;
     } else if (ev.type === 'WAIVER_CLAIMED' && ev.userClaimed) {
       // §73: how our waiver claim came out.
@@ -724,8 +724,8 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
       if (p && _deliverNotice(`claim:${ev.playerId}:${ev.atMs}`, {
         sender: 'Player Dev.', avatar: '📋', type: won ? 'good' : 'normal',
         subject: won ? `Claim awarded: ${p.name}` : `Claim lost: ${p.name}`,
-        preview: won ? `${_who(p)} is ours — he reports tomorrow.` : `${winner || 'Another club'} was ahead of us in the claiming order.`,
-        body: won ? `Our claim on ${_who(p)} came through. He reports tomorrow.`
+        preview: won ? `${_who(p)} is ours — reporting tomorrow.` : `${winner || 'Another club'} was ahead of us in the claiming order.`,
+        body: won ? `Our claim on ${_who(p)} came through. ${p.name} reports tomorrow.`
                   : `${winner || 'Another club'} had priority in the claiming order (worse record) and claimed ${_who(p)}.`,
       }, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'WAIVER_CLEARED' && ev.userClaimed) {
@@ -1907,8 +1907,8 @@ export function deliverAllStarLobbyCard(playerId, atMs, expiresAtMs) {
     subject: `${p.name} is on the All-Star bubble`,
     preview: `Rosters are set in a few days. As the host, we have a platform — use it?`,
     body: `${_who(p)} is right on the edge of making the All-Star team. Rosters are announced in a few days, and as the host club the league and the press are listening to us this week. `
-        + `We can make his case publicly — it might be the push he needs, and he'll know we went to bat for him — or stay out of it and let the vote speak.`,
-    yesLabel: 'Make his case', noLabel: 'Stay out of it',
+        + `We can make the case publicly — it might be the push that\'s needed, and ${p.name} will know we went to bat — or stay out of it and let the vote speak.`,
+    yesLabel: 'Make the case', noLabel: 'Stay out of it',
     yesEffect: { morale: 1 }, noEffect: {},
     autoResolve: 'no', expiresAtMs,
     _raw: { onYes: 'as_lobby_yes', onNo: 'as_lobby_no', onAuto: 'as_lobby_no' },
@@ -1930,7 +1930,7 @@ export function deliverAllStarSelectionCard(selections, atMs) {
                                      : `${selections.length} of ours are All-Stars`,
     preview: `The All-Star rosters are out.`,
     body: `The All-Star rosters are out, and we're sending ${_list(selections.map(desc))}. `
-        + `${selections.length > 1 ? 'They earned it' : 'He earned it'} — the clubhouse is proud. `
+        + `${selections.length > 1 ? 'Every one of them earned it' : 'Earned, not given'} — the clubhouse is proud. `
         + `The game is the second night of the break${host === 'user' ? ', in our ballpark' : host ? ` in ${_cityOf(state, host)}` : ''}.`,
     expiresAtMs: atMs + 2 * 24 * 3600_000,
   }, atMs);
@@ -1989,7 +1989,7 @@ export function deliverAllStarMvpCard(playerId, atMs) {
     cardId: 'as_mvp', tag: 'ROSTER', type: 'good', avatar: '🏆', sender: _managerName(state),
     subject: `${p.name} is the All-Star Game MVP`,
     preview: `${p.name} took home the MVP trophy.`,
-    body: `${_who(p)} was named MVP of the All-Star Game${r ? ` (${r.homeScore}–${r.awayScore} final)` : ''}. The guys gave him a standing ovation when he walked in.`,
+    body: `${_who(p)} was named MVP of the All-Star Game${r ? ` (${r.homeScore}–${r.awayScore} final)` : ''}. The clubhouse gave ${p.name} a standing ovation on the way in.`,
     expiresAtMs: atMs + 2 * 24 * 3600_000,
   }, atMs);
 }
@@ -1998,7 +1998,7 @@ export function deliverAllStarMvpCard(playerId, atMs) {
 export function deliverAllStarTradeOffer(context) {
   return _maybeDeliverCPUTradeOffer(StateManager.get(), context || {}, {
     force: true,
-    intro: (incoming) => `${incoming.name} spent All-Star week in our ballpark and has let his club know he would welcome a move here.`,
+    intro: (incoming) => `${incoming.name} spent All-Star week in our ballpark and has let the front office know a move here would be welcome.`,
   });
 }
 
@@ -2072,7 +2072,7 @@ function _strainWords(strain) {
   if (strain.over > 0.5) parts.push(`payroll is ${formatK(strain.payroll)}, ${Math.round(strain.over)}% over the ${formatK(strain.target)} target`);
   if (strain.projected < 0) parts.push(`at this rate we finish the season ${formatK(-strain.projected)} in the red`);
   if (strain.cpw) parts.push(`we're paying more per win than the league`);
-  return parts.length ? parts.join(', and ') : 'the books are tighter than he likes';
+  return parts.length ? parts.join(', and ') : 'the books are tighter than ownership likes';
 }
 
 /** The owner's mood worsened (watching / concerned) — a note in his voice. */
@@ -2110,9 +2110,9 @@ export function deliverOwnerCutOrder(playerId, amountK, atMs) {
     subject: `${owner} wants ${formatK(amountK)} off the payroll`,
     preview: `"${_voice(state, 'concerned')}" Due by ${due}.`,
     body: `"${_voice(state, 'concerned')}" Ownership wants ${formatK(amountK)} a year off the payroll by the payday on ${due}. `
-        + `The obvious contract is ${_who(p)}, at ${formatK(p.contractSalary)} a year. We can find a club to take him — it's a salary dump, nothing much comes back but the savings — `
-        + `or tell ownership we're keeping him and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
-    yesLabel: `Move ${p.name}`, noLabel: 'Keep him',
+        + `The obvious contract is ${_who(p)}, at ${formatK(p.contractSalary)} a year. We can find a club to take the contract — it's a salary dump, nothing much comes back but the savings — `
+        + `or tell ownership we're keeping ${p.name} and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
+    yesLabel: `Move ${p.name}`, noLabel: `Keep ${p.name}`,
     autoResolve: 'no', expiresAtMs: order.dueAt,
     _raw: { onYes: 'fin_dump_yes', onNo: 'fin_dump_no', onAuto: 'fin_dump_no' },
   }), atMs);
@@ -2151,7 +2151,7 @@ function _applyFinanceAction(action, instance, atMs) {
       cardId: 'owner_no_taker', tag: 'OWNERSHIP', sender: st.userTeam.ownerName || 'Ownership', avatar: '📞', type: 'normal',
       subject: `No club can take ${p.name}'s contract`,
       preview: `We called around — nobody has ${formatK(p.contractSalary || 0)} of room right now.`,
-      body: `We called every club about ${p.name} (${formatK(p.contractSalary || 0)} a year). Nobody's owner has the payroll room to take him on right now. `
+      body: `We called every club about ${p.name} (${formatK(p.contractSalary || 0)} a year). Nobody's owner has the payroll room for that contract right now. `
           + `The order stands; the payroll will have to come down another way.`,
       yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
     }, atMs);
@@ -2229,13 +2229,13 @@ export function deliverResignCard(playerId, atMs, expiresAtMs) {
     _rosterKey: `os:resign:${playerId}:${state.seasonNum}`, _osGate: 'contracts', _targetPlayerId: playerId,
     subject: `${p.name}'s contract is up`,
     preview: `Asking ${formatK(terms.salary)} a year for ${_years(terms.years)}.`,
-    body: `${_who(p)}, ${age} next season, is a free agent unless we re-sign him. He's asking ${formatK(terms.salary)} a year for ${_years(terms.years)}`
-        + ` (he made ${formatK(p.contractSalary || 0)}). That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))} — payroll is ${formatK(payroll)} against ownership's ${formatK(target)} target. `
-        + `If we let him walk he goes to the free-agent market, where any club can sign him. No answer by the time spring training opens means he walks.`,
-    yesLabel: `Re-sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Let him walk',
+    body: `${_who(p)}, ${age} next season, becomes a free agent unless we re-sign. The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)}`
+        + ` (up from ${formatK(p.contractSalary || 0)}). That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))} — payroll is ${formatK(payroll)} against ownership's ${formatK(target)} target. `
+        + `If we let ${p.name} walk, every club gets a shot on the free-agent market. No answer by the time spring training opens means the same thing.`,
+    yesLabel: `Re-sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: `Let ${p.name} walk`,
     expiresAtMs,
     _raw: { onYes: 'os_resign', onNo: 'os_walk', onAuto: 'os_walk_auto' },
-    _autoLabel: 'No answer — he walked',
+    _autoLabel: `No answer — ${p.name} walked`,
   });
   return _deliverAt(card, atMs);
 }
@@ -2249,10 +2249,10 @@ export function deliverManagerContractCard(atMs, expiresAtMs) {
     cardId: 'os_manager', tag: 'MANAGER_CONTRACT', sender: m.name || 'The manager', avatar: '📋', type: 'urgent',
     _rosterKey: `os:manager:${state.seasonNum}`, _osGate: 'manager',
     subject: `${m.name || 'The manager'} — contract decision`,
-    preview: 'His contract is up. Extend him, or open a search?',
+    preview: 'The manager\'s contract is up. Extend, or open a search?',
     body: `${m.name || 'The manager'}'s contract is up after a ${last.wins ?? '—'}–${last.losses ?? '—'} season. `
         + `A ${_years(MANAGER_EXTENSION_YEARS_UI)} extension keeps the clubhouse steady (salary up 5%). Opening a search brings in a new voice — and some uncertainty. `
-        + `With no decision by the time spring training opens, he stays on a one-year deal and knows he wasn't our first choice.`,
+        + `With no decision by the time spring training opens, ${m.name || 'the manager'} stays on a one-year deal — knowing we didn't choose to extend.`,
     yesLabel: `Extend ${_years(MANAGER_EXTENSION_YEARS_UI)}`, noLabel: 'Open a search',
     expiresAtMs,
     _raw: { onYes: 'os_mgr_extend', onNo: 'os_mgr_replace', onAuto: 'os_mgr_auto' },
@@ -2284,10 +2284,10 @@ export function deliverFreeAgentCards(atMs, springAt) {
       subject: `Free agent: ${p.name}`,
       preview: `${p.nativePos || p.pos}, OVR ${p.ovr}, ${age} — ${t.reason}.`,
       body: `${_who(p)}, ${age} next season${from ? `, formerly with ${from}` : ''}, is on the market — ${t.reason}. `
-          + `He's asking ${formatK(terms.salary)} a year for ${_years(terms.years)}. `
+          + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)}. `
           + (room ? `Our 28 is full, so ${room.name} (OVR ${room.ovr}) would go to the farm to make room. ` : '')
-          + `Other clubs are looking too — if he signs elsewhere this offer disappears.`,
-      yesLabel: `Sign him (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Pass',
+          + `Other clubs are looking too — if ${p.name} signs elsewhere this offer disappears.`,
+      yesLabel: `Sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Pass',
       expiresAtMs: Math.min(atMs + FA_CARD_TTL_DAYS * 86_400_000, springAt),
       _raw: { onYes: 'os_fa_sign', onNo: 'os_fa_pass', onAuto: 'os_fa_pass' },
       _autoLabel: 'No answer — passed',
@@ -2321,7 +2321,7 @@ export function deliverRetirementNotice(playerId, age, atMs) {
     sender: _managerName(state), avatar: '🎩', type: 'normal',
     subject: `${p.name} is retiring`,
     preview: `${_who(p)} has decided to hang them up at ${age}.`,
-    body: `${_who(p)} told us he's retiring at ${age}, after ${p.careerStats?.seasons || 1} season${(p.careerStats?.seasons || 1) === 1 ? '' : 's'}. His spot on the roster is open.`,
+    body: `${_who(p)} told us it's time to retire, at ${age}, after ${p.careerStats?.seasons || 1} season${(p.careerStats?.seasons || 1) === 1 ? '' : 's'}. The roster spot is open.`,
   }, atMs);
 }
 
@@ -2413,8 +2413,8 @@ function _deliverIndieReport(playerId, atMs) {
     subject: `Scouting report: ${p.name}`,
     preview: `${_who(p)}, ${age} — ${p._indieLeague || 'independent ball'}.`,
     body: `Our scout saw ${_who(p)}, ${age}, in the ${p._indieLeague || 'independent leagues'}. `
-        + `He'd sign for a ${formatK(terms.bonus)} bonus and report to our farm system.`,
-    yesLabel: `Sign him (${formatK(terms.bonus)})`, noLabel: 'Pass',
+        + `A ${formatK(terms.bonus)} bonus gets the deal done, with a spot in our farm system.`,
+    yesLabel: `Sign (${formatK(terms.bonus)})`, noLabel: 'Pass',
     expiresAtMs: atMs + 3 * 86_400_000,
     _raw: { onYes: 'indie_sign', onNo: 'indie_pass', onAuto: 'indie_pass' },
     _autoLabel: 'No answer — passed',
@@ -2438,7 +2438,7 @@ function _deliverDevelopmentReport(ev, atMs) {
     sender: coach, avatar: '🏋️', tag: 'TRAINING', type: r >= plan * 0.8 ? 'good' : 'normal',
     subject: `${p.name} — development update`,
     preview: `${verdict}. Now OVR ${p.ovr}.`,
-    body: `${verdict} with ${_who(p)}. The work is done for now — he's at OVR ${p.ovr}.`,
+    body: `${verdict} with ${_who(p)}. The work is done for now — OVR ${p.ovr}.`,
   }, atMs);
 }
 

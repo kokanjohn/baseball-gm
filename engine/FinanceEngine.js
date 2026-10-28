@@ -47,7 +47,7 @@ import {
   FIN_PAYDAYS, FIN_PAYDAY_HOUR, FIN_PLAYOFF_GATE_MULT, FIN_START_FUNDS_SHARE,
   FIN_CAPACITY_BASE, FIN_CAPACITY_PER_M, FIN_ATTENDANCE,
   OWNER_PROFILE, OWNER_PATIENCE, OWNER_STAGE, OWNER_TRUST_FX, OWNER_ORDER_TARGET_PENALTY,
-  FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER, FIN_CPU,
+  FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER, FIN_CPU, FIN_MIN_MOVE_K,
 } from '../data/constants.js';
 import { dayOf } from './PitchingEngine.js';
 
@@ -143,12 +143,16 @@ export function initClubBooks(draft, teamId) {
   t._ownerWinTarget ??= Math.round(REGULAR_SEASON_GAME_COUNT * clamp(t.str ?? 0.5, 0.4, 0.6));
   const payroll = payrollOf(draft, teamId);
   // The owner budgets a little over the opening payroll for the season's
-  // call-ups and injuries; the market is calibrated on what the club really
-  // spends (no front-office card budget), so it breaks even at its pace.
+  // call-ups and injuries — and never below what the league's market asks of
+  // a club (a weak roster is not a reason for a budget that can't fix it).
+  // The market is calibrated on what the club will really carry (no front-
+  // office card budget), so it breaks even at its pace.
+  const floor = cpuTargetFloor(draft);
+  const target = Math.max(1000, floor, Math.round(payroll * (1 + FIN_CPU.targetHeadroom) / 50) * 50);
   t.finances = { ...(t.finances || {}), staffK: Math.round(payroll * FIN_CPU.staffShare) };
   initFinances(t, {
-    payrollTarget:   Math.max(1000, Math.round(payroll * (1 + FIN_CPU.targetHeadroom) / 50) * 50),
-    calibrateOn:     payroll * (1 + FIN_CPU.inSeasonLift),
+    payrollTarget:   target,
+    calibrateOn:     Math.max(payroll * (1 + FIN_CPU.inSeasonLift), floor),
     cardsAllowance:  0,
     atmosphere:      t.atmosphere,
     startFundsShare: startFundsShareFor(t.ownerArchetype),
@@ -156,6 +160,14 @@ export function initClubBooks(draft, teamId) {
   });
   t.finances.payroll = payroll;
   return t.finances;
+}
+
+/** §78.5 the least a CPU owner budgets: a share of the league's median payroll. */
+export function cpuTargetFloor(state) {
+  const pays = (state.leagueTeams || []).map(t => payrollOf(state, t.id)).filter(x => x > 0).sort((a, b) => a - b);
+  if (!pays.length) return 0;
+  const median = pays[Math.floor(pays.length / 2)];
+  return Math.round(median * FIN_CPU.targetFloorShare / 50) * 50;
 }
 
 /** Opening-funds share for an archetype (the Gambler's is a roll). */
@@ -465,7 +477,9 @@ export function tolerance(state, teamId = 'user') {
 export function canAddSalary(state, addK, outK = 0, teamId = 'user') {
   const fin = _club(state, teamId)?.finances;
   if (!fin) return true;                       // a club without books (old save, mid-migration)
-  return addK - outK <= Math.max(0, payrollRoom(state, teamId));
+  // However tight the books, a minimum-salary move to fill a hole is always
+  // allowed — every club can claim or sign depth at the league minimum.
+  return addK - outK <= Math.max(FIN_MIN_MOVE_K, payrollRoom(state, teamId));
 }
 
 /** Annual salary the club could still add with the owner's blessing ($K). */
@@ -595,7 +609,7 @@ export function cpuNextTarget(draft, teamId) {
   const t = _club(draft, teamId);
   if (!t?.finances || teamId === 'user') return null;
   const { books } = booksOfferAdjustment(draft, teamId);
-  const target = Math.max(1000, Math.round(t.finances.payrollTarget * (1 + books) / 50) * 50);
+  const target = Math.max(1000, cpuTargetFloor(draft), Math.round(t.finances.payrollTarget * (1 + books) / 50) * 50);
   t.finances.payrollTarget = target;
   return target;
 }

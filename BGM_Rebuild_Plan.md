@@ -6992,3 +6992,23 @@ Cash moves between club funds, usually covering part of the traded player's **re
   - Card text already in the inbox keeps its old wording.
 - **Screens:** the four places that shortened names themselves (box score, League leaders and search, the hot/cold strip) now show the stored name. That also fixes "De Paula" showing as "Paula".
 - **Harness:** every player's name is a pool last name (initial only where shared), no two active players share a name, and the staff are known by last name. Checked at the new league and again in season 2.
+
+### 82.2 Gender-neutral writing (r78)
+- **Every he/him/his reworded, about 105 lines.** Card pool (29 lines), first-moment cards (17), CardEngine-built cards (about 40: injuries, IL returns, call-ups, claims, owner orders, re-signs, free agents, retirements, the manager's contract, All-Star cards), token phrases (12) and small notices.
+- **How:** sentences were rebuilt around the name or the role ("Tejada is unavailable until we know more", "The coach has been tracking…", "The ask is $X a year"). Singular "they" was never needed.
+- **Other gendered wording:**
+  - "the guys" became "the players", "the room" or "the hitters".
+  - "a man short" became "a player short"; "setup man" became "setup arm" (role label "Setup").
+  - Parental leave for a new baby ("just became a parent").
+  - The nurse's first pitch no longer assumes a gender.
+- **Harness:**
+  - `checkNeutralText` scans every string the game can send (all pools, moment cards and token phrases: about 6,500 strings) and every card actually delivered in the season. Each must be free of he/him/his/himself/she/her/guys/fella/man/men and family terms.
+  - Writing rule for every future card: write it so a reader pictures any player at all. Name the player or the role; reach for "they" only when nothing else reads naturally.
+
+### 82.3 Fixes found by the sweep (r78)
+- **A minimum-salary move is always allowed** (`FIN_MIN_MOVE_K` = 150, about a 50–54 player). Every club can fill a hole with depth however tight its books, like the league minimum in MLB. It's applied in `canAddSalary`, so every club and every path gets it.
+- **CPU owners budget for the market, not just the roster.** `cpuTargetFloor` is 70% of the league's median payroll (`FIN_CPU.targetFloorShare`), at league creation and at every season end. The club's market is calibrated to carry it.
+  - Before this, the league's weakest roster got the smallest target, couldn't afford a single claim, and sank (28–104 in one seed).
+  - Worst CPU club across 8 seeds is now 35–55 wins.
+- **Harness:** an unanswered All-Star lobbying card is withdrawn when the rosters are named, and the vote speaks. That is now accepted (it was failing whenever the test GM skipped the card).
+- **Open (for later):** in season, a CPU club can only spend through waiver claims. A weak club with money still can't buy help mid-season. CPU-to-CPU trades or in-season CPU free-agent signings would close that gap.
