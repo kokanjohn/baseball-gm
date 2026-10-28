@@ -6925,3 +6925,16 @@ Cash moves between club funds, usually covering part of the traded player's **re
 - **Runs vs RBI, structurally.** Every play now carries `runs` (what scored; the score, linescore and decisions count these via `SimEngine.playRuns`) separately from `rbi` (the batter's official credit). No RBI is given on a ground-into-double-play or on a run that scores on an error. Earned runs come from `runs`, except a run on an error, which is unearned. Plays saved before r73 fall back to `rbi`.
 - **Play-by-play calls the RBI.** Home runs are named by size (solo, two-run, three-run, grand slam). Any other play that drives in runs ends ", RBI" or ", 2 RBI". A run that scores without an RBI reads ", a run scores".
 - **The feed holds its scroll.** The CPU viewer redrew every 5 seconds whether or not anything happened, which reset its scroll. It now redraws only when the game moves (a new play, the final) and keeps the sheet's position. A dashboard redraw for another reason (a roster move elsewhere) keeps the same game's tab and play-by-play scroll. Only a new game starts fresh on Play by Play.
+
+## 80. The game day's inbox (r74, Session 8 — GM feedback)
+**Found:**
+1. Cards were only ever selected at a game's final (`checkAndDeliver` after `commitGame`), so a new team's first game day got nothing after the setup cards.
+2. The phase's pools filled three shared slots in a fixed order. The general decisions pool always filled all three, so the pre-game, in-game, between-games and personal-leave pools almost never delivered.
+3. Spring training excluded the pre-game and in-game pools, so its written spring game-day cards (media backlog, the visiting team's bus, a TV crew in the tunnel, the vendor walkout) could never arrive.
+
+**Built:**
+- **`GameEngine.planCardsForNextGame()`** plans each game day once (`state.cardPlanKey` = season|game index|date). It runs at the final of the game before, at team creation (the first game day), and on every tick (a no-op once planned, which also catches up saves from before r74).
+- **Moments:** every pool belongs to a moment (`POOL_MOMENT`): between (decisions, between-games), pregame, ingame and leave. Each moment draws from its own pools, with counts set by `CARD_DAY`: 1–2 between, a pre-game card 55% of days, an in-game card 40%, personal leave 5% (regular season). A CPU trade offer is still at most one per game day, and the inbox cap of 12 still holds.
+- **Timing against that game** (`_scheduleCards(…, game)`): pre-game cards arrive 45–150 minutes before first pitch and lapse at first pitch. In-game cards arrive 20–120 minutes after first pitch and lapse when the game is over (3.5 hours). A moment that has already passed when the day is planned is dropped, never delivered out of place. Between-games cards arrive up to first pitch, or, if the game is already underway, up to the next game's first pitch.
+- **Spring** now has its pre-game and in-game pools.
+- **Harness:** moment counts per season (about 200 between, 73 pre-game, 28 in-game, a few leave), in-game cards arrive while the game is on, the first game day is planned at creation, and spring game-day cards arrive.

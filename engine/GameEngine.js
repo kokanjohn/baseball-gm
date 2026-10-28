@@ -538,6 +538,9 @@ export async function startNewGame(config) {
     CardEngine.deliverSeedCards(NEW_TEAM_SEED_CARDS, ctx);
     // One real, engine-generated trade proposal (actual players from both rosters).
     CardEngine.deliverSeedTradeOffer(ctx);
+    // §80: the first game day's inbox is planned now — there is no game
+    // before it whose final would plan it.
+    planCardsForNextGame();
   } catch (err) {
     console.warn('[GameEngine.startNewGame] Card seeding failed:', err.message);
   }
@@ -574,6 +577,8 @@ export function tick() {
   // of a game not yet played — so the game below starts with the roster it
   // really has.
   advanceClock(Date.now());
+  // §80: a game day nobody planned yet (a save from before r74) gets its inbox.
+  planCardsForNextGame();
 
   const state = StateManager.get();
   const game  = getNextGame();
@@ -1081,7 +1086,7 @@ export async function commitGame(gameIndex) {
   // processFollowupQueue fires any queued follow-up cards whose atGame was reached.
   // checkAndDeliver selects and delivers new cards based on current context.
   CardEngine.processFollowupQueue();
-  CardEngine.checkAndDeliver(buildCardContext());
+  planCardsForNextGame();
 
   // ── Handle postponed game ─────────────────────────────────
   if (game.status === GAME_STATUS.POSTPONED) {
@@ -1174,6 +1179,25 @@ export function resumeSuspendedGame(gameIndex, makeupTimestamp) {
  *
  * @returns {Object|null} game object
  */
+/**
+ * planCardsForNextGame()
+ * §80: plans the inbox for the next game day exactly once — its pre-game,
+ * in-game and between-games cards (CardEngine.checkAndDeliver). Called at the
+ * final of the game before, at team creation, and on every tick (a no-op once
+ * that game is planned), so no game day — the very first included — goes by
+ * with an empty inbox.
+ */
+export function planCardsForNextGame() {
+  const state = StateManager.get();
+  if (!state?.schedule?.length || state.offseason) return;
+  const g = getNextGame();
+  if (!g || g._committed) return;
+  const key = `${state.seasonNum ?? 1}|${g.index ?? ''}|${g.date ?? ''}`;
+  if (state.cardPlanKey === key) return;
+  StateManager.mutate(s => { s.cardPlanKey = key; });
+  CardEngine.checkAndDeliver(buildCardContext());
+}
+
 export function getNextGame() {
   const state = StateManager.get();
   if (!state.schedule || state.schedule.length === 0) return null;

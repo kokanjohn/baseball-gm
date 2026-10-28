@@ -1384,6 +1384,19 @@ export const OFFSEASON_CARD_HOUR     = 9;    // ownership / contract / manager c
 export const OFFSEASON_FA_CARD_HOUR  = 12;   // free-agent cards arrive (days 2 and 4)
 export const FA_CARD_TTL_DAYS        = 3;    // §23.2 soft gate: auto-decline after 3 days
 export const FA_CARDS_PER_ROUND      = 3;
+
+// §80 The game day's inbox: how many cards each moment of a game day brings.
+// Planned once per game (at the final of the one before, at team creation, or
+// on the first tick that finds the next game unplanned).
+export const CARD_DAY = Object.freeze({
+  betweenMin:         1,      // cards between games (decisions, the front office)
+  betweenExtraChance: 0.5,    //   + a second one this often
+  pregameChance:      0.55,   // a card in the hours before first pitch
+  ingameChance:       0.40,   // a card while the game is being played
+  leaveChance:        0.05,   // a player's personal leave (regular season)
+  ingameLastMs:       150 * 60_000,   // no in-game card after the 7th-inning stretch or so
+  ingameExpireMs:     210 * 60_000,   // in-game cards lapse when the game is over
+});
 export const FA_UPGRADE_MIN          = 3;    // OVR over the man he'd replace
 
 // CPU re-sign odds by OVR relative to the league level (§69), then age.

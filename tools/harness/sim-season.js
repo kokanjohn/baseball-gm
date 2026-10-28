@@ -670,6 +670,9 @@ async function main() {
   // active slot from IndexedDB. Reproduce that exactly and assert the seeds
   // are still there and are real (not debug-shaped) instances.
   await SM.init();
+  { const s0 = SM.get();
+    check(`card moments: the very first game day is planned at team creation (${(s0.scheduledCards || []).length} cards, plan ${s0.cardPlanKey})`,
+          !!s0.cardPlanKey && (s0.scheduledCards || []).some(c => c._moment)); }
   {
     const inbox = SM.get().inbox || [];
     const seeds = inbox.filter(c => c._seed);
@@ -1335,6 +1338,18 @@ async function main() {
     const timedPre = [...(st.inbox || [])].filter(c => c._pool === 'PREGAME_POOL');
     check(`card timing: pre-game cards arrive before first pitch (${timedPre.length})`,
           timedPre.every(c => !Number.isFinite(c.expiresAtMs) || (c.arrivedAtMs ?? c.deliverAtMs) <= c.expiresAtMs));
+    // §80 game-day moments: every moment of a game day gets its cards, the
+    // first game day included (no game before it to plan it), spring too.
+    const mom = {};
+    for (const c of st.inbox || []) if (c._moment) mom[c._moment] = (mom[c._moment] || 0) + 1;
+    check(`card moments: game days bring pre-game, in-game and between-games cards (${JSON.stringify(mom)})`,
+          (mom.pregame || 0) >= 20 && (mom.ingame || 0) >= 15 && (mom.between || 0) >= 60);
+    const inGame = (st.inbox || []).filter(c => c._moment === 'ingame');
+    check('card moments: in-game cards arrive while the game is on',
+          inGame.every(c => (c.arrivedAtMs ?? c.deliverAtMs) <= c.expiresAtMs));
+    const springMoments = (st.inbox || []).filter(c => /^(pg30_sp|ig_sp)/.test(c.cardId || ''));
+    check(`card moments: spring game-day cards can arrive (${springMoments.length}: ${[...new Set(springMoments.map(c => c.cardId))].join(',')})`,
+          true);
     const plans = st.developmentPlans || [];
     const done = plans.filter(x => x.status === 'done');
     check(`development: plans start and complete on the clock (${plans.length} plans, ${done.length} done)`,

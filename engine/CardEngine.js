@@ -43,6 +43,7 @@ import {
   INJURY_MORNING_EXAM_HOUR,
   FA_CARD_TTL_DAYS,
   FA_CARDS_PER_ROUND,
+  CARD_DAY,
 } from '../data/constants.js';
 
 import {
@@ -86,7 +87,9 @@ const ALL_POOLS = {
 
 // Per-phase active pools
 const PHASE_POOLS = Object.freeze({
-  [PHASE.SPRING_TRAINING]:       ['DECISIONS_POOL', 'BETWEEN_GAMES_POOL'],
+  // §80: spring game days have their own pre-game and in-game moments
+  // (media at the first spring game, a visiting bus, a TV crew in the tunnel).
+  [PHASE.SPRING_TRAINING]:       ['DECISIONS_POOL', 'BETWEEN_GAMES_POOL', 'PREGAME_POOL', 'INGAME_POOL'],
   // §74 (D2): life happens — bereavement, paternity, family emergencies.
   [PHASE.REGULAR_SEASON]:        ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL', 'BETWEEN_GAMES_POOL', 'PERSONAL_LEAVE_POOL'],
   [PHASE.ALL_STAR_BREAK]:        ['DECISIONS_POOL', 'BETWEEN_GAMES_POOL'],
@@ -101,9 +104,16 @@ const PHASE_POOLS = Object.freeze({
   [PHASE.OFFSEASON]:             ['DECISIONS_POOL'],
 });
 
-// Max cards delivered per game check (prevents inbox flooding)
-const MAX_CARDS_PER_CHECK = 3;
 const MAX_INBOX_SIZE       = 12;
+
+// §80 Game-day moments: each pool belongs to a moment of the day, and every
+// moment draws from its own pools (they used to share three slots in a fixed
+// order, so the general pool always filled them and the game-day pools never
+// got a turn).
+const POOL_MOMENT = Object.freeze({
+  DECISIONS_POOL: 'between', BETWEEN_GAMES_POOL: 'between',
+  PREGAME_POOL: 'pregame', INGAME_POOL: 'ingame', PERSONAL_LEAVE_POOL: 'leave',
+});
 
 // ─────────────────────────────────────────────────────────────
 // MAIN DELIVERY LOOP
@@ -141,43 +151,48 @@ export function checkAndDeliver(context) {
   ];
   if (currentInbox.length >= MAX_INBOX_SIZE) return;
 
-  // 3b. Real CPU trade proposals (TradeEngine). At most one per check; it
-  // occupies one of this check's delivery slots. Replaces the retired v1 pool
-  // trade cards (t1–t9), whose actions were never wired to real trades.
+  // 3b. Real CPU trade proposals (TradeEngine): at most one per game day.
   const tradeDelivered = _maybeDeliverCPUTradeOffer(state, context) ? 1 : 0;
+  let room = MAX_INBOX_SIZE - currentInbox.length - tradeDelivered;
+  if (room <= 0) return;
 
-  const slotsAvailable = Math.min(
-    MAX_CARDS_PER_CHECK,
-    MAX_INBOX_SIZE - currentInbox.length
-  ) - tradeDelivered;
-  if (slotsAvailable <= 0) return;
-
-  // 4. Select eligible cards from active pools
-  const phase     = state.phase;
-  const poolNames = PHASE_POOLS[phase] || ['DECISIONS_POOL'];
+  // 4. The game day's moments (§80): how many cards each one gets today.
+  const poolNames = PHASE_POOLS[state.phase] || ['DECISIONS_POOL'];
+  const byMoment  = {};
+  for (const name of poolNames) (byMoment[POOL_MOMENT[name] || 'between'] ||= []).push(name);
+  const want = {
+    pregame: Math.random() < CARD_DAY.pregameChance ? 1 : 0,
+    ingame:  Math.random() < CARD_DAY.ingameChance  ? 1 : 0,
+    between: CARD_DAY.betweenMin + (Math.random() < CARD_DAY.betweenExtraChance ? 1 : 0),
+    leave:   Math.random() < CARD_DAY.leaveChance   ? 1 : 0,
+  };
   const delivered = [];
-
-  for (const poolName of poolNames) {
-    if (delivered.length >= slotsAvailable) break;
-
-    const pool      = ALL_POOLS[poolName] || [];
-    const eligible  = _filterEligible(pool, context, state);
-    const selected  = _selectCards(eligible, context, state, slotsAvailable - delivered.length);
-
-    for (const cardDef of selected) {
-      const instance = _createInstance(cardDef, context, state);
-      if (instance) {
-        delivered.push({ ...instance, _pool: poolName });
+  const taken = new Set();
+  for (const moment of ['pregame', 'ingame', 'between', 'leave']) {
+    const pools = byMoment[moment];
+    let n = Math.min(want[moment], room - delivered.length);
+    if (!pools || n <= 0) continue;
+    const eligible = [];
+    for (const poolName of pools) {
+      for (const card of _filterEligible(ALL_POOLS[poolName] || [], context, state)) {
+        if (!taken.has(card.id)) eligible.push({ ...card, _fromPool: poolName });
       }
+    }
+    for (const cardDef of _selectCards(eligible, context, state, n)) {
+      taken.add(cardDef.id);
+      const { _fromPool, ...def } = cardDef;
+      const instance = _createInstance(def, context, state);
+      if (instance) delivered.push({ ...instance, _pool: _fromPool, _moment: moment });
     }
   }
 
   if (delivered.length === 0) return;
 
-  // 5. Schedule for real-world delivery between now and the next game (§61).
+  // 5. Schedule for real-world delivery (§61): pre-game cards before first
+  // pitch, in-game cards while the game is played, the rest between games.
   // releaseDueCards() moves each into the inbox when its time comes; the same
   // schedule is synced to the push worker so it arrives with the app closed.
-  _scheduleCards(delivered, state);
+  _scheduleCards(delivered, state, context.nextGame || null);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -795,7 +810,8 @@ export function expireDueRosterCards(atMs) {
   const state = StateManager.get();
   const due = [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])]
     // Roster cards, and pre-game cards (§74 — their question is moot at first pitch).
-    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL') && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
+    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL')
+                 && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   for (const c of due) expire(c.instanceId, c.expiresAtMs);
   return due.length;
@@ -923,19 +939,25 @@ function _nextGameTime(state, nowMs) {
  * Gives each card its own random delivery time (waking hours, before the next
  * first pitch) and parks it in state.scheduledCards.
  */
-function _scheduleCards(instances, state) {
+function _scheduleCards(instances, state, game = null) {
   if (!instances?.length) return;
   const nowMs = Date.now();
-  // §74 (D3): pre-game cards arrive in the hours before first pitch; in-game
-  // cards while the game is being played. Everything else between games.
-  const next = _nextGameTime(state, nowMs);
+  // §74/§80: pre-game cards arrive in the hours before THIS game's first
+  // pitch, in-game cards while it is being played; a moment that has already
+  // passed (planned late, e.g. the app was closed) is dropped, not delivered
+  // out of place. Everything else arrives between games.
+  const T = Number.isFinite(game?.gameTime) ? game.gameTime : _nextGameTime(state, nowMs);
   const lead = 10 * 60_000;
   const timed = [], loose = [];
   for (const c of instances) {
-    if (Number.isFinite(next) && c._pool === 'PREGAME_POOL') {
-      timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, next - (45 + Math.random() * 105) * 60_000), expiresAtMs: next });
-    } else if (Number.isFinite(next) && c._pool === 'INGAME_POOL') {
-      timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, next + (20 + Math.random() * 100) * 60_000) });
+    if (c._moment === 'pregame' || (!c._moment && c._pool === 'PREGAME_POOL')) {
+      if (!Number.isFinite(T) || T - nowMs < lead + 15 * 60_000) continue;
+      timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, T - (45 + Math.random() * 105) * 60_000), expiresAtMs: T });
+    } else if (c._moment === 'ingame' || (!c._moment && c._pool === 'INGAME_POOL')) {
+      if (!Number.isFinite(T)) continue;
+      const at = Math.max(nowMs + lead, T + (20 + Math.random() * 100) * 60_000);
+      if (at > T + CARD_DAY.ingameLastMs) continue;          // the game is over by then
+      timed.push({ ...c, deliverAtMs: at, expiresAtMs: T + CARD_DAY.ingameExpireMs });
     } else loose.push(c);
   }
   if (timed.length) {
@@ -947,7 +969,7 @@ function _scheduleCards(instances, state) {
   if (!instances.length) return;
   const times = planDeliveryTimes(instances.length, {
     nowMs,
-    windowEndMs: _nextGameTime(state, nowMs),
+    windowEndMs: Number.isFinite(T) && T - nowMs >= 45 * 60_000 ? T : _nextGameTime(state, nowMs),
     quietStart:  state.push?.quietStart,
     quietEnd:    state.push?.quietEnd,
   });
