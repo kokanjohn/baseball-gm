@@ -199,6 +199,16 @@ function _sideCounts(draft, teamId) {
   return c;
 }
 
+/**
+ * hasRoomFor(draft, teamId, player) — an open active spot on the player's
+ * side (§76: a spot belongs to its side — 14 hitters, 14 pitchers of the 28).
+ */
+export function hasRoomFor(draft, teamId, player) {
+  if (activeCount(draft, teamId) >= ROSTER_LIMITS.ACTIVE_TOTAL) return false;
+  const c = _sideCounts(draft, teamId);
+  return isPitcher(player) ? c.pitcher < PITCHER_TARGET : c.hitter < HITTER_TARGET;
+}
+
 /** What a club most needs: an open lineup spot, a starter, or roster balance. */
 export function teamNeed(draft, teamId) {
   const t = _team(draft, teamId);
@@ -317,7 +327,7 @@ export function signFreeAgent(draft, playerId, teamId, atMs, { displaceId = null
   const t = _team(draft, teamId);
   if (!p || !t || p.group !== PLAYER_GROUP.FREE_AGENT) return null;
   const events = [];
-  if (displaceId && activeCount(draft, teamId) >= ROSTER_LIMITS.ACTIVE_TOTAL) {
+  if (displaceId && !hasRoomFor(draft, teamId, p)) {   // no spot on his side (§76)
     const d = draft.players[displaceId];
     if (d && (t.rosterIds || []).includes(displaceId)) {
       const sideMax = isPitcher(d) ? ROSTER_LIMITS.FARM_PITCHER_MAX : ROSTER_LIMITS.FARM_HITTER_MAX;
@@ -347,7 +357,7 @@ export function signFreeAgent(draft, playerId, teamId, atMs, { displaceId = null
 /** The weakest same-side non-starter a club would move to make room for `player`. */
 export function displacementFor(draft, teamId, player) {
   const t = _team(draft, teamId);
-  if (!t || activeCount(draft, teamId) < ROSTER_LIMITS.ACTIVE_TOTAL) return null;
+  if (!t || hasRoomFor(draft, teamId, player)) return null;
   const starters = new Set([...(t.lineupSlots || []).map(s => s.playerId), ...(t.rotation?.order || [])]);
   return (t.rosterIds || []).map(id => draft.players[id])
     .filter(p => p && isPitcher(p) === isPitcher(player) && !starters.has(p.id) && p.group !== PLAYER_GROUP.IL)

@@ -176,17 +176,39 @@ export function getRosterNeeds(state, teamId = 'user') {
 }
 
 /**
- * rosterIsFull(state, teamId)
+ * rosterIsFull(state, teamId, side?)
  * No room for one more active player: 28 in season (active + arriving), the
  * 38-man camp limit in spring. Adding anyone then needs a corresponding move.
+ *
+ * With `side` ('hitter' | 'pitcher' — the player being added, §76): a spot
+ * belongs to its side. A spot a pitcher left (the IL, a trade) is a pitcher's
+ * spot: a hitter fits only while the hitters are under their 14 (19 in camp,
+ * with the invitees), a pitcher while the pitchers are under theirs. Without
+ * this, every pitcher's empty spot filled with a bat and staffs hollowed out.
+ * `excluding`: a player about to make room (not counted).
  */
-export function rosterIsFull(state, teamId = 'user') {
-  if (CAP_PHASES.has(state.phase)) return getRosterNeeds(state, teamId).short <= 0;
-  if (state.phase !== PHASE.SPRING_TRAINING) return false;
+export function rosterIsFull(state, teamId = 'user', side = null, { excluding = null } = {}) {
+  const spring = state.phase === PHASE.SPRING_TRAINING;
+  if (!CAP_PHASES.has(state.phase) && !spring) return false;
   const team = teamId === 'user' ? state.userTeam : (state.leagueTeams || []).find(t => t.id === teamId);
-  const active = (team?.rosterIds || []).filter(id => state.players[id]?.group !== PLAYER_GROUP.IL).length;
-  return active + pendingArrivals(state, teamId).length >= ROSTER_LIMITS.SPRING_TOTAL;
+  const players = state.players || {};
+  const count = { hitter: 0, pitcher: 0 };
+  for (const id of team?.rosterIds || []) {
+    const p = players[id];
+    if (p && p.group !== PLAYER_GROUP.IL && id !== excluding) count[isPitcher(p) ? 'pitcher' : 'hitter']++;
+  }
+  for (const t of pendingArrivals(state, teamId)) count[isPitcher(players[t.playerId]) ? 'pitcher' : 'hitter']++;
+  const cap = spring ? ROSTER_LIMITS.SPRING_TOTAL : ROSTER_LIMITS.ACTIVE_TOTAL;
+  if (count.hitter + count.pitcher >= cap) return true;
+  if (!side) return false;
+  const target = side === 'pitcher'
+    ? PITCHER_TARGET + (spring ? ROSTER_LIMITS.SPRING_INVITEE_PITCHERS : 0)
+    : HITTER_TARGET  + (spring ? ROSTER_LIMITS.SPRING_INVITEE_HITTERS  : 0);
+  return count[side] >= target;
 }
+
+/** The side a player takes a roster spot on. */
+export const sideOf = (p) => (isPitcher(p) ? 'pitcher' : 'hitter');
 
 /**
  * rankCallupCandidates(state, teamId, need)
@@ -246,10 +268,17 @@ export function callUp(draft, playerId, teamId, atMs, by = 'gm') {
   if (!team || !player) return { ok: false, error: 'Player not found.' };
   if (!(team.farmIds || []).includes(playerId)) return { ok: false, error: `${player.name} is not in the farm system.` };
   if (player.isInjured) return { ok: false, error: `${player.name} is injured.` };
-  if (rosterIsFull(draft, teamId)) {
-    return { ok: false, error: draft.phase === PHASE.SPRING_TRAINING
-      ? 'Spring camp is full (38). Open a spot first.'
-      : 'The active roster is full (28). Open a spot first.' };
+  if (rosterIsFull(draft, teamId, sideOf(player))) {
+    const spring = draft.phase === PHASE.SPRING_TRAINING;
+    if (rosterIsFull(draft, teamId)) {
+      return { ok: false, error: spring ? 'Spring camp is full (38). Open a spot first.'
+                                        : 'The active roster is full (28). Open a spot first.' };
+    }
+    const kind = sideOf(player) === 'pitcher' ? 'pitchers' : 'position players';
+    const n = sideOf(player) === 'pitcher'
+      ? PITCHER_TARGET + (spring ? ROSTER_LIMITS.SPRING_INVITEE_PITCHERS : 0)
+      : HITTER_TARGET  + (spring ? ROSTER_LIMITS.SPRING_INVITEE_HITTERS  : 0);
+    return { ok: false, error: `We already carry our ${n} ${kind}. Open one of their spots first.` };
   }
   const { tx, patch } = makeArrival({ player, teamId, fromTeamId: teamId, reason: 'callup', atMs, by });
   team.farmIds = team.farmIds.filter(id => id !== playerId);
@@ -460,11 +489,12 @@ function _resolveWaiver(draft, player, atMs, events, touched) {
   player._userClaim = false;
   if (claimant) {
     draft.waiverPool = (draft.waiverPool || []).filter(id => id !== player.id);
-    // Our claim won (§73): with the 28 full, the weakest same-side reserve is
-    // optioned so the claimed player has a spot when he reports.
-    if (claimant === 'user' && rosterIsFull(draft, 'user')) {
-      const out = _weakestReserve(draft, player);
-      if (out) { applyRosterMutation(draft, sendToFarm(draft, out.id, 'user')); events.push({ type: 'OPTIONED', playerId: out.id, teamId: 'user', atMs }); }
+    // The claim won (§73, any club): with no spot on his side (§76), the
+    // weakest same-side reserve — the man he's an upgrade on — is optioned so
+    // the claimed player has a spot when he reports.
+    if (rosterIsFull(draft, claimant, sideOf(player))) {
+      const out = _weakestReserve(draft, player, claimant);
+      if (out) { applyRosterMutation(draft, sendToFarm(draft, out.id, claimant)); events.push({ type: 'OPTIONED', playerId: out.id, teamId: claimant, atMs }); }
     }
     const { tx, patch } = makeArrival({ player, teamId: claimant, fromTeamId: player._waivedBy || null,
                                         reason: 'waiver', atMs, by: claimant === 'user' ? 'gm' : 'cpu' });
@@ -481,8 +511,9 @@ function _resolveWaiver(draft, player, atMs, events, touched) {
 }
 
 /** The weakest healthy same-side player not in the lineup / rotation. */
-function _weakestReserve(draft, incoming) {
-  const u = draft.userTeam;
+function _weakestReserve(draft, incoming, teamId = 'user') {
+  const u = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(t => t.id === teamId);
+  if (!u) return null;
   const isP = (p) => ['SP', 'RP'].includes(p?.pos);
   const busy = new Set([...(u.lineupSlots || []).map(s => s.playerId), ...(u.rotation?.order || [])]);
   return (u.rosterIds || []).map(id => draft.players[id])

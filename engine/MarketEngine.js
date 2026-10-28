@@ -18,9 +18,9 @@
 
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../data/constants.js';
 import { createPlayer, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
-import { marketTerms, applyContract, activeCount, displacementFor } from './OffseasonEngine.js';
+import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor } from './OffseasonEngine.js';
 import { defaultActiveGroup, eligibleSlotsFor } from './RosterEngine.js';
-import { rosterIsFull } from './TransactionEngine.js';
+import { rosterIsFull, sideOf } from './TransactionEngine.js';
 import { PLAYER_NAME_POOL } from '../data/player-names.js';
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
@@ -119,10 +119,11 @@ export function signToClub(draft, playerId, teamId, atMs, { toFarm = false, disp
     events.push(..._farmCap(draft, t, isPitcher(p), atMs, playerId));
     return events;
   }
-  // A full roster (28, or the 38-man spring camp) makes room first.
+  // No room on his side (the 28 or the 38-man camp full, or his side's share
+  // of it — §76) — make room first, from his side.
   const full = draft.phase === PHASE.OFFSEASON || draft.phase === PHASE.SEASON_SUMMARY
-    ? activeCount(draft, teamId) >= ROSTER_LIMITS.ACTIVE_TOTAL
-    : rosterIsFull(draft, teamId);
+    ? !hasRoomFor(draft, teamId, p)
+    : rosterIsFull(draft, teamId, sideOf(p));
   if (full) {
     const out = (displaceId && draft.players[displaceId]) || displacementFor(draft, teamId, p);
     if (out) events.push(..._option(draft, t, out, atMs));

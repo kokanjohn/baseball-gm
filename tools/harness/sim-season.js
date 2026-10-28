@@ -23,6 +23,7 @@ import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation } from '../../engine/SimEngine.js';
 import * as Offseason from '../../engine/OffseasonEngine.js';
 import * as AllStar from '../../engine/AllStarEngine.js';
+import * as Pitching from '../../engine/PitchingEngine.js';
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
@@ -61,7 +62,7 @@ const summarize = () => {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -420,7 +421,8 @@ async function runAllStarChecks() {
     const clubs = [st.userTeam, ...st.leagueTeams].filter(t => (t.divisionId || 'A') === q.divisionId).map(t => t === st.userTeam ? 'user' : t.id);
     const rep = new Set([...q.starters, ...q.reserves, ...q.sp, ...q.rp].map(x => x.teamId));
     if (!clubs.every(c => rep.has(c))) bad.push(`${q.id} missing club`);
-    if ([...q.sp].some(x => st.players[x.id]?.pos !== 'SP') || [...q.rp].some(x => st.players[x.id]?.pos !== 'RP')) bad.push(`${q.id} staff`);
+    // Picked for his role at the time (a reliever moved to the rotation since is still a relief All-Star).
+    if ([...q.sp].some(x => x.pos !== 'SP') || [...q.rp].some(x => x.pos !== 'RP')) bad.push(`${q.id} staff`);
   }
   check('all-star: two 24-man squads — nine starters at their positions, a staff, every club represented, no one twice',
         Object.keys(sq).length === 2 && bad.length === 0 && new Set(ids).size === ids.length, bad.join('; '));
@@ -803,6 +805,13 @@ async function main() {
 
     await commitGame(idx);
     releaseDueCards();   // the App's next tick
+    // §76: every outing on every arm (the record keeps a few days; the harness keeps them all).
+    for (const p of Object.values(SM.get().players)) {
+      for (const o of p.arm || []) {
+        const seen = gm.arms.get(p.id) || gm.arms.set(p.id, new Map()).get(p.id);
+        seen.set(o.at, o);
+      }
+    }
     // Every follow-up the season sets in motion (some are later withdrawn when they can't happen any more).
     for (const c of [...(SM.get().inbox || []), ...(SM.get().scheduledCards || [])]) {
       if ((c._rosterKey || '').startsWith('followup:')) gm.chainSeen.set(c.instanceId, c.cardId);
@@ -1155,6 +1164,60 @@ async function main() {
     check(`stats: two starts per game, quality starts counted (${gsSum} GS / ${startGames} games, ${qsSum} QS)`,
           gsSum === 2 * startGames && qsSum > 0 && qsSum < gsSum && rotNoStart.length === 0,
           `starters with no start recorded: ${rotNoStart.length}`);
+    // §76: the manager's pitching. Relievers rest (never a third day in a row),
+    // starters get four days, relief work is spread over the pen (the best arms
+    // pitch the most), closers collect the saves, starters go about 5–6.
+    {
+      // Rest is counted in calendar days, by the day each game was played.
+      const dd = (a, b) => (b.day ?? 0) - (a.day ?? 0);
+      let reliefOut = 0, thirdDay = 0, starts = 0, shortRest = 0, startOuts = 0;
+      const reliefOutsBy = new Map(), reliefGBy = new Map();
+      for (const [pid, m] of gm.arms) {
+        const outs = [...m.values()].sort((a, b) => a.at - b.at);
+        outs.forEach((o, i) => {
+          if (o.start) {
+            starts++; startOuts += o.outs || 0;
+            const prev = outs.slice(0, i).reverse().find(x => x.start);
+            if (prev && dd(prev, o) < 5) shortRest++;   // four days' rest = the fifth day
+          } else {
+            reliefOut++;
+            reliefOutsBy.set(pid, (reliefOutsBy.get(pid) || 0) + (o.outs || 0));
+            reliefGBy.set(pid, (reliefGBy.get(pid) || 0) + 1);
+            const a = outs[i - 1], b = outs[i - 2];
+            if (a && b && dd(a, o) === 1 && dd(b, a) === 1) {
+              thirdDay++;
+              if (process.env.ARM_DUMP) {
+                const pl = st.players[pid];
+                const before = Pitching.armStatus({ ...pl, arm: outs.slice(0, i) }, o.at - 3 * 3600_000);
+                console.log('3RD', pl?.teamId, pl?.name, pl?.group, [b, a, o].map(x => `d${x.day}:${x.bf}${x.start ? 'S' : ''}`).join(' '), 'engine-said', before.status, before.lastDays);
+              }
+            }
+          }
+        });
+      }
+      check(`pitching: relievers never pitch a third day in a row (${thirdDay}/${reliefOut} outings)`, thirdDay <= reliefOut * 0.005, `${thirdDay}`);
+      check(`pitching: starters start on four days' rest (${shortRest}/${starts} short)`, shortRest <= starts * 0.02, `${shortRest}`);
+      // Relief work (spring, season and postseason), from the outings themselves.
+      const rel = allP.filter(p => p.teamId && [PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group) && reliefGBy.get(p.id));
+      const relG  = rel.map(p => reliefGBy.get(p.id)).sort((a, b) => a - b);
+      const med = (xs) => xs[Math.floor(xs.length / 2)] || 0;
+      const most = [...reliefOutsBy.entries()].sort((a, b) => b[1] - a[1])[0] || [null, 0];
+      const mp = st.players[most[0]];
+      check(`pitching: relief work spread over the pen (median ${med(relG)} G; most relief IP ${(most[1] / 3).toFixed(0)}: ${mp?.name} ${mp?.pos} ${reliefGBy.get(most[0])} G)`,
+            med(relG) >= 25 && most[1] / 3 <= 110);
+      const sv = allP.map(p => p.stats?.sv || 0).sort((a, b) => b - a);
+      const svTot = sv.reduce((a, b) => a + b, 0), top = sv.slice(0, st.leagueTeams.length + 1).reduce((a, b) => a + b, 0);
+      check(`pitching: closers collect the saves (top ${st.leagueTeams.length + 1}: ${top}/${svTot})`, svTot > 0 && top >= svTot * 0.5);
+      const ipgs = startOuts / 3 / Math.max(1, starts);
+      check(`pitching: starters go about 5–6 innings (${ipgs.toFixed(2)} IP/GS)`, ipgs >= 4.8 && ipgs <= 6.6);
+      // A roster spot belongs to its side: every club still carries its staff.
+      const lop = [st.userTeam, ...st.leagueTeams].map(t => {
+        const act = (t.rosterIds || []).map(id => st.players[id]).filter(p => p && p.group !== PLAYER_GROUP.IL);
+        const pit = act.filter(p => p.pos === 'SP' || p.pos === 'RP').length;
+        return { abbr: t.abbr || 'USR', h: act.length - pit, p: pit };
+      }).filter(c => Math.abs(c.p - 14) > 2 || Math.abs(c.h - 14) > 2);
+      check('rosters: every club carries about 14 hitters and 14 pitchers', lop.length === 0, lop.map(c => `${c.abbr} ${c.h}H/${c.p}P`).join(' '));
+    }
     const regPlayed = (id) => {
       const cpu = games.filter(g => !g.isSpring && g.played && (g.homeId === id || g.awayId === id)).length;
       const vsUser = st.schedule.filter(g => !g.isSpring && g._committed && g.opponentId === id).length;
@@ -1234,6 +1297,35 @@ async function main() {
       // §69 league balance: the contender lands in a plausible band around its
       // 88-win target and no CPU club is historically awful or dominant.
       const cpuW = st.leagueTeams.map(t => t.wins || 0);
+      if (process.env.BAL_DUMP) {
+        const worst = [...st.leagueTeams].sort((a, b) => (a.wins || 0) - (b.wins || 0))[0];
+        const P = (id) => st.players[id];
+        const act = worst.rosterIds.map(P).filter(Boolean);
+        const grp = {}; for (const p of act) grp[p.group + (p.pos === 'SP' || p.pos === 'RP' ? 'P' : 'H')] = (grp[p.group + (p.pos === 'SP' || p.pos === 'RP' ? 'P' : 'H')] || 0) + 1;
+        const avg = (xs) => (xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)).toFixed(1);
+        const lgAvg = (f) => avg(st.leagueTeams.map(t => +avg(f(t))));
+        const lineup = (t) => (t.lineupSlots || []).map(sl => P(sl.playerId)?.ovr || 0);
+        const rot = (t) => (t.rotation?.order || []).map(id => P(id)?.ovr || 0);
+        console.log('WORST', worst.abbr, `${worst.wins}-${worst.losses}`, JSON.stringify(grp),
+          'lineup', avg(lineup(worst)), 'lg', lgAvg(lineup), 'rot', avg(rot(worst)), 'lg', lgAvg(rot),
+          'farm', (worst.farmIds || []).length, 'emptySlots', (worst.lineupSlots || []).filter(sl => !sl.playerId).length,
+          'tx', (st.transactions || []).filter(t => t.teamId === worst.id || t.fromTeamId === worst.id).map(t => t.reason).join(','));
+        let rs = 0, ra = 0, g = 0;
+        for (const gm2 of Object.values(st.leagueSchedule.dayMap).flat()) {
+          if (!gm2.played || gm2.isSpring || gm2.isPlayoff || gm2.isAllStar) continue;
+          if (gm2.homeId === worst.id) { rs += gm2.homeScore; ra += gm2.awayScore; g++; }
+          if (gm2.awayId === worst.id) { rs += gm2.awayScore; ra += gm2.homeScore; g++; }
+        }
+        const lines = act.filter(p => p.pos === 'SP' || p.pos === 'RP').map(p => `${p.name.split(' ').pop()}(${p.pos}/${p.group} ${p.ovr} st${p.subRatings?.stamina}) ${(p.stats?.ip || 0).toFixed(0)}ip ${p.stats?.ip ? ((p.stats.er * 9) / p.stats.ip).toFixed(2) : '-'} gs${p.stats?.gs || 0}`);
+        console.log('WORST-RUNS', `RS ${(rs / g).toFixed(2)} RA ${(ra / g).toFixed(2)} in ${g} CPU games`);
+        console.log('WORST-STAFF', lines.join(' | '));
+        const inLu = new Set((worst.lineupSlots || []).map(sl => sl.playerId));
+        const hit = Object.values(st.players).filter(p => p.pos !== 'SP' && p.pos !== 'RP' && (p.teamId === worst.id) && (p.stats?.ab || 0) + (p.springStats?.ab || 0) >= 0)
+          .map(p => { const s2 = p.stats || {}; const pa = (s2.ab || 0) + (s2.bb || 0) + (s2.hbp || 0);
+                      const ops = pa ? ((s2.h || 0) + (s2.bb || 0) + (s2.hbp || 0)) / pa + (s2.ab ? (s2.tb || 0) / s2.ab : 0) : 0;
+                      return `${p.name.split(' ').pop()}(${p.pos}/${p.group}${inLu.has(p.id) ? '*' : ''} ${p.ovr} c${p.subRatings?.contact} p${p.subRatings?.power}) ${pa}pa ${ops.toFixed(3)}${p.condition ? ' COND' + JSON.stringify(p.condition) : ''}${p.injuryPenalty ? ' INJPEN' : ''}`; });
+        console.log('WORST-BATS', hit.join(' | '));
+      }
       check('balance: contender wins plausible around the 88-win target (60–112)',
             st.userTeam.wins >= 60 && st.userTeam.wins <= 112, `${st.userTeam.wins}-${st.userTeam.losses}`);
       check('balance: CPU clubs inside a realistic band (≥ 35 and ≤ 100 wins of 132)',

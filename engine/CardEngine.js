@@ -55,7 +55,7 @@ import {
 } from './RosterEngine.js';
 import { evaluateTrade, queueTrade, recordDeclinedOffer, generateCPUTradeOffer } from './TradeEngine.js';
 import {
-  getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull,
+  getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull, sideOf,
 } from './TransactionEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
@@ -362,7 +362,9 @@ export function expire(instanceId, atMs = Date.now()) {
   // §74: an unanswered card that resolves to "no" does what "no" does (e.g.
   // a player on personal leave still goes, for the minimum).
   const onNo = instance._raw?.onNo;
-  if (autoPath === 'no' && CARD_ACTIONS[onNo]) _applyCardAction(onNo, { ...instance, choice: 'no' }, atMs);
+  if (autoPath === 'no' && onNo && (CARD_ACTIONS[onNo] || onNo.startsWith('as_'))) {
+    _applyRosterAction(instance, 'no', StateManager.get(), { atMs });   // registry and All-Star actions alike
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -580,7 +582,7 @@ function _deliverILReturnCard(playerId, atMs) {
   const player = state.players[playerId];
   if (!player || !(state.ilReturnQueue || []).includes(playerId)) return null;
   const isSpring = state.phase === PHASE.SPRING_TRAINING;
-  const full     = rosterIsFull(state, 'user');
+  const full     = rosterIsFull(state, 'user', sideOf(player));   // his side's spots (§76)
   const drop     = full ? _dropCandidate(state, playerId) : null;
   const deadline = decisionDeadlineAfter(state, atMs);
   const ref      = `${player.name}${_hand(player)} (${player.pos})`;
@@ -2250,7 +2252,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
       // A full active roster needs a corresponding move (Section 9.7: waivers
       // in season, the farm in spring).
       const isSpring = st.phase === PHASE.SPRING_TRAINING;
-      if (rosterIsFull(st, 'user')) {
+      if (rosterIsFull(st, 'user', sideOf(player))) {
         const planned = st.players[instance._dropId];
         const drop = planned && planned.teamId === 'user' && planned.group !== PLAYER_GROUP.IL
           && (st.userTeam.rosterIds || []).includes(planned.id) ? planned : _dropCandidate(st, playerId);

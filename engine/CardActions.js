@@ -20,7 +20,7 @@
 import { PLAYER_GROUP, PHASE, ROSTER_LIMITS } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
 import { setUnavailable, setCondition, startPlan } from './DevelopmentEngine.js';
-import { callUp, rosterIsFull } from './TransactionEngine.js';
+import { callUp, rosterIsFull, sideOf } from './TransactionEngine.js';
 import { sendToFarm, applyRosterMutation, eligibleSlotsFor, defaultActiveGroup, computePayroll } from './RosterEngine.js';
 import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
@@ -122,7 +122,7 @@ const springFlag = (r) => ({
     const id = role(c, r);
     const p = st.players[id];
     if (st.phase !== PHASE.SPRING_TRAINING || !p || !isAvailable(p)) return false;
-    return (st.userTeam.farmIds || []).includes(id) ? !rosterIsFull(st, 'user') : ours(st, id);
+    return (st.userTeam.farmIds || []).includes(id) ? !rosterIsFull(st, 'user', sideOf(p)) : ours(st, id);
   },
   apply(d, c) {
     const id = role(c, r);
@@ -143,12 +143,14 @@ const callupHitter = {
   feasible: (st, c) => {
     const id = role(c, 'prospect_hitter');
     if (!REGULAR.has(st.phase) || !(st.userTeam.farmIds || []).includes(id) || !isAvailable(st.players[id])) return false;
-    return !rosterIsFull(st, 'user') || ours(st, role(c, 'drop_hitter'));
+    // Room for a bat — now, or once the weakest bench bat goes down.
+    const down = role(c, 'drop_hitter');
+    return !rosterIsFull(st, 'user', 'hitter') || (ours(st, down) && !rosterIsFull(st, 'user', 'hitter', { excluding: down }));
   },
   apply(d, c, atMs) {
     const events = [];
     const down = role(c, 'drop_hitter');
-    if (rosterIsFull(d, 'user') && down) {
+    if (rosterIsFull(d, 'user', 'hitter') && down) {
       applyRosterMutation(d, sendToFarm(d, down, 'user'));
       events.push({ type: 'OPTIONED', playerId: down, teamId: 'user', atMs });
     }
@@ -244,15 +246,16 @@ const isFA = (st, id) => st.players[id]?.group === PLAYER_GROUP.FREE_AGENT;
 const payrollRoom = (st) => (st.userTeam.finances?.payrollCap || 0) - computePayroll(st);
 const opRoom = (st) => (st.userTeam.finances?.operatingBudget || 0) - (st.userTeam.finances?.operatingSpent || 0);
 const salaryOf = (st, id) => st.players[id]?.contractSalary || 0;
-const affords = (st, addK, outId = null) => addK <= payrollRoom(st) + (outId && fullFor(st) ? salaryOf(st, outId) : 0);
-const fullFor = (st) => rosterIsFull(st, 'user');
+// Room on the incoming player's side (§76); a player who goes down to make it frees his salary.
+const affords = (st, addK, outId = null, side = null) => addK <= payrollRoom(st) + (outId && fullFor(st, side) ? salaryOf(st, outId) : 0);
+const fullFor = (st, side = null) => rosterIsFull(st, 'user', side);
 const between = (lo, hi) => lo + Math.random() * (hi - lo);
 
 /** A veteran who wants to start: signs, takes the weak starter's spot; the weakest bench bat goes down. */
 const signStarter = {
   feasible: (st, c) => isFA(st, role(c, 'acq_hitter')) && REGULAR_OR_SPRING.has(st.phase)
-    && (!fullFor(st) || ours(st, role(c, 'drop_hitter')))
-    && affords(st, signingTerms(st, st.players[role(c, 'acq_hitter')]).salary, role(c, 'drop_hitter')),
+    && (!fullFor(st, 'hitter') || (ours(st, role(c, 'drop_hitter')) && !rosterIsFull(st, 'user', 'hitter', { excluding: role(c, 'drop_hitter') })))
+    && affords(st, signingTerms(st, st.players[role(c, 'acq_hitter')]).salary, role(c, 'drop_hitter'), 'hitter'),
   apply(d, c, atMs) {
     const id = role(c, 'acq_hitter');
     const events = signToClub(d, id, 'user', atMs, { displaceId: role(c, 'drop_hitter') });
@@ -317,7 +320,7 @@ const tradeFor = {
 
 /** Spring: a non-roster invitee joins camp to compete for a job. */
 const inviteNRI = {
-  feasible: (st, c) => st.phase === PHASE.SPRING_TRAINING && isFA(st, role(c, 'nri')) && !rosterIsFull(st, 'user'),
+  feasible: (st, c) => st.phase === PHASE.SPRING_TRAINING && isFA(st, role(c, 'nri')) && !rosterIsFull(st, 'user', sideOf(st.players[role(c, 'nri')])),
   apply(d, c, atMs) {
     const id = role(c, 'nri');
     const ev = signToClub(d, id, 'user', atMs, { terms: { salary: 75, years: 1 } });

@@ -31,6 +31,7 @@ import { baseballYear, isAvailable } from '../../engine/PlayerFactory.js';
 import { contractIsUp } from '../../engine/OffseasonEngine.js';
 import { developmentStatus } from '../../engine/DevelopmentEngine.js';
 import { getHotColdIndicator } from '../../engine/IMPEngine.js';
+import { bullpenRoles, armStatus, ROLE_ABBR } from '../../engine/PitchingEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
 import { eligibleSlotsFor, reconcileRoster, applyRosterMutation }
@@ -481,8 +482,13 @@ function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, all
     .sort((a, b) => b.ovr - a.ovr);
   const rotation   = [...inOrder, ...strays];
 
-  const bullpen  = pitchers.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort((a, b) => b.ovr - a.ovr);
-  const pbench   = pitchers.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort((a, b) => b.ovr - a.ovr);
+  // §76: the manager's bullpen roles — listed closer, setup, middle, long.
+  const roles    = bullpenRoles({ rosterIds }, allPlayers);
+  const depth    = [roles.closer, ...roles.setup, ...roles.middle, ...roles.long].filter(Boolean);
+  const byDepth  = (a, b) => (depth.indexOf(a.id) + 1 || 99) - (depth.indexOf(b.id) + 1 || 99) || b.ovr - a.ovr;
+  const bullpen  = pitchers.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort(byDepth);
+  const pbench   = pitchers.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort(byDepth);
+  const reliefRole = (p) => roles.roleOf[p.id] || null;
 
   return `
     <div class="roster-col-labels">
@@ -493,14 +499,23 @@ function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, all
     <div class="roster-sub-head">Rotation (SP) — in start order</div>
     ${rotation.map(p => _renderPitcherRow(p, impScores[p.id], 'rotation', isSpring, allPlayers, rosterIds, p.id === nextSPId)).join('')}
     ${bullpen.length > 0 ? '<div class="roster-sub-head">Bullpen (RP)</div>' : ''}
-    ${bullpen.map(p => _renderPitcherRow(p, impScores[p.id], 'bullpen', isSpring, allPlayers, rosterIds)).join('')}
+    ${bullpen.map(p => _renderPitcherRow(p, impScores[p.id], 'bullpen', isSpring, allPlayers, rosterIds, false, reliefRole(p))).join('')}
     ${pbench.length > 0 ? '<div class="roster-sub-head">Pitcher Bench</div>' : ''}
-    ${pbench.map(p => _renderPitcherRow(p, impScores[p.id], 'pbench', isSpring, allPlayers, rosterIds)).join('')}
+    ${pbench.map(p => _renderPitcherRow(p, impScores[p.id], 'pbench', isSpring, allPlayers, rosterIds, false, reliefRole(p))).join('')}
   `;
 }
 
-function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [], rosterIds = [], isNext = false) {
+function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [], rosterIds = [], isNext = false, reliefRole = null) {
   if (!player) return '';
+  // §76: his bullpen role, and whether his arm is ready today.
+  const roleBadge = reliefRole ? `<span class="rp-role rp-role-${reliefRole}" title="${{ closer: 'Closer', setup: 'Setup man', middle: 'Middle relief', long: 'Long relief' }[reliefRole]}">${ROLE_ABBR[reliefRole]}</span>` : '';
+  const now = Date.now();
+  let armNote = '';
+  if (isAvailable(player) && role !== 'rotation') {     // starters rest in turn (the rotation)
+    const st = armStatus(player, now).status;
+    if (st === 'down')  armNote = ' · <span class="arm-down">resting today</span>';
+    if (st === 'tired') armNote = ' · <span class="arm-tired">tired</span>';
+  }
   const ovrColor  = _ovrColor(player.ovr);
   const indicator = getHotColdIndicator(imp);
   const statusEl  = _playerStatusEl(player);
@@ -536,11 +551,12 @@ function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [],
         <div class="player-name">
           ${_escape(player.name)}
           ${nextBadge}
+          ${roleBadge}
           ${stBadge}
           ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
           ${_dotIndicator(player)}
         </div>
-        <div class="player-sub">${posHand} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_contractNote(player)}</div>
+        <div class="player-sub">${posHand} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_contractNote(player)}${armNote}</div>
       </div>
       <div class="rating-cell">
         <div class="rating-num ${ovrColor}">${formatOVR(player.ovr)}</div>
@@ -1303,12 +1319,13 @@ function _playerStatusEl(player) {
     const label = { rest: 'Rest', illness: 'Sick', training: 'Train', benched: 'Sat', suspended: 'Susp', leave: 'Leave' }[away.reason] || 'Away';
     return `<div class="player-status status-inactive" title="${label} — ${away.gamesLeft} game${away.gamesLeft === 1 ? '' : 's'}">${label} ${away.gamesLeft}</div>`;
   }
-  // Starting: a hitter in his club's lineup (lineupSlots — the source of truth;
-  // every active hitter shares the bench group) or a pitcher in the rotation.
+  // Active: a hitter in his club's lineup (lineupSlots — the source of truth;
+  // every active hitter shares the bench group), a pitcher in the rotation or
+  // the bullpen. The pitcher bench and the bench bats read "Bench".
   const state = StateManager.get();
   const club  = player.teamId === 'user' ? state?.userTeam : (state?.leagueTeams || []).find(t => t.id === player.teamId);
   const inLineup = (club?.lineupSlots || []).some(sl => sl?.playerId === player.id);
-  if (inLineup || player.group === PLAYER_GROUP.STARTING_PITCHERS) {
+  if (inLineup || player.group === PLAYER_GROUP.STARTING_PITCHERS || player.group === PLAYER_GROUP.BULLPEN) {
     return '<div class="player-status status-active">Active</div>';
   }
   return '<div class="player-status status-bench">Bench</div>';
@@ -1394,6 +1411,12 @@ function _injectCSS() {
       border:1px solid var(--accent);border-radius:4px;
       padding:1px 4px;margin-left:5px;vertical-align:middle;}
 
+    .rp-role{font-size:9px;font-weight:800;letter-spacing:.5px;border-radius:4px;padding:1px 4px;
+      margin-left:5px;vertical-align:middle;color:var(--muted);border:1px solid var(--border);}
+    .rp-role-closer{color:#fbbf24;border-color:#fbbf24;}
+    .rp-role-setup{color:#60a5fa;border-color:#60a5fa;}
+    .arm-tired{color:#fbbf24;}
+    .arm-down{color:#f87171;}
     .sp-next-badge{font-size:9px;font-weight:800;letter-spacing:.5px;
       color:#052e1a;background:#34d399;
       border:1px solid #34d399;border-radius:4px;

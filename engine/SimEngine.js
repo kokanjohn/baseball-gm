@@ -70,6 +70,10 @@ import {
 } from '../data/constants.js';
 
 import { computeOVR, isAvailable } from './PlayerFactory.js';
+import {
+  ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, tireAfterBF, reliefInnings,
+} from './PitchingEngine.js';
+import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -178,8 +182,10 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   const _homeOrder = (_userIsHome ? userLineup : oppLineup).slots.map(s => s.id);
 
   // Select starting pitchers from rotation
-  const userSP  = _getRotationSP(userTeam, players);
-  const oppSP   = _getRotationSP(effectiveOppTeam, players) || _findHealthySP(effectiveOppTeam.rosterIds || [], players);
+  // §76: the starter in turn, if he's had his rest (else the next who has).
+  const atMs    = game.gameTime || 0;
+  const userSP  = _getRotationSP(userTeam, players, atMs);
+  const oppSP   = _getRotationSP(effectiveOppTeam, players, atMs) || _findHealthySP(effectiveOppTeam.rosterIds || [], players);
 
   // Field condition modifiers
   // Offense environment = field condition × weather scoring modifier. Both act
@@ -192,7 +198,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     userLineup, oppLineup,
     userSP, oppSP,
     players,
-    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms,
+    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs,
       // §75 All-Star Game: both starters work ALLSTAR_STARTER_INNINGS, every
       // other arm one inning; the reserves come in on the squads' plan.
       exhibition: exhibition ? { starterIds: new Set([userSP?.id, oppSP?.id].filter(Boolean)) } : null }
@@ -266,7 +272,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
 // ─────────────────────────────────────────────────────────────
 
 function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
-  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null } = ctx;
+  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null, atMs = 0 } = ctx;
 
   const plays = [];
 
@@ -291,6 +297,17 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     oppBullpenIdx:  0,
     norms,          // league averages the PA model measures against (§65)
     exhibition,     // §75: All-Star Game workloads / substitutions (null otherwise)
+    // §76 the manager's pitching: the bullpen's roles, who has pitched, and the
+    // current pitcher's role, batters before he tires, innings wanted, runs allowed.
+    atMs,
+    userRoles: userLineup.roles || null, oppRoles: oppLineup.roles || null,
+    userUsed:  new Set([userSP?.id].filter(Boolean)), oppUsed: new Set([oppSP?.id].filter(Boolean)),
+    userRole:  ROLE.STARTER, oppRole: ROLE.STARTER,
+    userTireAt: exhibition ? Infinity : tireAfterBF(userSP && players[userSP.id], true),
+    oppTireAt:  exhibition ? Infinity : tireAfterBF(oppSP && players[oppSP.id], true),
+    userTarget: _pitcherTargetInnings(userSP && players[userSP.id], { exhibition }),
+    oppTarget:  _pitcherTargetInnings(oppSP && players[oppSP.id], { exhibition }),
+    userRuns: 0, oppRuns: 0,
   };
 
   // User team bats in bottom (home) or top (away)
@@ -320,6 +337,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     const topRuns = topPlays.reduce((s, p) => s + (p.rbi || 0), 0);
     if (userBatsBottom) gs.oppScore += topRuns;
     else                gs.userScore += topRuns;
+    gs[userBatsBottom ? 'userRuns' : 'oppRuns'] += topRuns;   // off the home side's pitcher
 
     _accrueInningAndFatigue(gs, players, userBatsBottom ? 'user' : 'opp');
 
@@ -350,6 +368,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     const botRuns = botPlays.reduce((s, p) => s + (p.rbi || 0), 0);
     if (userBatsBottom) gs.userScore += botRuns;
     else                gs.oppScore  += botRuns;
+    gs[userBatsBottom ? 'oppRuns' : 'userRuns'] += botRuns;   // off the away side's pitcher
 
     // Walk-off: home team leads after its half of the 9th or later — game over.
     if (gs.inning >= 9 && homeScore() > awayScore()) break;
@@ -570,8 +589,12 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     const activeBatter = players[slots[slotIdx].id];
     if (!activeBatter) { outs++; continue; }
 
+    // §7.4 / §76: past the batters his stamina carries (or already tired from
+    // recent days), the pitcher is laboring until the manager gets him.
+    const pSide = isUserBatting ? 'opp' : 'user';
+    const pitcherTired = gs[`${pSide}PitchCount`] >= gs[`${pSide}TireAt`];
     const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
-      { inning, isSpring, norms: gs.norms });
+      { inning, isSpring, norms: gs.norms, pitcherTired });
     // Increment the THROWING pitcher's batters-faced count. When the user is
     // batting the opponent is pitching (and vice-versa) — this must match the
     // fatigue check below, which reads the same throwing-pitcher counter.
@@ -711,6 +734,11 @@ export function liveSituation(revealed, nextPlay = null) {
   return { inning, half, outs, bases: { ...EMPTY, ...bases }, final };
 }
 
+// Innings a pitcher counts for in the league norms before he has thrown any.
+const NORM_PITCHER_PRIOR_IP = Object.freeze({
+  [PLAYER_GROUP.STARTING_PITCHERS]: 30, [PLAYER_GROUP.BULLPEN]: 10, [PLAYER_GROUP.PITCHER_BENCH]: 5,
+});
+
 export function leagueNorms(teams, players) {
   const sum = { contact: 0, power: 0, speed: 0, stuff: 0, control: 0 };
   let nh = 0, np = 0;
@@ -724,12 +752,18 @@ export function leagueNorms(teams, players) {
       sum.speed   += _effectiveSR(p, 'speed',   p.subRatings?.speed);
       nh++;
     }
+    // Pitchers: the league average a batter FACES — weighted by the innings
+    // each arm actually throws (§76: the manager's best relievers pitch more
+    // than the last man in the pen). Before a pitcher has innings, his role's
+    // usual share stands in.
     for (const id of t.rosterIds || []) {
       const p = players[id];
-      if (!ok(p) || ![PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN].includes(p.group)) continue;
-      sum.stuff   += _effectiveSR(p, 'stuff',   p.subRatings?.stuff);
-      sum.control += _effectiveSR(p, 'control', p.subRatings?.control);
-      np++;
+      const prior = NORM_PITCHER_PRIOR_IP[p?.group];
+      if (!ok(p) || prior == null) continue;
+      const w = (p.stats?.ip || 0) + prior;
+      sum.stuff   += w * _effectiveSR(p, 'stuff',   p.subRatings?.stuff);
+      sum.control += w * _effectiveSR(p, 'control', p.subRatings?.control);
+      np += w;
     }
   }
   if (!nh || !np) return null;
@@ -791,8 +825,9 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   const batterMod  = _gmRelVariance(batter.gmRelationship);
   const pitcherMod = _gmRelVariance(pitcher.gmRelationship);
 
-  // Pitcher fatigue modifiers (multipliers on the pitcher-driven rates)
-  const fatigueFlag    = pitcher._simFatigued || false;
+  // Pitcher fatigue modifiers (multipliers on the pitcher-driven rates, §7.4):
+  // the simulation says when he's tired (context.pitcherTired, §76).
+  const fatigueFlag    = !!context.pitcherTired;
   const fatigueHitMod  = fatigueFlag ? (1 + SIM_P_FATIGUE_HIT_QUALITY_BONUS) : 1;
   const fatigueKMod    = fatigueFlag ? (1 - SIM_P_FATIGUE_K_PENALTY)        : 1;
   const fatigueWalkMod = fatigueFlag ? (1 + SIM_P_FATIGUE_WALK_BONUS)       : 1;
@@ -1483,47 +1518,80 @@ function _pitcherTargetInnings(pitcher, gs = null) {
   return Math.max(4, Math.round(5 + (stam - 50) / 12));           // ~5–8 IP
 }
 
-// Credit the current pitcher with a completed inning and flag fatigue once they
-// reach their target workload. Called after each half-inning; the change itself
+// Credit the current pitcher with a completed inning; decide whether he's done
+// (§76): his innings are in, he's past the batters his stamina carries (or well
+// past them), or — a starter — he's been hit hard early. The change itself
 // waits until his side next takes the field (_checkPitcherChange).
 function _accrueInningAndFatigue(gs, players, team) {
   const isUser = team === 'user';
-  const pObj   = isUser ? gs.userPitcher : gs.oppPitcher;
-  const p      = pObj ? players[pObj.id] : null;
-  if (isUser) gs.userPitcherInnings++; else gs.oppPitcherInnings++;
-  const innings = isUser ? gs.userPitcherInnings : gs.oppPitcherInnings;
-  if (innings >= _pitcherTargetInnings(p, gs)) {
-    if (isUser) gs.userFatigued = true; else gs.oppFatigued = true;
-  }
+  const side   = isUser ? 'user' : 'opp';
+  gs[`${side}PitcherInnings`]++;
+  const innings = gs[`${side}PitcherInnings`];
+  const bf      = gs[`${side}PitchCount`];
+  const tireAt  = gs[`${side}TireAt`];
+  const runs    = gs[`${side}Runs`];
+  const starter = gs[`${side}Role`] === ROLE.STARTER;
+  const shelled = starter && !gs.exhibition && ((runs >= PITCH_SHELLED_RUNS && gs.inning <= 6)
+                                             || (runs >= PITCH_SHELLED_EARLY_RUNS && gs.inning <= 3));
+  // Why he's done matters: a pitcher whose innings are simply in can be asked
+  // for one more when the pen is taxed; a tired or shelled one can't.
+  gs[`${side}MustGo`] = bf >= tireAt || shelled;
+  if (innings >= gs[`${side}Target`] || gs[`${side}MustGo`]) gs[`${side}Fatigued`] = true;
 }
 
+/**
+ * _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, inning, half)
+ * As his side takes the field: a pitcher who is done is replaced — by the
+ * manager's choice for the situation (PitchingEngine.chooseReliever) — and in
+ * a 9th-inning save a starter still going makes way for a rested closer.
+ * With nobody left to bring in, he stays out there.
+ */
 function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, inning, half) {
-  const isUser   = team === 'user';
-  const fatigued = isUser ? gs.userFatigued : gs.oppFatigued;
-  if (!fatigued) return;
+  const isUser = team === 'user';
+  const side   = isUser ? 'user' : 'opp';
+  const lead   = isUser ? gs.userScore - gs.oppScore : gs.oppScore - gs.userScore;
+  const roles  = gs[`${side}Roles`];
+  let   done   = gs[`${side}Fatigued`];
 
-  // Relievers come from the team's actual bullpen (BULLPEN + PITCHER_BENCH),
-  // supplied by _buildLineup — NOT the batting lineup, which never contains
-  // pitchers (that was the bug: bullpen was always empty, so no one ever subbed).
-  const bullpen = (isUser ? userBullpen : oppBullpen) || [];
-
-  const bpIdx    = isUser ? gs.userBullpenIdx : gs.oppBullpenIdx;
-  const reliever = bullpen[bpIdx % bullpen.length];
-  if (!reliever) return; // no relievers available — leave the starter in
-
-  if (isUser) {
-    gs.userPitcher    = reliever;
-    gs.userFatigued   = false;
-    gs.userBullpenIdx++;
-    gs.userPitchCount = 0; // fresh arm — reset workload so it doesn't instantly re-tire
-    gs.userPitcherInnings = 0;
-  } else {
-    gs.oppPitcher   = reliever;
-    gs.oppFatigued  = false;
-    gs.oppBullpenIdx++;
-    gs.oppPitchCount = 0;
-    gs.oppPitcherInnings = 0;
+  if (!done && !gs.exhibition && roles?.closer && inning >= 9 && lead >= 1 && lead <= 3
+      && gs[`${side}Role`] !== ROLE.CLOSER && !gs[`${side}Used`].has(roles.closer)
+      && armStatus(players[roles.closer], gs.atMs).status !== 'down') {
+    done = true;   // the closer gets the save
   }
+  if (!done) return;
+  const closerCall = !gs[`${side}Fatigued`];   // done only because the closer comes in
+
+  let reliever = null, role = ROLE.MIDDLE, carriedTired = false;
+  if (gs.exhibition) {
+    // §75 All-Star Game: the squad's plan, one inning each.
+    const bullpen = (isUser ? userBullpen : oppBullpen) || [];
+    const idx = gs[`${side}BullpenIdx`];
+    reliever = bullpen[idx % bullpen.length] || null;
+  } else {
+    const pick = chooseReliever({ roles, players, used: gs[`${side}Used`], atMs: gs.atMs, inning, lead });
+    // A taxed pen: the man out there isn't tired and nobody rested is left —
+    // the manager asks him for another inning.
+    if (pick && !pick.wanted && !gs[`${side}MustGo`] && !closerCall) {
+      gs[`${side}Target`] += 1;
+      gs[`${side}Fatigued`] = false;
+      return;
+    }
+    if (pick) { reliever = { id: pick.id }; role = pick.role; carriedTired = pick.carriedTired; }
+  }
+  if (!reliever) return;   // no one left — the current pitcher stays in
+
+  gs[`${side}Pitcher`]        = reliever;
+  gs[`${side}Fatigued`]       = false;
+  gs[`${side}MustGo`]         = false;
+  gs[`${side}BullpenIdx`]++;
+  gs[`${side}PitchCount`]     = 0;      // a fresh count for the new arm
+  gs[`${side}PitcherInnings`] = 0;
+  gs[`${side}Runs`]           = 0;
+  gs[`${side}Role`]           = role;
+  gs[`${side}Used`].add(reliever.id);
+  const rp = players[reliever.id];
+  gs[`${side}TireAt`] = gs.exhibition ? Infinity : tireAfterBF(rp, false, carriedTired);
+  gs[`${side}Target`] = gs.exhibition ? _pitcherTargetInnings(rp, gs) : reliefInnings(role);
 
   // The first play of the half the new pitcher works: nobody out, bases empty.
   const prev = plays[plays.length - 1];
@@ -1535,7 +1603,8 @@ function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, 
     batterId:     null,
     pitcherId:    reliever.id,
     type:         'pitching_change',
-    description:  `Pitching change: ${players[reliever.id]?.name || 'Reliever'} enters`,
+    description:  `Pitching change: ${rp?.name || 'Reliever'} enters`,
+    _role:        role,
     rbi:          0,
     isScoring:    false,
     isBigPlay:    false,
@@ -1807,22 +1876,17 @@ function _buildLineup(team, players, isCPU) {
     )
     .sort((a, b) => b.ovr - a.ovr);
 
-  // Bullpen — healthy rostered relievers (BULLPEN + PITCHER_BENCH), sorted
-  // weakest→best so lower-leverage arms enter first and the best arm (closer)
-  // finishes. Used by _checkPitcherChange when the current pitcher tires.
-  const bullpen = rosterIds
-    .map(id => players[id])
-    .filter(p =>
-      p &&
-      isAvailable(p) &&
-      (p.group === PLAYER_GROUP.BULLPEN || p.group === PLAYER_GROUP.PITCHER_BENCH)
-    )
-    .sort((a, b) => a.ovr - b.ovr);
+  // Bullpen — healthy rostered relievers (BULLPEN + PITCHER_BENCH) in the
+  // manager's roles (§76): closer, setup, middle, long. _checkPitcherChange
+  // picks by the situation and each arm's rest (PitchingEngine).
+  const roles = bullpenRoles(team, players);
+  const bullpen = [roles.closer, ...roles.setup, ...roles.middle, ...roles.long].filter(Boolean);
 
   return {
     slots:   orderedStarters.map(p => ({ id: p.id, subbed: false })),
     bench:   bench.map(p => ({ id: p.id, used: false })),
-    bullpen: bullpen.map(p => ({ id: p.id })),
+    bullpen: bullpen.map(id => ({ id })),
+    roles,
   };
 }
 
@@ -1863,19 +1927,24 @@ function _buildCPULineup(team, players) {
   return _buildLineup(team, players, true);
 }
 
-function _getRotationSP(team, players) {
+function _getRotationSP(team, players, atMs = null) {
   if (team.simStarter && players[team.simStarter] && isAvailable(players[team.simStarter])) return { id: team.simStarter };
   const rotation = team.rotation;
   if (!rotation || !rotation.order || rotation.order.length === 0) {
     // Fallback: find any healthy SP
     return _findHealthySP(team.rosterIds || [], players);
   }
-  const spId = rotation.order[rotation.currentIndex % rotation.order.length];
-  const sp   = players[spId];
-  if (!sp || !isAvailable(sp)) {
-    return _findHealthySP(team.rosterIds || [], players);
+  // The starter in turn — unless he hasn't had his four days (a doubleheader,
+  // a makeup game): then the next man in the rotation who has (§76).
+  const n = rotation.order.length;
+  const ready = (id) => players[id] && isAvailable(players[id]) && (atMs == null || starterRested(players[id], atMs));
+  for (let k = 0; k < n; k++) {
+    const id = rotation.order[(rotation.currentIndex + k) % n];
+    if (ready(id)) return { id };
   }
-  return { id: spId };
+  const spId = rotation.order[rotation.currentIndex % n];
+  if (players[spId] && isAvailable(players[spId])) return { id: spId };
+  return _findHealthySP(team.rosterIds || [], players);
 }
 
 function _getCPUSP(team, players) {

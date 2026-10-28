@@ -388,8 +388,9 @@ function _pickSquad(state, divisionId, { boostId = null } = {}) {
   return {
     starters: starters.filter(s => s.pick).map(s => ({ slot: s.slot, id: s.pick.id, teamId: s.pick.teamId })),
     reserves: reserves.map(x => ({ id: x.id, teamId: x.teamId })),
-    sp: sp.map(x => ({ id: x.id, teamId: x.teamId })),
-    rp: rp.map(x => ({ id: x.id, teamId: x.teamId })),
+    // The role each arm was picked for (a reliever moved to the rotation since is still a relief All-Star).
+    sp: sp.map(x => ({ id: x.id, teamId: x.teamId, pos: 'SP' })),
+    rp: rp.map(x => ({ id: x.id, teamId: x.teamId, pos: 'RP' })),
     votes: Object.fromEntries(pool.map(x => [x.id, Math.round(x.vote * 10) / 10])),
   };
 }

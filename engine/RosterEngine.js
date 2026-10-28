@@ -642,6 +642,19 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     const benchPick = benchPool().find(p => eligibleSlotsFor(p).includes(slot.slot));
     if (benchPick) slot.playerId = benchPick.id;
   }
+  // A CPU manager plays his best nine (§76): a clearly better healthy bat on
+  // the bench — a waiver claim, a call-up, a player back from the IL — takes
+  // the job; the man he replaces goes to the bench. (The user's lineup is the
+  // GM's call.) The margin keeps a near-tie from churning the lineup daily.
+  if (!isUserTeam) {
+    for (const slot of slots) {
+      if (!slot.playerId || slot.emergency) continue;
+      const cur = players[slot.playerId];
+      const better = benchPool().find(p => eligibleSlotsFor(p).includes(slot.slot)
+                                        && (p.ovr || 0) >= (cur?.ovr || 0) + CPU_LINEUP_UPGRADE_MARGIN);
+      if (better) slot.playerId = better.id;
+    }
+  }
   // Nobody eligible: the manager plays someone out of position.
   const openPositions = [];
   for (const slot of slots) {
@@ -777,6 +790,8 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
 
 // Active-roster composition targets (Section 20 — LOCKED): 14 hitters
 // (9 starters + 5 bench) and 14 pitchers (5 SP + 5 RP + 4 bench).
+// A CPU manager benches a starter for a bat at least this much better (OVR).
+const CPU_LINEUP_UPGRADE_MARGIN = 3;
 export const HITTER_TARGET  = ROSTER_LIMITS.STARTING_HITTERS + ROSTER_LIMITS.BENCH_HITTERS;
 export const PITCHER_TARGET = ROSTER_LIMITS.STARTING_PITCHERS + ROSTER_LIMITS.BULLPEN + ROSTER_LIMITS.PITCHER_BENCH;
 
@@ -844,11 +859,20 @@ function _droppable(rosterIds, order, slots, groupOf, isHealthy, players) {
     ...slots.map(s => s.playerId).filter(Boolean),
     ...order,
   ]);
+  // §76: a club over 28 sheds from the side that's over its share (14 hitters,
+  // 14 pitchers) — a bat arriving in a trade costs a bat, not a reliever.
+  const isP = (p) => ['SP', 'RP'].includes(p?.pos);
+  const active = rosterIds.filter(id => groupOf(id) !== PLAYER_GROUP.IL).map(id => players[id]).filter(Boolean);
+  const over = {
+    hitter:  active.filter(p => !isP(p)).length - HITTER_TARGET,
+    pitcher: active.filter(p =>  isP(p)).length - PITCHER_TARGET,
+  };
+  const overSide = (p) => (over[isP(p) ? 'pitcher' : 'hitter'] > 0 ? 1 : 0);
   return rosterIds
     .filter(id => groupOf(id) !== PLAYER_GROUP.IL && isHealthy(id) && !locked.has(id))
     .map(id => players[id])
     .filter(Boolean)
-    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))
+    .sort((a, b) => overSide(b) - overSide(a) || (a.ovr || 0) - (b.ovr || 0))
     .map(p => p.id);
 }
 

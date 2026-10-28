@@ -300,6 +300,27 @@ export const SIM_P_FATIGUE_HIT_QUALITY_BONUS = 0.10; // +10% hit rate when fatig
 export const SIM_P_FATIGUE_K_PENALTY        = 0.15;  // −15% K rate when fatigued
 export const SIM_P_FATIGUE_WALK_BONUS       = 0.10;  // +10% walk rate when fatigued (multiplier)
 
+// ── Pitcher workload, rest and bullpen roles (§76, PitchingEngine) ──
+// In a game: a pitcher tires (§7.4 modifiers apply) once he has faced more
+// batters than his stamina carries; the manager replaces him when his side
+// next takes the field.
+export const PITCH_SP_TIRE_BASE_BF          = 9;     // starter tires after 9 + stamina/5 batters (≈ the 3rd time through: 19–26)
+export const PITCH_SP_TIRE_PER_STAMINA      = 0.2;
+export const PITCH_RP_TIRE_BASE_BF          = 4;     // reliever: 4 + stamina/12 batters (≈ an inning and a half)
+export const PITCH_RP_TIRE_PER_STAMINA      = 1 / 12;
+export const PITCH_HOOK_EXTRA_BF            = 6;     // past tiring by this many, he's done regardless of innings
+export const PITCH_SHELLED_RUNS             = 5;     // a starter who has allowed this many by the 6th is pulled
+export const PITCH_SHELLED_EARLY_RUNS       = 4;     // ... or this many by the 3rd
+export const PITCH_LONG_INNINGS             = Object.freeze({ min: 2, max: 3 });  // a long man's stint
+// Between games (calendar days since an outing; same-day = 0).
+export const PITCH_SP_REST_DAYS             = 4;     // a starter needs 4 days' rest
+export const PITCH_RP_LONG_OUTING_BF        = 10;    // ≈ 2+ innings: not available the next day
+export const PITCH_RP_HEAVY_OUTING_BF       = 18;    // ≈ 4+ innings: not available for two days
+export const PITCH_RP_START_BF              = 25;    // a start's worth: not available for three days
+export const PITCH_RP_MAX_STRAIGHT_DAYS     = 2;     // never a third day in a row
+export const PITCH_RP_TIRED_ONSET_SHARE     = 0.5;   // a reliever still tired from recent days tires twice as fast
+export const PITCH_ARM_HISTORY_DAYS         = 6;     // outings kept on the arm's record
+
 // Extra innings: the regular season plays until a winner. This guard only stops
 // a pathological loop; with a realistic run environment the chance of reaching
 // it is astronomically small. Runs are never added outside the plays.

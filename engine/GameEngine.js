@@ -78,6 +78,7 @@ import * as CardEngine from './CardEngine.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
 import * as AllStar from './AllStarEngine.js';
+import { recordOutings } from './PitchingEngine.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Development from './DevelopmentEngine.js';
 
@@ -895,6 +896,8 @@ export async function commitGame(gameIndex) {
         if (!s.players[playerId]) continue;
         s.players[playerId][statKey] = mutation[statKey];
       }
+      // §76: each pitcher's outing goes on his arm's record (rest for the next games).
+      recordOutings(s, g.plays, _playsEndMs(g));
 
       // IMP game log — append this game's stat delta (not lifetime totals)
       // to each player's rolling log for hot/cold calculation.
@@ -1833,6 +1836,7 @@ function _finishLeagueGame(date, i) {
     if (home) Development.countGame(s, home.id);
     if (away) Development.countGame(s, away.id);
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
+    recordOutings(s, g.plays, endMs);   // §76: the arms' record
     for (const [pid, d] of Object.entries(perGame)) {
       if (s.players[pid]) s.players[pid]._impGameLog = appendGameLog(s.players[pid], s.currentGameIndex || 0, date, d)._impGameLog;
     }

@@ -1847,6 +1847,8 @@ The user selects a region during team creation (Setup Step 2, between archetype 
 
 > Status: LOCKED — no cash in trades (decided Phase 8 pre-build).
 > Trade fairness communicated via a fairness rating signal, not cash exchange.
+>
+> **⚠ Under review (Session 8, before B7 user-initiated trades):** the GM wants to reconsider the no-cash rule — cash may need to be part of trades after all (as in real baseball, where clubs include money to balance salaries or a deal). **Discuss with the GM before implementing B7; do not build B7 on the no-cash assumption.** See §76.
 > Cash considerations create budget complexity without adding meaningful strategy for a mobile GM sim.
 
 ### 9.1 Cash Direction (LOCKED)
@@ -6704,3 +6706,70 @@ After the break: +1 atmosphere at each of the next 20 home games, and one trade 
 - **TradeEngine `_assessDepthImpact`** still keys "improvement" on the `STARTING_HITTERS` group, so an incoming hitter never counts as filling a need. Fix with user-initiated trades (B7).
 
 **Harness:** the game is on the calendar once and mid-break. The host is named in window and his division is home. Host seeds get the payoff, the host card, the three week cards and the lobbying card with the choice recorded; non-host seeds get the longest-waiting club and the reasons. At selection: healthy big-leaguers only and no swingman starters. Two 24-man squads, positions filled, every club represented, no one twice. Our All-Stars are told and marked. The game goes live with plays; score, box and linescore agree; no pitcher past 2 innings; the reserves get in; nothing outside the game moves; result and MVP are recorded. In season 2, last year's game is on the record and the new one is on the calendar. Every pitcher in every box score faced a batter. Two starts per game. 8 seeds green.
+
+
+---
+
+## 76. r70 — The bullpen, pitcher fatigue and rest (Session 8, Batch 4 · E3)
+Closes §64 **E3** (`_simFatigued` was never set, so the §7.4 fatigue modifiers never applied) and r51's open note ("true one-inning-per-arm bullpen usage").
+
+**What was wrong.** Each game's bullpen was the relief pool sorted weakest → best, always entered from the top, with no memory between games. The weakest arm (often a spare starter) pitched the 6th nearly every day, and a club's best relievers barely pitched. In r69, IRF's three best relievers (OVR 64–65) had 0 appearances at the break while a 52 had 68 IP. Nothing tracked rest, and a tired pitcher was never worse.
+
+**PitchingEngine (new, pure) — how a manager runs a staff:**
+- **Roles** (`bullpenRoles`): the relief corps (bullpen + pitcher bench, healthy) as a depth chart:
+  - long men: the spare starters, most stamina first;
+  - the rest by relief value (stuff .45, control .25, OVR .30): a closer, two setup men, then middle relievers.
+  
+  Computed from the roster (no stored state), like the manager would line them up.
+- **The arm's record** (`player.arm = [{ at, day, bf, outs, start }]`, last 6 days): after every final out, user and CPU (`recordOutings`). Rest is counted in **calendar days by the day each game was played**. Elapsed hours rounded (the first version) misdated night-to-day turnarounds.
+- **Rest** (`armStatus`):
+  - **down** (can't go today): pitched today, two days running (never a third), 10+ batters yesterday, 18+ in the last two days, or a start's worth (25+) in the last three. Thresholds scale up with stamina (×0.7 + stamina/150).
+  - **tired**: pitched yesterday, three outings in four days, or a long one two days ago.
+  - **fresh**: otherwise.
+  
+  Starters need **four days' rest** (`starterRested`). The rotation skips a starter who hasn't had them, to the next man who has.
+- **The manager's call** (`chooseReliever`), at the start of the half his side fields:
+  - 9th+, up 1–3 or tied: closer, then setup;
+  - 8th, close: setup;
+  - 7th, close: the second setup man;
+  - a blowout (5+) or an early hook (≤ 5th): a long man;
+  - anything else: middle relief.
+  
+  In the late innings of a close game he takes the first arm who can go (his closer pitches back-to-back, never a third day). Elsewhere a rested arm first, and the low-leverage work is shared (within a role, the arm with the most days off). Only with no one else does an arm who needs rest pitch; then it's the one who has rested longest. Never someone already used.
+- **When a pitcher comes out** (`_accrueInningAndFatigue`): his innings are in (relievers 1, long men 2–3, starters by stamina), he's past the batters his stamina carries, or a starter was hit hard (5 by the 6th, 4 by the 3rd). In a 9th-inning save a starter still going makes way for the closer. **A taxed pen:** a pitcher who's done only because his innings are in, and isn't tired, is asked for another inning when nobody rested is left.
+- **§7.4 fatigue applies** (replaces `_simFatigued`): past `tireAfterBF` (starters 9 + stamina/5 ≈ 19–26 batters, the third time through; relievers 4 + stamina/12), the pitcher allows +10% hits, −15% K and +10% BB until he's replaced. A reliever who comes in still tired from recent days tires twice as fast. The flag is passed to the at-bat (`context.pitcherTired`), never written on the player.
+- **League norms by innings.** The average pitcher a batter faces is weighted by the innings each arm actually throws (before he has any, a role prior: SP 30, RP 10, pitcher bench 5). Counting every arm equally, including the ones who barely pitch, would mis-measure the league once the best arms pitch the most.
+
+**Roster balance (found while testing — the cause of empty pens).** The harness GM's club ran with 19–20 hitters and 8–10 pitchers for weeks. Pens of 3–4 healthy arms meant the third-day outings. "Is there room?" only counted the 28 total, so a pitcher's open spot (IL, trade) filled with a bat and never came back. **A roster spot belongs to its side** (14 hitters, 14 pitchers; 19/19 in camp):
+- `rosterIsFull(state, teamId, side, { excluding })`: a hitter fits only while the hitters are under 14, a pitcher while the pitchers are under 14 (`excluding`: the man about to make room).
+- Applied to call-ups, every card action that adds a player, signings (in season and offseason: `hasRoomFor` / `displacementFor`), IL returns, and **every club's waiver claims**. A CPU claim used to fill whatever spot was open; now, as for the user, the weakest same-side reserve goes down.
+- A club over 28 (a trade) sheds from the side that's over its share (`_droppable`).
+- `callUp` explains the refusal: "We already carry our 14 pitchers. Open one of their spots first."
+
+**CPU managers play their best nine.** A CPU lineup only filled empty slots: a better bat (a waiver claim, a call-up, a player back from the IL) sat on the bench forever. One club went 28–104 with its best bench bats at 0 PA while a 49 played shortstop every day. In the reconcile, a healthy bench bat at least `CPU_LINEUP_UPGRADE_MARGIN` (3) OVR better, eligible at the spot, takes the job. The user's lineup stays the GM's.
+
+**The GM sees:**
+- On the Team screen, each reliever's role (CL / SU / MR / LR, the bullpen listed in the manager's order) and "tired" or "resting today".
+- Bullpen arms read Active; the pitcher bench reads Bench.
+- The pitching-change play carries `_role`.
+
+**Harness (8 seeds green):**
+- Relievers never pitch a third day in a row (0–13 per ~4,400 relief outings, only when a pen has nobody else).
+- Starters start on four days' rest (≤ 2 per ~1,410).
+- Relief work is spread (median 38–50 relief G; the busiest relief arm 70–97 IP, a long man).
+- Closers collect the saves (top 10 hold 55–68%). Starters go 5.1–5.5 IP/GS. Every pitcher in a box faced a batter.
+- Every club carries about 14 hitters and 14 pitchers.
+- Run environment 3.6–4.4 R per team per game.
+- Balance: the contender 70–100 wins (96–113 before the CPU lineup fix), CPU clubs 45–92.
+- Dev dumps: `ARM_DUMP=1` (third-day outings with what the engine decided), `BAL_DUMP=1` (the worst CPU club's roster, runs and staff).
+
+**Pending decision (B7): cash in trades.** §9 is LOCKED "no cash in trades", and r66–r68 built the deadline trade cards on it (a prospect instead of cash). The GM wants to reconsider: in real baseball, clubs send money to balance salaries or a deal. **Discuss with the GM before implementing B7 (user-initiated trades).** Open questions to bring:
+1. Cash in both directions, or only to cover salary?
+2. How the amount is set — the §9.2 formula (rating differential, salary, season phase) was never designed.
+3. Whether cash counts against the operating budget or payroll.
+4. Whether CPU-proposed offers change too.
+5. Whether the deadline cards (b1 / dl3 / dl4) go back to cash or stay prospect-based.
+
+Also fold in with B7: `TradeEngine._assessDepthImpact` still keys "improvement" on the `STARTING_HITTERS` group (§75).
+
+**Observed, not changed:** the harness GM (who says yes to nearly every helpful card) wins 70–100 with the contender. Worth watching once real play data exists.
