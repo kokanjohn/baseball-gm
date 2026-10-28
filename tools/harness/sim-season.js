@@ -737,6 +737,41 @@ async function checkNeutralText(st) {
         badS.slice(0, 4).map(t => t.slice(0, 90)).join(' | '));
 }
 
+/** §78.8 what cards can do to the books — on a copy of the state, and the
+ *  season's own record of unanswered cards that resolved by default. */
+async function checkCardMoney(st) {
+  const Fin = await import('../../engine/FinanceEngine.js');
+  // A ticket promotion: cheaper seats, fuller park, for exactly N home games.
+  {
+    const c = structuredClone(st), fin = c.userTeam.finances;
+    Fin.startPromo(fin, { price: -0.15, fill: 0.10, homeGames: 2 });
+    const g1 = Fin.homeGate(c, 'user', { atMs: clock.get() });
+    const per1 = g1.gateK * 1000 / g1.attendance;
+    Fin.homeGate(c, 'user', { atMs: clock.get() });
+    const g3 = Fin.homeGate(c, 'user', { atMs: clock.get() });
+    const per3 = g3.gateK * 1000 / g3.attendance;
+    check(`card money: a ticket promotion discounts the gate for its home games, then ends ($${per1.toFixed(2)} vs $${per3.toFixed(2)} a fan)`,
+          Math.abs(per1 / fin.market.perFan - 0.85) < 0.02 && Math.abs(per3 / fin.market.perFan - 1) < 0.02 && fin.promo.gamesLeft === 0);
+  }
+  // The owner loosens this season's target: real room now, gone at season's end.
+  {
+    const c = structuredClone(st), fin = c.userTeam.finances;
+    const before = Fin.payrollRoom(c, 'user');
+    Fin.adjustSeasonTarget(fin, 0.05);
+    const after = Fin.payrollRoom(c, 'user');
+    Fin.seasonEndReview(c, clock.get(), 'user');
+    check(`card money: an owner's push opens payroll room for the season (${Math.round(before)}K → ${Math.round(after)}K), then resets`,
+          after - before >= fin.payrollTarget * 0.045 && Fin.seasonTarget(fin) === fin.payrollTarget);
+  }
+  // Unanswered cards do what their default choice does: a deal signed by default pays.
+  {
+    const ledger = st.userTeam.finances.ledger || [];
+    const autoDeals = (st.inbox || []).filter(c => c.choice === 'auto' && c.autoChoice === 'yes' && c._revenueK > 0);
+    const unpaid = autoDeals.filter(c => !ledger.some(e => e.label === c.subject && e.k === c._revenueK));
+    check(`card money: deals that go through by default are paid (${autoDeals.length})`, unpaid.length === 0, unpaid.map(c => c.cardId).join(','));
+  }
+}
+
 async function main() {
   seedRandom(SEED);
   await checkPrecache();
@@ -1542,6 +1577,7 @@ async function main() {
 
   // ── §70: the offseason on the league calendar → season 2 ────────
   if (SM.get().phase === PHASE.SEASON_SUMMARY) {
+    await checkCardMoney(SM.get());
     await runOffseasonChecks();
     await checkNames('season 2');
     await checkNeutralText(SM.get());

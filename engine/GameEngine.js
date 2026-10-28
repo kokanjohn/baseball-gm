@@ -1697,9 +1697,9 @@ export function buildCardContext() {
 
     // Finances
     payroll:            userTeam.finances.payroll,
-    payrollTarget:      userTeam.finances.payrollTarget,
+    payrollTarget:      Finance.seasonTarget(userTeam.finances),
     funds:              userTeam.finances.funds,                        // §78 Club Funds
-    payrollHeadroom:    (userTeam.finances.payrollTarget || 0) - (userTeam.finances.payroll || 0),
+    payrollHeadroom:    Finance.seasonTarget(userTeam.finances) - (userTeam.finances.payroll || 0),
     ownerStage:         userTeam.finances.owner?.stage || 'content',
 
     // Record

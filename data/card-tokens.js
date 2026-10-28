@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────
 
 export const CARD_TOKEN_MONEY = Object.freeze({
-  rev_amount:       { min: 100, max: 400 },  // sponsorships, naming rights, media access
+  rev_amount:       { min:  60, max: 200 },  // sponsorships, naming rights, media access (contender-sized market; scaled per club, §78.8)
   camp_cost:        { min:  20, max:  45 },
   camp_revenue:     { min:  35, max:  90 },
   pipe_repair_cost: { min:  15, max:  40 },

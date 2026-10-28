@@ -238,14 +238,7 @@ export function resolve(instanceId, choice) {
     if (instance._raw?._hosting && s.allStar) AllStar.accrueCard(s, instance._raw._hosting, choice);
 
     // Apply budget cost / revenue — the exact amounts the card text showed.
-    const costK = choice === 'yes' ? _resolveBudgetCost(instance._budgetCost)
-                : choice === 'no'  ? _resolveBudgetCost(instance._budgetCostNo)
-                : 0;
-    // §78: out of / into Club Funds, with the decision as the reason.
-    if (costK) Finance.post(s.userTeam.finances, -costK, 'cards', instance.subject || 'Front-office decision', Date.now());
-    if (choice === 'yes' && instance._revenueK) {
-      Finance.post(s.userTeam.finances, instance._revenueK, 'cards', instance.subject || 'Deal', Date.now());
-    }
+    _applyChoiceMoney(s, instance, choice);
 
     // Apply player relationship effects
     if (instance._playerRelationshipEffect) {
@@ -364,15 +357,21 @@ export function expire(instanceId, atMs = Date.now()) {
     return;
   }
 
-  // Apply auto-resolve tax
+  // §78.8 an unanswered card does what its default choice does — the effects
+  // and the money of that choice (a deal signed by default pays; an expense
+  // absorbed by default is charged) — plus the tax for leaving it.
   const tax = instance.autoResolveTax || {};
+  const def = autoPath === 'yes' ? 'yes' : 'no';
   StateManager.mutate(s => {
     const card = s.inbox.find(c => c.instanceId === instanceId);
     if (card) {
       card.resolved  = true;
       card.choice    = 'auto';
+      card.autoChoice = def;
       card.resolvedAt = s.currentGameIndex || 0;
     }
+    _applySoftEffects(s, def === 'yes' ? instance.yesEffect : instance.noEffect, def, instance);
+    _applyChoiceMoney(s, instance, def);
     _applySoftEffects(s, tax, 'auto', instance);
   });
   // §74: an unanswered card that resolves to "no" does what "no" does (e.g.
@@ -380,6 +379,17 @@ export function expire(instanceId, atMs = Date.now()) {
   const onNo = instance._raw?.onNo;
   if (autoPath === 'no' && onNo && (CARD_ACTIONS[onNo] || onNo.startsWith('as_'))) {
     _applyRosterAction(instance, 'no', StateManager.get(), { atMs });   // registry and All-Star actions alike
+  }
+}
+
+/** A decision's money — the exact amounts the card showed — into / out of Club Funds (§78). */
+function _applyChoiceMoney(s, instance, choice) {
+  const costK = choice === 'yes' ? _resolveBudgetCost(instance._budgetCost)
+              : choice === 'no'  ? _resolveBudgetCost(instance._budgetCostNo)
+              : 0;
+  if (costK) Finance.post(s.userTeam.finances, -costK, 'cards', instance.subject || 'Front-office decision', Date.now());
+  if (choice === 'yes' && instance._revenueK) {
+    Finance.post(s.userTeam.finances, instance._revenueK, 'cards', instance.subject || 'Deal', Date.now());
   }
 }
 
@@ -1810,6 +1820,16 @@ function _applySoftEffects(state, effects, choice, instance) {
   if (fundsK && state.userTeam.finances) {
     Finance.post(state.userTeam.finances, fundsK, 'cards', instance?.subject || 'Front-office decision', Date.now());
   }
+  // §78.8 decisions that move the economy itself, not just a payment:
+  //   target — the owner loosens / tightens this season's payroll target (share)
+  //   gate   — a ticket promotion { price, fill, homeGames }
+  //   local  — sponsor / rights income won or lost from here on (share)
+  const fin = state.userTeam.finances;
+  if (fin) {
+    if (effects.target) Finance.adjustSeasonTarget(fin, effects.target);
+    if (effects.gate)   Finance.startPromo(fin, effects.gate);
+    if (effects.local)  Finance.adjustLocalIncome(fin, effects.local);
+  }
 
   // OVR effect (§71) — on the player the card is about (else one of ours):
   // a gain is a development plan that lands over time; a loss is a temporary
@@ -2222,7 +2242,7 @@ export function deliverResignCard(playerId, atMs, expiresAtMs) {
   const terms = p._ask || Offseason.marketTerms(state, p);
   const age = computeAge(p.dob, baseballYear(state) + 1);
   const payroll = state.userTeam.finances?.payroll || 0;
-  const target = state.userTeam.finances?.payrollTarget || 0;
+  const target = Finance.seasonTarget(state.userTeam.finances);
   const delta = terms.salary - (p.contractSalary || 0);
   const card = _rosterCard(state, {
     cardId: 'os_resign', tag: 'CONTRACT', sender: `${p.name}'s agent`, avatar: '✍️', type: 'normal',

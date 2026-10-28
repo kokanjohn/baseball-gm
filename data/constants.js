@@ -405,7 +405,10 @@ export const CARD_COST_XS      = { min:  10, max:   25 };  // broken pipe, minor
 export const CARD_COST_SM      = { min:  25, max:   75 };  // specialist, consultant
 export const CARD_COST_CAPPED  = { min:  50, max:  150 };  // community event, field work
 export const CARD_COST_LG      = { min: 150, max:  400 };  // stadium renovation section
-export const CARD_COST_EXT     = { min: 200, max:  500 };  // contract extension fee
+export const CARD_COST_EXT     = { min: 200, max:  500 };
+// §78.8 card amounts above are for a contender-sized market (this payroll
+// target, $K); each club's are scaled to its own (×0.5–1.6).
+export const CARD_MONEY_BASE_TARGET_K = 22000;  // contract extension fee
 
 // Trade cash — no cash in trades (Option C — locked)
 // Trade fairness communicated via fairness rating, not cash exchange

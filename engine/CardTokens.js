@@ -22,6 +22,7 @@ import {
   CARD_COST_CAPPED,
   CARD_COST_LG,
   CARD_COST_EXT,
+  CARD_MONEY_BASE_TARGET_K,
   REGULAR_SEASON_GAME_COUNT,
   SPRING_TRAINING_GAME_COUNT,
   PHASE,
@@ -55,8 +56,11 @@ export function buildTokenMap(cardDef, context, state) {
   const amountsK = {};
 
   // ── Money (drawn once; text and effect share the number) ──────────────
+  // §78.8 the money on a card is sized to the club's market: a deal or a bill
+  // at an Empire club is bigger than the same one at an Ember club.
+  const scale = Math.max(0.5, Math.min(1.6, (userTeam.finances?.payrollTarget || CARD_MONEY_BASE_TARGET_K) / CARD_MONEY_BASE_TARGET_K));
   const money = (key, range) => {
-    const k = _randInt(range.min, range.max);
+    const k = Math.max(5, Math.round(_randInt(range.min, range.max) * scale / 5) * 5);
     amountsK[key] = k;
     values[key]   = formatK(k);
     return k;

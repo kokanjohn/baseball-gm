@@ -7012,3 +7012,25 @@ Cash moves between club funds, usually covering part of the traded player's **re
   - Worst CPU club across 8 seeds is now 35–55 wins.
 - **Harness:** an unanswered All-Star lobbying card is withdrawn when the rosters are named, and the vote speaks. That is now accepted (it was failing whenever the test GM skipped the card).
 - **Open (for later):** in season, a CPU club can only spend through waiver claims. A weak club with money still can't buy help mid-season. CPU-to-CPU trades or in-season CPU free-agent signings would close that gap.
+
+## 83. Phase 3a — card money made real (r79)
+- **New card effects** (`_applySoftEffects` → FinanceEngine):
+  - `target: share`: the owner loosens (+) or tightens (−) **this season's** payroll target. `fin.seasonTargetAdj` is capped at ±15% and resets at season's end. `seasonTarget(fin)` is what the owner checks, the room, the UI and the card context all use.
+  - `gate: { price, fill, homeGames }`: a ticket promotion. The crowd pays the discounted price and more seats fill, for the next N regular-season home games (`fin.promo`, counted down at each home gate).
+  - `local: share`: a sponsor or rights deal won or lost changes local income from now on (`market.localAnnual` and this season's installments).
+- **The audit's cards, rebuilt on them:**
+  - o1 (+4% target), sr1 (+5% target; the stray `_rawBudgetCost` is gone) and ms2 (owner trust) carry ownership pushes that do something.
+  - o4: a real 15%-off promotion for ten home games. The old flat "revenue cost" is gone; the gate tells the truth.
+  - sp_renew: a reduced rate (−3% local) or the sponsor walks (−8%). sp_complaint: the legal fight costs 3% of local.
+  - fn5: absorbing the overage now charges it. fn6: the recovered overpayment is the amount shown, tied to the last payday.
+  - bg4: savings are credited. ms_5: the online store adds 2% to local income.
+  - st1 and the charter follow-up: their $25K now charges (an unhandled `_rawBudgetCost`).
+  - "Budget" wording was reframed to club funds.
+- **Unanswered cards do what their default choice does:** that choice's effects and its money (a deal that goes through by default pays; an expense absorbed by default is charged), plus the tax for leaving it. Roster actions still only happen on the "no" path (§74); nothing on the roster moves on an unanswered "yes".
+- **Card money is sized to the club's market:** every money token is scaled by the payroll target against a contender-sized market (`CARD_MONEY_BASE_TARGET_K` 22,000; ×0.5–1.6). Deals (`rev_amount`) are now $60–200K at that size.
+  - Before this, unanswered deals never paid, and once they did, flat $100–400K deals added $5–9M a season.
+  - Now deals bring $3.7–5.4M against $2.5–5.3M of card spending. Season results: +$0.6–1.7M operating at a contender.
+- **Harness (8 seeds green):**
+  - A promotion discounts the per-fan gate to 85% for exactly its home games.
+  - An owner's push opens payroll room for the season and resets at its end.
+  - Every deal that goes through by default is in the ledger at its shown amount.

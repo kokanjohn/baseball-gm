@@ -219,7 +219,7 @@ export function refresh() {
 
   const team      = state.userTeam;
   const payroll   = team.finances?.payroll    || 0;
-  const cap       = team.finances?.payrollTarget || 22000;   // §78: the owner's payroll target
+  const cap       = Finance.seasonTarget(team.finances) || 22000;   // §78: the owner's payroll target (this season's)
   const capPct    = Math.min(100, Math.round((payroll / cap) * 100));
   const capColor  = capPct > 90 ? 'pf-red' : capPct > 75 ? '' : 'pf-green';
 
@@ -886,7 +886,7 @@ function _renderFinances(state) {
   const funds = fin.funds || 0;
   const projected = Finance.projection(state, 'user');
   const payroll = Finance.payrollOf(state, 'user');
-  const target = fin.payrollTarget || 0;
+  const target = Finance.seasonTarget(fin);
   const room = Math.max(0, Math.round(target * (1 + Finance.tolerance(state)) - payroll));
   const stage = fin.owner?.stage || 'content';
   const [stageName, stageText] = _OWNER_STAGE_TEXT[stage] || _OWNER_STAGE_TEXT.content;

@@ -199,6 +199,38 @@ export function postFor(draft, teamId, k, cat, label, at) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// WHAT CARDS CAN DO TO THE BOOKS (§78.8)
+// ─────────────────────────────────────────────────────────────
+
+/** This season's payroll target: the owner's target, loosened (or tightened) by any mid-season decision. */
+export function seasonTarget(fin) {
+  return Math.round((fin?.payrollTarget || 0) * (1 + (fin?.seasonTargetAdj || 0)));
+}
+
+/** The owner loosens (+) or tightens (−) this season's payroll target by a share. */
+export function adjustSeasonTarget(fin, pct) {
+  if (!fin || !pct) return;
+  fin.seasonTargetAdj = clamp((fin.seasonTargetAdj || 0) + pct, -0.15, 0.15);
+}
+
+/**
+ * startPromo(fin, { price, fill, homeGames }) — a ticket promotion for the
+ * next N home games: a price change (−0.15 = 15% off) and a lift in the
+ * share of seats filled (+0.08). The gate the crowd pays is real (crowdFor).
+ */
+export function startPromo(fin, { price = 0, fill = 0, homeGames = 8 } = {}) {
+  if (!fin) return;
+  fin.promo = { price, fill, gamesLeft: homeGames };
+}
+
+/** A sponsor or rights deal won or lost: local income changes by a share from now on. */
+export function adjustLocalIncome(fin, pct) {
+  if (!fin?.market || !pct) return;
+  fin.market.localAnnual = Math.round(fin.market.localAnnual * (1 + pct));
+  if (fin.cal) fin.cal.localPer = fin.cal.localPer * (1 + pct);
+}
+
+// ─────────────────────────────────────────────────────────────
 // PAYROLL
 // ─────────────────────────────────────────────────────────────
 
@@ -339,8 +371,11 @@ export function crowdFor(state, teamId, { atMs, playoff = false, atmosphere = nu
   const noise = 1 + (Math.random() * 2 - 1) * A.noise;
   let fill = _fill(atmosphere ?? t.atmosphere ?? 60, form, dayMult, noise);
   if (playoff) fill = Math.min(1, fill + A.playoffLift);
+  // A ticket promotion (§78.8): its price and its crowd, regular-season home games.
+  const promo = !playoff && fin.promo?.gamesLeft > 0 ? fin.promo : null;
+  if (promo) fill = clamp(fill + (promo.fill || 0), A.min, 1);
   const attendance = round(fin.market.capacity * fill);
-  const gateK = round(attendance * fin.market.perFan / 1000 * (playoff ? FIN_PLAYOFF_GATE_MULT : 1));
+  const gateK = round(attendance * fin.market.perFan * (1 + (promo?.price || 0)) / 1000 * (playoff ? FIN_PLAYOFF_GATE_MULT : 1));
   return { attendance, gateK, sellout: fill >= 0.995 };
 }
 
@@ -354,6 +389,7 @@ export function homeGate(draft, teamId, opts) {
   const crowd = opts.crowd || crowdFor(draft, teamId, opts);
   if (!crowd || !t?.finances) return null;
   post(t.finances, crowd.gateK, 'gate', opts.playoff ? 'Playoff gate' : 'Home gate', opts.atMs);
+  if (!opts.playoff && t.finances.promo?.gamesLeft > 0) t.finances.promo.gamesLeft -= 1;
   return crowd;
 }
 
@@ -423,7 +459,7 @@ export function patience(state, teamId = 'user') {
 export function strain(state, teamId = 'user') {
   const u = _club(state, teamId) || {};
   const fin = u.finances || {};
-  const target = fin.payrollTarget || 1;
+  const target = seasonTarget(fin) || 1;
   const payroll = payrollOf(state, teamId);
   const projected = projection(state, teamId);
   // Money the club is projected to have covers some of the payroll over the
@@ -485,13 +521,13 @@ export function canAddSalary(state, addK, outK = 0, teamId = 'user') {
 /** Annual salary the club could still add with the owner's blessing ($K). */
 export function payrollRoom(state, teamId = 'user') {
   const fin = _club(state, teamId)?.finances || {};
-  return (fin.payrollTarget || 0) * (1 + tolerance(state, teamId)) - payrollOf(state, teamId);
+  return seasonTarget(fin) * (1 + tolerance(state, teamId)) - payrollOf(state, teamId);
 }
 
 /** Can the club spend this much now (a bonus)? A happy owner lets funds dip a little. */
 export function canSpend(state, costK, teamId = 'user') {
   const fin = _club(state, teamId)?.finances || {};
-  const overdraft = (fin.payrollTarget || 0) * tolerance(state, teamId) * FIN_OVERDRAFT_SHARE;
+  const overdraft = seasonTarget(fin) * tolerance(state, teamId) * FIN_OVERDRAFT_SHARE;
   return (fin.funds || 0) - costK >= -overdraft;
 }
 
@@ -587,6 +623,8 @@ export function seasonEndReview(draft, atMs, teamId = 'user') {
   fin.ledger = [];
   fin.season = { income: {}, spend: {} };
   fin.dead = [];
+  fin.seasonTargetAdj = 0;     // a mid-season loosening (or tightening) lasts the season
+  fin.promo = null;
   if (fin.owner) { fin.owner.order = null; fin.owner.stage = 'content'; }
   return summary;
 }
