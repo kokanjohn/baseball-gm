@@ -101,6 +101,22 @@ export function buildTokenMap(cardDef, context, state) {
   values.gm_name       = state.gmName || userTeam.gmName || 'the new GM';
   const lastSeason     = (state.seasonHistory || [])[(state.seasonHistory || []).length - 1];
   values.last_record   = lastSeason ? `${lastSeason.wins}–${lastSeason.losses}` : '';
+  // §83 the club's numbers, as a card quotes them.
+  const fin = userTeam.finances;
+  const homes = (state.schedule || []).filter(g => g._committed && g.isHome && !g.isSpring && g.attendance).slice(-5);
+  const avgCrowd = homes.length ? Math.round(homes.reduce((a, g) => a + g.attendance, 0) / homes.length) : 0;
+  values.attendance_avg = avgCrowd ? avgCrowd.toLocaleString('en-US') : 'a thin crowd';
+  values.capacity       = (fin?.market?.capacity || 0).toLocaleString('en-US');
+  values.empty_seats    = avgCrowd && fin?.market?.capacity ? Math.max(0, fin.market.capacity - avgCrowd).toLocaleString('en-US') : 'thousands of';
+  values.sellouts_recent = String(homes.filter(g => g.sellout).length);
+  values.funds_now      = formatK(fin?.funds || 0);
+  values.payroll_target = formatK(fin?.payrollTarget || 0);
+  values.record_now     = `${userTeam.wins || 0}–${userTeam.losses || 0}`;
+  // A CPU club whose owner is cutting payroll, and its most expensive contract outside its core.
+  const troubled = (state.leagueTeams || []).filter(t => ['cuts', 'concerned'].includes(t.finances?.owner?.stage))
+    .sort((a, b) => (b.finances.owner.stage === 'cuts') - (a.finances.owner.stage === 'cuts'))[0];
+  values.troubled_team = troubled?.name || 'one of the clubs in the league';
+  values._troubledTeamId = troubled?.id || null;
   values.scout_name          = _pickPerson(state);
 
   // One-off outside people — distinct names within this card.

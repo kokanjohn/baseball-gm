@@ -63,7 +63,7 @@ const summarize = () => {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { calls: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -131,9 +131,19 @@ function gmActs() {
   for (let guard = 0; guard < 50; guard++) {
     const c = getInbox().find(x => !gm.seen.has(x.instanceId)
       && (x.autoResolve === 'roster' || !!x._rosterKey || (!!x._tradeOffer && !x._seed)
-          || PLAYER_CARD_ACTIONS.has(x._raw?.onYes)));
+          || PLAYER_CARD_ACTIONS.has(x._raw?.onYes) || x._raw?.onYes === 'fin_call_club'));
     if (!c) break;
     gm.cardIdsSeen.add(c.cardId);
+    // §83 a club cutting payroll: we make the call — an offer or word back.
+    if (c._raw?.onYes === 'fin_call_club') {
+      gm.seen.add(c.instanceId);
+      resolveCard(c.instanceId, 'yes');
+      const st2 = SM.get();
+      const answered = [...(st2.inbox || []), ...(st2.scheduledCards || [])]
+        .some(x => (x._proposingTeamId === c._aboutTeamId && !x.resolved) || x._rosterKey === `fin:called:${c.instanceId}`);
+      gm.calls.push({ team: c._aboutTeamId, answered });
+      continue;
+    }
     // §71 player cards: the action lands on the player the card names.
     if (PLAYER_CARD_ACTIONS.has(c._raw?.onYes)) {
       gm.seen.add(c.instanceId);
@@ -726,7 +736,9 @@ async function checkNeutralText(st) {
   const pools = await import('../../data/cards-pool.js');
   const moments = await import('../../data/cards-moments.js');
   const tokens = await import('../../data/card-tokens.js');
-  const authored = [...strs(Object.values(pools)), ...strs(moments.MOMENT_CARDS), ...strs(Object.values(tokens))];
+  const money = await import('../../data/cards-money.js');
+  const authored = [...strs(Object.values(pools)), ...strs(moments.MOMENT_CARDS), ...strs(Object.values(tokens)),
+                    ...strs(money.MONEY_BETWEEN), ...strs(money.MONEY_PREGAME)];
   const badA = authored.filter(t => GENDERED.test(t));
   check(`neutral text: every card written reads gender-neutral (${authored.length} strings)`, badA.length === 0,
         badA.slice(0, 4).map(t => t.slice(0, 90)).join(' | '));
@@ -762,6 +774,18 @@ async function checkCardMoney(st) {
     Fin.seasonEndReview(c, clock.get(), 'user');
     check(`card money: an owner's push opens payroll room for the season (${Math.round(before)}K → ${Math.round(after)}K), then resets`,
           after - before >= fin.payrollTarget * 0.045 && Fin.seasonTarget(fin) === fin.payrollTarget);
+  }
+  // §83 the Club Funds families: one version of a family a season, each the
+  // version that fits (its _when held when it was chosen).
+  {
+    const fam = {};
+    for (const c of st.inbox || []) if (c._family && c._season === st.seasonNum) (fam[c._family] = fam[c._family] || []).push(c.cardId);
+    const twice = Object.entries(fam).filter(([, ids]) => ids.length > 1);
+    check(`card families: one version each a season (${Object.entries(fam).map(([f, ids]) => `${f}:${ids[0].replace(/^mon_/, '')}`).join(' ')})`,
+          twice.length === 0, twice.map(([f, ids]) => `${f}=${ids.join('+')}`).join(' '));
+    check(`card families: the Club Funds cards reach the inbox (${Object.keys(fam).length} families)`, Object.keys(fam).length >= 3);
+    check(`card families: calling a club that is cutting payroll gets an answer (${gm.calls.length} calls)`,
+          gm.calls.every(x => x.team && x.answered), JSON.stringify(gm.calls.filter(x => !x.answered)));
   }
   // Unanswered cards do what their default choice does: a deal signed by default pays.
   {

@@ -44,6 +44,7 @@ import {
   FA_CARD_TTL_DAYS,
   FA_CARDS_PER_ROUND,
   CARD_DAY,
+  SPRING_TRAINING_GAME_COUNT,
 } from '../data/constants.js';
 
 import {
@@ -69,6 +70,7 @@ import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
+import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import { computeOVR } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -76,8 +78,9 @@ import { computeOVR } from './PlayerFactory.js';
 // ─────────────────────────────────────────────────────────────
 
 const ALL_POOLS = {
-  DECISIONS_POOL,
-  PREGAME_POOL,
+  // §83 the Club Funds families join the moments they belong to.
+  DECISIONS_POOL: [...DECISIONS_POOL, ...MONEY_BETWEEN],
+  PREGAME_POOL:   [...PREGAME_POOL, ...MONEY_PREGAME],
   INGAME_POOL,
   BETWEEN_GAMES_POOL,
   FOLLOWUP_POOL,
@@ -998,6 +1001,62 @@ function _scheduleCards(instances, state, game = null) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// THE CLUB'S SITUATION (§83) — what a card's `_when` reads
+// ─────────────────────────────────────────────────────────────
+
+const POSTSEASON = new Set([PHASE.WILD_CARD, PHASE.FIRST_ROUND, PHASE.DIVISION_SERIES, PHASE.WORLD_SERIES]);
+
+/**
+ * cardSituation(state, context) — the club right now, in the words cards use:
+ *   archetype, season ('first'|'returning'), last ('winning'|'losing'),
+ *   pace ('winning'|'middling'|'losing', after 20 games), race ('in'|'out'),
+ *   lossGap, funds ('flush'|'steady'|'tight'), red (projected to finish in
+ *   the red), owner (stage), crowd ('packed'|'steady'|'soft', last 5 home
+ *   gates), sellouts (of the last 5), postseason, cpuTrouble (a CPU club
+ *   whose owner is cutting).
+ */
+export function cardSituation(state, context = {}) {
+  const u = state.userTeam || {};
+  const fin = u.finances;
+  const n = (u.wins || 0) + (u.losses || 0);
+  const pct = n ? u.wins / n : 0.5;
+  const last = (state.seasonHistory || [])[(state.seasonHistory || []).length - 1];
+  const target = Finance.seasonTarget(fin) || 1;
+  const homes = (state.schedule || []).filter(g => g._committed && g.isHome && !g.isSpring && g.attendance).slice(-5);
+  const cap = fin?.market?.capacity || 1;
+  const fill = homes.length ? homes.reduce((a, g) => a + g.attendance, 0) / homes.length / cap : null;
+  const gb = parseFloat(context.gamesBack);
+  const regIdx = context.regularSeasonIndex || 0;
+  return {
+    archetype: state.archetype,
+    season:    (state.seasonNum || 1) > 1 ? 'returning' : 'first',
+    last:      last ? ((last.wins || 0) > (last.losses || 0) ? 'winning' : 'losing') : null,
+    pace:      n < 20 ? null : pct >= 0.55 ? 'winning' : pct <= 0.45 ? 'losing' : 'middling',
+    race:      regIdx < 60 ? null : (context.gamesBack === '-' || (Number.isFinite(gb) && gb <= 4)) ? 'in' : 'out',
+    lossGap:   (u.losses || 0) - (u.wins || 0),
+    funds:     !fin ? null : fin.funds >= target * 0.25 ? 'flush' : fin.funds < target * 0.10 ? 'tight' : 'steady',
+    red:       !!fin && Finance.projection(state, 'user') < 0,
+    owner:     fin?.owner?.stage || 'content',
+    crowd:     fill == null ? null : fill >= 0.95 ? 'packed' : fill <= 0.62 ? 'soft' : 'steady',
+    sellouts:  homes.filter(g => g.sellout).length,
+    postseason: POSTSEASON.has(state.phase),
+    cpuTrouble: (state.leagueTeams || []).some(t => ['concerned', 'cuts'].includes(t.finances?.owner?.stage)),
+  };
+}
+
+/** Does the situation meet a card's `_when`? Every listed key must hold. */
+export function fitsSituation(w, sit) {
+  const is = (want, have) => want == null || (Array.isArray(want) ? want.includes(have) : want === have);
+  if (!is(w.archetypes, sit.archetype)) return false;
+  for (const k of ['season', 'last', 'pace', 'race', 'funds', 'owner', 'crowd']) if (!is(w[k], sit[k])) return false;
+  if (w.red != null && w.red !== sit.red) return false;
+  if (w.postseason != null && w.postseason !== sit.postseason) return false;
+  if (w.cpuTrouble != null && w.cpuTrouble !== sit.cpuTrouble) return false;
+  if (w.minSellouts != null && sit.sellouts < w.minSellouts) return false;
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────
 // FIRST MOMENTS (§80)
 // ─────────────────────────────────────────────────────────────
 
@@ -1557,6 +1616,12 @@ function _filterEligible(pool, context, state) {
     ...(state.scheduledCards || []).map(c => c.cardId),
   ]);
 
+  const sit = cardSituation(state, context);
+  const familiesThisSeason = new Set(
+    [...(state.inbox || []), ...(state.scheduledCards || [])]
+      .filter(c => c._family && (c._season ?? state.seasonNum) === state.seasonNum)
+      .map(c => c._family));
+
   return pool.filter(card => {
     // Retired content (kept in the pool for reference, never delivered)
     if (card._retired) return false;
@@ -1612,6 +1677,15 @@ function _filterEligible(pool, context, state) {
 
     // Prestige tier gate
     if (card._maxTier !== undefined && (state.prestigeTier || 1) > card._maxTier) return false;
+
+    // §83 the club's situation: a card (or one version of a card family) is
+    // only sent when it is true — the record, the race, the books, the owner,
+    // the crowds, the league around us.
+    if (card._requiresDivClose && !(sit.race === 'in')) return false;
+    if (card._requiresLossGap && (sit.lossGap < card._requiresLossGap)) return false;
+    if (card._when && !fitsSituation(card._when, sit)) return false;
+    // One version of a family a season: the family is the card.
+    if (card._family && familiesThisSeason.has(card._family)) return false;
 
     return true;
   });
@@ -1751,6 +1825,9 @@ function _createInstance(cardDef, context, state) {
     expireMsg:        text.expireMsg || null,
     yesEffect:        cardDef.yesEffect  || {},
     noEffect:         cardDef.noEffect   || {},
+    _family:          cardDef._family || null,       // §83 one version of a family a season
+    _aboutTeamId:     cardDef._aboutTroubledTeam ? (values._troubledTeamId || null) : null,
+    _season:          state.seasonNum || 1,
     autoResolve:      cardDef.autoResolve   || null,
     autoResolveTax:   cardDef.autoResolveTax || null,
     _playerRelationshipEffect: cardDef._playerRelationshipEffect || null,
@@ -2156,7 +2233,8 @@ export function deliverOwnerOrderResult(result, atMs) {
 
 /** The cut-order decision (inside _applyRosterAction). */
 function _applyFinanceAction(action, instance, atMs) {
-  if (action !== 'fin_dump_yes') return;   // keeping him: the order stands, the owner decides at the deadline
+  if (action === 'fin_call_club') { _callClubAboutSalary(instance, atMs); return; }
+  if (action !== 'fin_dump_yes') return;   // keeping the contract: the order stands, the owner decides at the deadline
   const st = StateManager.get();
   const pid = instance._targetPlayerId;
   const p = st.players[pid];
@@ -2180,6 +2258,31 @@ function _applyFinanceAction(action, instance, atMs) {
   StateManager.mutate(s => {
     s.transactions = [...(s.transactions || []), queueTrade({ incomingIds: [], outgoingIds: [pid] }, taker.id, atMs)];
   });
+}
+
+/**
+ * §83 we call a club whose owner is cutting payroll: if it has a deal we and
+ * both owners can live with, its offer comes in; if not, word comes back.
+ */
+function _callClubAboutSalary(instance, atMs) {
+  const st = StateManager.get();
+  const team = (st.leagueTeams || []).find(t => t.id === instance._aboutTeamId);
+  const result = team && generateCPUTradeOffer(team.id, st, {
+    regularSeasonIndex: Math.max(0, (st.currentGameIndex || 0) - SPRING_TRAINING_GAME_COUNT), phase: st.phase, force: true,
+  });
+  if (result && _tradeSalaryOk(st, result.offer, team.id)) {
+    deliverTradeOffer(result.offer, result.evaluation, team.id, {
+      intro: (incoming) => `${team.name} called back about the conversation we started: ${incoming.name} is available, and they need the payroll room.`,
+    });
+    return;
+  }
+  _deliverNotice(`fin:called:${instance.instanceId}`, {
+    cardId: 'fin_called_back', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', type: 'normal',
+    subject: `${team?.name || 'The club'} — nothing that fits`,
+    preview: 'We made the call. Nothing on their roster works for both sides right now.',
+    body: `We talked to ${team?.name || 'them'} about their payroll. Nothing they are willing to move fits what we need and what our owner will carry right now. The line is open if that changes.`,
+    yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
+  }, atMs + 3 * 3600_000);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2470,6 +2573,7 @@ function _deliverDevelopmentReport(ev, atMs) {
  * name here in the same change that adds its handler (§60).
  */
 export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
+  'fin_call_club',
   'il_return_activate',
   'il_return_waive',
   'il_return_farm',

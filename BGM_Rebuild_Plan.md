@@ -7034,3 +7034,26 @@ Cash moves between club funds, usually covering part of the traded player's **re
   - A promotion discounts the per-fan gate to 85% for exactly its home games.
   - An owner's push opens payroll room for the season and resets at its end.
   - Every deal that goes through by default is in the ledger at its shown amount.
+
+## 84. Phase 3b — cards that know the club's situation (r80)
+- **`cardSituation(state, context)`** describes the club right now in the words cards use:
+  - archetype; season (first / returning); last season (winning / losing);
+  - pace (winning ≥ .550, middling, losing ≤ .450, after 20 games); race (in = within 4 games back from game 60 on);
+  - lossGap; funds (flush ≥ 25% of this season's target, tight < 10%, steady); red (projected to finish in the red); owner stage;
+  - crowd (packed ≥ 95% filled, soft ≤ 62%, over the last 5 home gates) and sellouts; postseason;
+  - cpuTrouble (a CPU owner concerned or cutting).
+- **Card gating:** `_when` gates any pool card on that situation (`fitsSituation`). `_family` makes several cards one card with versions: one per season, whichever version fits when it's drawn. The old `_requiresDivClose` (sr1) and `_requiresLossGap` (ms2) are now enforced; they had been silently ignored.
+- **New tokens:** `{attendance_avg}`, `{capacity}`, `{empty_seats}`, `{sellouts_recent}`, `{funds_now}`, `{payroll_target}`, `{record_now}`, `{troubled_team}`.
+- **`data/cards-money.js`** has 26 cards in 13 families:
+  - **Owner pleased** (winning + flush): 4 archetype voices, from Empire's "go get it" (+5%) and the Gambler's "let it ride" (+7%) to the Ember / Lab / Institution note (+3%).
+  - **Owner and red ink:** a stern version (the CFO's plan: real savings plus trust) and a gentle one (coffee and a light trim).
+  - **Owner funds a push** (in the race, owner content): bold (+6%) or measured (+3%).
+  - **Cash tight:** defer maintenance, or pull the fireworks nights. **Cash flush:** a clubhouse recovery area, or a coaches' video room.
+  - **Crowds packed:** raise prices 10% for ten home games, or throw an appreciation night. **Crowds soft:** a four-pack promotion (25% off, +15% filled, six games), or free seats for schools in a losing year.
+  - **A CPU club cutting payroll:** a beat-writer or Pro Scouting version. "Make the call" (`fin_call_club`) asks that club for a real offer that both owners can carry; if nothing fits, word comes back.
+  - **Postseason money:** a staff bonus pool, or road-game watch parties.
+  - **Media rights:** winning brings an early extension (+4% local); losing brings a rate cut (−3%, or −5% and a secondary channel if refused).
+  - **A big year:** the agent asks for a performance bonus.
+  - **Home pre-game:** a giveaway night (+10% filled tonight), or a rivalry-night event.
+- **Harness (8 seeds green):** at most one version of each family a season (5–6 families a season, versions matching the situation); a call to a club cutting payroll always gets an answer (an offer or word back); the new cards pass the neutral-text scan.
+- **Fixed:** the intro on a called-back trade offer.
