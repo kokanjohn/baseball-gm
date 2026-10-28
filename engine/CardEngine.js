@@ -62,6 +62,7 @@ import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecent
 import * as Offseason from './OffseasonEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import { CARD_ACTIONS, cardFeasible } from './CardActions.js';
+import * as AllStar from './AllStarEngine.js';
 import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
@@ -216,6 +217,8 @@ export function resolve(instanceId, choice) {
 
     // Apply soft metric effects
     _applySoftEffects(s, effects, choice, instance);
+    // §75: ballpark decisions shape the league's impression (hosting score).
+    if (instance._raw?._hosting && s.allStar) AllStar.accrueCard(s, instance._raw._hosting, choice);
 
     // Apply budget cost / revenue — the exact amounts the card text showed.
     const costK = choice === 'yes' ? _resolveBudgetCost(instance._budgetCost)
@@ -807,7 +810,7 @@ export function expireDueRosterCards(atMs) {
  * @param {Object} evaluation  — from TradeEngine.evaluateTrade()
  * @param {String} proposingTeamId
  */
-export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = false } = {}) {
+export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = false, intro = null } = {}) {
   const state    = StateManager.get();
   const team     = (state.leagueTeams || []).find(t => t.id === proposingTeamId);
   const teamName = team?.name || 'Another team';
@@ -852,7 +855,7 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = f
     sender:          teamName,
     subject:         `Trade offer from ${teamName}`,
     preview:         `${teamName} is offering ${incoming.name} for ${outgoing.name}.`,
-    body:            `${teamName} has proposed a trade: you send ${outRef} and receive ${inRef}. ${fairnessNote}${payrollNote}`,
+    body:            `${intro ? intro(incoming, teamName) + ' ' : ''}${teamName} has proposed a trade: you send ${outRef} and receive ${inRef}. ${fairnessNote}${payrollNote}`,
     yesLabel:        'Accept the Trade',
     noLabel:         'Decline',
     yesEffect:       {},
@@ -1021,7 +1024,7 @@ function _tradeWindowOpen(state, context) {
  * `force` skips only the roll (seed offer).
  * @returns {Boolean} true if an offer was delivered
  */
-function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = false } = {}) {
+function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = false, intro = null } = {}) {
   if (!force && !_tradeWindowOpen(state, context)) return false;
 
   const pendingFrom = new Set(
@@ -1042,7 +1045,7 @@ function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = fals
       force,
     });
     if (result) {
-      deliverTradeOffer(result.offer, result.evaluation, team.id, { seed });
+      deliverTradeOffer(result.offer, result.evaluation, team.id, { seed, intro });
       return true;
     }
   }
@@ -1678,13 +1681,186 @@ function _applyPlayerRelationshipEffect(state, effect, choice) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// ALL-STAR GAME CARDS (§75)
+// ─────────────────────────────────────────────────────────────
+
+const _cityOf = (state, teamId) => (teamId === 'user'
+  ? (state.userTeam.city || state.userTeam.name)
+  : (state.leagueTeams.find(t => t.id === teamId)?.name || '').split(' ').slice(0, -1).join(' ') || 'their ballpark');
+const _list = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
 /**
- * Card actions (onYes / onNo) that have a real handler — in _applyRosterAction
- * or _fireFollowup. A pool card that declares any other action is NEVER
- * delivered (_filterEligible): it would promise a roster move ("sign him",
- * "call him up", "bench him") that the engine cannot perform. Add the action
- * name here in the same change that adds its handler (§60).
+ * deliverAllStarHostCard({ hostId, status }, atMs)
+ * The league names the host. Ours: the Commissioner's Office, with what it
+ * brings (§17.3). Someone else's: the League Office's note — and, in words
+ * rather than a number (§17.1), where our ballpark stood.
  */
+export function deliverAllStarHostCard({ hostId, status }, atMs) {
+  const state = StateManager.get();
+  const season = state.allStar?.season;
+  const key = `allstar:host:${state.seasonNum}`;
+  if (hostId === 'user') {
+    const n = state.allStar.hostedCount || 1;
+    return _deliverNotice(key, {
+      cardId: 'as_host', tag: 'OWNERSHIP', type: 'good', avatar: '🌟', _prominent: true,
+      sender: "Commissioner's Office",
+      subject: n === 1 ? "We're hosting the All-Star Game" : `The All-Star Game is coming back to ${_cityOf(state, 'user')}`,
+      preview: `The league has awarded this year's All-Star Game to ${_cityOf(state, 'user')}.`,
+      body: `The Commissioner's Office has awarded this season's All-Star Game to ${_cityOf(state, 'user')}. `
+          + (n === 1 ? 'The league has watched what this organization has built in the ballpark and in the stands, and it wants the game here. '
+                     : 'It is a rare thing for a club to host twice; the league says the ballpark and the crowds made the decision easy. ')
+          + `The host's share — ${formatK(season?.hostBonusK || 0)} — is already in our revenue, the city is buzzing, and ownership has never been happier. `
+          + `Every club's GM will be in our building during the break. All-Star week is ours to run.`,
+      yesLabel: "Let's get to work", expiresAtMs: atMs + 3 * 24 * 3600_000,
+    }, atMs);
+  }
+  const city = _cityOf(state, hostId);
+  const why = [];
+  if (status?.reasons?.includes('recently')) why.push('the league rarely returns to a city so soon after a game');
+  if (status?.reasons?.includes('prestige')) why.push('the league wants a host with a winning reputation — that has to be earned on the field');
+  if (status?.reasons?.includes('atmosphere')) why.push('the league office cited the crowds — our atmosphere is not where a host\'s needs to be');
+  if (status?.reasons?.includes('ballpark')) {
+    const p = status.progress;
+    why.push(p >= 0.85 ? 'our ballpark was a finalist — the facilities are nearly where the league wants them'
+           : p >= 0.5  ? 'our ballpark was in the conversation, but the facilities still lag the league\'s best'
+           :             'our ballpark is not on the league\'s list yet — facilities and fan experience are what move it');
+  }
+  return _deliverNotice(key, {
+    cardId: 'as_host_other', tag: 'OWNERSHIP', type: 'normal', avatar: '🏟️', sender: 'League Office',
+    subject: `All-Star Game awarded to ${city}`,
+    preview: `This year's All-Star Game will be played in ${city}.`,
+    body: `The league has awarded this season's All-Star Game to ${city}. `
+        + (why.length ? `From the league office: ${why.join('; ')}.` : ''),
+    expiresAtMs: atMs + 2 * 24 * 3600_000,
+  }, atMs);
+}
+
+/**
+ * deliverAllStarLobbyCard(playerId, atMs, expiresAtMs)
+ * The host's GM has the league's ear before the rosters are set: make the
+ * public case for one of ours who is on the bubble, or stay out of it.
+ */
+export function deliverAllStarLobbyCard(playerId, atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const p = state.players[playerId];
+  if (!p) return null;
+  return _deliverAt(_rosterCard(state, {
+    cardId: 'as_lobby', tag: 'MEDIA', type: 'normal', avatar: '🎙️', sender: 'Media Relations',
+    _rosterKey: `allstar:lobby:${state.seasonNum}`, _targetPlayerId: playerId,
+    subject: `${p.name} is on the All-Star bubble`,
+    preview: `Rosters are set in a few days. As the host, we have a platform — use it?`,
+    body: `${_who(p)} is right on the edge of making the All-Star team. Rosters are announced in a few days, and as the host club the league and the press are listening to us this week. `
+        + `We can make his case publicly — it might be the push he needs, and he'll know we went to bat for him — or stay out of it and let the vote speak.`,
+    yesLabel: 'Make his case', noLabel: 'Stay out of it',
+    yesEffect: { morale: 1 }, noEffect: {},
+    autoResolve: 'no', expiresAtMs,
+    _raw: { onYes: 'as_lobby_yes', onNo: 'as_lobby_no', onAuto: 'as_lobby_no' },
+  }), atMs);
+}
+
+/** The manager names our All-Stars (one card for the club). */
+export function deliverAllStarSelectionCard(selections, atMs) {
+  const state = StateManager.get();
+  if (!selections.length) return null;
+  const desc = (x) => {
+    const p = state.players[x.id];
+    return `${p?.name} (${x.role === 'starter' ? `starting at ${x.slot === 'OF' ? 'outfield' : x.slot}` : x.role === 'pitcher' ? p?.pos : 'reserve'})`;
+  };
+  const host = state.allStar?.season?.hostId;
+  return _deliverNotice(`allstar:selected:${state.seasonNum}`, {
+    cardId: 'as_selected', tag: 'ROSTER', type: 'good', avatar: '⭐', sender: _managerName(state),
+    subject: selections.length === 1 ? `${state.players[selections[0].id]?.name} is an All-Star`
+                                     : `${selections.length} of ours are All-Stars`,
+    preview: `The All-Star rosters are out.`,
+    body: `The All-Star rosters are out, and we're sending ${_list(selections.map(desc))}. `
+        + `${selections.length > 1 ? 'They earned it' : 'He earned it'} — the clubhouse is proud. `
+        + `The game is the second night of the break${host === 'user' ? ', in our ballpark' : host ? ` in ${_cityOf(state, host)}` : ''}.`,
+    expiresAtMs: atMs + 2 * 24 * 3600_000,
+  }, atMs);
+}
+
+/** All-Star week in our ballpark — three decisions while the league is in town. */
+export function scheduleAllStarWeekCards(dayStartMs, firstPitchMs) {
+  const state = StateManager.get();
+  const K = (lo, hi) => Math.round((lo + Math.random() * (hi - lo)) / 5) * 5;
+  const sponsorK = K(500, 900), clinicK = K(120, 220);
+  const cards = [
+    { h: 9, key: 'sponsor', fields: {
+      cardId: 'as_week_sponsor', tag: 'MARKETING', avatar: '💼', sender: 'Corporate Partnerships',
+      subject: 'All-Star FanFest — title sponsor on the table',
+      preview: `A regional bank wants its name on FanFest. ${formatK(sponsorK)}.`,
+      body: `A regional bank wants to be the title sponsor of All-Star FanFest: ${formatK(sponsorK)}, with their branding across the concourse and the plaza all week. `
+          + 'The money is real. Fans and the league will notice the ballpark looking like a bank lobby.',
+      yesLabel: 'Sign the sponsor', noLabel: 'Keep FanFest ours',
+      yesEffect: { atmosphere: -3 }, noEffect: { atmosphere: 2 }, _revenueK: sponsorK } },
+    { h: 11, key: 'clinic', fields: {
+      cardId: 'as_week_clinic', tag: 'MARKETING', avatar: '🧢', sender: 'Community Relations',
+      subject: 'All-Stars want to run a youth clinic',
+      preview: `A clinic with the All-Stars for local kids — ${formatK(clinicK)} to put on.`,
+      body: `Several All-Stars have offered to run a clinic for local youth leagues on the field before the game. Putting it on costs ${formatK(clinicK)} (staff, gear, buses). `
+          + 'It is the kind of morning the city remembers.',
+      yesLabel: 'Put it on', noLabel: 'Not this year',
+      yesEffect: { atmosphere: 4, ownerTrust: 1 }, noEffect: { atmosphere: -1 }, _budgetCost: clinicK } },
+    { h: 15, key: 'media', fields: {
+      cardId: 'as_week_media', tag: 'MEDIA', avatar: '📺', sender: 'Media Relations',
+      subject: 'National media want the run of our clubhouse',
+      preview: 'Open access all week — great exposure, and a distraction.',
+      body: 'The national networks want open access to our clubhouse and players for All-Star week features. '
+          + 'It would put the franchise in front of the whole country — and put cameras in our players\' faces for four days.',
+      yesLabel: 'Open the doors', noLabel: 'Keep it to the usual',
+      yesEffect: { atmosphere: 3, morale: -3 }, noEffect: { morale: 1, atmosphere: -1 } } },
+  ];
+  let n = 0;
+  for (const c of cards) {
+    const at = dayStartMs + c.h * 3600_000;
+    if (_deliverAt(_rosterCard(state, {
+      type: 'normal', autoResolve: 'no', expiresAtMs: firstPitchMs,
+      _rosterKey: `allstar:week:${c.key}:${state.seasonNum}`, _raw: {},
+      ...c.fields,
+    }), at)) n++;
+  }
+  return n;
+}
+
+/** The game's MVP is one of ours. */
+export function deliverAllStarMvpCard(playerId, atMs) {
+  const state = StateManager.get();
+  const p = state.players[playerId];
+  if (!p) return null;
+  const r = state.allStar?.season?.result;
+  return _deliverNotice(`allstar:mvp:${state.seasonNum}`, {
+    cardId: 'as_mvp', tag: 'ROSTER', type: 'good', avatar: '🏆', sender: _managerName(state),
+    subject: `${p.name} is the All-Star Game MVP`,
+    preview: `${p.name} took home the MVP trophy.`,
+    body: `${_who(p)} was named MVP of the All-Star Game${r ? ` (${r.homeScore}–${r.awayScore} final)` : ''}. The guys gave him a standing ovation when he walked in.`,
+    expiresAtMs: atMs + 2 * 24 * 3600_000,
+  }, atMs);
+}
+
+/** A player who spent All-Star week in our ballpark wants in (§17.3). */
+export function deliverAllStarTradeOffer(context) {
+  return _maybeDeliverCPUTradeOffer(StateManager.get(), context || {}, {
+    force: true,
+    intro: (incoming) => `${incoming.name} spent All-Star week in our ballpark and has let his club know he would welcome a move here.`,
+  });
+}
+
+/** Withdraw the lobbying card once the rosters are set. */
+export function withdrawAllStarLobbyCard() {
+  const st = StateManager.get();
+  return _withdraw(c => c._rosterKey === `allstar:lobby:${st.seasonNum}`);
+}
+
+/** All-Star card decisions (inside _applyRosterAction). */
+function _applyAllStarAction(action, instance) {
+  StateManager.mutate(s => {
+    const season = s.allStar?.season;
+    if (!season?.influence) return;
+    season.influence.choice = action === 'as_lobby_yes' ? 'yes' : 'no';
+  });
+}
+
 // ─────────────────────────────────────────────────────────────
 // OFFSEASON CARDS (§70)
 // ─────────────────────────────────────────────────────────────
@@ -1947,6 +2123,13 @@ function _deliverDevelopmentReport(ev, atMs) {
   }, atMs);
 }
 
+/**
+ * Card actions (onYes / onNo) that have a real handler — in _applyRosterAction
+ * or _fireFollowup. A pool card that declares any other action is NEVER
+ * delivered (_filterEligible): it would promise a roster move ("sign him",
+ * "call him up", "bench him") that the engine cannot perform. Add the action
+ * name here in the same change that adds its handler (§60).
+ */
 export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'il_return_activate',
   'il_return_waive',
@@ -1970,6 +2153,8 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'os_resign', 'os_walk', 'os_walk_auto',
   'os_mgr_extend', 'os_mgr_replace', 'os_mgr_auto',
   'os_fa_sign', 'os_fa_pass',
+  // §75 All-Star Game
+  'as_lobby_yes', 'as_lobby_no',
 ]));
 
 function _cardActionsHandled(card) {
@@ -1987,6 +2172,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
   const action = choice === 'yes' ? raw.onYes : choice === 'no' ? raw.onNo : choice === 'auto' ? raw.onAuto : null;
   if (!action) return;
   if (action.startsWith('os_')) { _applyOffseasonAction(action, instance, atMs); return; }
+  if (action.startsWith('as_')) { _applyAllStarAction(action, instance, atMs); return; }
   if (CARD_ACTIONS[action]) { _applyCardAction(action, { ...instance, choice }, atMs, feasible); return; }
 
   const playerId = instance._targetPlayerId || null;

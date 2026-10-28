@@ -6641,3 +6641,66 @@ Closes §64 **D1–D3** and a gap the audit didn't list: **follow-up chains neve
 - **Late joiners sign on.** A player who joins a club after offseason contract day with his deal up (a late waiver claim or outright) signs a one-year market deal at spring open. No one opens a season without a contract.
 - **Injury rates.** RP 0.009 → 0.0095 per appearance. The harness's pitcher-share band became 36–64%, because about 130 injuries a season carry ±4–5 points of binomial noise.
 - **Result:** 0 of 241 live card definitions are gated; every live follow-up's actions are handled. Harness: follow-up chains fire, pre-game cards arrive before first pitch, every action does what its card says.
+
+---
+
+## 75. r69 — The All-Star Game (Session 8, Batch 4 · E1)
+Closes §64 **E1**. Before this there was no All-Star Game: the break was four empty days after game 66, and the §17 hosting functions were never called.
+
+**Decisions (GM, Session 8):**
+- **A real All-Star Game every season.** Division A's stars vs Division B's. Hosting is the extra prize on top.
+- **Host: a same-season surprise (§17.2 as locked).** The league names the host after the user's game 45–55, for that season's game.
+- **Watched live, like a regular game.** It plays at a real time during the break, with the live diamond, play-by-play and box score.
+
+**The calendar.** The game is a league-calendar entry (`asg-<season>`, `isAllStar`) on day `ALLSTAR_GAME_BREAK_DAY` (2) of the four-day break, at `ALLSTAR_GAME_TIME` (8:00 PM). It is generated with every season's calendar (SeasonEngine). It starts and finishes through the same league-clock path as every CPU game (`_startLeagueGame` / `_finishLeagueGame` hand off to `_startAllStarGame` / `_finishAllStarGame`). It's an exhibition: no stats, standings, rotations or injuries move. The host's division's squad bats last.
+
+**AllStarEngine (new, pure).** `state.allStar = { hostingScore, hostedCount, lastHostedSeason, hosts[], season, history[] }`. The legacy `allStarHostingScore` / `allStarHostedCount` / `allStarLastHostedSeason` / `userTeam.hostingScore` fields are removed. The old PrestigeEngine hosting functions were never called and are deleted.
+- **Hosting score (§17.1) — never shown as a number.** It grows from:
+  - every home game, by atmosphere above 55 (`HOSTING_PTS_PER_ATMO_POINT`);
+  - ballpark and fan-experience card decisions (`_hosting: { yes, no }` on about 20 pool cards — facilities, stadium ops, field prep, travel and visiting-club care);
+  - a season bonus when the average home atmosphere is 70 or higher.
+  
+  15% of the score fades each offseason (`HOSTING_SCORE_CARRYOVER` 0.85), so a bid is built by sustained effort.
+- **Naming the host.** The user's club hosts when the score clears the bar for its next hosting (850 / 1400 / 2200), the prestige tier is met (2 / 3 / 5), the wait since last hosting is met (– / 3 / 4 seasons) and atmosphere is 65 or higher. Otherwise the CPU club that has waited longest hosts. A new franchise joins a league where each CPU club hosted once in the previous nine seasons.
+  - **If the user hosts:** the Commissioner's Office card (`_prominent`: gold, labeled "ALL-STAR"). The §17.3 payoff applies at once: $10–15M revenue scaled by atmosphere and tier, +15 atmosphere, +10 owner trust, +5 GM relationship with every club.
+  - **If someone else hosts:** the League Office says so and, in words, where our ballpark stood: "a finalist", "in the conversation", "not on the list yet", or a prestige / atmosphere / too-soon reason.
+- **The vote (after the user's 58th game).** Per division, a 24-man squad: 13 hitters, 6 SP, 5 RP.
+  - Nine starters by position (the fan vote), then the reserves a manager needs (a second catcher, a middle infielder, an outfielder), then the best bats left.
+  - At most 6 per club beyond the elected starters, and every club sends at least one.
+  - A vote blends first-half production (OPS plus HR and SB; run prevention, wins and K for starters; saves and holds for relievers) with reputation (OVR against the league).
+  - **Only healthy big-leaguers can be voted in** (lineup, bench, rotation, bullpen, extra arms) — never the farm, the IL or a player between clubs. The league baselines come from the same players.
+  - **Playing time is part of the case.** A player's numbers carry his vote once he has 60% of a regular's playing time at the break: a lineup regular's PA, a rotation starter's IP, a regular reliever's IP (all league medians). Below that, his vote is scaled toward half (`PLAYING_TIME_FLOOR`). A star back from an early injury can still make it on reputation; a swingman's 20 good innings can't.
+- **Host's lobbying (§17.3 selection influence).** Three games before the rosters, the host GM can make the public case for his best player just short of the squad (an 8% vote boost) or stay out of it. The card is withdrawn when the rosters are named.
+- **Game day.** At first pitch, anyone hurt, sent down or released since the vote is replaced by the next in line (each replacement is in the feed with a ⭐). Each squad's plan:
+  - the nine starters in a real batting order;
+  - each reserve paired with a starter he replaces from the 5th–7th inning (`_plannedSubstitution`), so everyone plays;
+  - the best-voted SP starts and works 2 innings, every other arm 1, and the reliever with the most saves closes.
+- **After the final.** The MVP is the best game on the winning side (`allStarMvps`). The selection, MVP and host are kept in `allStar.history` at the end of the season.
+
+**The host's week (§17.3).** Three cards on the day before the game, each due at first pitch:
+- FanFest title sponsor: revenue vs atmosphere.
+- Youth clinic: budget vs atmosphere and owner trust.
+- National media access: atmosphere vs clubhouse.
+
+After the break: +1 atmosphere at each of the next 20 home games, and one trade offer from a player who "spent All-Star week in our ballpark" within 10 games.
+
+**The GM sees:**
+- An inbox card naming our All-Stars (role and position).
+- ★ next to each All-Star on the Team screen, and an All-Star / MVP line on the player card.
+- The Dashboard's game area belongs to the All-Star Game from our last game before the break until the morning after it:
+  - before first pitch: matchup, place, countdown, our All-Stars;
+  - live: the same live card as our games (scoreboard, diamond, linescore, play-by-play, box score, refreshed every 5 s) plus our All-Stars' lines;
+  - final: score, MVP, box score and our All-Stars' lines.
+- The schedule lists the game; the Debug screen shows the hosting score, the bar and the reasons.
+
+**Fixed along the way (all games):**
+- **No phantom relievers.** A tired pitcher was replaced at the end of his inning, before the game knew whether there'd be another half. When the game then ended (home team ahead after the top of the 9th, or a regulation finish), a reliever showed in the box with 0.0 IP, never having thrown. The change now happens when the pitcher's side next takes the field, as a manager makes it: first play of that half, nobody out, bases empty.
+- **Games started and quality starts are recorded.** `gs` and `qs` were never counted for anyone. Each side's starter is the first pitcher to face a batter for that side. A quality start is 6+ IP with 3 or fewer ER.
+- **Team screen status chip** read "Bench" for every lineup starter: it checked the `STARTING_HITTERS` group, which no hitter carries under the lineupSlots model (rule 5). It now reads the club's `lineupSlots`.
+- **Inbox deadlines.** Any decision card with a real-time deadline (pre-game, All-Star week, roster) shows its "by" time; before this only roster cards did. Notices show none.
+
+**Found, deferred to Batch 4 · E3 (fatigue):**
+- **The simulator's bullpen is used weakest-first, every game, with no rest.** The weakest arm pitches nearly every 6th inning, and the best relievers barely pitch (median 8 IP at the break, while a few low-rated arms have 60–90). Relief usage needs roles (closer, setup, middle, long) and rest days.
+- **TradeEngine `_assessDepthImpact`** still keys "improvement" on the `STARTING_HITTERS` group, so an incoming hitter never counts as filling a need. Fix with user-initiated trades (B7).
+
+**Harness:** the game is on the calendar once and mid-break. The host is named in window and his division is home. Host seeds get the payoff, the host card, the three week cards and the lobbying card with the choice recorded; non-host seeds get the longest-waiting club and the reasons. At selection: healthy big-leaguers only and no swingman starters. Two 24-man squads, positions filled, every club represented, no one twice. Our All-Stars are told and marked. The game goes live with plays; score, box and linescore agree; no pitcher past 2 innings; the reserves get in; nothing outside the game moves; result and MVP are recorded. In season 2, last year's game is on the record and the new one is on the calendar. Every pitcher in every box score faced a batter. Two starts per game. 8 seeds green.

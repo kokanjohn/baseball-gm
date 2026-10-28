@@ -293,7 +293,11 @@ function _renderCard(card, gameIdx) {
   const typeClass   = isUrgent ? 'unread type-urgent' : isGood ? 'unread type-good' : 'unread type-normal';
   const avatarClass = isUrgent ? 'av-urgent' : isGood ? 'av-good' : 'av-normal';
   const tagClass    = isUrgent ? 'tag-urgent' : isGood ? 'tag-good' : 'tag-normal';
-  const tagLabel    = isUrgent ? 'URGENT' : isGood ? 'GOOD' : card.tag || 'INFO';
+  const tagLabel    = card._prominent ? 'ALL-STAR' : isUrgent ? 'URGENT' : isGood ? 'GOOD' : card.tag || 'INFO';
+  // §17.2 / §75: a franchise moment (hosting the All-Star Game) reads as one.
+  const prominent   = card._prominent
+    ? ' style="margin-top:10px;border:1px solid #c9971c;border-left:4px solid #c9971c;background:linear-gradient(100deg,rgba(201,151,28,.16),transparent 70%);"'
+    : ' style="margin-top:10px;"';
 
   // TTL countdown
   const ttlHtml = _renderTTL(card, gameIdx);
@@ -316,7 +320,7 @@ function _renderCard(card, gameIdx) {
   ` : '';
 
   return `
-    <div class="msg-card ${typeClass}" id="card-${card.instanceId}" style="margin-top:10px;">
+    <div class="msg-card ${typeClass}" id="card-${card.instanceId}"${prominent}>
       <div class="msg-header" data-expand="${card.instanceId}">
         <div class="msg-avatar ${avatarClass}">${card.avatar || '📋'}</div>
         <div class="msg-meta">
@@ -336,8 +340,10 @@ function _renderCard(card, gameIdx) {
 }
 
 function _renderTTL(card, gameIdx) {
-  // Real-time deadline (roster decisions, §65): show the clock time it's due.
-  if (Number.isFinite(card.expiresAtMs) && card.autoResolve === 'roster') {
+  // A real-time deadline on a decision (roster decisions §65, pre-game cards
+  // §74, All-Star week §75): show the clock time it's due. A notice (nothing
+  // to decide) just leaves the inbox when it's stale — no chip.
+  if (Number.isFinite(card.expiresAtMs) && card.autoResolve !== 'skip') {
     const left = card.expiresAtMs - Date.now();
     // A deadline more than a day out names its day (offseason decisions, §70).
     const d    = new Date(card.expiresAtMs);

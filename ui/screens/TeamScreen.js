@@ -1303,13 +1303,29 @@ function _playerStatusEl(player) {
     const label = { rest: 'Rest', illness: 'Sick', training: 'Train', benched: 'Sat', suspended: 'Susp', leave: 'Leave' }[away.reason] || 'Away';
     return `<div class="player-status status-inactive" title="${label} — ${away.gamesLeft} game${away.gamesLeft === 1 ? '' : 's'}">${label} ${away.gamesLeft}</div>`;
   }
-  if (player.group === PLAYER_GROUP.STARTING_HITTERS || player.group === PLAYER_GROUP.STARTING_PITCHERS) {
+  // Starting: a hitter in his club's lineup (lineupSlots — the source of truth;
+  // every active hitter shares the bench group) or a pitcher in the rotation.
+  const state = StateManager.get();
+  const club  = player.teamId === 'user' ? state?.userTeam : (state?.leagueTeams || []).find(t => t.id === player.teamId);
+  const inLineup = (club?.lineupSlots || []).some(sl => sl?.playerId === player.id);
+  if (inLineup || player.group === PLAYER_GROUP.STARTING_PITCHERS) {
     return '<div class="player-status status-active">Active</div>';
   }
   return '<div class="player-status status-bench">Bench</div>';
 }
 
 function _dotIndicator(player) {
+  return _allStarMark(player) + _statusDot(player);
+}
+
+/** §75: an All-Star this season. */
+function _allStarMark(player) {
+  const season = StateManager.get()?.seasonNum || 1;
+  return (player.allStarSeasons || []).includes(season)
+    ? `<span class="as-star" title="${(player.allStarMvps || []).includes(season) ? 'All-Star Game MVP' : 'All-Star'}">★</span>` : '';
+}
+
+function _statusDot(player) {
   if (player._isNewAcquisition) return '<span class="new-player-dot" title="New"></span>';
   if (player.isSuspended)       return '<span class="suspended-dot" title="Suspended"></span>';
   if (player.condition)         return '<span class="suspended-dot" title="Playing through it"></span>';
@@ -1419,6 +1435,7 @@ function _injectCSS() {
     .oop-note{color:var(--danger);}
     .contract-note{color:var(--warning, #f5a524);font-weight:600;}
     .dev-arrow{font-size:9px;font-weight:800;color:var(--success, #22c55e);margin-left:4px;}
+    .as-star{font-size:10px;color:#c9971c;margin-left:4px;}
     .player-pos-badge.oop{border-color:var(--danger);color:var(--danger);}
     .swap-btn.full{opacity:.45;}
     .vacancy-row{border:1.5px dashed var(--border);border-radius:8px;margin:4px 12px;

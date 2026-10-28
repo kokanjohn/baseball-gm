@@ -68,6 +68,7 @@ import {
   PITCHER_TARGET,
 } from './RosterEngine.js';
 import { PLAYER_NAME_POOL, STAFF_NAMES } from '../data/player-names.js';
+import * as AllStar from './AllStarEngine.js';
 
 export const OFFSEASON_STEPS = Object.freeze(['day1', 'day2', 'day3', 'day4', 'day5', 'day6', 'spring']);
 
@@ -363,6 +364,7 @@ export function displacementFor(draft, teamId, player) {
  * (RETIRED for every retirement; the user's become notices + history).
  */
 export function beginOffseason(draft, atMs) {
+  if (draft.allStar) AllStar.closeSeason(draft);   // §75: the season's hosting impression + record
   _lockSeason(draft, atMs);
   _archiveStats(draft);
   const nextYear = baseballYear(draft) + 1;

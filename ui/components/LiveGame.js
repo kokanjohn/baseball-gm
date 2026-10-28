@@ -17,6 +17,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { GAME_STATUS } from '../../data/constants.js';
 import { accumulateBox, liveSituation } from '../../engine/SimEngine.js';
 import { renderBoxScore } from './BoxScore.js';
+import { clubFor } from '../../engine/AllStarEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // DERIVED LIVE STATE
@@ -27,7 +28,8 @@ export function liveLeagueGames(state, nowMs = Date.now()) {
   const out = [];
   for (const [date, games] of Object.entries(state?.leagueSchedule?.dayMap || {})) {
     for (const g of games) {
-      if (g.status === GAME_STATUS.LIVE && g.plays?.length) out.push({ date, game: g });
+      // (The All-Star Game has the Dashboard's game area to itself, §75.)
+      if (g.status === GAME_STATUS.LIVE && g.plays?.length && !g.isAllStar) out.push({ date, game: g });
     }
   }
   return out.sort((a, b) => a.game.gameTime - b.game.gameTime);
@@ -201,7 +203,7 @@ function _viewerHtml(state, g) {
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _team(state, id) { return (state.leagueTeams || []).find(t => t.id === id); }
+function _team(state, id) { return clubFor(state, id); }
 function _abbr(state, id) { return (_team(state, id)?.abbr || String(id).slice(0, 3)).toUpperCase(); }
 
 function _diamond(bases, size) {

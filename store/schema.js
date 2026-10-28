@@ -67,9 +67,9 @@ export function createGameState(config = {}) {
     prestigeHistory:        [],   // [{ seasonNum, tier, score }]
     turningPointFired:      false,
     franchiseLegendFired:   false,
-    allStarHostingScore:    0,
-    allStarHostedCount:     0,
-    allStarLastHostedSeason: null,
+    // All-Star Game (§75): hosting score + history, this season's squads and
+    // result. Built by AllStarEngine.createAllStarState at game creation.
+    allStar:                null,
     seenMilestones:         [],   // 'MILESTONE_ID@season' keys — serialized as Array (not Set)
     milestoneQueue:         [],   // milestones queued by league events, shown in order (§68)
     seasonHistory:          [],   // season summary objects added each offseason
@@ -375,9 +375,6 @@ export function createUserTeamObject(config = {}) {
       revenueHistory:    [],
     },
 
-    // Hosting score (feeds All-Star bid)
-    hostingScore: 0,
-
     // Coaching staff
     coachingStaff: {
       // Coaching staff salaries in $K
@@ -554,6 +551,11 @@ function _fillDefaults(state) {
     const y = parseInt(String(state.schedule?.[0]?.date || '').slice(0, 4), 10);
     state.baseYear = Number.isFinite(y) ? y - ((state.seasonNum || 1) - 1) : new Date().getFullYear();
   }
+
+  // §75: legacy hosting fields (never written) give way to state.allStar,
+  // which GameEngine builds on first use for saves from before it existed.
+  delete state.allStarHostingScore; delete state.allStarHostedCount; delete state.allStarLastHostedSeason;
+  if (state.userTeam) delete state.userTeam.hostingScore;
 
   // Fill new top-level fields
   const newTopLevel = {

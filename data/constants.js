@@ -658,6 +658,36 @@ export const ALLSTAR_HOSTING_ATMOS_BUMP          = 15;
 export const ALLSTAR_HOSTING_OWNER_TRUST_BUMP    = 10;
 export const ALLSTAR_HOSTING_GM_REL_BUMP         =  5;  // with all league teams
 
+// ── The All-Star Game itself (§75) ─────────────────────────────
+// Every season: Division A's stars vs Division B's, on day ALLSTAR_GAME_BREAK_DAY
+// of the break, in the host's ballpark (the host's division bats last).
+export const ALL_STAR_BREAK_DAYS           = 4;
+export const ALLSTAR_GAME_BREAK_DAY        = 2;          // 1-based day of the break
+export const ALLSTAR_GAME_TIME             = '8:00 PM';
+export const ALLSTAR_SELECTION_AFTER_GAME  = 58;         // rosters named after the user's 58th regular game
+export const ALLSTAR_SQUAD_IDS             = Object.freeze({ A: 'ASA', B: 'ASB' });
+// Per squad: one starter at each lineup slot (fan vote), reserves, a staff.
+export const ALLSTAR_SQUAD_SIZE            = Object.freeze({ HITTERS: 13, SP: 6, RP: 5 });
+export const ALLSTAR_MAX_PER_CLUB          = 6;          // beyond the elected starters
+export const ALLSTAR_MIN_PA                = 60;         // below this, OVR (reputation) carries the vote
+export const ALLSTAR_MIN_IP                = 20;
+export const ALLSTAR_STARTER_INNINGS       = 2;          // everyone else pitches one
+export const ALLSTAR_SUBS_FROM_INNING      = 5;          // the reserves come in from here
+export const ALLSTAR_INFLUENCE_BOOST       = 0.08;       // host GM lobbying for a bubble player (vote score ×)
+
+// ── Hosting score: the league's impression of the ballpark (§75) ──
+// Never shown as a number. Grows from home games played in a lively park,
+// facility decisions on cards (`_hosting: { yes, no }`), and a full season of
+// high atmosphere; a fraction carries into the next season (the league's
+// memory fades), so a bid is built by SUSTAINED effort.
+export const HOSTING_PTS_PER_ATMO_POINT    = 0.1;        // per home game, per atmosphere point above the floor
+export const HOSTING_ATMO_FLOOR            = 55;
+export const HOSTING_SEASON_ATMO_TARGET    = 70;         // avg home atmosphere for the season bonus
+export const HOSTING_SEASON_ATMO_BONUS     = 100;
+export const HOSTING_SCORE_CARRYOVER       = 0.85;
+export const ALLSTAR_HOSTING_MIN_ATMOSPHERE = 65;
+export const ALLSTAR_POST_GLOW_GAMES       = 20;         // home-crowd lift after hosting
+
 // ─────────────────────────────────────────────────────────────
 // ARCHETYPE PARAMETERS (Section 16.6) — all $M
 // ─────────────────────────────────────────────────────────────

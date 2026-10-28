@@ -1,6 +1,6 @@
 /**
  * engine/PrestigeEngine.js
- * Prestige score accumulation, tier advancement, All-Star hosting eligibility,
+ * Prestige score accumulation, tier advancement,
  * and the Franchise Legend win condition.
  *
  * Prestige is earned permanently — score never decreases. Bad seasons affect
@@ -31,8 +31,6 @@ import {
   PRESTIGE_TIER_THRESHOLDS,
   PRESTIGE_TIER_NAMES,
   PRESTIGE_TIER_WIN_TARGET_BUMP,
-  ALLSTAR_HOSTING_REVENUE_BONUS_MIN,
-  ALLSTAR_HOSTING_REVENUE_BONUS_MAX,
   WIN_TARGET_MET_WITHIN,
 } from '../data/constants.js';
 
@@ -181,97 +179,7 @@ export function computeSeasonPrestige(state, seasonResult) {
   return { mutations, events };
 }
 
-// ─────────────────────────────────────────────────────────────
-// ALL-STAR HOSTING
-// ─────────────────────────────────────────────────────────────
-
-/**
- * evaluateAllStarHostingEligibility(state)
- * Checks whether the user team is eligible to host the All-Star Game
- * next season. Returns eligibility status and blocking reasons.
- *
- * Eligibility rules (Section 19.2):
- *   - Minimum Tier 2 for first hosting
- *   - Minimum Tier 3 for second hosting (3+ seasons since last)
- *   - Minimum Tier 5 for third hosting (4+ seasons since last)
- *   - atmosphere >= 65 required for any hosting bid
- *   - operatingBudget >= ALLSTAR_MIN_BUDGET for hosting costs
- *
- * @param {Object} state
- * @returns {Object} { eligible, reasons, tier, nextEligibleSeason }
- */
-export function evaluateAllStarHostingEligibility(state) {
-  const tier          = state.prestigeTier || 1;
-  const hostedCount   = state.allStarHostedCount || 0;
-  const lastHosted    = state.allStarLastHostedSeason || 0;
-  const currentSeason = state.seasonNum;
-  const atmosphere    = state.userTeam?.atmosphere || 50;
-  const reasons       = [];
-
-  // Tier requirement
-  const tierRequired = hostedCount === 0 ? 2 : hostedCount === 1 ? 3 : 5;
-  if (tier < tierRequired) {
-    reasons.push(`Prestige Tier ${tierRequired} required (currently Tier ${tier})`);
-  }
-
-  // Cooldown
-  const cooldownRequired = hostedCount === 0 ? 0 : hostedCount === 1 ? 3 : 4;
-  const seasonsSinceLast = currentSeason - lastHosted;
-  if (lastHosted > 0 && seasonsSinceLast < cooldownRequired) {
-    const waitSeasons = cooldownRequired - seasonsSinceLast;
-    reasons.push(`Must wait ${waitSeasons} more season(s) since last hosting`);
-  }
-
-  // Atmosphere
-  if (atmosphere < 65) {
-    reasons.push(`Stadium atmosphere must be 65+ (currently ${atmosphere})`);
-  }
-
-  const eligible = reasons.length === 0;
-
-  return {
-    eligible,
-    reasons,
-    tier,
-    hostedCount,
-    tierRequired,
-    nextEligibleSeason: eligible ? currentSeason + 1 : null,
-  };
-}
-
-/**
- * applyAllStarHostingRevenue(state)
- * Calculates and returns the revenue bonus from hosting the All-Star Game.
- * Scaled by atmosphere and prestige tier.
- *
- * @param {Object} state
- * @returns {Object} { revenueBonus, mutations }
- */
-export function applyAllStarHostingRevenue(state) {
-  const atmosphere = state.userTeam?.atmosphere || 50;
-  const tier       = state.prestigeTier || 1;
-
-  // Base range from constants, scaled by atmosphere (0.5–1.0 modifier)
-  const atmosMod = 0.5 + (atmosphere / 200); // 0.50 at atmo=0, 1.0 at atmo=100
-  const tierMod  = 0.8 + (tier * 0.04);      // 0.84 at Tier 1, 1.0 at Tier 5
-
-  const base    = ALLSTAR_HOSTING_REVENUE_BONUS_MIN;
-  const range   = ALLSTAR_HOSTING_REVENUE_BONUS_MAX - ALLSTAR_HOSTING_REVENUE_BONUS_MIN;
-  const revenue = Math.round(base + range * atmosMod * tierMod);
-
-  const mutations = {
-    allStarHostedCount:     (state.allStarHostedCount || 0) + 1,
-    allStarLastHostedSeason: state.seasonNum,
-    allStarHostingScore:    (state.allStarHostingScore || 0) + revenue,
-    userTeam: {
-      finances: {
-        revenue: (state.userTeam?.finances?.revenue || 0) + revenue,
-      },
-    },
-  };
-
-  return { revenueBonus: revenue, mutations };
-}
+// All-Star hosting (eligibility, payoff) lives in AllStarEngine (§75).
 
 // ─────────────────────────────────────────────────────────────
 // FRANCHISE TURNING POINT

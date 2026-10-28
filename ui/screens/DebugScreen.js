@@ -24,6 +24,7 @@
 
 import * as StateManager from '../../store/StateManager.js';
 import * as EventBus     from '../EventBus.js';
+import { hostingStatus } from '../../engine/AllStarEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // PUBLIC API
@@ -290,18 +291,20 @@ function _renderSeasonHistory(s) {
 // ─────────────────────────────────────────────────────────────
 
 function _renderAllStarHosting(s) {
-  const score       = s.allStarHostingScore   || 0;
-  const hosted      = s.allStarHostedCount    || 0;
-  const lastSeason  = s.allStarLastHostedSeason || 0;
-  const tier        = s.prestigeTier          || 1;
-
+  const a  = s.allStar || {};
+  const st = s.allStar ? hostingStatus(s) : null;
+  const se = a.season || {};
+  const hostName = se.hostId === 'user' ? 'Us' : (s.leagueTeams || []).find(t => t.id === se.hostId)?.name;
   const rows = [
-    ['Hosting score',   score],
-    ['Times hosted',    hosted],
-    ['Last hosted',     lastSeason > 0 ? `Season ${lastSeason}` : 'Never'],
-    ['Current tier',    tier],
-    ['Tier required',   hosted === 0 ? 2 : hosted === 1 ? 3 : 5],
-    ['Atmosphere',      s.userTeam?.atmosphere || '—'],
+    ['Hosting score',   `${Math.round(a.hostingScore || 0)} / ${st?.bar ?? '—'}`],
+    ['Would host now',  st ? (st.eligible ? 'Yes' : `No — ${st.reasons.join(', ')}`) : '—'],
+    ['Times hosted',    a.hostedCount || 0],
+    ['Last hosted',     a.lastHostedSeason ? `Season ${a.lastHostedSeason}` : 'Never'],
+    ['Tier (needed)',   `${s.prestigeTier || 1} (${st?.tierNeeded ?? '—'})`],
+    ['Atmosphere',      s.userTeam?.atmosphere ?? '—'],
+    ['Host named after', se.announceAfterGame ? `game ${se.announceAfterGame}` : '—'],
+    ['This year\'s host', hostName || 'Not named yet'],
+    ['Rosters',         se.squads ? 'Named' : 'Not yet'],
   ].map(([l, v]) => `<div class="debug-asb-row"><span class="debug-asb-label">${l}</span><span class="debug-asb-val">${v}</span></div>`).join('');
 
   return _section('All-Star Hosting', rows);

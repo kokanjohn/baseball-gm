@@ -31,6 +31,10 @@ import { accumulateBox, liveSituation } from '../../engine/SimEngine.js';
 import { renderBoxScore } from '../components/BoxScore.js';
 import { renderLeagueLiveRow, wireLeagueGameTaps } from '../components/LiveGame.js';
 import { renderOffseasonCard, updateOffseasonCountdown } from '../components/OffseasonCard.js';
+import {
+  allStarFeature, allStarView, allStarGameLike, allStarIsLive, allStarFinalDs, countdownText,
+  renderAllStarHeader, renderAllStarPregame, renderMyAllStars, renderAllStarResult,
+} from '../components/AllStarCard.js';
 import { GAME_STATUS, PLAYER_GROUP } from '../../data/constants.js';
 import {
   formatRecord, formatStreak, formatDate, metricBarColor, computeRosterOvr,
@@ -49,6 +53,7 @@ let _pbpRenderedIdx = 0;   // count of plays already placed in the live PBP feed
 let _firstPitchSounded  = false;
 let _countdownInterval  = null; // 1-second interval for fp countdown display
 let _visibilityHandler  = null; // document visibilitychange handler
+let _asgMode            = null; // §75: 'pre' | 'live' | 'final' while the All-Star Game owns the game area
 
 // ─────────────────────────────────────────────────────────────
 // MOUNT / UNMOUNT
@@ -238,7 +243,11 @@ export function refresh() {
   // The feed was just rebuilt with all currently-revealed plays; subsequent
   // ticks only append plays beyond this index.
   _pbpRenderedIdx = game?.livePlayIndex || 0;
-  if (game && !game._committed && game.gameTime && Date.now() < game.gameTime
+  if (_asgMode === 'live') {
+    const asg = allStarFeature(state, game);
+    if (asg) _pbpRenderedIdx = allStarGameLike(asg.game).livePlayIndex;
+  }
+  if (!_asgMode && game && !game._committed && game.gameTime && Date.now() < game.gameTime
       && !(game.plays && game.plays.length > 0 && (game.livePlayIndex || 0) > 0)) {
     _startCountdown(game.gameTime);
   }
@@ -249,7 +258,7 @@ export function refresh() {
 // ─────────────────────────────────────────────────────────────
 
 function _onTick({ play, game } = {}) {
-  if (!game) return;
+  if (!game || _asgMode) return;   // the All-Star Game has the card (_refreshAllStar)
 
   const liveWrap = document.getElementById('live-game-wrap');
 
@@ -272,7 +281,27 @@ function _onTick({ play, game } = {}) {
   }
 
   const ds = _deriveGameState(game);
+  _patchLiveCard(game, ds, _userView(StateManager.get(), game));
 
+  // First pitch sound (on first revealed play)
+  if (!_firstPitchSounded && ds.revealedCount === 1) {
+    _firstPitchSounded = true;
+    App.playSoundFirstPitch();
+  }
+
+  // Win/loss sound on game_end play
+  if (play?.type === 'game_end') {
+    if (ds.ourScore > ds.theirScore) App.playSoundWin();
+    else                              App.playSoundLoss();
+  }
+}
+
+/**
+ * _patchLiveCard(game, ds, view)
+ * Brings the live card up to date in place (no re-render: the PBP keeps its
+ * scroll). Shared by our own games (game:tick) and the All-Star Game (§75).
+ */
+function _patchLiveCard(game, ds, view) {
   // PBP first — append every play revealed since the last render (oldest→newest
   // so the newest ends on top), so the play appears together with the score it
   // produced rather than a beat behind it. Handles batches at high speed.
@@ -309,14 +338,7 @@ function _onTick({ play, game } = {}) {
 
   // Linescore team abbrs via shared helpers (never a placeholder)
   const lsEl = document.getElementById('lgv-linescore');
-  if (lsEl) {
-    const st       = StateManager.get();
-    const userAbbr = _userAbbr(st);
-    const oppAbbr  = _oppAbbr(st, game);
-    const awayAbbr = game.isHome ? oppAbbr  : userAbbr;
-    const homeAbbr = game.isHome ? userAbbr : oppAbbr;
-    lsEl.innerHTML = _renderLinescore(ds, awayAbbr, homeAbbr);
-  }
+  if (lsEl) lsEl.innerHTML = _renderLinescore({ ...ds, isHome: view.userIsHome }, view.awayAbbr, view.homeAbbr);
 
   // Diamond — replace SVG in-place
   const svgWrap = document.getElementById('lgv-diamond-wrap');
@@ -329,19 +351,7 @@ function _onTick({ play, game } = {}) {
   // Box score — only rebuild if tab is active
   if (_liveTab === 'box') {
     const boxEl = document.getElementById('lgv-box');
-    if (boxEl) boxEl.innerHTML = _renderBoxScore(ds, game, StateManager.get());
-  }
-
-  // First pitch sound (on first revealed play)
-  if (!_firstPitchSounded && ds.revealedCount === 1) {
-    _firstPitchSounded = true;
-    App.playSoundFirstPitch();
-  }
-
-  // Win/loss sound on game_end play
-  if (play?.type === 'game_end') {
-    if (ds.ourScore > ds.theirScore) App.playSoundWin();
-    else                              App.playSoundLoss();
+    if (boxEl) boxEl.innerHTML = _renderBoxScore(ds, game, StateManager.get(), view.names);
   }
 }
 
@@ -594,6 +604,11 @@ function _renderDashboard(state) {
 // ─────────────────────────────────────────────────────────────
 
 function _renderGameArea(game, state) {
+  // §75: from our last game before the break to the morning after the
+  // All-Star Game, the game area is the All-Star Game's.
+  const asg = allStarFeature(state, game);
+  _asgMode = null;
+  if (asg) return _renderAllStarArea(asg.game, state, game);
   if (!game) return _renderSeasonDoneCard(state);
 
   const isLive = game.plays
@@ -615,6 +630,63 @@ function _renderGameArea(game, state) {
   return _renderNextGameCard(game, state) + _renderFirstPitchCountdown(game);
 }
 
+/** The All-Star Game in the game area: pre-game, live, or final (§75). */
+function _renderAllStarArea(g, state, nextUserGame) {
+  const view = allStarView(state, g);
+  const head = renderAllStarHeader(state, g);
+  if (g.played) {
+    _asgMode = 'final';
+    _liveTab = 'box';   // the plays are gone after the final; the box tells it
+    const ds = allStarFinalDs(g, view);
+    const next = nextUserGame && !nextUserGame._committed ? _renderNextGameCard(nextUserGame, state) : '';
+    return head + _renderLiveGameCard({ ...g, isHome: true, _committed: true, boxScore: g.boxScore }, state, view, ds,
+                                      renderAllStarResult(state, g))
+         + renderMyAllStars(state, g, g.boxScore) + next;
+  }
+  if (allStarIsLive(g)) {
+    _asgMode = 'live';
+    const like = allStarGameLike(g);
+    const ds = _deriveGameState(like);
+    return head + _renderLiveGameCard(like, state, view, ds) + `<div id="asg-mine">${renderMyAllStars(state, g, _liveBox(like, state))}</div>`;
+  }
+  _asgMode = 'pre';
+  return head + renderAllStarPregame(state, g) + renderMyAllStars(state, g, null);
+}
+
+/** The box from the revealed plays (the same accumulator as everywhere). */
+function _liveBox(game, state) {
+  const revealed = (game.plays || []).slice(0, game.livePlayIndex || 0);
+  if (!revealed.length) return null;
+  return accumulateBox(revealed, state.players || {}, {
+    awayOrder: game.liveLineups?.away || [], homeOrder: game.liveLineups?.home || [],
+    userIsHome: !!game.isHome, homeIds: game.liveLineups?.homeIds || null,
+  });
+}
+
+/**
+ * _refreshAllStar() — every 5 s while the All-Star Game owns the game area:
+ * the countdown, the live card patched in place, a full render when it goes
+ * live or final.
+ */
+function _refreshAllStar() {
+  const state = StateManager.get();
+  if (!state || !document.getElementById('dashboard-content')) return;
+  const nextUserGame = _getNextGame(state);
+  const asg = allStarFeature(state, nextUserGame);
+  const mode = !asg ? null : asg.game.played ? 'final' : allStarIsLive(asg.game) ? 'live' : 'pre';
+  if (mode !== _asgMode) { refresh(); return; }
+  if (mode === 'pre') {
+    const el = document.getElementById('asg-fp-time');
+    if (el) el.textContent = countdownText(asg.game.gameTime);
+  } else if (mode === 'live') {
+    const like = allStarGameLike(asg.game);
+    const view = allStarView(state, asg.game);
+    _patchLiveCard(like, _deriveGameState(like), view);
+    const mine = document.getElementById('asg-mine');
+    if (mine) mine.innerHTML = renderMyAllStars(state, asg.game, _liveBox(like, state));
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // TEAM LABELS — one source of truth, never a placeholder
 // ─────────────────────────────────────────────────────────────
@@ -634,26 +706,26 @@ function _oppAbbr(state, game) {
 function _oppFull(game) {
   return game?.opponent || 'Opponent';
 }
+/** Labels for our own game's live card. */
+function _userView(state, game) {
+  const uA = _userAbbr(state), uF = _userFull(state), oA = _oppAbbr(state, game), oF = _oppFull(game);
+  return {
+    awayFull: game.isHome ? oF : uF, homeFull: game.isHome ? uF : oF,
+    awayAbbr: game.isHome ? oA : uA, homeAbbr: game.isHome ? uA : oA,
+    awayIsUser: !game.isHome, homeIsUser: !!game.isHome, userIsHome: !!game.isHome,
+    names: { awayName: game.isHome ? oF : uF, homeName: game.isHome ? uF : oF },
+  };
+}
 
 // ─────────────────────────────────────────────────────────────
 // LIVE GAME CARD
 // ─────────────────────────────────────────────────────────────
 
-function _renderLiveGameCard(game, state) {
-  const ds       = _deriveGameState(game);
-  const userAbbr = _userAbbr(state);
-  const userFull = _userFull(state);
-
-  const oppAbbr  = _oppAbbr(state, game);
-  const oppFull  = _oppFull(game);
-
+function _renderLiveGameCard(game, state, view = null, ds = null, footer = '') {
+  view = view || _userView(state, game);
+  ds   = ds   || _deriveGameState(game);
   // Away always top, home always bottom
-  const awayFull  = game.isHome ? oppFull  : userFull;
-  const homeFull  = game.isHome ? userFull : oppFull;
-  const awayAbbr  = game.isHome ? oppAbbr  : userAbbr;
-  const homeAbbr  = game.isHome ? userAbbr : oppAbbr;
-  const awayIsUser = !game.isHome;
-  const homeIsUser =  game.isHome;
+  const { awayFull, homeFull, awayAbbr, homeAbbr, awayIsUser, homeIsUser } = view;
 
   return `
     <div class="live-game-wrap" id="live-game-wrap">
@@ -680,8 +752,9 @@ function _renderLiveGameCard(game, state) {
       </div>
 
       <div class="lgv-linescore-wrap" id="lgv-linescore">
-        ${_renderLinescore(ds, awayAbbr, homeAbbr)}
+        ${_renderLinescore({ ...ds, isHome: view.userIsHome }, awayAbbr, homeAbbr)}
       </div>
+      ${footer}
 
       <div class="live-tabs">
         <div class="live-tab${_liveTab === 'pbp' ? ' active' : ''}" data-tab="pbp">Play by Play</div>
@@ -693,7 +766,7 @@ function _renderLiveGameCard(game, state) {
         </div>
       </div>
       <div class="live-tab-content${_liveTab === 'box' ? ' active' : ''}" id="lgv-tc-box">
-        <div id="lgv-box">${_renderBoxScore(ds, game, state)}</div>
+        <div id="lgv-box">${_renderBoxScore(ds, game, state, view.names)}</div>
       </div>
     </div>
   `;
@@ -840,7 +913,7 @@ function _innHeader(half, inning) {
 
 function _renderPBPFeed(ds) {
   if (ds.pbpPlays.length === 0) {
-    return `<div class="pbp-empty">Game in progress…</div>`;
+    return `<div class="pbp-empty">${ds.isFinal ? 'Final — the box score has the whole game.' : 'Game in progress…'}</div>`;
   }
   const lines = [];
   let lastKey = null;
@@ -890,7 +963,7 @@ function _prependPBPInningHeader(play) {
 // BOX SCORE RENDERER
 // ─────────────────────────────────────────────────────────────
 
-function _renderBoxScore(ds, game, state) {
+function _renderBoxScore(ds, game, state, names = null) {
   if (!state) state = StateManager.get();
   const players = state?.players || {};
 
@@ -911,12 +984,7 @@ function _renderBoxScore(ds, game, state) {
     return '<div style="padding:16px;color:var(--muted);font-size:12px;">Stats appear as plays are revealed.</div>';
   }
 
-  const userName = _userFull(state);
-  const oppName  = _oppFull(game);
-  return renderBoxScore(box, {
-    awayName: game.isHome ? oppName : userName,
-    homeName: game.isHome ? userName : oppName,
-  });
+  return renderBoxScore(box, names || _userView(state, game).names);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1092,7 +1160,7 @@ function _renderHotColdStrip(state) {
 const _FEED_ICONS = {
   trade:'🔄',injury:'🏥',promotion:'⬆️',demotion:'⬇️',
   signing:'✍️',release:'👋',milestone:'🏆',card:'📋',
-  waiver:'📋',win:'✅',loss:'❌',weather:'⛈️',result:'⚾',
+  waiver:'📋',win:'✅',loss:'❌',weather:'⛈️',result:'⚾',allstar:'⭐',
 };
 
 /** Real-time label for a feed entry (the league runs on the real clock). */
@@ -1186,6 +1254,7 @@ function _openGameLogModal(state, filter) {
 let _leagueTimer = null;
 function _refreshLeagueRow() {
   updateOffseasonCountdown();
+  _refreshAllStar();
   const el = document.getElementById('dash-league-live');
   const st = StateManager.get();
   if (!el || !st) return;
@@ -1214,11 +1283,16 @@ function _attachListeners(state) {
       document.getElementById(`lgv-tc-${_liveTab}`)?.classList.add('active');
 
       if (_liveTab === 'box') {
-        const liveGame = _getNextGame(state);
-        if (liveGame) {
-          const ds  = _deriveGameState(liveGame);
-          const box = document.getElementById('lgv-box');
-          if (box) box.innerHTML = _renderBoxScore(ds, liveGame, state);
+        const st  = StateManager.get();
+        const box = document.getElementById('lgv-box');
+        const asg = _asgMode ? allStarFeature(st, _getNextGame(st)) : null;
+        if (asg && box) {
+          const view = allStarView(st, asg.game);
+          const like = asg.game.played ? { ...asg.game, isHome: true } : allStarGameLike(asg.game);
+          box.innerHTML = _renderBoxScore(asg.game.played ? allStarFinalDs(asg.game, view) : _deriveGameState(like), like, st, view.names);
+        } else {
+          const liveGame = _getNextGame(st);
+          if (liveGame && box) box.innerHTML = _renderBoxScore(_deriveGameState(liveGame), liveGame, st);
         }
       }
     });

@@ -28,6 +28,7 @@ import { openPlayerCard } from '../components/PlayerCard.js';
 import { renderBoxScore } from '../components/BoxScore.js';
 import { accumulateBox } from '../../engine/SimEngine.js';
 import { leagueGameState, wireLeagueGameTaps } from '../components/LiveGame.js';
+import { clubFor } from '../../engine/AllStarEngine.js';
 import {
   formatDate, formatRecord, formatTeamRecord, formatGameLabel,
   formatGameStatus, formatPhaseLabel,
@@ -764,7 +765,7 @@ function _renderScoresModal(state) {
     return;
   }
 
-  const _abbr = id => (leagueTeams.find(t => t.id === id)?.abbr || id?.substring(0,3) || '???').toUpperCase();
+  const _abbr = id => (clubFor(state, id)?.abbr || id?.substring(0,3) || '???').toUpperCase();
   const _sfx  = n => n===1?'st':n===2?'nd':n===3?'rd':'th';
 
   let rows = '';
@@ -848,6 +849,7 @@ function _renderScoresModal(state) {
       metaPart  = '';
     }
 
+    if (g.isAllStar) rows += `<div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);padding:8px 0 2px;">★ All-Star Game</div>`;
     rows += `<div class="sg-row${started ? ' sg-row-tap' : ''}"${started ? ` data-lg-date="${_scoresBrowseDate}" data-lg-id="${g.id}"` : ''}>
       <span class="sg-abbr sg-abbr-away">${awayAbbr}</span>
       <span class="sg-score-wrap">${scorePart}</span>

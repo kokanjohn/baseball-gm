@@ -17,6 +17,10 @@ import {
   REGULAR_SEASON_GAME_COUNT,
   SPRING_TRAINING_GAME_COUNT,
   ALL_STAR_BREAK_AFTER_GAME,
+  ALL_STAR_BREAK_DAYS,
+  ALLSTAR_GAME_BREAK_DAY,
+  ALLSTAR_GAME_TIME,
+  ALLSTAR_SQUAD_IDS,
   TRADE_DEADLINE_OPEN,
   TRADE_DEADLINE_CLOSE,
   STRETCH_RUN_FINAL_GAMES,
@@ -47,7 +51,6 @@ const SPRING_START_DAY   = 14;
 // games over 13 days, then a short break).
 const SPRING_TO_SEASON_GAP_DAYS = 18;
 const SPRING_OFF_DAYS           = new Set([2, 5, 8]);
-const ALL_STAR_BREAK_DAYS       = 4;
 
 /**
  * generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride?, opts?)
@@ -108,6 +111,7 @@ export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride
   const homeNext = new Map();      // pair key → id of the team hosting their next series
   offset = SPRING_TO_SEASON_GAP_DAYS;
   let gamesSoFar = 0;
+  let asgOffset = null;
   rounds.forEach((pairs, r) => {
     const len     = lengths[r];
     const stagger = r % 2 === 1;  // every other round: half the pairs start a day later
@@ -125,7 +129,10 @@ export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride
     });
     offset += len + (stagger ? 1 : 0);
     gamesSoFar += len;
-    if (gamesSoFar === ALL_STAR_BREAK_AFTER_GAME) offset += ALL_STAR_BREAK_DAYS;
+    if (gamesSoFar === ALL_STAR_BREAK_AFTER_GAME) {
+      asgOffset = offset + ALLSTAR_GAME_BREAK_DAY - 1;   // §75: the game, mid-break
+      offset += ALL_STAR_BREAK_DAYS;
+    }
   });
 
   // ── Materialize: user schedule + CPU day map ─────────────────
@@ -178,6 +185,26 @@ export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride
         });
       }
     }
+  }
+
+  // ── The All-Star Game (§75): on the league calendar like any game. Which
+  // squad is home is set when the host is named (AllStarEngine.nameHost).
+  if (asgOffset !== null) {
+    const realDate = _addDays(realStart, asgOffset);
+    const dateStr  = _isoDate(_addDays(dispStart, asgOffset));
+    (dayMap[dateStr] = dayMap[dateStr] || []).push({
+      id:        `asg-${seasonNum}`,
+      isAllStar: true,
+      homeId:    ALLSTAR_SQUAD_IDS.B,
+      awayId:    ALLSTAR_SQUAD_IDS.A,
+      date:      dateStr,
+      gameTime:  _parseGameTime(ALLSTAR_GAME_TIME, realDate),
+      isSpring:  false,
+      status:    GAME_STATUS.SCHEDULED,
+      played:    false,
+      homeScore: null,
+      awayScore: null,
+    });
   }
 
   if (schedule.filter(g => g.isSpring).length !== SPRING_TRAINING_GAME_COUNT

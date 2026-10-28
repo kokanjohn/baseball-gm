@@ -382,14 +382,14 @@ export const DECISIONS_POOL = [
    yesMsg:'Extension signed! Key bat locked up.',noMsg:'They are leaving. Lineup takes a hit.',
    _relYes:{'act_hi':2},_relNo:{'act_hi':-2},
    _budgetCost:'ext_cost',onYes:'retain_active_hitter',onNo:'release_active_hitter',_ttl:2,_expireMsg:"Deadline passed — {active_hitter_name} tests free agency. They\'re gone.",_expireFx:{morale:0},_rosterContract:'roster:release:hitter',_requiresContractYear:true},
-  {id:'f1',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'FACILITIES',sender:'Operations',avatar:'🏟️',
+  {id:'f1',_hosting:{yes:40,no:0},autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'FACILITIES',sender:'Operations',avatar:'🏟️',
    subject:'Facility upgrade proposal — {facility_area}',
    preview:'Players frustrated with outdated facilities — targeted renovation on the table…',
    body:"A local contractor has submitted a proposal to renovate the {facility_area} during the next extended road trip. Cost is {misc_cost_lg}. Players have been vocal about how outdated the current setup is — a meaningful morale and performance lift is on the table. Holding off doesn\'t make the problem go away.",
    yesLabel:'Approve Renovation',noLabel:'Hold Off',
    yesEffect:{morale:9,atmo:6,ovr:3},noEffect:{morale:-4},
    yesMsg:'Renovation underway! Players are thrilled.',noMsg:'Budget saved. Locker room grumbling continues. The facility issues won\'t fix themselves — this will come up again.',_budgetCost:'misc_cost_lg',_requeueOnNo:true,_requeueCooldown:30},
-  {id:'f2',autoResolve:'no',_minGames:10,type:'good',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🏟️',
+  {id:'f2',_hosting:{yes:30,no:0},autoResolve:'no',_minGames:10,type:'good',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🏟️',
    subject:'New scoreboard screens — fan impact',
    preview:'Fans want modern screens — big atmosphere boost…',
    body:"A local contractor is quoting {misc_cost_lg} for a full LED ribbon board replacement. Installation would happen during an upcoming road trip — no game-day disruption. Fans have complained about the ancient scoreboards for years — real atmosphere upside. The kind of visible investment that signals we\'re serious about the fan experience.",
@@ -482,7 +482,7 @@ export const DECISIONS_POOL = [
    yesMsg:'Backed the manager. Culture first.',noMsg:'Player stays active. Tension persists.',
    onYes:'bench_active_pitcher',_gamesToken:'susp_pitcher_games',_requiresBPCoverage:true,_rosterContract:'roster:bench:pitcher',
    _followup:{on:"no",chance:0.60,delayMin:8,delayMax:17}},
-  {id:'m1',autoResolve:'no',type:'good',tag:'MARKETING',sender:'Community Relations',avatar:'📣',
+  {id:'m1',_hosting:{yes:10,no:0},autoResolve:'no',type:'good',tag:'MARKETING',sender:'Community Relations',avatar:'📣',
    subject:'Youth baseball clinic — community goodwill',
    preview:'Host a free clinic — community goodwill and fan approval…',
    body:"Our community relations team wants to host a free youth baseball clinic. Cost is minimal — {misc_cost_capped} — but we project a meaningful bump in fan ratings and local goodwill{streak_context_clause}. Rebuilding franchises win cities first.",
@@ -518,7 +518,7 @@ export const DECISIONS_POOL = [
    noMsg:'Passed on the vendor terms. Marketing team frustrated but creative control stays with the franchise.',
    _revenueToken:'rev_amount',_oncePerSeason:true},
 
-  {id:'ms_4',autoResolve:'no',_weight:0.85,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🛍️',
+  {id:'ms_4',_hosting:{yes:25,no:-10},autoResolve:'no',_weight:0.85,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🛍️',
    _requiresHome:true,_requiresRegular:true,_oncePerSeason:true,_minGames:15,_maxGames:85,
    subject:'League ADA compliance notice — retail area upgrade required',
    preview:'League-mandated accessibility upgrade for the team store area — minimum required or full renovation…',
@@ -950,7 +950,7 @@ export const DECISIONS_POOL = [
    yesMsg:'Suspension issued. Clubhouse line drawn.',noMsg:'Handled quietly. Tension remains.',
    onYes:'bench_active_hitter',_ttl:1,_requiresTargetCoverage:true,_expireMsg:'Left unaddressed — altercation became public. PR crisis unfolding.',_expireFx:{morale:-10,atmo:-10,ovr:-2},_rosterContract:'roster:bench:hitter',
    _followup:{on:"no",chance:0.70,delayMin:4,delayMax:10}},
-  {id:'f3',autoResolve:'no',autoResolveTax:{morale:-1},_requiresHome:true,type:'urgent',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🏟️',
+  {id:'f3',_hosting:{yes:15,no:-15},autoResolve:'no',autoResolveTax:{morale:-1},_requiresHome:true,type:'urgent',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🏟️',
    subject:'Visiting clubhouse emergency repair needed',
    preview:'Pipe burst overnight — league requires fix before next home game…',
    body:"A pipe burst in the visiting clubhouse overnight. The league requires the repair before our next home game or we face a conduct fine. Emergency contractor quoted {pipe_repair_cost} for the fix — defer and risk a larger fine or handle it now.",
@@ -958,7 +958,7 @@ export const DECISIONS_POOL = [
    yesEffect:{atmo:3},noEffect:{atmo:-5,morale:-2},
    yesMsg:'Repairs completed. Visiting team has no complaints.',noMsg:'Deferred. League compliance officer has been notified.',
    _budgetCost:'pipe_repair_cost'},
-  {id:'f4',autoResolve:'yes',_requiresHome:true,type:'good',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🏟️',
+  {id:'f4',_hosting:{yes:20,no:0},autoResolve:'yes',_requiresHome:true,type:'good',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🏟️',
    subject:'Infield resurfacing offer — discounted contractor available',
    preview:'Local contractor offering below-market rate on infield work…',
    body:"A local contractor is offering to fully resurface the infield at a below-market rate of {misc_cost_lg}. A smoother surface reduces player injury risk. Stadium Ops wants it done. One flag: the discount is real but the contractor has a shorter track record than the firm we usually use. If the work is rushed, we could end up with worse footing than we started with.",
@@ -1279,7 +1279,7 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:3,atmo:1},noEffect:{morale:-6,atmo:-2},
    yesMsg:'Charter booked. Team arrived on time — crisis averted.',noMsg:'Left to sort it out. Morale took a real hit.',
    _budgetCost:'misc_cost_xs',_ttl:1,_expireMsg:'No charter booked — team arrived late. League fine issued.',_expireFx:{morale:-10,atmo:-4}},
-  {id:'op2',autoResolve:'no',_requiresRegular:true,_minGames:55,autoResolveTax:{morale:-2},_requiresHome:true,type:'urgent',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'✈️',
+  {id:'op2',_hosting:{yes:15,no:-10},autoResolve:'no',_requiresRegular:true,_minGames:55,autoResolveTax:{morale:-2},_requiresHome:true,type:'urgent',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'✈️',
    subject:'HVAC system failing — summer home stand at risk',
    preview:'Cooling system down ahead of five straight home games in the heat…',
    body:"The stadium HVAC is failing ahead of a summer home stand. Emergency repairs cost {misc_cost_lg} but protect players and fans from dangerous heat. Delaying risks heat-related player issues and furious fans — which gets back to ownership fast.",
@@ -1288,7 +1288,7 @@ export const DECISIONS_POOL = [
    yesMsg:'HVAC repaired. Players and fans comfortable.',noMsg:'Repairs delayed. Heat complaints rolling in from all sides.',
    _budgetCost:'misc_cost_lg',_ttl:1,_expireMsg:'Repairs ignored — summer home stand played in dangerous heat. Players and fans furious.',_expireFx:{morale:-10,atmo:-14,ovr:-3},
    _followup:{on:"no",chance:0.50,delayMin:8,delayMax:19}},
-  {id:'op3',autoResolve:'no',autoResolveTax:{morale:-1},_requiresHome:true,type:'normal',tag:'OPERATIONS',sender:'Travel Coordinator',avatar:'✈️',
+  {id:'op3',_hosting:{yes:10,no:-15},autoResolve:'no',autoResolveTax:{morale:-1},_requiresHome:true,type:'normal',tag:'OPERATIONS',sender:'Travel Coordinator',avatar:'✈️',
    subject:'Hospitality heads-up — visiting club hotel fell through',
    preview:'Incoming club flagged {hotel_issue} — league rules put us on the hook…',
    body:"The {next_home_opp} have flagged {hotel_issue} with their hotel arrangements ahead of their visit. League hospitality rules put us on the hook to help rebook before they arrive. Cost is {misc_cost_xs}. Taking care of it now keeps us clean with the league office. Letting it slide invites a formal grievance that tends to surface at the worst possible moment.",
@@ -1485,7 +1485,7 @@ export const DECISIONS_POOL = [
   // All gated with _requiresSpring:true — only appear during March pre-season
 
   // FACILITIES / LOGISTICS (10)
-  {id:'sp1',autoResolve:'no',_weight:1.2,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'⚾',
+  {id:'sp1',_hosting:{yes:10,no:0},autoResolve:'no',_weight:1.2,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'⚾',
    subject:'Ballpark prep — field crew needs a green light',
    preview:'Grounds crew ready to begin spring prep work on the field…',
    body:'The grounds crew is ready to begin spring prep on the playing surface — regrading the warning track, resodding the infield corners, and testing the irrigation. Full prep runs {grounds_crew_cost}. A partial job saves money but leaves the field below standard for Opening Day.',
@@ -1494,7 +1494,7 @@ export const DECISIONS_POOL = [
    yesMsg:'Full field prep underway. Ballpark will be ready.',noMsg:'Partial prep done. A few rough edges heading into the season.',
    _budgetCost:'grounds_crew_cost',_requiresSpring:true},
 
-  {id:'sp2',autoResolve:'no',_weight:1.0,type:'normal',tag:'OPERATIONS',sender:'Facilities Mgmt.',avatar:'🔧',
+  {id:'sp2',_hosting:{yes:15,no:0},autoResolve:'no',_weight:1.0,type:'normal',tag:'OPERATIONS',sender:'Facilities Mgmt.',avatar:'🔧',
    subject:'Clubhouse upgrades — pre-season is the window',
    preview:'Facilities team flagging deferred maintenance before players arrive in full…',
    body:'The facilities team flagged a backlog of deferred clubhouse maintenance: {sp2_items}. Doing it now costs {misc_cost_sm} but avoids disruption during the season. Skipping it means the clubhouse goes into the year below standard.',
@@ -1503,7 +1503,7 @@ export const DECISIONS_POOL = [
    yesMsg:'Upgrades complete. Players will notice.',noMsg:'Deferred again. Players noticed that too.',
    _budgetCost:'misc_cost_sm',_requiresSpring:true,_maxSpringGame:7},
 
-  {id:'sp3',autoResolve:'yes',_weight:1.0,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🏟️',
+  {id:'sp3',_hosting:{yes:10,no:0},autoResolve:'yes',_weight:1.0,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🏟️',
    subject:'Scoreboard software update — window is now',
    preview:'IT flagging a scoreboard system update that needs a restart window…',
    body:'The stadium IT team needs a maintenance window to push a scoreboard software update. Cost is {misc_cost_xs}. Doing it now during spring training is clean and low-risk. Deferring saves the budget this month — IT can find a window mid-season — but scheduling around live games is harder and a failed update during a broadcast is a real possibility.',
@@ -1521,7 +1521,7 @@ export const DECISIONS_POOL = [
    yesMsg:'New vendor signed. Fans will love the upgrade.',noMsg:'Staying with the current setup this season.',
    _budgetCost:'misc_cost_xs',_requiresSpring:true,_requiresHome:true},
 
-  {id:'sp5',autoResolve:'yes',_weight:0.85,type:'normal',tag:'OPERATIONS',sender:'Security Dept.',avatar:'🔐',
+  {id:'sp5',_hosting:{yes:10,no:0},autoResolve:'yes',_weight:0.85,type:'normal',tag:'OPERATIONS',sender:'Security Dept.',avatar:'🔐',
    subject:'Stadium security review — pre-season audit',
    preview:'Security team requesting approval for pre-season audit and upgrades…',
    body:'The security team completed their pre-season audit and flagged a few areas needing attention — {sp5_areas}. Approving the full package runs {misc_cost_xs}. Skipping it is a risk heading into a full season of traffic.',
@@ -1539,7 +1539,7 @@ export const DECISIONS_POOL = [
    yesMsg:'Order expedited. Jerseys arriving in time.',noMsg:'Delayed. Players a little disappointed — minor grumbling.',
    _budgetCost:'misc_cost_xs',_minSpringGame:0,_maxSpringGame:4,_requiresSpring:true,_ttl:3},
 
-  {id:'sp7',autoResolve:'no',_weight:0.8,_requiresSpring:true,type:'normal',tag:'OPERATIONS',sender:'Facilities Mgmt.',avatar:'💡',
+  {id:'sp7',_hosting:{yes:15,no:-5},autoResolve:'no',_weight:0.8,_requiresSpring:true,type:'normal',tag:'OPERATIONS',sender:'Facilities Mgmt.',avatar:'💡',
    subject:'Lighting system inspection — field lights flagged',
    preview:'Two field light towers need bulb replacements before night games begin…',
    body:'The pre-season inspection flagged {sp7_item} before the first night game. Fixing now costs {misc_cost_xs} and is straightforward. Waiting risks a failure during a broadcast game.',
@@ -1623,7 +1623,7 @@ export const DECISIONS_POOL = [
    _requiresSpring:true},
 
   // Spring hint cards - league standards / facility readiness
-  {id:'sp_hint1',autoResolve:'yes',_weight:0.9,type:'normal',tag:'OPERATIONS',sender:'Facilities Mgmt.',avatar:'🔧',
+  {id:'sp_hint1',_hosting:{yes:30,no:10},autoResolve:'yes',_weight:0.9,type:'normal',tag:'OPERATIONS',sender:'Facilities Mgmt.',avatar:'🔧',
    subject:'Pre-season inspection — league standards review',
    preview:'Facilities team flagging two options ahead of the annual league facility review…',
    body:'The league conducts annual facility standards reviews and ours is scheduled before the season. The facilities team identified two options: a full voluntary pre-audit sweep that addresses every flagged item proactively, or targeted fixes covering only the items most likely to draw attention. The full sweep is more thorough and more expensive. The targeted approach is cheaper but leaves some items unresolved.',
@@ -1634,7 +1634,7 @@ export const DECISIONS_POOL = [
    _budgetCost:'misc_cost_sm',_rawBudgetCostNo:20,
    _requiresSpring:true,_requiresHome:true,_oncePerSeason:true},
 
-  {id:'sp_hint2',autoResolve:'yes',_weight:0.85,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🏟️',
+  {id:'sp_hint2',_hosting:{yes:25,no:8},autoResolve:'yes',_weight:0.85,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🏟️',
    subject:'Visiting team facilities — league hospitality standards memo',
    preview:'League memo on visiting team hospitality standards — two options for how to respond…',
    body:'The league circulated a memo on visiting team hospitality standards. Our facilities team reviewed it and flagged a choice: bring everything fully up to spec now before the season starts, or address only the minimum required items and manage the rest reactively if an issue arises during the season. Full compliance is more expensive but removes any exposure. The minimum approach is cheaper but carries some risk.',
@@ -1646,7 +1646,7 @@ export const DECISIONS_POOL = [
    _requiresSpring:true,_requiresHome:true,_oncePerSeason:true,
   },
 
-  {id:'sp_hint3',autoResolve:'no',_weight:0.8,type:'good',tag:'MARKETING',sender:'PR Dept.',avatar:'📣',
+  {id:'sp_hint3',_hosting:{yes:25,no:0},autoResolve:'no',_weight:0.8,type:'good',tag:'MARKETING',sender:'PR Dept.',avatar:'📣',
    subject:'Fan experience benchmarking — league comparison results',
    preview:'Annual league fan experience survey results are back — two directions to respond…',
    body:'League benchmarking came back — we are below average on lighting, signage, and concessions. A visible fan experience package ({misc_cost_sm}) addresses it before Opening Day. Redirecting to player-side clubhouse upgrades ($20K) costs less but leaves the public-facing issues unaddressed.',
@@ -1942,7 +1942,7 @@ export const FOLLOWUP_POOL = [
   }},
 
   // rv5: compressed field prep led to rough conditions
-  {type:'rv5', card:{id:'rv5_field_prep',autoResolve:'no',type:'normal',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🏟️',
+  {type:'rv5', card:{id:'rv5_field_prep',_hosting:{yes:10,no:-10},autoResolve:'no',type:'normal',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🏟️',
     subject:'Field prep compressed — surface below standard for opening home game',
     preview:'Grounds crew flagging that the compressed prep window left some areas below standard…',
     body:'The compressed prep window after the event left the field slightly below standard for the first home game back. Nothing that made the game unsafe, but footing in a few areas was inconsistent and the warning track needs attention. The crew can address it fully between games one and two of the home stand.',
@@ -2467,7 +2467,7 @@ export const BETWEEN_GAMES_POOL = [
 
   // ── HOME STAND CLOSER CARDS (_requiresHomeStandCloser:true) ──────────────
 
-  {id:'bg7',autoResolve:'yes',_weight:1.0,type:'normal',tag:'OPERATIONS',sender:'Facilities Mgmt.',avatar:'🔧',
+  {id:'bg7',_hosting:{yes:15,no:0},autoResolve:'yes',_weight:1.0,type:'normal',tag:'OPERATIONS',sender:'Facilities Mgmt.',avatar:'🔧',
    subject:'End of home stand — facilities window before the road trip',
    preview:'Facilities team flagging a maintenance window while the team is on the road…',
    body:'With the home stand ending and a {road_trip_length}-game road trip coming up, the facilities team has a clean window to tackle deferred maintenance: {bg7_items}. Cost is {misc_cost_xs}. "This is the best window we\'ll have until the offseason. If we don\'t move now it waits until October."',

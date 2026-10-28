@@ -22,6 +22,7 @@ import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as reso
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation } from '../../engine/SimEngine.js';
 import * as Offseason from '../../engine/OffseasonEngine.js';
+import * as AllStar from '../../engine/AllStarEngine.js';
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
@@ -29,7 +30,8 @@ import * as CardPools from '../../data/cards-pool.js';
 import {
   GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP,
   SPRING_TRAINING_GAME_COUNT, REGULAR_SEASON_GAME_COUNT,
-  NEW_TEAM_SEED_CARDS,
+  NEW_TEAM_SEED_CARDS, ALL_STAR_BREAK_AFTER_GAME, ALLSTAR_ANNOUNCE_GAME_MIN, ALLSTAR_ANNOUNCE_GAME_MAX,
+  ALLSTAR_SQUAD_SIZE, ALLSTAR_STARTER_INNINGS, LINEUP_SLOTS,
 } from '../../data/constants.js';
 import {
   reconcileRoster, applyRosterMutation, eligibleSlotsFor, pendingArrivals, nextCalendarDay,
@@ -59,7 +61,7 @@ const summarize = () => {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -310,6 +312,14 @@ async function runOffseasonChecks() {
   check(`season 2: a full new calendar (${sched2.length} games, first ${sched2[0]?.date})`,
         sched2.length === sched1Len && sched2[0].gameTime >= os.springAt && String(sched2[0].date).startsWith(String(year2))
         && Object.keys(st.leagueSchedule.dayMap).length > 50);
+  // §75: last season's All-Star Game is on the record; this season's is on the calendar, its story not yet begun.
+  const asHist = st.allStar?.history || [];
+  const asg2 = Object.values(st.leagueSchedule.dayMap).flat().filter(g => g.isAllStar);
+  const s2 = AllStar.seasonOf({ ...st, allStar: { ...st.allStar } });
+  check('season 2: last All-Star Game on the record; a new one on the calendar, host not yet named',
+        asHist.length === 1 && asHist[0].seasonNum === 1 && asHist[0].hostId && asHist[0].homeScore != null
+        && asg2.length === 1 && asg2[0].id === 'asg-2' && !asg2[0].played && s2.seasonNum === 2 && !s2.hostId,
+        `history ${asHist.length} games ${asg2.length}`);
   const ghost = getInbox().filter(c => !c.resolved && ((c._rosterKey || '').startsWith('os:fa:') || c._osGate));
   check('offseason: no offseason card left open in season 2', ghost.length === 0, ghost.map(c => c.cardId).join(','));
   // Season 2 plays: the first spring games run through the normal pipeline.
@@ -347,6 +357,112 @@ function playToFinal(idx) {
     releaseDueCards();   // mirrors App's tick loop (§61)
   }
   return SM.get().schedule[idx]?.status === GAME_STATUS.FINAL;
+}
+
+// ── §75: the All-Star Game, checked when the break arrives ───────
+async function runAllStarChecks() {
+  const st = SM.get();
+  const a = st.allStar, season = a?.season;
+  const entries = Object.values(st.leagueSchedule.dayMap).flat().filter(g => g.isAllStar);
+  check('all-star: one game on the league calendar', entries.length === 1, `got ${entries.length}`);
+  const asg = entries[0];
+  if (!asg || !season) return;
+
+  // Mid-break: after every club's 66th game, before every club's 67th.
+  const times = {};
+  for (const g of st.schedule) {
+    if (g.isSpring || g.isPlayoff) continue;
+    for (const t of ['user', g.opponentId]) (times[t] = times[t] || []).push(g.gameTime);
+  }
+  for (const g of Object.values(st.leagueSchedule.dayMap).flat()) {
+    if (g.isSpring || g.isPlayoff || g.isAllStar) continue;
+    for (const t of [g.homeId, g.awayId]) (times[t] = times[t] || []).push(g.gameTime);
+  }
+  const k = ALL_STAR_BREAK_AFTER_GAME;
+  const off = Object.entries(times).filter(([, ts]) => { ts.sort((x, y) => x - y); return !(ts[k - 1] < asg.gameTime && ts[k] > asg.gameTime); });
+  check('all-star: played in the break (after every club\'s 66th game, before its 67th)', off.length === 0, off.map(([t]) => t).join(','));
+
+  // The host.
+  const hostDiv = season.hostId === 'user' ? st.userTeam.divisionId || 'A' : st.leagueTeams.find(t => t.id === season.hostId)?.divisionId;
+  check(`all-star: host named after game ${season.announceAfterGame} (${ALLSTAR_ANNOUNCE_GAME_MIN}–${ALLSTAR_ANNOUNCE_GAME_MAX}); its division is home`,
+        !!season.hostId && season.announceAfterGame >= ALLSTAR_ANNOUNCE_GAME_MIN && season.announceAfterGame <= ALLSTAR_ANNOUNCE_GAME_MAX
+        && asg.homeId === AllStar.squadIdFor(hostDiv) && asg.awayId !== asg.homeId, `host ${season.hostId} home ${asg.homeId}`);
+  const cards = [...(st.inbox || []), ...(st.scheduledCards || [])];
+  if (SEED % 2 === 1) {
+    const week = cards.filter(c => (c._rosterKey || '').startsWith('allstar:week:'));
+    check('all-star (host): an eligible user club hosts — payoff, announcement, three All-Star week cards',
+          season.hostId === 'user' && st.userTeam._hostedAllStarThisSeason && a.hostedCount === 1 && season.hostBonusK > 0
+          && cards.some(c => c.cardId === 'as_host') && week.length === 3,
+          `host ${season.hostId} count ${a.hostedCount} week ${week.length}`);
+    // The host's GM gets a say for a player on the bubble (when there is one).
+    const lobby = (st.inbox || []).filter(c => c.cardId === 'as_lobby');
+    check('all-star (host): a lobbying card for a bubble player, and the choice recorded',
+          !!season.influence && (!season.influence.playerId
+            || (lobby.length === 1 && lobby[0]._targetPlayerId === season.influence.playerId
+                && (!lobby[0].resolved || season.influence.choice === (lobby[0].choice === 'yes' ? 'yes' : 'no')))),
+          `influence ${JSON.stringify(season.influence)} cards ${lobby.length}`);
+  } else {
+    const last = new Map(st.leagueTeams.map(t => [t.id, -Infinity]));
+    for (const h of a.hosts.slice(0, -1)) if (last.has(h.teamId)) last.set(h.teamId, Math.max(last.get(h.teamId), h.year));
+    check('all-star: an ineligible user club does not host; the longest-waiting club does, and we hear why',
+          season.hostId !== 'user' && last.get(season.hostId) === Math.min(...last.values())
+          && cards.some(c => c.cardId === 'as_host_other'), `host ${season.hostId}`);
+  }
+
+  // The squads.
+  const sq = season.squads || {};
+  const ids = Object.values(sq).flatMap(q => q.rosterIds || []);
+  const bad = [];
+  for (const q of Object.values(sq)) {
+    if (q.rosterIds.length !== ALLSTAR_SQUAD_SIZE.HITTERS + ALLSTAR_SQUAD_SIZE.SP + ALLSTAR_SQUAD_SIZE.RP) bad.push(`${q.id} size ${q.rosterIds.length}`);
+    if (q.starters.map(x => x.slot).join() !== LINEUP_SLOTS.join()) bad.push(`${q.id} slots`);
+    for (const x of q.starters) if (x.slot !== 'DH' && !eligibleSlotsFor(st.players[x.id]).includes(x.slot)) bad.push(`${q.id} ${x.slot}`);
+    const clubs = [st.userTeam, ...st.leagueTeams].filter(t => (t.divisionId || 'A') === q.divisionId).map(t => t === st.userTeam ? 'user' : t.id);
+    const rep = new Set([...q.starters, ...q.reserves, ...q.sp, ...q.rp].map(x => x.teamId));
+    if (!clubs.every(c => rep.has(c))) bad.push(`${q.id} missing club`);
+    if ([...q.sp].some(x => st.players[x.id]?.pos !== 'SP') || [...q.rp].some(x => st.players[x.id]?.pos !== 'RP')) bad.push(`${q.id} staff`);
+  }
+  check('all-star: two 24-man squads — nine starters at their positions, a staff, every club represented, no one twice',
+        Object.keys(sq).length === 2 && bad.length === 0 && new Set(ids).size === ids.length, bad.join('; '));
+  check('all-star: our All-Stars told (and marked)',
+        cards.some(c => c.cardId === 'as_selected') && AllStar.userSelections(st).every(x => (st.players[x.id].allStarSeasons || []).includes(st.seasonNum)));
+
+  if (process.env.ASG_DUMP) {
+    for (const c of cards.filter(c => (c.cardId || '').startsWith('as_'))) console.log('CARD', c.cardId, '|', c.subject, '|', c.body, '|', c.yesLabel, '/', c.noLabel);
+    for (const q of Object.values(sq)) console.log('SQUAD', q.name, q.starters.map(x => `${x.slot}:${st.players[x.id].name}(${x.teamId}) ${q.votes[x.id]}`).join(' · '), '| RES', q.reserves.map(x => st.players[x.id].pos).join(','), '| SP', q.sp.length, 'RP', q.rp.length);
+  }
+  // The game: live it, and nothing but the game changes.
+  stepTo(asg.gameTime - 1000);
+  clock.set(asg.gameTime - 1000); advanceClock(clock.get());
+  const pre = SM.get();
+  const snap = JSON.stringify(Object.values(pre.players).map(p => [p.id, p.stats, p.springStats]));
+  const wl   = JSON.stringify([pre.userTeam, ...pre.leagueTeams].map(t => [t.wins, t.losses]));
+  const rot  = JSON.stringify(pre.leagueTeams.map(t => t.rotation?.currentIndex));
+  clock.set(asg.gameTime + 1000); advanceClock(clock.get());
+  const liveG = Object.values(SM.get().leagueSchedule.dayMap).flat().find(g => g.isAllStar);
+  check('all-star: goes live at first pitch, with plays', liveG.status === GAME_STATUS.LIVE && liveG.plays?.length > 50);
+  const plays = liveG.plays || [];
+  const subs  = plays.filter(p => p.type === 'pinch_hit').length;
+  clock.set((plays[plays.length - 1]?._timestamp || asg.gameTime) + 1000); advanceClock(clock.get());
+  releaseDueCards(); gmActs();
+  const post = SM.get();
+  const g = Object.values(post.leagueSchedule.dayMap).flat().find(x => x.isAllStar);
+  const box = g.boxScore;
+  check('all-star: final — score, box score and linescore agree',
+        g.played && g.status === GAME_STATUS.FINAL && box && box.home.runs === g.homeScore && box.away.runs === g.awayScore
+        && g.homeScore !== g.awayScore, `${g.awayScore}-${g.homeScore}`);
+  const pitchBad = [...(box?.home.pitchers || []), ...(box?.away.pitchers || [])].filter(p => p.ipOuts > ALLSTAR_STARTER_INNINGS * 3);
+  const usedArms = (box?.home.pitchers.length || 0) + (box?.away.pitchers.length || 0);
+  check(`all-star: an All-Star staff — ${usedArms} pitchers, no one past ${ALLSTAR_STARTER_INNINGS} innings`, pitchBad.length === 0 && usedArms >= 12,
+        pitchBad.map(p => `${p.name} ${p.ipOuts}`).join(','));
+  check(`all-star: the reserves get in (${subs} substitutions)`, subs >= 5);
+  check('all-star: an exhibition — no stats, standings or rotations move',
+        snap === JSON.stringify(Object.values(post.players).map(p => [p.id, p.stats, p.springStats]))
+        && wl === JSON.stringify([post.userTeam, ...post.leagueTeams].map(t => [t.wins, t.losses]))
+        && rot === JSON.stringify(post.leagueTeams.map(t => t.rotation?.currentIndex)));
+  if (process.env.ASG_DUMP) { console.log('RESULT', JSON.stringify(post.allStar.season.result)); for (const f of post.activityFeed.slice(-6)) console.log('FEED', JSON.stringify(f)); const lc = [...(post.inbox||[]),...(post.scheduledCards||[])].filter(c => (c.cardId||'').startsWith('as_')||c.cardId?.startsWith('trade_')).map(c=>c.cardId+':'+c.subject); console.log('CARDS', lc.join(' || ')); }
+  check('all-star: result and MVP recorded', !!post.allStar.season.result
+        && (!post.allStar.season.result.mvpId || [...(box.home.hitters), ...(box.away.hitters), ...box.home.pitchers, ...box.away.pitchers].some(x => x.id === post.allStar.season.result.mvpId)));
 }
 
 // ── Count the active (non-IL) hitters/pitchers on the user roster ─
@@ -590,7 +706,7 @@ async function main() {
   {
     const all = [];
     for (const g of s0.schedule) all.push({ d: g.date, h: g.isHome ? 'user' : g.opponentId, a: g.isHome ? g.opponentId : 'user', sp: g.isSpring });
-    for (const [d, gs] of Object.entries(s0.leagueSchedule.dayMap)) for (const g of gs) all.push({ d, h: g.homeId, a: g.awayId, sp: g.isSpring });
+    for (const [d, gs] of Object.entries(s0.leagueSchedule.dayMap)) for (const g of gs) if (!g.isAllStar) all.push({ d, h: g.homeId, a: g.awayId, sp: g.isSpring });
     const per = {}, day = {}, pair = {};
     for (const g of all) {
       if (g.sp) continue;
@@ -619,9 +735,16 @@ async function main() {
   let gamesWithRelief = 0; // r51: games where at least one side used >1 pitcher
   let seasonRuns = 0, seasonHits = 0, seasonGames = 0; // §60 run environment
 
+  let asgChecked = false;
   for (let i = 0; i < target; i++) {
     const idx = SM.get().currentGameIndex;
     if (idx == null || idx >= s0.schedule.length) break;
+    // §75: odd seeds make the user's club an eligible host before the league decides.
+    if (SEED % 2 === 1 && SM.get().allStar && !SM.get().allStar.season.hostId) {
+      SM.mutate(s => { s.prestigeTier = Math.max(2, s.prestigeTier || 1); s.allStar.hostingScore = Math.max(900, s.allStar.hostingScore);
+                       s.userTeam.atmosphere = Math.max(70, s.userTeam.atmosphere || 50); });
+    }
+    if (!asgChecked && SM.get().schedule[idx]?.regularSeasonIndex === ALL_STAR_BREAK_AFTER_GAME) { asgChecked = true; await runAllStarChecks(); }
 
     const reachedFinal = playToFinal(idx);
     const pre = SM.get().schedule[idx];
@@ -680,6 +803,32 @@ async function main() {
 
     await commitGame(idx);
     releaseDueCards();   // the App's next tick
+    // Every follow-up the season sets in motion (some are later withdrawn when they can't happen any more).
+    for (const c of [...(SM.get().inbox || []), ...(SM.get().scheduledCards || [])]) {
+      if ((c._rosterKey || '').startsWith('followup:')) gm.chainSeen.set(c.instanceId, c.cardId);
+    }
+    {
+      // §75: the moment the squads are named, every All-Star is a healthy big-leaguer,
+      // and every starting pitcher has a starter's innings or a starter's reputation.
+      const st = SM.get(), as = st.allStar?.season;
+      if (as?.squads && !gm.asSelectionChecked) {
+        gm.asSelectionChecked = true;
+        const ACTIVE = [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS, PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH];
+        const ids = Object.values(as.squads).flatMap(q => q.rosterIds);
+        const bad = ids.filter(id => !ACTIVE.includes(st.players[id]?.group) || st.players[id]?.isInjured);
+        check(`all-star: squads named from healthy big-leaguers only (${ids.length})`, bad.length === 0,
+              bad.map(id => `${st.players[id]?.name}:${st.players[id]?.group}`).join(','));
+        const rot = Object.values(st.players).filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS && (p.stats?.gs || 0) > 0)
+          .map(p => p.stats.ip || 0).sort((x, y) => x - y);
+        const spIp = rot[Math.floor(rot.length / 2)] || 0;
+        const ovrs = Object.values(st.players).filter(p => p.pos === 'SP' && p.teamId && ACTIVE.includes(p.group)).map(p => p.ovr);
+        const avgOvr = ovrs.reduce((x, y) => x + y, 0) / Math.max(1, ovrs.length);
+        const swing = Object.values(as.squads).flatMap(q => q.sp).map(x => st.players[x.id])
+          .filter(p => (p.stats?.ip || 0) < 0.4 * spIp && p.ovr < avgOvr);
+        check(`all-star: no swingman named an All-Star starter (a regular starter has ${spIp.toFixed(0)} IP)`, swing.length === 0,
+              swing.map(p => `${p.name} ${p.stats?.ip?.toFixed(0)}IP ovr${p.ovr}`).join(','));
+      }
+    }
     {
       // §71: nobody away (rest / sick / training / benched) is in the lineup or rotation.
       const st = SM.get();
@@ -721,6 +870,9 @@ async function main() {
       check(`game ${idx}: both lineups seeded (>=9 hitters each)`,
             box.away.hitters.length >= 9 && box.home.hitters.length >= 9,
             `${box.away.hitters.length}/${box.home.hitters.length}`);
+      // A pitcher in the box faced someone (no reliever brought in for a half never played).
+      const phantom = [...box.away.pitchers, ...box.home.pitchers].filter(p => !(p.ipOuts || p.h || p.bb || p.er || p.k));
+      check(`game ${idx}: every pitcher in the box faced a batter`, phantom.length === 0, phantom.map(p => p.name).join(','));
       // r51: bullpen usage — a full game should hook the starter for relief.
       const awayP = (box.away.pitchers || []).length;
       const homeP = (box.home.pitchers || []).length;
@@ -983,11 +1135,26 @@ async function main() {
   // ── §67: a real league ─────────────────────────────────────────
   if (committed >= SPRING_TRAINING_GAME_COUNT + 20) {
     const st = SM.get();
-    const games = Object.values(st.leagueSchedule.dayMap).flat();
+    const games = Object.values(st.leagueSchedule.dayMap).flat().filter(g => !g.isAllStar);
     const lastUser = st.schedule[st.currentGameIndex - 1];
     const due = games.filter(g => g.gameTime < (lastUser?.gameTime || 0));
     check(`league: every CPU game before the user's last game was played (${due.filter(g => g.played).length}/${due.length})`,
           due.every(g => g.played && g.boxScore));
+    const phantomCpu = games.filter(g => g.played && g.boxScore).flatMap(g => [...g.boxScore.away.pitchers, ...g.boxScore.home.pitchers])
+      .filter(p => !(p.ipOuts || p.h || p.bb || p.er || p.k));
+    check(`league: every pitcher in a CPU box score faced a batter`, phantomCpu.length === 0, `${phantomCpu.length} phantom appearances`);
+    // Starts are recorded: two per game (one each side), quality starts among them.
+    const startGames = games.filter(g => !g.isSpring && !g.isPlayoff && g.played).length
+                     + st.schedule.filter(g => !g.isSpring && !g.isPlayoff && g._committed).length;
+    const allP = Object.values(st.players);
+    const gsSum = allP.reduce((x, p) => x + (p.stats?.gs || 0), 0), qsSum = allP.reduce((x, p) => x + (p.stats?.qs || 0), 0);
+    // Everyone who started one of our games (first pitcher on each side) has a start.
+    const rotNoStart = [...new Set(st.schedule.filter(g => !g.isSpring && !g.isPlayoff && g._committed && g.boxScore)
+      .flatMap(g => [g.boxScore.away.pitchers[0]?.id, g.boxScore.home.pitchers[0]?.id]))]
+      .filter(id => id && st.players[id] && !(st.players[id].stats?.gs > 0));
+    check(`stats: two starts per game, quality starts counted (${gsSum} GS / ${startGames} games, ${qsSum} QS)`,
+          gsSum === 2 * startGames && qsSum > 0 && qsSum < gsSum && rotNoStart.length === 0,
+          `starters with no start recorded: ${rotNoStart.length}`);
     const regPlayed = (id) => {
       const cpu = games.filter(g => !g.isSpring && g.played && (g.homeId === id || g.awayId === id)).length;
       const vsUser = st.schedule.filter(g => !g.isSpring && g._committed && g.opponentId === id).length;
@@ -1020,9 +1187,9 @@ async function main() {
           gm.awayInLineup.slice(0, 5).join(' '));
     const stale = Object.values(st.players).filter(p => p.unavailable && !(p.unavailable.gamesLeft > 0));
     check('player cards: every absence ends (games counted down)', stale.length === 0, stale.length);
-    const chained = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => (c._rosterKey || '').startsWith('followup:'));
+    const chained = [...gm.chainSeen.values()];
     check(`card chains: follow-up cards are set in motion (${chained.length})`, chained.length >= 1,
-          [...new Set(chained.map(c => c.cardId))].join(','));
+          [...new Set(chained)].join(','));
     const timedPre = [...(st.inbox || [])].filter(c => c._pool === 'PREGAME_POOL');
     check(`card timing: pre-game cards arrive before first pitch (${timedPre.length})`,
           timedPre.every(c => !Number.isFinite(c.expiresAtMs) || (c.arrivedAtMs ?? c.deliverAtMs) <= c.expiresAtMs));

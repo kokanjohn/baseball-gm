@@ -34,6 +34,7 @@ import {
   SIM_HIT_XBH_SHARE_BASE, SIM_HIT_XBH_SHARE_PER_PT, SIM_HIT_XBH_SHARE_MIN, SIM_HIT_XBH_SHARE_MAX,
   SIM_HIT_TRIPLE_SHARE,
   SIM_MAX_INNINGS_GUARD,
+  ALLSTAR_STARTER_INNINGS,
   SIM_H_SPEED_SB_THRESHOLD,
   SIM_H_SPEED_STRETCH_THRESHOLD,
   SIM_H_SPEED_DOUBLE_SCORE_THRESHOLD,
@@ -158,7 +159,7 @@ export function computeWinProbability(userRoster, opponentTeam, players, context
  * @returns {Object} { plays, boxScore }
  */
 export function generatePlays(game, userTeam, opponentTeam, players, context) {
-  const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null } = context;
+  const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false } = context;
 
   // When opponentTeam is null (lookup failed), build a synthetic CPU opponent
   // from any available league team so the game can still produce scoring plays.
@@ -191,7 +192,10 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     userLineup, oppLineup,
     userSP, oppSP,
     players,
-    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms }
+    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms,
+      // §75 All-Star Game: both starters work ALLSTAR_STARTER_INNINGS, every
+      // other arm one inning; the reserves come in on the squads' plan.
+      exhibition: exhibition ? { starterIds: new Set([userSP?.id, oppSP?.id].filter(Boolean)) } : null }
   );
 
   // Prepend a game_start announcement play — first thing shown in PBP.
@@ -262,7 +266,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
 // ─────────────────────────────────────────────────────────────
 
 function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
-  const { game, fieldMod, isHome, phase, isSpring, norms = null } = ctx;
+  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null } = ctx;
 
   const plays = [];
 
@@ -286,6 +290,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     userBullpenIdx: 0,
     oppBullpenIdx:  0,
     norms,          // league averages the PA model measures against (§65)
+    exhibition,     // §75: All-Star Game workloads / substitutions (null otherwise)
   };
 
   // User team bats in bottom (home) or top (away)
@@ -294,7 +299,10 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
   const awayScore = () => (userBatsBottom ? gs.oppScore  : gs.userScore);
 
   while (!_gameOver(gs)) {
-    // Top of inning — away team bats
+    // Top of inning — away team bats. The home side takes the field: a tired
+    // pitcher is replaced now, as he walks out (never at the end of his last
+    // inning — the game may be over before he'd have pitched again).
+    _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning, 'TOP');
     const topSlots   = userBatsBottom ? oppLineup.slots  : userLineup.slots;
     const topBench   = userBatsBottom ? oppLineup.bench  : userLineup.bench;
     const topIsUser  = !userBatsBottom;
@@ -314,13 +322,13 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     else                gs.userScore += topRuns;
 
     _accrueInningAndFatigue(gs, players, userBatsBottom ? 'user' : 'opp');
-    _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning);
 
     // 9th inning or later: if the HOME team already leads after the top half,
     // the bottom half is not played (home team wins).
     if (gs.inning >= 9 && homeScore() > awayScore()) break;
 
-    // Bottom of inning — home team bats
+    // Bottom of inning — home team bats; the away side takes the field.
+    _checkPitcherChange(gs, players, userBatsBottom ? 'opp' : 'user', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning, 'BOT');
     const botSlots   = userBatsBottom ? userLineup.slots  : oppLineup.slots;
     const botBench   = userBatsBottom ? userLineup.bench  : oppLineup.bench;
     const botIsUser  = userBatsBottom;
@@ -347,7 +355,6 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     if (gs.inning >= 9 && homeScore() > awayScore()) break;
 
     _accrueInningAndFatigue(gs, players, userBatsBottom ? 'opp' : 'user');
-    _checkPitcherChange(gs, players, userBatsBottom ? 'opp' : 'user', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning);
 
     gs.inning++;
 
@@ -540,10 +547,12 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     }
 
     // ── Substitution check ────────────────────────────────────
-    const subPlay = _checkBenchSubstitution(
-      slots, bench, slotIdx, batter, players,
-      inning, isSpring, gs.userScore, gs.oppScore, isUserBatting
-    );
+    const subPlay = gs.exhibition
+      ? _plannedSubstitution(slots, slotIdx, batter, players, inning)
+      : _checkBenchSubstitution(
+          slots, bench, slotIdx, batter, players,
+          inning, isSpring, gs.userScore, gs.oppScore, isUserBatting
+        );
 
     if (subPlay) {
       const prev = plays[plays.length - 1];
@@ -1160,6 +1169,21 @@ export function accumulateStats(plays, userTeam, opponentTeam, players, isSpring
     }
   }
 
+  // Starts: each side's starter is the first pitcher to face a batter in the
+  // halves his side fields (TOP = the home side pitching). A quality start is
+  // 6+ innings with 3 or fewer earned runs.
+  const starterBy = {};
+  for (const play of plays) {
+    if (!play.pitcherId || !play._statDeltas?.[play.pitcherId] || (play.half !== 'TOP' && play.half !== 'BOT')) continue;
+    if (!starterBy[play.half]) starterBy[play.half] = play.pitcherId;
+    if (starterBy.TOP && starterBy.BOT) break;
+  }
+  for (const id of new Set(Object.values(starterBy))) {
+    const d = deltas[id] || (deltas[id] = {});
+    d.gs = (d.gs || 0) + 1;
+    if (Math.round((d.ip || 0) * 3) >= 18 && (d.er || 0) <= 3) d.qs = (d.qs || 0) + 1;
+  }
+
   // Build mutations
   const playerMutations = {};
   for (const [playerId, statDeltas] of Object.entries(deltas)) {
@@ -1314,6 +1338,26 @@ export function accumulateBox(plays, players, opts = {}) {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * _plannedSubstitution(slots, slotIdx, batter, players, inning)
+ * §75 All-Star Game: each starter has a reserve paired with him (the squad's
+ * plan, AllStarEngine.prepareForGame), who takes his place the first time the
+ * spot comes up from the planned inning on — so every All-Star plays.
+ */
+function _plannedSubstitution(slots, slotIdx, batter, players, inning) {
+  const slot = slots[slotIdx];
+  if (!slot?.subIn || inning < (slot.subInning || 99)) return null;
+  const sub = players[slot.subIn];
+  if (!sub || !isAvailable(sub)) return null;
+  slots[slotIdx] = { id: sub.id, subbed: false };
+  return {
+    playIndex: 0, batterId: sub.id, pitcherId: null, type: 'pinch_hit',
+    description: `${sub.name} pinch hits for ${batter?.name || 'the starter'}`,
+    rbi: 0, isScoring: false, isBigPlay: false,
+    cumOurScore: 0, cumTheirScore: 0, _timestamp: 0, _statDeltas: {},
+  };
+}
+
+/**
  * _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
  *                          inning, isSpring, userScore, oppScore, isUserBatting)
  *
@@ -1430,7 +1474,8 @@ function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
 // Target innings for the current pitcher, by role + stamina. Starters ~5–8 IP,
 // relievers ~1–2 IP. Keyed to innings (not batters) so the hook doesn't drift
 // with how much offense a game happens to produce.
-function _pitcherTargetInnings(pitcher) {
+function _pitcherTargetInnings(pitcher, gs = null) {
+  if (gs?.exhibition) return gs.exhibition.starterIds.has(pitcher?.id) ? ALLSTAR_STARTER_INNINGS : 1;
   const stam = pitcher?.subRatings?.stamina ?? 60;
   const isRP = pitcher?.group === PLAYER_GROUP.BULLPEN
             || pitcher?.group === PLAYER_GROUP.PITCHER_BENCH;
@@ -1439,19 +1484,20 @@ function _pitcherTargetInnings(pitcher) {
 }
 
 // Credit the current pitcher with a completed inning and flag fatigue once they
-// reach their target workload. Called after each half-inning, before the change.
+// reach their target workload. Called after each half-inning; the change itself
+// waits until his side next takes the field (_checkPitcherChange).
 function _accrueInningAndFatigue(gs, players, team) {
   const isUser = team === 'user';
   const pObj   = isUser ? gs.userPitcher : gs.oppPitcher;
   const p      = pObj ? players[pObj.id] : null;
   if (isUser) gs.userPitcherInnings++; else gs.oppPitcherInnings++;
   const innings = isUser ? gs.userPitcherInnings : gs.oppPitcherInnings;
-  if (innings >= _pitcherTargetInnings(p)) {
+  if (innings >= _pitcherTargetInnings(p, gs)) {
     if (isUser) gs.userFatigued = true; else gs.oppFatigued = true;
   }
 }
 
-function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, inning) {
+function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, inning, half) {
   const isUser   = team === 'user';
   const fatigued = isUser ? gs.userFatigued : gs.oppFatigued;
   if (!fatigued) return;
@@ -1479,12 +1525,13 @@ function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, 
     gs.oppPitcherInnings = 0;
   }
 
+  // The first play of the half the new pitcher works: nobody out, bases empty.
   const prev = plays[plays.length - 1];
   plays.push({
     playIndex:    0,
-    _halfInning:  prev?._halfInning || `TOP_${inning}`,
+    _halfInning:  `${half}_${inning}`,
     inning,
-    half:         prev?.half || 'TOP',
+    half,
     batterId:     null,
     pitcherId:    reliever.id,
     type:         'pitching_change',
@@ -1492,8 +1539,8 @@ function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, 
     rbi:          0,
     isScoring:    false,
     isBigPlay:    false,
-    outsAfter:    prev?.outsAfter ?? 0,
-    _basesAfter:  prev?._basesAfter ?? { first: null, second: null, third: null },
+    outsAfter:    0,
+    _basesAfter:  { first: null, second: null, third: null },
     cumOurScore:   prev?.cumOurScore   ?? 0,
     cumTheirScore: prev?.cumTheirScore ?? 0,
     _timestamp:   0,
@@ -1733,9 +1780,23 @@ function _buildLineup(team, players, isCPU) {
 
   // Batting order: CPU uses OVR sort, user team uses sub-rating derivation.
   // lineupSlots defines WHO is in the lineup; batting order defines SEQUENCE.
-  const orderedStarters = isCPU
+  // An All-Star squad's manager builds a real order too (§75).
+  const orderedStarters = isCPU && !team.isAllStar
     ? [...starterPlayers].sort((a,b) => b.ovr - a.ovr)
     : _simDeriveBattingOrder(starterPlayers);
+
+  // §75 All-Star squad: the bench and staff are the squad's own (named), not
+  // roster groups — selected starters and relievers both pitch in relief.
+  if (team.isAllStar) {
+    const ok = (id) => players[id] && isAvailable(players[id]);
+    const subs = team.simSubs || {};
+    return {
+      slots:   orderedStarters.map(p => ({ id: p.id, subbed: false,
+                                           subIn: subs[p.id]?.inId || null, subInning: subs[p.id]?.inning || null })),
+      bench:   (team.simBench || []).filter(ok).map(id => ({ id, used: false })),
+      bullpen: (team.simBullpen || []).filter(ok).map(id => ({ id })),
+    };
+  }
 
   const bench = rosterIds
     .map(id => players[id])
@@ -1803,6 +1864,7 @@ function _buildCPULineup(team, players) {
 }
 
 function _getRotationSP(team, players) {
+  if (team.simStarter && players[team.simStarter] && isAvailable(players[team.simStarter])) return { id: team.simStarter };
   const rotation = team.rotation;
   if (!rotation || !rotation.order || rotation.order.length === 0) {
     // Fallback: find any healthy SP

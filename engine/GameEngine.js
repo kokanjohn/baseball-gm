@@ -76,7 +76,8 @@ import {
 } from './SimEngine.js';
 import * as CardEngine from './CardEngine.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
-import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint, evaluateAllStarHostingEligibility } from './PrestigeEngine.js';
+import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
+import * as AllStar from './AllStarEngine.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Development from './DevelopmentEngine.js';
 
@@ -96,6 +97,9 @@ import {
   REGULAR_SEASON_GAME_COUNT,
   SPRING_TRAINING_GAME_COUNT,
   ALL_STAR_BREAK_AFTER_GAME,
+  ALLSTAR_SELECTION_AFTER_GAME,
+  ALLSTAR_POST_GLOW_GAMES,
+  ALLSTAR_GAME_BREAK_DAY,
   TRADE_DEADLINE_OPEN,
   TRADE_DEADLINE_CLOSE,
   STRETCH_RUN_FINAL_GAMES,
@@ -493,6 +497,7 @@ export async function startNewGame(config) {
     // Schedule
     s.schedule       = schedule;
     s.leagueSchedule = leagueSchedule;
+    s.allStar        = AllStar.createAllStarState(s, baseYear);   // §75
 
     // Geographic region — set from setup config, persists for lifetime of franchise
     if (config.region)        s.settings.region        = config.region;
@@ -1030,6 +1035,9 @@ export async function commitGame(gameIndex) {
     injuryEvents = inj.events.map(e => ({ ...e, atMs: endMs }));
   }
   advanceClock(endMs, { events: injuryEvents, reconcileAll: true });
+
+  // ── All-Star Game (§75): host, rosters, the host's week ────
+  if (game.status !== GAME_STATUS.POSTPONED) _allStarProgress(StateManager.get().schedule[gameIndex], endMs);
 
   // ── Milestone check ───────────────────────────────────────
   const milestone = checkMilestone();
@@ -1761,6 +1769,7 @@ function _leagueGameEvents(state, clockMs) {
 function _startLeagueGame(date, i) {
   const state = StateManager.get();
   const cg    = state.leagueSchedule.dayMap[date][i];
+  if (cg.isAllStar) return _startAllStarGame(date, i);
   const home  = state.leagueTeams.find(t => t.id === cg.homeId);
   const away  = state.leagueTeams.find(t => t.id === cg.awayId);
   if (!home || !away) {
@@ -1792,6 +1801,7 @@ function _startLeagueGame(date, i) {
 function _finishLeagueGame(date, i) {
   const st0 = StateManager.get();
   const cg0 = st0.leagueSchedule.dayMap[date][i];
+  if (cg0.isAllStar) return _finishAllStarGame(date, i);
   const endMs = _playsEndMs(cg0);
   const last  = cg0.plays[cg0.plays.length - 1];
   const homeScore = last?.cumOurScore ?? 0, awayScore = last?.cumTheirScore ?? 0;
@@ -1861,6 +1871,155 @@ function _finishLeagueGame(date, i) {
     });
   }
   return inj.events.map(e => ({ ...e, atMs: endMs }));
+}
+
+// ─────────────────────────────────────────────────────────────
+// THE ALL-STAR GAME (§75)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * _allStarProgress(game, endMs)
+ * After each of the user's regular-season games: the home crowd feeds the
+ * hosting score; the league names the host (games 45–55); the host may lobby
+ * for a bubble player; the rosters are named (after game 58) — and the host's
+ * All-Star week is put on the calendar; after the break, the glow.
+ */
+function _allStarProgress(game, endMs) {
+  if (!game || game.isSpring || game.isPlayoff || game.regularSeasonIndex == null) return;
+  if (!StateManager.get().allStar) {
+    StateManager.mutate(s => { s.allStar = AllStar.createAllStarState(s, s.baseYear || baseballYear(s)); });
+  }
+  const entry = AllStar.gameEntry(StateManager.get());
+  if (!entry) return;   // a calendar from before §75 (a fresh team adds the game)
+  const played = game.regularSeasonIndex + 1;
+
+  StateManager.mutate(s => {
+    const season = AllStar.seasonOf(s);
+    if (game.isHome) {
+      AllStar.accrueHomeGame(s);
+      // Post-break glow for the host: the buzz fills the park.
+      if (season.hostId === 'user' && played > ALL_STAR_BREAK_AFTER_GAME
+          && played <= ALL_STAR_BREAK_AFTER_GAME + ALLSTAR_POST_GLOW_GAMES) {
+        s.userTeam.atmosphere = Math.min(100, (s.userTeam.atmosphere ?? 50) + 1);
+      }
+    }
+  });
+
+  let season = StateManager.get().allStar.season;
+
+  // 1. The league names the host.
+  if (!season.hostId && played >= season.announceAfterGame) {
+    let named = null;
+    StateManager.mutate(s => { named = AllStar.nameHost(s, endMs); });
+    const st = StateManager.get();
+    const host = named.hostId === 'user' ? st.userTeam : st.leagueTeams.find(t => t.id === named.hostId);
+    StateManager.mutate(s => {
+      s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+        buildActivityFeedEntry('milestone', host?.abbr || 'LG', `${host?.name || 'A club'} will host the All-Star Game`)]);
+      if (named.hostId === 'user') {
+        // A post-break trade target who fell for the place during the week.
+        AllStar.seasonOf(s).glowTradeAfterGame = ALL_STAR_BREAK_AFTER_GAME + 1 + Math.floor(Math.random() * 10);
+      }
+    });
+    CardEngine.deliverAllStarHostCard(named, endMs + _rng(10, 40) * 60_000);
+    season = StateManager.get().allStar.season;
+  }
+
+  // 2. The host's GM can lobby for a player on the bubble before rosters are set.
+  if (season.hostId === 'user' && !season.influence && !season.squads
+      && played >= ALLSTAR_SELECTION_AFTER_GAME - 3) {
+    const pid = AllStar.bubblePlayer(StateManager.get());
+    StateManager.mutate(s => { AllStar.seasonOf(s).influence = { playerId: pid, choice: null }; });
+    if (pid) CardEngine.deliverAllStarLobbyCard(pid, endMs + _rng(20, 90) * 60_000, endMs + 2 * 86_400_000);
+    season = StateManager.get().allStar.season;
+  }
+
+  // 3. The rosters.
+  if (!season.squads && played >= ALLSTAR_SELECTION_AFTER_GAME) {
+    CardEngine.withdrawAllStarLobbyCard();
+    let mine = [];
+    StateManager.mutate(s => {
+      mine = AllStar.selectSquads(s, endMs);
+      s.userTeam.morale = Math.min(100, (s.userTeam.morale ?? 50) + Math.min(4, mine.length));
+      s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+        buildActivityFeedEntry('milestone', s.userTeam.abbr, `All-Star rosters announced — ${mine.length} ${s.userTeam.abbr} All-Star${mine.length === 1 ? '' : 's'}`)]);
+    });
+    CardEngine.deliverAllStarSelectionCard(mine, endMs + _rng(30, 120) * 60_000);
+    // All-Star week in our ballpark: the day before the game.
+    const st = StateManager.get();
+    if (st.allStar.season.hostId === 'user') {
+      const day = new Date(entry.game.gameTime); day.setHours(0, 0, 0, 0);
+      day.setDate(day.getDate() - Math.max(1, ALLSTAR_GAME_BREAK_DAY - 1));
+      CardEngine.scheduleAllStarWeekCards(day.getTime(), entry.game.gameTime);
+    }
+    season = StateManager.get().allStar.season;
+  }
+
+  // 4. After the break, the host's trade suitor.
+  if (season.glowTradeAfterGame && !season.glowTradeSent && played >= season.glowTradeAfterGame) {
+    StateManager.mutate(s => { AllStar.seasonOf(s).glowTradeSent = true; });
+    CardEngine.deliverAllStarTradeOffer(buildCardContext());
+  }
+}
+
+/** First pitch of the All-Star Game: replacements named, then a live game. */
+function _startAllStarGame(date, i) {
+  let repl = [];
+  StateManager.mutate(s => { repl = AllStar.prepareForGame(s); });
+  const state = StateManager.get();
+  const cg    = state.leagueSchedule.dayMap[date][i];
+  const home  = AllStar.clubFor(state, cg.homeId);
+  const away  = AllStar.clubFor(state, cg.awayId);
+  const sim = generatePlays(
+    { ...cg, isHome: true, weather: null, fieldCondition: null, _tickOffset: 0 },
+    home, away, state.players,
+    { phase: state.phase, isSpring: false, exhibition: true,
+      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players) }
+  );
+  StateManager.mutate(s => {
+    const g = s.leagueSchedule.dayMap[date][i];
+    g.plays                = sim.plays;
+    g._precomputedBoxScore = sim.boxScore;
+    g.liveLineups          = sim.liveLineups;
+    g.status               = GAME_STATUS.LIVE;
+    for (const r of repl) {
+      const out = s.players[r.outId], inn = s.players[r.inId];
+      if (out && inn) s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+        buildActivityFeedEntry('allstar', AllStar.clubFor(s, r.squadId)?.abbr || r.squadId, `All-Star replacement: ${inn.name} for ${out.name}`)]);
+    }
+  });
+}
+
+/** Final out of the All-Star Game: the result and the MVP. An exhibition —
+ *  no standings, stats, rotations or injuries. */
+function _finishAllStarGame(date, i) {
+  const st0 = StateManager.get();
+  const cg0 = st0.leagueSchedule.dayMap[date][i];
+  const endMs = _playsEndMs(cg0);
+  const last  = cg0.plays[cg0.plays.length - 1];
+  let res = null;
+  StateManager.mutate(s => {
+    const g = s.leagueSchedule.dayMap[date][i];
+    g.homeScore = last?.cumOurScore ?? 0;
+    g.awayScore = last?.cumTheirScore ?? 0;
+    g.played    = true;
+    g.status    = GAME_STATUS.FINAL;
+    g.endedAt   = endMs;
+    g.boxScore  = g._precomputedBoxScore;
+    delete g.plays;
+    delete g._precomputedBoxScore;
+    res = AllStar.recordResult(s, g);
+    const name = (id) => AllStar.clubFor(s, id)?.name || id;
+    const [w, l, ws, ls] = g.homeScore > g.awayScore ? [g.homeId, g.awayId, g.homeScore, g.awayScore]
+                                                     : [g.awayId, g.homeId, g.awayScore, g.homeScore];
+    const mvp = res.mvpId && s.players[res.mvpId];
+    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+      buildActivityFeedEntry('result', w, `All-Star Game: ${name(w)} def. ${name(l)} ${ws}–${ls}${mvp ? ` · MVP ${mvp.name}` : ''}`)]);
+    if (mvp && mvp.teamId === 'user') s.userTeam.morale = Math.min(100, (s.userTeam.morale ?? 50) + 2);
+  });
+  const mvp = res?.mvpId && StateManager.get().players[res.mvpId];
+  if (mvp && mvp.teamId === 'user') CardEngine.deliverAllStarMvpCard(mvp.id, endMs + _rng(5, 20) * 60_000);
+  return [];
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1946,7 +2105,7 @@ function _regularSeasonResults(state) {
     out.push({ homeId: g.isHome ? 'user' : g.opponentId, awayId: g.isHome ? g.opponentId : 'user', homeScore: hs, awayScore: as });
   }
   for (const games of Object.values(state.leagueSchedule?.dayMap || {})) {
-    for (const g of games) if (!g.isSpring && !g.isPlayoff && g.played) out.push(g);
+    for (const g of games) if (!g.isSpring && !g.isPlayoff && !g.isAllStar && g.played) out.push(g);
   }
   return out;
 }

@@ -128,6 +128,7 @@ function _renderCard(player, playerId, state) {
         <div class="pc-team">${_escape(teamName)}</div>
         ${isFarm ? `<div class="pc-farm-badge">Farm System</div>` : ''}
         ${player.trait ? `<div class="pc-trait">${_escape(player.trait)}</div>` : ''}
+        ${(player.allStarSeasons || []).length ? `<div class="pc-trait" style="color:#c9971c;">★ ${player.allStarSeasons.length > 1 ? `${player.allStarSeasons.length}× ` : ''}All-Star${(player.allStarMvps || []).length ? ` · ${player.allStarMvps.length > 1 ? `${player.allStarMvps.length}× ` : ''}ASG MVP` : ''}</div>` : ''}
       </div>
       ${indicator ? `<div class="pc-hot-cold">${indicator}</div>` : ''}
     </div>
