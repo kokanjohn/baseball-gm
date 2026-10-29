@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Radar preview</title>
+<style>body{margin:0;background:#0F1117;color:#ccc;font:12px sans-serif;display:flex;flex-wrap:wrap;gap:8px;padding:8px}figure{margin:0}figcaption{padding:2px 0}</style></head>
+<body><script type="module">
+// §100 Radar frames over the base map, for review: ?region=&seed=&day=&hours=12,15,18&zoom=0
+import { regionMap } from '../../engine/WeatherMap.js';
+import { localDayStart, MS_DAY, MS_HOUR } from '../../engine/WeatherClimate.js';
+import { radarField } from '../../engine/WeatherSystems.js';
+import { drawBaseMap, RADAR_ZOOMS } from '../../ui/components/RadarMap.js';
+import { drawPrecip } from '../../ui/components/RadarPrecip.js';
+const q = new URLSearchParams(location.search);
+const region = q.get('region') || 'north', seed = q.get('seed') || 'wx-a', theme = q.get('theme') || 'dark';
+const tz = -240, START = localDayStart(Date.UTC(2026, 9, 30, 12), tz);
+const ctx = { seed, region, tzMin: tz, map: regionMap(region), cal: [{ kind: 'season', season: 1, realStartMs: START, dispIso: '2027-03-14' }] };
+const W = +(q.get('w') || 360), H = W;
+const zoom = RADAR_ZOOMS[+(q.get('zoom') || 0)];
+const frames = (q.get('frames') || '115:12,115:15,115:18').split(',').map(s => s.split(':').map(Number));
+for (const [day, hour] of frames) {
+  const t = START + day * MS_DAY + hour * MS_HOUR;
+  const fig = document.createElement('figure');
+  const c = document.createElement('canvas'); const dpr = 2;
+  c.width = W * dpr; c.height = H * dpr; c.style.width = W + 'px'; c.style.height = H + 'px';
+  const g = c.getContext('2d'); g.scale(dpr, dpr);
+  const view = { cx: 0, cy: 0, spanKm: zoom.spanKm, w: W, h: H };
+  drawBaseMap(g, ctx.map, view, { theme, userCity: 'Springfield', labels: false });
+  const half = zoom.spanKm / 2, cell = zoom.spanKm / 180;
+  const t0 = performance.now();
+  const f = radarField(ctx, t, { x0: -half, y0: -half, x1: half, y1: half }, cell);
+  const ms = performance.now() - t0;
+  drawPrecip(g, f, view);
+  drawBaseMap(g, ctx.map, view, { theme, userCity: 'Springfield', labelsOnly: true });
+  const d = new Date(t + tz * 60000);
+  fig.innerHTML = `<figcaption>${region} day ${day} ${String(hour).padStart(2, '0')}:00 · ${ms.toFixed(0)} ms</figcaption>`;
+  fig.prepend(c); document.body.append(fig);
+}
+document.body.dataset.done = '1';
+</script></body></html>

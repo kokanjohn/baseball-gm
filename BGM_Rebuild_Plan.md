@@ -7610,3 +7610,51 @@ The map also carries a few highways and city labels (the club name without the n
 - **Before first pitch**, the call starts about 2 hours out: on time, a delayed start, or postponed.
 - **The forecast is what the GM sees; what happens decides.** A game can start under a dry forecast and be interrupted by a pop-up storm, as in real life. The radar shows it coming.
 - **CPU games follow the same rules** (delays, called and suspended games, rainouts), so the standings and the map always agree.
+
+### 100.3 Step 1c done — what happens: weather systems and the precipitation field (r95)
+
+**`engine/WeatherSystems.js`** (pure, deterministic) — the truth every other weather surface reads.
+- **Kinds of system:**
+  - **front:** a long, tilted, bowed band. Its leading edge is a line of storms in the warm months and a rain band otherwise. Lighter rain trails behind it.
+  - **shield:** a broad area of steady rain, with internal bands, gaps and ragged edges.
+  - **squall:** a summer squall line. A thin, intense, bowed leading edge (50–60 dBZ) moves at about 1.25–1.65× the flow. Behind it come a lighter gap, then a wide trailing rain area (29–37 dBZ). It forms late afternoon or evening, fades by morning, and 25% fall apart early.
+  - **showers:** cool, unsettled days with scattered small showers.
+  - **cell:** pop-up thunderstorms, 45–105 minutes long, irregular, with 1–3 lobes, sometimes in clusters of 2–3. Most are modest and a few are severe. They have an anvil downstream.
+- **Where systems come from:**
+  - Synoptic systems are born in 6-hour slots from the seed, at rates set by the day's normals (wet days, storm share, warm season). Some form upstream and some right over the region; about 12% of fronts and shields fizzle early.
+  - Pop-ups get one chance per 36 km square per 20 minutes. The chance is `stormPotential` × a trigger made of storm zones a few hundred km across × a region-wide regime, so some days storms go up everywhere and some days hardly anywhere.
+- **Motion:** systems move with the steering flow at their birth, with a gentle wobble.
+- **Units:** reflectivity in dBZ. Overlapping systems add their powers, as on real radar. The rain rate comes from Marshall–Palmer.
+- **API:**
+  - `activeSystems(ctx, t, box)`;
+  - `precipAt(ctx, x, y, t)` → { dbz, kind (rain / mix / snow), rateMmH, convective };
+  - `radarField(ctx, t, box, cellKm)` → a dBZ grid plus a kind grid. Each cell is exactly `precipAt` at the cell's centre.
+- **Rain, mix or snow:** decided by `precipTemp`, a fixed 24 km × 15-minute temperature lattice anchored to the map, shared by the radar and the ballparks. The radar's colour over a park always matches what the park reports. Heavy precipitation drags the air up to 3 °F colder.
+
+**`ui/components/RadarPrecip.js`** — real radar colours:
+- rain: light green → green → dark green → yellow → amber → orange → red → dark red → magenta → purple (hail);
+- mix: pinks;
+- snow: light → dark blue.
+
+The field is painted per cell, then scaled up with smoothing.
+
+`RadarMap.drawBaseMap(..., { labelsOnly })` draws place names over the precipitation, as radar apps do.
+
+**Tools:** `tools/harness/radar-preview.html` + `render-radar.mjs` (frames over the base map, any region / seed / day / hour / zoom).
+
+**Harness (`check-weather.mjs`, 59 checks; 13 new):**
+- the same place and moment always gets the same precipitation (separate module copies);
+- the radar exactly matches what each place reports (2,000 sampled cells, amount and kind);
+- rain moves west → east (82% of hours, median 36 km/h);
+- summer heavy rain peaks in the afternoon;
+- pop-up storms are an afternoon thing (≈43 at 5 PM, 0 at 8 AM, 1 at 3 AM, Gulf Coast July);
+- snow only where it's cold (never above 36 °F; never in a southern summer; yes in a northern early spring);
+- each region's wet days within 12 points of its climate (N 29/34, S 33/34, E 37/34, W 22/19), with the West driest;
+- some systems break up early (about 16%) and some form overhead;
+- a region radar frame builds in about 80 ms (Node).
+
+**First measurements, left for 1g:**
+- monthly totals: North July about 4.1", South July about 8.6" (high), East about 2.5–3" (a little low), West about 1.3–3.2";
+- cool-season thunder days are low;
+- region frames at 4 km cells show slight stair-stepping at the edges (radar step 2 will render finer);
+- light snow's fade-in edge looks a little grey on the dark map.

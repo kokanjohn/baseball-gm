@@ -66,6 +66,11 @@ export function drawBaseMap(ctx, map, view, opts = {}) {
   const C = MAP_PALETTES[opts.theme === 'light' ? 'light' : 'dark'];
   const P = projector(view);
   const zoomIdx = view.spanKm > 400 ? 0 : view.spanKm > 100 ? 1 : 2;
+  if (opts.labelsOnly) {
+    // Labels alone — drawn over the precipitation, as radar apps do.
+    ctx.save(); _labels(ctx, map, view, P, C, zoomIdx, opts); ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.fillStyle = C.land;
   ctx.fillRect(0, 0, view.w, view.h);
