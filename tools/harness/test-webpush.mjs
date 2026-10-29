@@ -51,15 +51,16 @@ ok('worker payload decrypts on the browser side', out === msg, out);
   const worker = (await import(new URL('../../workers/push-worker.js', import.meta.url))).default;
   const vk = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const kv = new Map();
+  const ops = { put: 0, list: 0 };   // §98 the free plan's scarce operations
   const env = {
     VAPID_PRIVATE_KEY: (await subtle.exportKey('jwk', vk.privateKey)).d,
     VAPID_PUBLIC_KEY:  Buffer.from(new Uint8Array(await subtle.exportKey('raw', vk.publicKey))).toString('base64url'),
     VAPID_SUBJECT:     'mailto:test@example.com',
     SCHEDULES: {
-      async put(k, v) { kv.set(k, v); },
+      async put(k, v) { ops.put++; kv.set(k, v); },
       async get(k, t) { const v = kv.get(k); return v == null ? null : (t === 'json' ? JSON.parse(v) : v); },
       async delete(k) { kv.delete(k); },
-      async list({ prefix }) { return { keys: [...kv.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })) }; },
+      async list({ prefix }) { ops.list++; return { keys: [...kv.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })) }; },
     },
   };
   const received = [];
@@ -83,7 +84,19 @@ ok('worker payload decrypts on the browser side', out === msg, out);
   await worker.scheduled({}, env);
   const st = await (await call('GET', '/status')).json();
   ok('cron sent the due card and kept the future one',
-     st.cron?.sent === 1 && st.subscriptions[0]?.scheduled === 1, JSON.stringify({ cron: st.cron, s: st.subscriptions }));
+     st.lastSend?.sent === 1 && st.subscriptions[0]?.scheduled === 1, JSON.stringify({ lastSend: st.lastSend, s: st.subscriptions }));
+
+  // §98 the KV budget: a day of cron minutes with nothing due, and the app
+  // re-sending an unchanged schedule, cost no writes and no list calls.
+  {
+    const before = { ...ops };
+    for (let m = 0; m < 1440; m++) await worker.scheduled({}, env);
+    // the app re-sending exactly what the worker holds now
+    const regBody = { userId: 'dev1', subscription: subJson, schedule: JSON.parse(kv.get('sub:dev1')).schedule };
+    for (let i = 0; i < 50; i++) await call('POST', '/register', regBody);
+    ok(`worker stays inside the free KV budget (a day of idle cron + 50 unchanged registers: ${ops.put - before.put} writes, ${ops.list - before.list} lists)`,
+       ops.put === before.put && ops.list === before.list);
+  }
 
   // What the push service received must decrypt and carry a valid VAPID JWT
   const last = received[received.length - 1];

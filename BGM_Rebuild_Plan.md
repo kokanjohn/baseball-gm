@@ -7346,3 +7346,19 @@ Harness: the rating history is kept across seasons, in time order, one point per
 **Waiver claims (decision, supersedes §20.2's priority cycling):** claims are decided when the 72-hour window closes, worst winning percentage first (fewer wins breaks a tie); the waiving club is skipped. We claim only by putting a claim in; a CPU club claims when the player is at least `WAIVER_CLAIM_MIN_UPGRADE` (3) OVR better than its weakest healthy active player at his position and its owner can carry the contract. §20.2's rolling priority (a claim drops the club to last; order set from last season; "your priority: 4th of 10") is **not** being built. `state.waiverPriority` stays unused.
 
 **The Hitting Coach's icon** was a cricket bat (🏏 — Unicode has no baseball bat). It is now ⚾ on the compose screen and on the Hitting Coach's three report cards.
+
+## 98. Push: the worker ran out of its free KV allowance every day (worker r93)
+
+**Symptom:** cards arriving with the app closed didn't push (§94); the worker's `/status` page answered Cloudflare Error 1101 ("Worker threw exception").
+
+**Cause:** Workers KV on the Free plan allows 1,000 writes and 1,000 list calls a day (reset 00:00 UTC); past either, every further call of that kind throws. The cron runs every minute — 1,440 times a day — and every run listed the devices (`SCHEDULES.list`) and wrote its report (`meta:cron`), whether or not anything was due; every `/register` wrote too. Both limits ran out each day — with the app's syncs, well before mid-afternoon US Eastern — and from then until 8 PM Eastern (00:00 UTC) the cron threw before sending anything, `/register` failed, and `/status` threw. It worked when tested in Chat #3 because that was early in the UTC day.
+
+**Fix (`workers/push-worker.js`):**
+- Devices are found through one index key, `meta:devices`, written only when a device is added or removed (built once with a single list call on first run). The cron never lists.
+- The cron only reads unless something is due; it writes a device's schedule after sending, and `meta:cron` only when it sent something (`/status` shows it as `lastSend`).
+- `/register` writes only when the schedule or subscription changed (the app re-sends unchanged schedules often).
+- Any failure inside a request answers JSON `{ ok: false, error }` (503) instead of Error 1101, so a limit shows up as a readable reason.
+
+**Harness (`test-webpush.mjs`):** a full day of idle cron minutes plus 50 unchanged registers cost 0 writes and 0 list calls; the existing send/decrypt/VAPID checks pass.
+
+**Deploying:** the worker is deployed by pasting into Cloudflare (the connector reads code but can't deploy). After pasting, today's exhausted allowance still has to reset at 00:00 UTC (8 PM Eastern) before the first run can build the index; from then on it stays far inside the limits.

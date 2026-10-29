@@ -19,6 +19,16 @@
  *
  * Bindings / secrets: SCHEDULES (KV), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
  *
+ * §98 KV budget (Workers Free: 1,000 writes and 1,000 list calls a day, reset
+ * at 00:00 UTC; past either, every further call of that kind throws). The cron
+ * runs 1,440 times a day, so it must never list or write on a minute with
+ * nothing to send. Devices are found through one index key (`meta:devices`,
+ * written only when a device is added or removed); a schedule is written
+ * only when it changed; the cron writes only after it sent something. Before
+ * r93 the cron listed and wrote every minute — both limits ran out each
+ * afternoon (US Eastern), and from then until 00:00 UTC no push went out,
+ * /register failed and /status threw (Error 1101).
+ *
  * §61 fix: payload encryption followed RFC 8291 incorrectly — the IKM was
  * derived with info = as_public ‖ ua_public, but the standard requires
  * info = "WebPush: info" ‖ 0x00 ‖ ua_public ‖ as_public. Browsers could not
@@ -195,10 +205,39 @@ async function handleRegister(req, env) {
       body:      String(i.body  || '').slice(0, 300),
       tag:       String(i.tag   || 'bgm').slice(0, 64),
     }));
-  console.log('[Register]', userId, 'items:', items.length);
-  await env.SCHEDULES.put(`sub:${userId}`, JSON.stringify({ subscription, schedule: items }),
-                          { expirationTtl: KV_TTL_SECONDS });
+  const key = `sub:${userId}`;
+  const prev = await env.SCHEDULES.get(key, 'json');
+  // §98 nothing changed (same device subscription, same schedule): no write.
+  const same = prev && prev.subscription?.endpoint === subscription.endpoint
+    && JSON.stringify(prev.schedule || []) === JSON.stringify(items);
+  if (!same) {
+    await env.SCHEDULES.put(key, JSON.stringify({ ...(prev || {}), subscription, schedule: items }),
+                            { expirationTtl: KV_TTL_SECONDS });
+  }
+  await _indexAdd(env, userId);
+  console.log('[Register]', userId, 'items:', items.length, same ? '(unchanged)' : '(saved)');
   return new Response('OK');
+}
+
+// ── §98 the device index (one key, so the cron never lists) ───────────
+
+async function _devices(env) {
+  let ids = await env.SCHEDULES.get('meta:devices', 'json');
+  if (!Array.isArray(ids)) {
+    // First run after the index existed: one list call builds it.
+    const list = await env.SCHEDULES.list({ prefix: 'sub:' });
+    ids = list.keys.map(k => k.name.slice(4));
+    await env.SCHEDULES.put('meta:devices', JSON.stringify(ids));
+  }
+  return ids;
+}
+async function _indexAdd(env, userId) {
+  const ids = await _devices(env);
+  if (!ids.includes(userId)) await env.SCHEDULES.put('meta:devices', JSON.stringify([...ids, userId]));
+}
+async function _indexRemove(env, userId) {
+  const ids = await _devices(env);
+  if (ids.includes(userId)) await env.SCHEDULES.put('meta:devices', JSON.stringify(ids.filter(x => x !== userId)));
 }
 
 // POST /test-send { userId, subscription } — send right now, report the result.
@@ -223,14 +262,13 @@ async function handleTestSend(req, env) {
 
 // GET /status — diagnostics (no secrets, no full endpoints).
 async function handleStatus(env) {
-  const list = await env.SCHEDULES.list({ prefix: 'sub:' });
   const now  = Date.now();
   const subs = [];
-  for (const k of list.keys.slice(0, 20)) {
-    const d = await env.SCHEDULES.get(k.name, 'json');
+  for (const id of (await _devices(env)).slice(0, 20)) {
+    const d = await env.SCHEDULES.get(`sub:${id}`, 'json');
     const sched = d?.schedule || [];
     subs.push({
-      device:       k.name.slice(4, 12),
+      device:       id.slice(0, 8),
       pushService:  _host(d?.subscription?.endpoint),
       scheduled:    sched.length,
       nextInMin:    sched.length ? Math.round((sched[0].deliverAt - now) / 60000) : null,
@@ -239,7 +277,7 @@ async function handleStatus(env) {
   }
   return _json({
     now,
-    cron:  await env.SCHEDULES.get('meta:cron', 'json'),
+    lastSend: await env.SCHEDULES.get('meta:cron', 'json'),   // §98 written only when the cron sent something
     keys:  await vapidKeyCheck(env),
     subscriptions: subs,
   });
@@ -250,34 +288,35 @@ function _json(obj, status = 200) {
 }
 
 async function handleCron(env) {
-  const now  = Date.now();
-  const list = await env.SCHEDULES.list({ prefix: 'sub:' });
-  const cron = { startedAt: now, subscriptions: list.keys.length, sent: 0, failures: 0, lastError: null };
-  for (const key of list.keys) {
-    const data = await env.SCHEDULES.get(key.name, 'json');
+  const now = Date.now();
+  // §98 reads only, unless there is something to send.
+  const ids = await _devices(env);
+  let report = null;
+  for (const id of ids) {
+    const key = `sub:${id}`;
+    const data = await env.SCHEDULES.get(key, 'json');
     if (!data?.subscription || !data.schedule?.length) continue;
-    const due     = data.schedule.filter(i => i.deliverAt <= now);
-    const pending = data.schedule.filter(i => i.deliverAt >  now);
+    const due = data.schedule.filter(i => i.deliverAt <= now);
     if (!due.length) continue;
+    report = report || { at: now, sent: 0, failures: 0, lastError: null };
 
     let gone = false, last = null;
     for (const item of due) {
       last = await sendAndReport(data.subscription, item, env);
-      cron.sent++;
-      if (!last.ok) { cron.failures++; cron.lastError = last; }
+      report.sent++;
+      if (!last.ok) { report.failures++; report.lastError = last; }
       if (last.status === 404 || last.status === 410) { gone = true; break; }   // subscription expired
     }
-    if (gone) { await env.SCHEDULES.delete(key.name); continue; }
+    if (gone) { await env.SCHEDULES.delete(key); await _indexRemove(env, id); continue; }
 
     // Re-read before writing so a /register that landed during sending wins.
-    const latest = await env.SCHEDULES.get(key.name, 'json');
+    const latest = await env.SCHEDULES.get(key, 'json');
     const sentIds = new Set(due.map(i => i.id));
-    const schedule = (latest?.schedule || pending).filter(i => !(sentIds.has(i.id) && i.deliverAt <= now));
-    await env.SCHEDULES.put(key.name, JSON.stringify({ ...(latest || data), schedule, lastResult: last }),
+    const schedule = (latest?.schedule || data.schedule).filter(i => !(sentIds.has(i.id) && i.deliverAt <= now));
+    await env.SCHEDULES.put(key, JSON.stringify({ ...(latest || data), schedule, lastResult: last }),
                             { expirationTtl: KV_TTL_SECONDS });
   }
-  cron.finishedAt = Date.now();
-  await env.SCHEDULES.put('meta:cron', JSON.stringify(cron));
+  if (report) await env.SCHEDULES.put('meta:cron', JSON.stringify({ ...report, finishedAt: Date.now() }));
 }
 
 const CORS = {
@@ -291,16 +330,22 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     let res;
-    if (request.method === 'POST' && url.pathname === '/register') {
-      res = await handleRegister(request, env);
-    } else if (request.method === 'POST' && url.pathname === '/test-send') {
-      res = await handleTestSend(request, env);
-    } else if (request.method === 'GET' && url.pathname === '/status') {
-      res = await handleStatus(env);
-    } else if (request.method === 'GET' && url.pathname === '/vapid-key') {
-      res = new Response(env.VAPID_PUBLIC_KEY, { headers: { 'Content-Type': 'text/plain' } });
-    } else {
-      res = new Response('Not found', { status: 404 });
+    try {
+      if (request.method === 'POST' && url.pathname === '/register') {
+        res = await handleRegister(request, env);
+      } else if (request.method === 'POST' && url.pathname === '/test-send') {
+        res = await handleTestSend(request, env);
+      } else if (request.method === 'GET' && url.pathname === '/status') {
+        res = await handleStatus(env);
+      } else if (request.method === 'GET' && url.pathname === '/vapid-key') {
+        res = new Response(env.VAPID_PUBLIC_KEY, { headers: { 'Content-Type': 'text/plain' } });
+      } else {
+        res = new Response('Not found', { status: 404 });
+      }
+    } catch (e) {
+      // §98 say what failed (a KV daily limit, for one) instead of Error 1101.
+      console.error('[Fetch]', url.pathname, e?.message);
+      res = _json({ ok: false, error: String(e?.message || e) }, 503);
     }
     const h = new Headers(res.headers);
     for (const [k, v] of Object.entries(CORS)) h.set(k, v);
