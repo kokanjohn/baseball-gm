@@ -7260,3 +7260,15 @@ Offer cards (`lt_offer`) carry Pro Scouting's package (`scoutPackage`: the fewes
 8 seeds green; webpush and refs pass.
 
 **Open:** when someone beats us to a player and nobody else fits, the card is still an "Understood" notice rather than a decision.
+
+## 92. Every inbox card expands in place (r87, GM feedback)
+
+**Question from the GM:** why did the seeded Facilities Management card ("Pre-season inspection") open as a sheet when every other message expands in place?
+
+**Cause:** an old rule in `CardModal.shouldUseModal` sent any card with a body of 400 characters or more to a bottom sheet. That card runs about 410. It was never a design decision. The r86 trade offers usually crossed the line too.
+
+**Decision:** every card expands in place, whatever its length. `ui/components/CardModal.js` had no other users and is deleted (and removed from the service worker's precache). The shared sheet styles in `index.html` stay; the player card, composer and other sheets use them.
+
+**Found and fixed on the way:** the inline view showed one button for any card that goes through by default if unanswered (`autoResolve: 'yes'`), hiding its second choice. On "Pre-season inspection", "Targeted fixes only" was missing; 44 two-choice cards in the main pool alone were affected when short enough to expand inline. A card now shows one button only when it has one choice.
+
+Checked in the browser: the long card expands in place with both choices, and deciding it from the inline buttons resolves it. 8 seeds green; webpush and refs pass.

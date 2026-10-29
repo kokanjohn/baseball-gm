@@ -20,7 +20,6 @@ import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { getInbox, getHistory, clearHistory, restoreHistory } from '../../engine/CardEngine.js';
-import { openCardModal, shouldUseModal } from '../components/CardModal.js';
 import { snapshotMetrics } from '../formatters.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -311,7 +310,9 @@ function _renderCard(card, gameIdx) {
   // TTL countdown
   const ttlHtml = _renderTTL(card, gameIdx);
 
-  const isSingleAction = !card.noLabel || card.noLabel === card.yesLabel || card.autoResolve === 'yes';
+  // One button only when there is one choice. (A card that goes through by
+  // default if unanswered — autoResolve 'yes' — still offers both, §92.)
+  const isSingleAction = !card.noLabel || card.noLabel === card.yesLabel;
 
   const bodyHtml = isExpanded ? `
     <div class="msg-body open">
@@ -542,15 +543,9 @@ function _attachTabListeners(state) {
   document.querySelectorAll('[data-expand]').forEach(el => {
     el.addEventListener('click', () => {
       const id   = el.dataset.expand;
-      const card = getInbox().find(c => c.instanceId === id)
-                || getHistory(100).find(c => c.instanceId === id);
-      // Long cards open in CardModal; short cards expand inline
-      if (card && shouldUseModal(card)) {
-        openCardModal(card, (instanceId, choice) => _resolveCard(instanceId, choice));
-      } else {
-        _expandedCard = _expandedCard === id ? null : id;
-        refresh();
-      }
+      // §92 every card expands in place, whatever its length.
+      _expandedCard = _expandedCard === id ? null : id;
+      refresh();
     });
   });
 
@@ -634,10 +629,10 @@ function _attachTabListeners(state) {
 
 /**
  * _resolveCard(instanceId, choice)
- * The ONE path that resolves an inbox decision — used by the inline Yes/No
- * buttons and by the CardModal sheet (§62). Before r57 the inline buttons
- * called this function but it did not exist, so only long cards (which open in
- * the modal) could be decided.
+ * The ONE path that resolves an inbox decision — the inline Yes/No buttons
+ * (§62). Before r57 the inline buttons called this function but it did not
+ * exist, so only long cards (which then opened in a sheet) could be decided.
+ * Since §92 every card expands inline.
  */
 async function _resolveCard(instanceId, choice) {
   try {
