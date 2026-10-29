@@ -7217,3 +7217,46 @@ Offer cards (`lt_offer`) carry Pro Scouting's package (`scoutPackage`: the fewes
 - **The balance band floor is now 33 of 132** (the 2024 White Sox, 41–121, .253). The weakest CPU club now finishes 37–57 across seeds (it was 28–30 before 4c), and the best 73–84.
 
 8 seeds green; webpush and refs pass.
+
+## 91. CPU clubs' offers to us, rebuilt on the trade desk (r86)
+
+**Decisions (GM, Session 9):** a CPU club's call about one of our players comes from the daily trade desk, not a per-game roll; a club opens a little under, as a real GM would; the new-franchise seed offer varies, situation and wording, so it doesn't read the same for every new club.
+
+**Retired:** `generateCPUTradeOffer`, `_identifyCPUNeed`, `_findTradeTarget`, `_assembleCPUOffer` and `_dressWithMoney` (TradeEngine). They found a club's need by averaging OVR across `group` buckets, targeted a random player of ours from the 20th–80th percentile, always offered one bench or final-year player back, and never checked the deal from the other club's side. The per-game roll now offers only the selling club's cash sale (§85 A).
+
+**The desk calls us** (`LeagueTrades.findLeagueTrades`):
+- A club with a need that works the phones also looks at our organization, for its two weakest spots (`clubNeeds`). One of our players qualifies when he fills the spot, beats its incumbent by `upgradeMin`, and a package exists.
+- It calls us when our player is about as good a fit as the best it can get elsewhere (`callMargin` 4 OVR; a second-need fit counts 4 lower). It then waits for our answer instead of dealing elsewhere that day. At most one call a day.
+- A club that is already dealing with us doesn't call (`TradeEngine.busyWithUs`): talks open, an offer of its own waiting on our answer, or cooling off after a no.
+- **The opening bid** (`callOffer`): the package that costs the club least (`buildPackage` `cheapest`: the pieces it values least, plus any cash) that comes within `openUnder` (8% of the player's value to us, at least 4) of what he is worth to us. It always clears the club's own bar, the same bar it holds our counters to (`cpuRespond`). It is never a lowball.
+- `room`: a better deal for us that the club would still make exists. Pro Scouting says so in words.
+- Measured over 8 seeds: 3–10 calls a season, plus 1–6 cash sales.
+
+**A club offering one of its own players** (`askingOffer`): what it asks of our spare pieces, a little over its bar when it opens. `shedK` requires the deal to take money off a club's books (the payroll call-back). Used by:
+- **The seed** (`deliverSeedTradeOffer`): whichever situation the new league has, picked at random — a club that wants one of ours, or a club offering a player who would start for us.
+- **The All-Star suitor** (§17.3): now an actual All-Star from another club (`allStarSeasons`) who would start for us. Before, the "spent All-Star week in our ballpark" line was attached to whatever bench player the old generator picked.
+- **The payroll call-back** (§83): the club's biggest salary held by a player who would start for us, in a deal that takes at least half of that salary off its books. Before, it could come attached to a minimum-salary player.
+
+**Clubs keep their word** (`promisedToUs`): a club doesn't move a player in a deal of ours it accepted, or in its own offer that waits on our answer. A counter isn't a promise, so "someone beat us to a player" (§90) now happens only after a counter. It used to fire after the club had accepted our offer.
+
+**The offer card** (`CardEngine.deliverTradeOffer`, kinds `call`, `sell`, `sale`):
+- An opening line varied by situation (four for a call, three for a club selling, three each for seeds). Then the deal, cash, salary kept, Pro Scouting's read in words, and the payroll change.
+- **Accept the Trade / Decline / Counter.** Counter opens the composer pre-filled with their offer. It starts a talk at round 2 (their offer was round 1) and withdraws their card (`withdrawTalkCards`).
+- Now a roster card on the real clock: it expires after 2 days (a seed after 3) and declines by default. It used to expire by game count, which never happens in the offseason.
+- Withdrawn when the deal can no longer be made (`tradeBlockers`). The old check looked only at active rosters, so an offer with a farm prospect in it was dropped as invalid.
+- The payroll note says only what the deal changes ("adds $X to a payroll already over ownership's target"), not "would push payroll over" on every card when the club was already over.
+
+**Found and fixed on the way:**
+- **A prospect traded from a farm held an active roster spot.** `pendingArrivals` counted farm-bound arrivals (`toFarm`), so trading an active player for two prospects left us at 27 with no open spot and no deadline. Every active count (call-ups, the 28-man check, reconciles, the offseason) now leaves them out. Seen when a call sent one of our regulars for two prospects.
+- Possessive club names ("Ironfield Bears' front office").
+
+**Harness:**
+- New checks: calls come from the desk (2–30 in season 1); every opening bid clears the caller's bar and is never more than its `openBy` under; at least half the calls open under value; a selling club asks a price it would take; the All-Star suitor is a real All-Star; the wording varies; a counter opens round 2 and replaces their card; talks closed because another club got the player come with word from Pro Scouting.
+- The GM counters about a quarter of offers (their offer plus $100K to us).
+- The seed checks accept a farm player in the deal and a roster-clock expiry. The harness GM leaves the seed offer alone (it is made at the clock's far-future anchor, before the season clock starts).
+- Ghost checks use `tradeBlockers`. The trade-engine copy checks run at neutral rapport. Odd seeds' forced All-Star host gets an atmosphere margin (a bad day had dropped it under 65 before the league named the host).
+- `ROSTER_DUMP` prints pending arrivals and recent trades when the 28-man check fails.
+
+8 seeds green; webpush and refs pass.
+
+**Open:** when someone beats us to a player and nobody else fits, the card is still an "Understood" notice rather than a decision.

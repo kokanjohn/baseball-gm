@@ -23,7 +23,7 @@ import { TRADE } from '../data/constants.js';
 import * as Finance from './FinanceEngine.js';
 import {
   cpuRespond, buildCounter, evaluateForClub, tradeBlockers, queueTrade,
-  adjustRapport, startCooldown, clubBar,
+  adjustRapport, startCooldown, clubBar, talkWith, talkIsOpen,
 } from './TradeEngine.js';
 import { deliverTalkReply, withdrawTalkCards } from './CardEngine.js';
 import { formatK } from './CardTokens.js';
@@ -35,21 +35,9 @@ function _replyDelayMs() {
   return Math.round((2 + Math.pow(Math.random(), 1.6) * 34) * H);
 }
 
-/** The open talk with a club, if any. */
-export function talkWith(state, teamId) {
-  return state.tradeTalks?.[teamId]?.talk || null;
-}
-
-/**
- * Are we in talks with this club right now — waiting to hear back, or
- * holding an answer we haven't acted on?
- */
-export function talkIsOpen(state, teamId, nowMs = Date.now()) {
-  const t = talkWith(state, teamId);
-  if (!t) return false;
-  if ((t.replyAtMs || 0) > nowMs) return true;                    // their answer hasn't reached us yet
-  return ['countered', 'agreed'].includes(t.status);
-}
+// §91 the talk helpers live with the rest of the pure trade rules (the trade
+// desk reads them too); re-exported here for the screens and cards.
+export { talkWith, talkIsOpen };
 
 /**
  * ourSideOk(state, offer) — can our owner carry the deal (salary we'd add,

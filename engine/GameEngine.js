@@ -2628,10 +2628,14 @@ const _clubAbbr = (st, id) => id === 'user' ? st.userTeam.abbr : ((st.leagueTeam
 /**
  * _runTradeDesk(atMs) — the day's moment for CPU clubs to deal: every trade a
  * club with a need can make with a club that has the player (LeagueTrades),
- * carried out at once through the ledger. The next desk is tomorrow.
+ * carried out at once through the ledger. A club that wants one of OUR
+ * players calls instead (§91): its opening offer reaches the inbox, and it
+ * waits for our answer. The next desk is tomorrow.
  */
 function _runTradeDesk(atMs) {
-  const deals = LeagueTrades.findLeagueTrades(StateManager.get(), atMs);
+  const found = LeagueTrades.findLeagueTrades(StateManager.get(), atMs);
+  const deals = found.filter(d => !d.call);
+  for (const d of found.filter(x => x.call)) CardEngine.deliverTradeCall(d, atMs);
   StateManager.mutate(s => {
     const last = { ...(s.tradeDesk?.lastTradeMs || {}) };
     for (const d of deals) {

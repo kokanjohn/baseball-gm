@@ -1,6 +1,6 @@
 /**
  * engine/TradeEngine.js
- * Trade value calculation, CPU trade proposal generation, execution, and fairness evaluation.
+ * Trade value, how clubs judge a deal, the CPU's cash sale, execution, and fairness evaluation.
  *
  * Rules:
  *   - Pure functions. No state reads or writes. GameEngine applies mutations.
@@ -10,11 +10,13 @@
  *   - A CPU club judges a deal from where it stands (§85 I): its needs and
  *     depth, buying or selling, its books, age, contract and rating — and
  *     sets its bar by its GM's rapport with ours.
- *   - evaluateTrade() is the single place trade value is assessed — used for both
- *     CPU-proposed trades and user-initiated trades. No special casing.
+ *   - Every club judges a deal through valueToClub / evaluateForClub (§90),
+ *     ours included (evaluateForUser); evaluateTrade() is the user-side
+ *     summary the offer cards and the scout's read quote.
  *   - Accepting a trade queues ONE ledger transaction (queueTrade); the roster
  *     moves happen on the real-clock transaction ledger (TransactionEngine, §65).
- *   - Trade deadline window (games 88–92) modulates CPU aggressiveness.
+ *   - CPU clubs' calls about our players come from the daily trade desk
+ *     (LeagueTrades, §91), not from a roll here.
  *
  * Section references: Section 9 (trade system), Section 22 (GM relationship)
  */
@@ -22,7 +24,6 @@
 import {
   PLAYER_GROUP,
   PHASE,
-  TRADE_DEADLINE_OPEN,
   TRADE_DEADLINE_CLOSE,
   GM_RELATIONSHIP_DEFAULT,
   SALARY_BY_OVR,
@@ -39,8 +40,7 @@ import * as Finance from './FinanceEngine.js';
 /**
  * evaluateTrade(offer, state)
  * Evaluates a trade proposal from all angles.
- * Returns a TradeEvaluation object used by CardEngine for display
- * and by generateCPUTradeOffer() for proposal generation.
+ * Returns a TradeEvaluation object used by CardEngine for display.
  *
  * offer shape:
  * {
@@ -270,107 +270,13 @@ function _payrollDelta(incoming, outgoing, retain = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// CPU TRADE PROPOSAL GENERATION
+// CPU OFFERS TO US
 // ─────────────────────────────────────────────────────────────
-
-/**
- * generateCPUTradeOffer(teamId, state, context)
- * Generates a CPU trade proposal for a given team.
- * Returns an offer object if the CPU wants to propose, null if not.
- *
- * CPU logic:
- *   - Identify the CPU team's biggest need (weakest position group)
- *   - Find a user player who addresses that need
- *   - Assemble a return offer using their tradeable assets
- *   - Apply GM relationship modifier to generosity
- *   - Apply trade deadline aggressiveness modifier
- *
- * @param {String} teamId
- * @param {Object} state
- * @param {Object} context  — { regularSeasonIndex, phase }
- * @returns {Object|null} offer
- */
-export function generateCPUTradeOffer(teamId, state, context = {}) {
-  const team    = (state.leagueTeams || []).find(t => t.id === teamId);
-  if (!team) return null;
-
-  const gmRel   = state.userTeam.gmRelationships?.[teamId] ?? GM_RELATIONSHIP_DEFAULT;
-
-  // Teams with very low gmRelationship rarely initiate trades
-  if (gmRel < 20 && Math.random() > 0.10) return null;
-
-  // Base trade probability per game — low, so trades feel special
-  const isDeadlineWindow = context.regularSeasonIndex >= TRADE_DEADLINE_OPEN
-                        && context.regularSeasonIndex <= TRADE_DEADLINE_CLOSE;
-  const baseProbability  = isDeadlineWindow ? 0.08 : 0.02;
-  const relModifier      = (gmRel - 50) * 0.001; // ±0.05 at extremes
-
-  // context.force skips the per-game probability roll (used for the
-  // new-franchise seed offer); every quality gate below still applies.
-  if (!context.force && Math.random() > baseProbability + relModifier) return null;
-
-  // Find what the CPU team needs most
-  const cpuNeed = _identifyCPUNeed(team, state);
-  if (!cpuNeed) return null;
-
-  // Find a user player who addresses that need
-  const target = _findTradeTarget(cpuNeed, state);
-  if (!target) return null;
-
-  // Find what the CPU can offer
-  const offering = _assembleCPUOffer(team, target, state, gmRel, isDeadlineWindow);
-  if (!offering) return null;
-
-  // Direction is from the USER's perspective (see evaluateTrade / queueTrade):
-  //   incomingIds = players the user RECEIVES (the CPU's offered player)
-  //   outgoingIds = players the user SENDS    (the user player the CPU targets)
-  // This was previously inverted, so accepting would have "acquired" the user's
-  // own player and shipped the CPU's player away.
-  const offer = {
-    incomingIds:     [offering.id],
-    outgoingIds:     [target.id],
-    proposingTeamId: teamId,
-    isRental:        _isRentalPlayer(offering, state),
-    cashK:           0,
-    retain:          {},
-  };
-  _dressWithMoney(offer, state, teamId);
-
-  // Evaluate the offer — if it's too unfair for the user, the CPU adjusts
-  const evaluation = evaluateTrade(offer, state);
-
-  // CPU teams don't propose highway robbery (would insult the GM)
-  if (evaluation.fairnessRating < -2) return null;
-
-  // Teams with high gmRelationship propose fairer deals
-  if (gmRel >= 70 && evaluation.fairnessRating < -1) return null;
-
-  return { offer, evaluation };
-}
-
-/**
- * §85 the CPU puts money in its own offer when the deal needs it:
- *   - our owner can't carry the player's salary and the club is selling (or
- *     cutting): it keeps paying a share of it this season;
- *   - the deal is a little short for us and the club can spend: it adds cash.
- */
-function _dressWithMoney(offer, state, teamId) {
-  const P = (id) => state.players[id];
-  const inSal  = offer.incomingIds.reduce((a, id) => a + (P(id)?.contractSalary || 0), 0);
-  const outSal = offer.outgoingIds.reduce((a, id) => a + (P(id)?.contractSalary || 0), 0);
-  const room = Finance.payrollRoom(state, 'user');
-  if (inSal - outSal > Math.max(0, room) && clubMode(state, teamId) === 'seller' && remainingShare(state) > 0) {
-    const big = offer.incomingIds.map(P).filter(Boolean).sort((a, b) => (b.contractSalary || 0) - (a.contractSalary || 0))[0];
-    const need = inSal - outSal - Math.max(0, room);
-    const pct = big?.contractSalary ? Math.ceil((need / big.contractSalary) * 20) / 20 : 0;
-    if (pct > 0 && pct <= TRADE.maxRetainPct) offer.retain[big.id] = pct;
-  }
-  const ev = evaluateTrade(offer, state);
-  if (ev.valueDiff < -8 && ev.valueDiff > -40) {
-    const k = Math.round(((-ev.valueDiff - 4) / Math.max(0.01, cashValue(1, state, 'user'))) / 25) * 25;
-    if (k > 0 && Finance.canSpend(state, k, teamId)) offer.cashK = k;
-  }
-}
+//
+// §91 a CPU club's call about one of our players comes from the daily trade
+// desk (LeagueTrades.findLeagueTrades), built by the same package logic and
+// judged the same way as every other trade. The one CPU offer still made
+// here is the selling club's cash sale (§85 A).
 
 /**
  * generateCPUCashSale(teamId, state, context) — §85 A: a selling (or cutting)
@@ -465,81 +371,6 @@ function _isRentalPlayer(player, state) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// CPU NEED IDENTIFICATION
-// ─────────────────────────────────────────────────────────────
-
-function _identifyCPUNeed(team, state) {
-  const roster = (team.rosterIds || [])
-    .map(id => state.players[id])
-    .filter(p => p && isAvailable(p));
-
-  // Find weakest position group by average OVR
-  const groups = {
-    hitters:  roster.filter(p => [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS].includes(p.group)),
-    starters: roster.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS),
-    bullpen:  roster.filter(p => [PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group)),
-  };
-
-  const avgOvr = arr => arr.length ? arr.reduce((s, p) => s + p.ovr, 0) / arr.length : 0;
-
-  const weakest = Object.entries(groups)
-    .map(([key, arr]) => ({ key, avg: avgOvr(arr) }))
-    .sort((a, b) => a.avg - b.avg)[0];
-
-  return weakest?.key || 'hitters';
-}
-
-function _findTradeTarget(need, state) {
-  const userRoster = state.userTeam.rosterIds
-    .map(id => state.players[id])
-    .filter(p => p && !p.isInjured);
-
-  const isPitcher = need === 'starters' || need === 'bullpen';
-
-  const eligible = userRoster.filter(p => {
-    if (isPitcher) return ['SP','RP'].includes(p.pos);
-    return ![PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group);
-  });
-
-  if (!eligible.length) return null;
-
-  // Target a player in the top half of the user's roster but not the best player
-  const sorted = eligible.sort((a, b) => b.ovr - a.ovr);
-  const startIdx = Math.floor(sorted.length * 0.2); // avoid the top 20%
-  const pool     = sorted.slice(startIdx, Math.floor(sorted.length * 0.8));
-
-  return pool[Math.floor(Math.random() * pool.length)] || null;
-}
-
-function _assembleCPUOffer(team, target, state, gmRel, isDeadlineWindow) {
-  const targetValue = _playerValue(target, state);
-  const roster      = (team.rosterIds || [])
-    .map(id => state.players[id])
-    .filter(p => p && isAvailable(p));
-
-  // Find tradeable CPU players — bench/final-year players, or 15% chance of any
-  const tradeable = roster.filter(p => {
-    const isBench    = [PLAYER_GROUP.BENCH_HITTERS, PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group);
-    const isFinalYr  = _isRentalPlayer(p, state);
-    return isBench || isFinalYr || (isDeadlineWindow && Math.random() < 0.15);
-  });
-
-  if (!tradeable.length) return null;
-
-  // Find best value match — aim for value close to target
-  // gmRelationship > 70: CPU offers slightly above target value (generous)
-  // gmRelationship < 30: CPU offers below target value (stingy)
-  const valueMod = gmRel >= 70 ? 1.10 : gmRel <= 30 ? 0.80 : 1.0;
-  const targetOfferValue = targetValue * valueMod;
-
-  const scored = tradeable
-    .map(p => ({ p, diff: Math.abs(_playerValue(p, state) - targetOfferValue) }))
-    .sort((a, b) => a.diff - b.diff);
-
-  return scored[0]?.p || null;
-}
-
-// ─────────────────────────────────────────────────────────────
 // §85 PHASE 4 — HOW CLUBS JUDGE A DEAL
 // ─────────────────────────────────────────────────────────────
 
@@ -589,6 +420,38 @@ export function cooldownUntil(state, teamId) {
 }
 export function startCooldown(draft, teamId, atMs) {
   draft.tradeTalks = { ...(draft.tradeTalks || {}), [teamId]: { ...(draft.tradeTalks?.[teamId] || {}), cooldownUntilMs: atMs + TRADE.cooldownMs } };
+}
+
+// ── Talking with a club (§88, §91) ──────────────────────────────────────────
+
+/** The open talk with a club, if any (Negotiation runs it). */
+export function talkWith(state, teamId) {
+  return state.tradeTalks?.[teamId]?.talk || null;
+}
+
+/**
+ * Are we in talks with this club right now — waiting to hear back, or
+ * holding an answer we haven't acted on?
+ */
+export function talkIsOpen(state, teamId, nowMs = Date.now()) {
+  const t = talkWith(state, teamId);
+  if (!t) return false;
+  if ((t.replyAtMs || 0) > nowMs) return true;                    // their answer hasn't reached us yet
+  return ['countered', 'agreed'].includes(t.status);
+}
+
+/** An offer of theirs we haven't answered yet (in the inbox or on its way). */
+export function offerAwaitingUs(state, teamId) {
+  return [...(state.inbox || []), ...(state.scheduledCards || [])]
+    .some(c => !c.resolved && c._proposingTeamId === teamId && c._tradeOffer);
+}
+
+/**
+ * §91 is this club already dealing with us — talks open, an offer of theirs
+ * waiting on our answer, or cooling off after a no? Then it doesn't call.
+ */
+export function busyWithUs(state, teamId, atMs) {
+  return talkIsOpen(state, teamId, atMs) || offerAwaitingUs(state, teamId) || cooldownUntil(state, teamId) > atMs;
 }
 
 // ── Where a club stands ────────────────────────────────────────────────────
@@ -735,6 +598,18 @@ export function evaluateForClub(offer, state, teamId) {
     booksOk: Finance.canAddSalary(state, payrollIn, payrollOut, teamId),
     cashOk:  cashK <= 0 || Finance.canSpend(state, cashK, teamId),
   };
+}
+
+/**
+ * evaluateForUser(offer, state) — §91 the deal as we would judge it, by the
+ * same rules a CPU club uses (offer in our terms: incomingIds = we receive,
+ * cashK + = they pay us).
+ */
+export function evaluateForUser(offer, state) {
+  return evaluateForClub({
+    incomingIds: offer.outgoingIds || [], outgoingIds: offer.incomingIds || [],
+    cashK: -(offer.cashK || 0), retain: offer.retain || {},
+  }, state, 'user');
 }
 
 /** The bar this club sets (net value it needs), by its GM's rapport with ours. */

@@ -13,6 +13,13 @@
  * buying or selling, who would start, age, contract, books); the buyer will
  * overpay a little to fill a need, the seller takes nothing less than fair.
  *
+ * §91 we're one of the clubs a buyer calls: when one of our players fills
+ * its need about as well as the best it can find elsewhere, it makes us an
+ * offer instead (callOffer: its opening bid, a little under his value to
+ * us), and waits for our answer. A club offering us one of its own players
+ * asks a little over its bar (askingOffer). A club doesn't move players it
+ * has put on the table with us until we answer (promisedToUs).
+ *
  * A deal is { a, b, aGets, bGets, cashAtoB, retain }: club `a` receives
  * `aGets` (from b) and sends `bGets`; `cashAtoB` is a one-time payment from a
  * to b (negative: b pays a); `retain` is the salary share the SENDING club
@@ -23,6 +30,7 @@ import { PLAYER_GROUP, PHASE, TRADE, LEAGUE_TRADES, TRADE_DEADLINE_OPEN, TRADE_D
 import {
   valueToClub, evaluateForClub, wouldStart, tradeWindow, regularIndex, clubMode, cashValue,
   remainingShare, clubBar, isKeyPiece, playsSlot, packageValue,
+  busyWithUs, offerAwaitingUs, evaluateForUser, talkWith,
 } from './TradeEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { isAvailable } from './PlayerFactory.js';
@@ -114,9 +122,27 @@ function _settled(p, atMs, cpu) {
 /** The pieces a club would part with: not a key piece now (the player being replaced may go). */
 function _spare(state, teamId, atMs, { keep = new Set(), allow = new Set() } = {}) {
   const t = _club(state, teamId);
+  const promised = teamId === 'user' ? new Set() : promisedToUs(state, teamId);
   return _org(t).map(id => state.players[id])
-    .filter(p => movable(p, atMs) && _settled(p, atMs, teamId !== 'user') && !keep.has(p.id)
+    .filter(p => movable(p, atMs) && _settled(p, atMs, teamId !== 'user') && !keep.has(p.id) && !promised.has(p.id)
               && (allow.has(p.id) || !isKeyPiece(p, state, teamId)));
+}
+
+/**
+ * §91 the players a CPU club has put on the table with us and stands behind
+ * until we answer: a deal of ours it accepted, and an offer of its own that
+ * waits on our answer. It doesn't move them elsewhere meanwhile. (A counter
+ * isn't a promise: another club can still meet its price first — "someone
+ * beat us to a player".)
+ */
+export function promisedToUs(state, teamId) {
+  const out = new Set();
+  const talk = talkWith(state, teamId);
+  if (talk?.status === 'agreed') for (const id of talk.offer?.incomingIds || []) out.add(id);
+  for (const c of [...(state.inbox || []), ...(state.scheduledCards || [])]) {
+    if (!c.resolved && c._proposingTeamId === teamId && c._tradeOffer) for (const id of c._tradeOffer.incomingIds || []) out.add(id);
+  }
+  return out;
 }
 
 // ── A deal from each side ───────────────────────────────────────────────────
@@ -132,9 +158,19 @@ export function viewFor(deal, x) {
   };
 }
 
-/** The deal from our side (user = club a): the offer shape the composer and Negotiation use. */
+/**
+ * The deal from our side, whichever side we're on: the offer shape the
+ * composer, the offer cards and Negotiation use (incomingIds = we receive,
+ * cashK + = they pay us).
+ */
 export function userOffer(deal) {
-  return { incomingIds: [...deal.aGets], outgoingIds: [...deal.bGets], cashK: -(deal.cashAtoB || 0), retain: { ...(deal.retain || {}) } };
+  const weBuy = deal.a === 'user';
+  return {
+    incomingIds: [...(weBuy ? deal.aGets : deal.bGets)],
+    outgoingIds: [...(weBuy ? deal.bGets : deal.aGets)],
+    cashK:       weBuy ? -(deal.cashAtoB || 0) : (deal.cashAtoB || 0),
+    retain:      { ...(deal.retain || {}) },
+  };
 }
 
 /** The ledger record that carries a deal out (TransactionEngine executes it). */
@@ -163,7 +199,9 @@ export function leagueTradeTx(deal, atMs) {
  * sends for the seller's player(s): the fewest, smallest pieces the seller
  * would take (its bar), from what the buyer can spare; cash for a small gap;
  * the seller keeping part of a salary the buyer's owner can't carry.
- *   opts: { atMs, sellerBar, buyerSlack (null: the buyer's view isn't checked — our scout), allow }
+ *   opts: { atMs, sellerBar, buyerSlack (null: the buyer's view isn't checked — our scout), allow, keep,
+ *           shedK (the seller's payroll must drop at least this much — a club cutting payroll),
+ *           cheapest (an opening bid: the package that costs the buyer least, not the fewest pieces) }
  * Returns a deal, or null when nothing works.
  */
 export function buildPackage(state, buyerId, sellerId, targetIds, opts = {}) {
@@ -199,6 +237,14 @@ export function buildPackage(state, buyerId, sellerId, targetIds, opts = {}) {
     // up in cash, counts a bit worse than a little over).
     .map(x => ({ ...x, miss: x.total >= need ? x.total - need : (need - x.total) * 1.5 }))
     .sort((x, y) => (x.c.length - y.c.length) || (x.miss - y.miss));
+  // §91 an opening bid: what costs the buyer least — the pieces it values
+  // least that still reach the price, plus any cash it adds to get there.
+  if (opts.cheapest) {
+    const cost = (x) => packageValue(x.c.map(o => valueToClub(o.p, state, buyerId, false)))
+      + (x.total < need ? cashValue(cashGapK(need - x.total), state, buyerId) : 0);
+    for (const x of ranked) x.cost = cost(x);
+    ranked.sort((x, y) => (x.cost - y.cost) || (x.c.length - y.c.length));
+  }
   for (const { c, total } of ranked.slice(0, 40)) {
     const deal = { a: buyerId, b: sellerId, aGets: targets.map(p => p.id), bGets: c.map(x => x.p.id), cashAtoB: 0, retain: {} };
     if (total < need) {
@@ -206,7 +252,7 @@ export function buildPackage(state, buyerId, sellerId, targetIds, opts = {}) {
       if (!Finance.canSpend(state, k, buyerId)) continue;
       deal.cashAtoB = k;
     }
-    if (_settle(state, deal, { sellerBar, buyerSlack: opts.buyerSlack ?? null })) return deal;
+    if (_settle(state, deal, { sellerBar, buyerSlack: opts.buyerSlack ?? null, shedK: opts.shedK || 0 })) return deal;
   }
   return null;
 }
@@ -216,7 +262,7 @@ export function buildPackage(state, buyerId, sellerId, targetIds, opts = {}) {
  * carries the payroll (or the seller keeps part of a salary), and — for a CPU
  * buyer — the buyer isn't overpaying more than it would to fill a need.
  */
-function _settle(state, deal, { sellerBar, buyerSlack }) {
+function _settle(state, deal, { sellerBar, buyerSlack, shedK = 0 }) {
   const evB = () => evaluateForClub(viewFor(deal, deal.b), state, deal.b);
   const evA = () => evaluateForClub(viewFor(deal, deal.a), state, deal.a);
   let a = evA();
@@ -233,6 +279,7 @@ function _settle(state, deal, { sellerBar, buyerSlack }) {
   }
   const b = evB();
   if (!(b.net >= sellerBar && b.booksOk && b.cashOk)) return false;
+  if (shedK > 0 && b.payrollOut - b.payrollIn < shedK) return false;
   if (buyerSlack != null && !(a.net >= -buyerSlack && a.cashOk)) return false;
   return true;
 }
@@ -261,38 +308,123 @@ export function findLeagueTrades(state, atMs, rand = Math.random) {
   const chance = _dailyChance(state);
   const used = new Set();
   const deals = [];
+  let calls = LEAGUE_TRADES.maxCallsPerDay;
   const order = [...clubs].sort(() => rand() - 0.5);
   for (const buyer of order) {
     if (deals.length >= LEAGUE_TRADES.maxPerDay) break;
     if (used.has(buyer.id)) continue;
+    // A club waiting on our answer to its offer isn't shopping elsewhere.
+    if (offerAwaitingUs(state, buyer.id)) continue;
     const needs = clubNeeds(state, buyer.id, norms);
     if (!needs.length || rand() > chance) continue;
     const need = needs[0];
     const slack = LEAGUE_TRADES.buyerSlack[clubMode(state, buyer.id)] ?? 0;
+    const opts = _needOpts(state, buyer.id, need);
     let best = null;
     for (const seller of clubs) {
       if (seller.id === buyer.id || used.has(seller.id)) continue;
+      const promised = promisedToUs(state, seller.id);
       const fits = _org(seller).map(id => state.players[id])
-        .filter(p => movable(p, atMs) && _settled(p, atMs, true) && fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + LEAGUE_TRADES.upgradeMin)
+        .filter(p => movable(p, atMs) && _settled(p, atMs, true) && !promised.has(p.id) && fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + LEAGUE_TRADES.upgradeMin)
         .sort((x, y) => (y.ovr || 0) - (x.ovr || 0))
         .slice(0, 3);
       for (const p of fits) {
-        const deal = buildPackage(state, buyer.id, seller.id, [p.id], {
-          atMs, sellerBar: 0, buyerSlack: slack, allow: need.incumbentId ? [need.incumbentId] : [],
-          // never the club's own answer at the spot
-          keep: _org(buyer).filter(id => id !== need.incumbentId && fillsNeed(state.players[id], need) && (state.players[id]?.ovr || 0) > need.ovr),
-        });
+        const deal = buildPackage(state, buyer.id, seller.id, [p.id], { atMs, sellerBar: 0, buyerSlack: slack, ...opts });
         if (!deal) continue;
         const gain = (p.ovr || 0) - need.ovr;
         if (!best || gain > best.gain) best = { deal, gain, p };
       }
     }
+    // §91 we're one of the clubs it calls: when one of our players fits about
+    // as well as the best elsewhere, it makes us an offer (its opening bid)
+    // and waits for our answer instead of dealing elsewhere today.
+    // It asks about its two weakest spots; for the second, our player has to
+    // be clearly better than anything it can get for the first elsewhere.
+    let ours = null;
+    if (calls > 0 && !busyWithUs(state, buyer.id, atMs)) {
+      for (const [i, n] of needs.slice(0, 2).entries()) {
+        const fits = _org(state.userTeam).map(id => state.players[id])
+          .filter(p => movable(p, atMs) && fillsNeed(p, n) && (p.ovr || 0) >= n.ovr + LEAGUE_TRADES.upgradeMin)
+          .sort((x, y) => (y.ovr || 0) - (x.ovr || 0))
+          .slice(0, 3);
+        for (const p of fits) {
+          const c = callOffer(state, buyer.id, p.id, atMs, { need: n });
+          if (!c) continue;
+          const gain = (p.ovr || 0) - n.ovr - (i ? LEAGUE_TRADES.callMargin : 0);
+          if (!ours || gain > ours.gain) ours = { ...c, gain, p, need: n };
+        }
+      }
+    }
+    const why = (d, n = need) => ({ need: { kind: n.kind, slot: n.slot || null, incumbentId: n.incumbentId }, buyerMode: clubMode(state, buyer.id), sellerMode: clubMode(state, d.b) });
+    if (ours && (!best || ours.gain >= best.gain - LEAGUE_TRADES.callMargin)) {
+      deals.push({ ...ours.deal, call: true, room: ours.room, why: why(ours.deal, ours.need) });
+      used.add(buyer.id);
+      calls--;
+      continue;
+    }
     if (!best) continue;
-    best.deal.why = { need: { kind: need.kind, slot: need.slot || null, incumbentId: need.incumbentId }, buyerMode: clubMode(state, buyer.id), sellerMode: clubMode(state, best.deal.b) };
+    best.deal.why = why(best.deal);
     deals.push(best.deal);
     used.add(best.deal.a); used.add(best.deal.b);
   }
   return deals;
+}
+
+/** A buyer filling a need: the incumbent may go; its own answer at the spot never does. */
+function _needOpts(state, buyerId, need) {
+  if (!need) return {};
+  return {
+    allow: need.incumbentId ? [need.incumbentId] : [],
+    keep:  _org(_club(state, buyerId)).filter(id => id !== need.incumbentId && fillsNeed(state.players[id], need) && (state.players[id]?.ovr || 0) > need.ovr),
+  };
+}
+
+/** How far a club opens in its own favor, for a player worth `worth`. */
+function _openBy(worth) {
+  return Math.max(LEAGUE_TRADES.openUnderMin, Math.round(worth * LEAGUE_TRADES.openUnder));
+}
+
+/** Our net on a deal, by the rules every club uses. */
+const _ourNet = (state, deal) => evaluateForUser(userOffer(deal), state).net;
+
+/**
+ * callOffer(state, buyerId, playerId, atMs, { need }) — §91 a CPU club wants
+ * one of our players: its opening bid, a little under what he is worth to us
+ * (never a lowball), that its GM would stand behind (it clears the club's
+ * own bar, the same bar it holds our counters to). `room`: a better deal it
+ * would still make exists — there's more there if we push.
+ * Returns { deal, room } (deal.a = the buyer, deal.b = 'user'), or null.
+ */
+export function callOffer(state, buyerId, playerId, atMs, { need = null } = {}) {
+  const p = state.players[playerId];
+  if (!p) return null;
+  const opts = { atMs, buyerSlack: -clubBar(state, buyerId), ..._needOpts(state, buyerId, need) };
+  const under = _openBy(valueToClub(p, state, 'user', false));
+  const fair = buildPackage(state, buyerId, 'user', [playerId], { ...opts, sellerBar: 0 });
+  const open = buildPackage(state, buyerId, 'user', [playerId], { ...opts, sellerBar: -under, cheapest: true }) || fair;
+  if (!open) return null;
+  open.openBy = under;
+  return { deal: open, room: !!fair && _ourNet(state, fair) > _ourNet(state, open) + 2 };
+}
+
+/**
+ * askingOffer(state, sellerId, playerId, atMs, { premium, shedK }) — §91 a
+ * CPU club offers us one of its players: what it asks of our spare pieces,
+ * a little over its bar when it opens (premium), the least it would take
+ * otherwise. shedK: a club cutting payroll needs the deal to take at least
+ * this much off its books. `room`: it would take less.
+ * Returns { deal, room } (deal.a = 'user', deal.b = the seller), or null.
+ */
+export function askingOffer(state, sellerId, playerId, atMs, { premium = true, shedK = 0 } = {}) {
+  const p = state.players[playerId];
+  if (!p) return null;
+  const bar = clubBar(state, sellerId);
+  const opts = { atMs, buyerSlack: null, shedK };
+  const fair = buildPackage(state, 'user', sellerId, [playerId], { ...opts, sellerBar: bar });
+  const over = premium ? _openBy(valueToClub(p, state, sellerId, false)) : 0;
+  const ask = (over && buildPackage(state, 'user', sellerId, [playerId], { ...opts, sellerBar: bar + over })) || fair;
+  if (!ask) return null;
+  return { deal: ask, room: !!fair && _ourNet(state, fair) > _ourNet(state, ask) + 2 };
 }
 
 /** When the trade desk next opens (one moment a day, late morning to evening). */

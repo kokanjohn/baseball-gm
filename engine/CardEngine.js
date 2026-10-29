@@ -59,7 +59,7 @@ import {
   activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation,
   defaultActiveGroup, nextCalendarDay, computePayroll,
 } from './RosterEngine.js';
-import { evaluateTrade, queueTrade, generateCPUTradeOffer, generateCPUCashSale, tradeWindow, tradeBlockers, cooldownUntil, startCooldown } from './TradeEngine.js';
+import { evaluateTrade, queueTrade, generateCPUCashSale, tradeWindow, tradeBlockers, startCooldown, busyWithUs, evaluateForUser, evaluateForClub, clubBar } from './TradeEngine.js';
 import {
   getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull, sideOf,
 } from './TransactionEngine.js';
@@ -163,8 +163,9 @@ export function checkAndDeliver(context) {
   ];
   if (currentInbox.length >= MAX_INBOX_SIZE) return;
 
-  // 3b. Real CPU trade proposals (TradeEngine): at most one per game day.
-  const tradeDelivered = _maybeDeliverCPUTradeOffer(state, context) ? 1 : 0;
+  // 3b. A selling club's cash sale (§85 A): at most one per game day. (Clubs'
+  //     calls about our players come from the daily trade desk, §91.)
+  const tradeDelivered = _maybeDeliverCashSale(state, context) ? 1 : 0;
   let room = MAX_INBOX_SIZE - currentInbox.length - tradeDelivered;
   if (room <= 0) return;
 
@@ -832,7 +833,7 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     // §71: a card about one of our players that can no longer apply (he left,
     // got hurt, or is already away) is withdrawn rather than left as a ghost.
     if ((!key || key.startsWith('followup:') || key.startsWith('indie:')) && CARD_ACTIONS[c._raw?.onYes]) return !cardFeasible(state, c);
-    if (c._tradeOffer)               return !_tradeStillValid(state, c);
+    if (c._tradeOffer)               return !_tradeStillValid(state, c, atMs);
     // §90 a package Pro Scouting put together that can no longer be offered
     // (a player in it moved or got hurt, the window closed, the club cooled off).
     if (c._ideaOffer && c._ideaTeamId) return !!(tradeBlockers(c._ideaOffer, state, Math.max(atMs, c.deliverAtMs || 0), c._ideaTeamId)
@@ -843,13 +844,10 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
   return { delivered, withdrawn };
 }
 
-function _tradeStillValid(state, card) {
-  const o    = card._tradeOffer || {};
+/** §91 the offer can still be made: the window, every player where the deal needs him (roster or farm), healthy, settled. */
+function _tradeStillValid(state, card, atMs = Date.now()) {
   const team = (state.leagueTeams || []).find(t => t.id === card._proposingTeamId);
-  const ok   = (id, list) => list.includes(id) && !state.players[id]?.isInjured;
-  return !!team
-    && (o.outgoingIds || []).every(id => ok(id, state.userTeam.rosterIds || []))
-    && (o.incomingIds || []).every(id => ok(id, team.rosterIds || []));
+  return !!team && !tradeBlockers(card._tradeOffer || {}, state, Math.max(atMs, card.deliverAtMs || 0), card._proposingTeamId);
 }
 
 /**
@@ -872,24 +870,119 @@ export function expireDueRosterCards(atMs) {
 
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+// A CPU CLUB'S OFFER TO US (§91)
+// ─────────────────────────────────────────────────────────────
+//
+// Every offer a CPU club makes us is a decision with three ways out: take it,
+// turn it down (the club cools off), or counter from the composer, which
+// starts a talk at round 2 (their offer was round 1). The club opens in its
+// own favor — a little under our player's value when it wants him, a little
+// over its own when it offers one — and Pro Scouting says, in words, whether
+// there's room. Kinds:
+//   call  — the trade desk: a club with a need wants one of our players
+//   sell  — a club offers us one of its players (the seed, the All-Star
+//           suitor, a club cutting payroll returning our call)
+//   sale  — a selling club's player for cash (§85 A)
+
+const _NOUN  = { C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder', DH: 'designated hitter' };
+const _SPOT  = { C: 'catcher', '1B': 'first base', '2B': 'second base', '3B': 'third base', SS: 'shortstop', OF: 'the outfield', DH: 'the DH spot' };
+const _an    = (w) => (/^[aeiou]/i.test(w) ? `an ${w}` : `a ${w}`);
+const _pick  = (xs) => xs[Math.floor(Math.random() * xs.length)];
+const _poss  = (name) => (/s$/.test(name) ? `${name}'` : `${name}'s`);
+const _and   = (xs) => xs.length <= 1 ? (xs[0] || '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+
+/** A club's need in words: { a: 'a shortstop', role: 'play shortstop for them every day', hole: 'shortstop has been a weak spot' }. */
+function _needWords(need, whose = 'them') {
+  if (!need) return { a: 'help', role: `help ${whose} right away`, hole: 'the lineup has a hole' };
+  if (need.kind === 'sp') return { a: 'a starting pitcher', role: `take a turn in ${whose === 'us' ? 'our' : 'their'} rotation`, hole: 'the back of the rotation has been a weak spot' };
+  if (need.kind === 'rp') return { a: 'a late-inning reliever', role: `pitch the late innings for ${whose}`, hole: 'the bullpen has been leaking late in games' };
+  const n = _NOUN[need.slot] || 'regular';
+  return need.slot === 'DH'
+    ? { a: 'a designated hitter', role: `be ${whose === 'us' ? 'our' : 'their'} designated hitter`, hole: 'the DH spot has been a weak spot' }
+    : { a: _an(n), role: `play ${_SPOT[need.slot] || n} for ${whose} every day`, hole: `${_SPOT[need.slot] || 'one spot in the lineup'} has been a weak spot` };
+}
+
+/** The opening line, by kind, varied so the same situation doesn't read the same way twice. */
+function _offerIntro(kind, { team, ours, theirs, need, seed }) {
+  const w = _needWords(need, kind === 'call' ? 'them' : 'us');
+  if (kind === 'call') return _pick(seed ? [
+    `Welcome to the job. ${team} were the first to call: they need ${w.a} and want ${ours}.`,
+    `The phone was ringing before the nameplate went up. ${team} want ${ours} to ${w.role}.`,
+    `${team} wasted no time testing the new front office: they're after ${ours}.`,
+  ] : [
+    `${team} called about ${ours}. They need ${w.a} and see ${ours} as the answer.`,
+    `${team} have been shopping for ${w.a}, and ${ours} is the name they keep coming back to.`,
+    `${_poss(team)} front office reached out: they want ${ours} to ${w.role}.`,
+    `Word from ${team}: ${w.hole} for them, and they'd like ${ours} to fill it.`,
+  ]);
+  if (kind === 'sell') return _pick(seed ? [
+    `Welcome to the job. ${team} called with an offer: ${theirs}, who would ${need ? w.role : 'start for us'}.`,
+    `The phone was ringing before the nameplate went up — ${team} want to move ${theirs}, and they think we're the fit.`,
+    `${team} are testing the new front office with an offer for ${theirs}.`,
+  ] : [
+    `${team} called: ${theirs} is available, and they think ${theirs} would start for us.`,
+    need ? `${team} know we could use ${w.a} and are offering ${theirs}.` : `${team} are shopping ${theirs} and think we're a fit.`,
+    `${_poss(team)} GM is shopping ${theirs} and called us first.`,
+  ]);
+  return '';
+}
+
+/** Pro Scouting's read, in words (never a meter). */
+function _offerRead(st, kind, offer, room) {
+  const net = evaluateForUser(offer, st).net;
+  const good = net >= 15;
+  if (kind === 'call') return room
+    ? 'Pro Scouting reads it as an opening bid — they should go higher if we push back.'
+    : good     ? 'Pro Scouting thinks this is close to the most they will pay, and it is a good deal for us.'
+    : net >= 0 ? 'Pro Scouting thinks this is close to the most they will pay, and it is fair value for us.'
+               : 'Pro Scouting thinks this is about the most they will pay — a little short of what we would want.';
+  if (kind === 'sell') return room
+    ? 'They are asking a bit more than they would take — Pro Scouting thinks there is room to bring the price down.'
+    : good     ? 'Pro Scouting thinks that is a good price for us.'
+    : net >= 0 ? 'Pro Scouting thinks that is a fair price.'
+               : 'Pro Scouting thinks that is about the least they will take, and it is a little steep for us.';
+  return good ? 'Pro Scouting thinks that is a good price for us.' : net >= 0 ? 'Pro Scouting thinks the price is fair.' : 'Pro Scouting thinks the price is a little high.';
+}
+
+/** Can the offer be made right now, with both owners able to carry it? */
+function _offerCanGo(st, offer, teamId, atMs) {
+  return !tradeBlockers(offer, st, atMs, teamId) && !Negotiation.ourSideBlocker(st, offer) && _tradeSalaryOk(st, offer, teamId);
+}
+
 /**
- * deliverTradeOffer(offer, evaluation, proposingTeamId)
- * Delivers a CPU trade proposal as an inbox card.
- * Card text dynamically built from the evaluated offer.
- *
- * @param {Object} offer
- * @param {Object} evaluation  — from TradeEngine.evaluateTrade()
- * @param {String} proposingTeamId
+ * deliverTradeCall(deal, atMs, { seed }) — §91 the trade desk's call: a club
+ * with a need wants one of our players (deal.a = the club, deal.b = 'user'),
+ * and its opening offer reaches us within the next hour or so.
  */
-export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = false, intro = null } = {}) {
+export function deliverTradeCall(deal, atMs, { seed = false } = {}) {
+  const st = StateManager.get();
+  const offer = LeagueTrades.userOffer(deal);
+  if (!_offerCanGo(st, offer, deal.a, atMs)) return null;
+  return deliverTradeOffer(offer, deal.a, {
+    kind: 'call', room: !!deal.room, need: deal.why?.need || null, seed, openBy: deal.openBy || 0,
+    atMs: seed ? null : atMs + (10 + Math.random() * 80) * 60_000,
+  });
+}
+
+/**
+ * deliverTradeOffer(offer, proposingTeamId, opts)
+ * A CPU club's offer as an inbox card (offer in our terms: incomingIds = we
+ * receive, cashK + = they pay us).
+ *   opts: { kind: 'call'|'sell'|'sale', room, need, intro (a line of its own,
+ *           replacing the varied one), subject, seed, atMs (exact delivery),
+ *           openBy (how far under our value a caller opened) }
+ */
+export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room = false, need = null, intro = null, subject = null, seed = false, atMs = null, openBy = 0 } = {}) {
   const state    = StateManager.get();
   const team     = (state.leagueTeams || []).find(t => t.id === proposingTeamId);
   const teamName = team?.name || 'Another team';
+  const evaluation = evaluateTrade(offer, state);
 
   const ins  = evaluation.incomingPlayers || [];
   const outs = evaluation.outgoingPlayers || [];
   const incoming = ins[0];
-  if (!incoming) return;
+  if (!incoming && !outs.length) return null;
   // §85 up to three a side, plus cash and salary kept by the sending club.
   const ref  = (p) => `${p.name}${['SP','RP'].includes(p.pos) ? ` ${PITCHER_HAND_DISPLAY[p.hand] || '(R)'}` : ''} (${p.pos}, OVR ${p.ovr})`;
   const list = (ps) => ps.length <= 1 ? ps.map(ref).join('') : `${ps.slice(0, -1).map(ref).join(', ')} and ${ref(ps[ps.length - 1])}`;
@@ -904,66 +997,70 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = f
                            : ` We'd keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`;
   }).join('');
 
-  const fairnessNote = evaluation.fairnessRating >= 1
-    ? `Our scouting grades this as ${evaluation.fairnessLabel.toLowerCase()} for us.`
-    : evaluation.fairnessRating <= -1
-    ? `Worth noting: our scouting grades this as ${evaluation.fairnessLabel.toLowerCase()}.`
-    : 'Our scouting grades this as a fair exchange.';
-
-  const payrollNote = evaluation.overTarget
-    ? " This would push payroll over ownership's target."
+  // Payroll against the owner's target: only what this deal changes.
+  const payrollNote = evaluation.overTarget && evaluation.payrollDelta > 100
+    ? (evaluation.newPayroll - evaluation.payrollDelta > (Finance.seasonTarget(state.userTeam.finances) || 22000)
+        ? ` It adds ${formatK(evaluation.payrollDelta)} to a payroll already over ownership's target.`
+        : " This would push payroll over ownership's target.")
     : evaluation.payrollDelta > 500
-    ? ` Adds $${Math.round(evaluation.payrollDelta)}K to payroll.`
+    ? ` It adds ${formatK(evaluation.payrollDelta)} to the payroll.`
     : evaluation.payrollDelta < -500
-    ? ` Saves $${Math.abs(Math.round(evaluation.payrollDelta))}K in payroll.`
+    ? ` It takes ${formatK(-evaluation.payrollDelta)} off the payroll.`
     : '';
 
-  const instance = {
-    instanceId:      _uuid(),
+  // The player the offer is about: ours they want, or theirs they offer.
+  const target = kind === 'call' ? outs[0] : incoming;
+  const lead = intro || _offerIntro(kind, { team: teamName, ours: target?.name, theirs: target?.name, need, seed });
+  const read = _offerRead(state, kind, offer, room);
+  const deal = kind === 'sale'
+    ? `${teamName} need to move salary and will sell ${inRef} to us outright.`
+    : `The deal: we send ${outRef} and get ${inRef}.`;
+  const when = atMs ?? Date.now();
+
+  const instance = _rosterCard(state, {
     cardId:          `trade_${proposingTeamId}`,
-    deliveredAt:     state.currentGameIndex || 0,
-    expiresAt:       (state.currentGameIndex || 0) + 3,
-    expiresAtMs:     null,
-    resolved:        false,
-    resolvedAt:      null,
-    choice:          null,
     type:            'normal',
     tag:             'TRADE',
-    sender:          teamName,
-    subject:         `Trade offer from ${teamName}`,
-    preview:         outs.length ? `${teamName} is offering ${ins.map(p => p.name).join(', ')} for ${outs.map(p => p.name).join(', ')}.`
-                                 : `${teamName} will sell ${incoming.name} for ${formatK(-cashK)}.`,
-    body:            `${intro ? intro(incoming, teamName) + ' ' : ''}`
-                   + (outs.length ? `${teamName} has proposed a trade: you send ${outRef} and receive ${inRef}.`
-                                  : `${teamName} needs to move salary and will sell ${inRef} to us outright.`)
-                   + `${cashNote}${keepNote} ${fairnessNote}${payrollNote}`,
+    sender:          `${teamName} front office`,
+    avatar:          '📞',
+    subject:         subject || (kind === 'call' ? `${teamName} want ${target?.name}`
+                              : kind === 'sale' ? `${teamName} will sell ${incoming.name}`
+                              : `${teamName} are offering ${target?.name}`),
+    preview:         kind === 'sale' ? `${incoming.name} for ${formatK(-cashK)}.`
+                                     : `${_and(ins.map(p => p.name))} for ${_and(outs.map(p => p.name))}.`,
+    body:            `${lead ? lead + ' ' : ''}${deal}${cashNote}${keepNote} ${read}${payrollNote} We can take it, turn it down, or counter.`,
     yesLabel:        'Accept the Trade',
     noLabel:         'Decline',
-    yesEffect:       {},
-    noEffect:        {},
-    autoResolve:     'no',
-    autoResolveTax:  null,
-    _playerRelationshipEffect: null,
-    _budgetCost:     null,
+    autoResolve:     'roster',
+    expiresAtMs:     seed ? when + 3 * 86_400_000 : (atMs != null ? atMs + 2 * 86_400_000 : null),
+    _expiresAfterMs: atMs == null && !seed ? 2 * 86_400_000 : null,
     _tradeOffer:     offer,
+    _tradeKind:      kind,
+    // How the offer stood for each side when it was made (the harness reads it).
+    _opening:        { ourNet: Math.round(evaluateForUser(offer, state).net), theirNet: Math.round(evaluateForClub(offer, state, proposingTeamId).net), bar: clubBar(state, proposingTeamId), openBy },
     // A frozen summary of the offer as proposed — never live player objects
     // (those keep changing; the card must describe the deal it offered).
     _tradeEval:      _evalSnapshot(evaluation),
     _proposingTeamId: proposingTeamId,
-    _expiredSeason:  state.seasonNum,
-    _raw:            { onYes: 'trade_execute', onNo: 'trade_decline' },
+    _rosterKey:      `trade:${proposingTeamId}:${when}`,
+    // Counter from the composer: their offer was the talk's first round.
+    _reviseOffer:    { teamId: proposingTeamId, offer, round: 2 },
+    _reviseLabel:    'Counter',
+    _raw:            { onYes: 'trade_execute', onNo: 'trade_decline', onAuto: 'trade_decline' },
     ...(seed ? { _seed: true } : {}),
-  };
+  });
 
   if (seed) {
     // New-franchise seed: visible immediately, never pushed.
     StateManager.mutate(s => {
-      s.inbox = [...(s.inbox || []), instance];
+      s.inbox = [...(s.inbox || []), { ...instance, arrivedAtMs: when }];
       _sortInbox(s.inbox);
     });
-  } else {
-    _scheduleCards([instance], state);
+    return instance;
   }
+  if (atMs != null) return _deliverAt(instance, atMs);
+  _scheduleCards([instance], state);
+  return instance;
 }
 
 function _evalSnapshot(ev) {
@@ -1042,7 +1139,8 @@ function _scheduleCards(instances, state, game = null) {
   // planDeliveryTimes returns ascending times; shuffle the pairing so card
   // order in the pool doesn't dictate arrival order.
   const order = instances.map(c => ({ c, r: Math.random() })).sort((a, b) => a.r - b.r);
-  const scheduled = order.map(({ c }, i) => ({ ...c, deliverAtMs: times[i] }));
+  const scheduled = order.map(({ c }, i) => ({ ...c, deliverAtMs: times[i],
+    ...(c._expiresAfterMs ? { expiresAtMs: times[i] + c._expiresAfterMs } : {}) }));
   StateManager.mutate(s => {
     s.scheduledCards = [...(s.scheduledCards || []), ...scheduled]
       .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
@@ -1250,43 +1348,24 @@ function _tradeWindowOpen(state, context) {
 }
 
 /**
- * _maybeDeliverCPUTradeOffer(state, context, { force, seed })
- * Asks CPU teams (in random order) whether they want to propose a trade; the
- * first real offer is delivered. Teams with an unresolved offer already in the
- * inbox are skipped. TradeEngine owns the probability roll and offer quality;
- * `force` skips only the roll (seed offer).
+ * _maybeDeliverCashSale(state, context)
+ * §85 A: a club that has to sell sometimes offers a fringe player for cash.
+ * Clubs already dealing with us (talks open, an offer waiting on our answer,
+ * cooling off) are skipped. TradeEngine owns the roll and the price.
  * @returns {Boolean} true if an offer was delivered
  */
-function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = false, intro = null } = {}) {
-  if (!force && !_tradeWindowOpen(state, context)) return false;
-
-  const pendingFrom = new Set(
-    [...(state.inbox || []), ...(state.scheduledCards || [])]
-      .filter(c => !c.resolved && c._proposingTeamId)
-      .map(c => c._proposingTeamId));
-
+function _maybeDeliverCashSale(state, context) {
+  if (!_tradeWindowOpen(state, context)) return false;
   const now = Date.now();
   const teams = (state.leagueTeams || [])
-    .filter(t => !pendingFrom.has(t.id) && cooldownUntil(state, t.id) <= now)   // §85 cooling off after a no
+    .filter(t => !busyWithUs(state, t.id, now))
     .map(t => ({ t, r: Math.random() }))
     .sort((a, b) => a.r - b.r)
     .map(x => x.t);
-
   for (const team of teams) {
-    // §85 A: a club that has to sell sometimes offers a player for cash.
-    const sale = generateCPUCashSale(team.id, state, { atMs: now, force });
+    const sale = generateCPUCashSale(team.id, state, { atMs: now });
     if (sale && _tradeSalaryOk(state, sale.offer, team.id) && !tradeBlockers(sale.offer, state, now, team.id)) {
-      deliverTradeOffer(sale.offer, sale.evaluation, team.id, { seed, intro });
-      return true;
-    }
-    const result = generateCPUTradeOffer(team.id, state, {
-      regularSeasonIndex: context.regularSeasonIndex || 0,
-      phase: state.phase,
-      force,
-    });
-    // §78: only offers ownership would pay for; §85 only deals that can be made.
-    if (result && _tradeSalaryOk(state, result.offer, team.id) && !tradeBlockers(result.offer, state, now, team.id)) {
-      deliverTradeOffer(result.offer, result.evaluation, team.id, { seed, intro });
+      deliverTradeOffer(sale.offer, team.id, { kind: 'sale' });
       return true;
     }
   }
@@ -1318,11 +1397,56 @@ const _tradeSalaryOk = (state, offer, cpuId = null) => {
 
 /**
  * deliverSeedTradeOffer(context)
- * New-franchise seed: one real, engine-generated trade proposal (no push).
+ * New-franchise seed (§60, §91): one real offer, visible at once and never
+ * pushed — whichever situation the new league actually has, picked at
+ * random: a club that wants one of our players (its opening bid), or a club
+ * offering one of its players who would start for us (its asking price).
+ * The wording varies too, so no two new clubs open the same way.
  * @returns {Boolean}
  */
 export function deliverSeedTradeOffer(context) {
-  return _maybeDeliverCPUTradeOffer(StateManager.get(), context || {}, { force: true, seed: true });
+  const st = StateManager.get();
+  const atMs = Date.now();
+  if (!tradeWindow(st).open) return false;
+  const shuffle = (xs) => xs.map(x => ({ x, r: Math.random() })).sort((a, b) => a.r - b.r).map(o => o.x);
+  const tryCall = () => {
+    for (const t of shuffle(st.leagueTeams || [])) {
+      for (const need of LeagueTrades.clubNeeds(st, t.id).slice(0, 2)) {
+        const fits = [...(st.userTeam.rosterIds || []), ...(st.userTeam.farmIds || [])].map(id => st.players[id])
+          .filter(p => LeagueTrades.movable(p, atMs) && LeagueTrades.fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + LEAGUE_TRADES.upgradeMin)
+          .sort((x, y) => (y.ovr || 0) - (x.ovr || 0)).slice(0, 3);
+        for (const p of shuffle(fits)) {
+          const c = LeagueTrades.callOffer(st, t.id, p.id, atMs, { need });
+          if (c && _offerCanGo(st, LeagueTrades.userOffer(c.deal), t.id, atMs)) {
+            return deliverTradeCall({ ...c.deal, room: c.room, why: { need } }, atMs, { seed: true });
+          }
+        }
+      }
+    }
+    return null;
+  };
+  const trySell = () => {
+    const ourNeed = LeagueTrades.clubNeeds(st, 'user')[0] || null;
+    const cands = [];
+    for (const t of st.leagueTeams || []) {
+      for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) {
+        const p = st.players[id];
+        if (!LeagueTrades.movable(p, atMs) || !wouldStart(p, st, 'user')) continue;
+        if (ourNeed && !LeagueTrades.fillsNeed(p, ourNeed)) continue;
+        cands.push({ t, p });
+      }
+    }
+    for (const { t, p } of shuffle(cands.sort((x, y) => (y.p.ovr || 0) - (x.p.ovr || 0)).slice(0, 8))) {
+      const a = LeagueTrades.askingOffer(st, t.id, p.id, atMs);
+      if (!a) continue;
+      const offer = LeagueTrades.userOffer(a.deal);
+      if (!_offerCanGo(st, offer, t.id, atMs)) continue;
+      return deliverTradeOffer(offer, t.id, { kind: 'sell', room: a.room, seed: true, need: ourNeed });
+    }
+    return null;
+  };
+  const order = Math.random() < 0.5 ? [tryCall, trySell] : [trySell, tryCall];
+  return !!(order[0]() || order[1]());
 }
 
 /**
@@ -2147,12 +2271,39 @@ export function deliverAllStarMvpCard(playerId, atMs) {
   }, atMs);
 }
 
-/** A player who spent All-Star week in our ballpark wants in (§17.3). */
+/**
+ * A player who spent All-Star week in our ballpark wants in (§17.3, §91): an
+ * All-Star from another club who would start for us, offered by that club at
+ * its asking price. Nothing comes if no such deal can be made.
+ */
 export function deliverAllStarTradeOffer(context) {
-  return _maybeDeliverCPUTradeOffer(StateManager.get(), context || {}, {
-    force: true,
-    intro: (incoming) => `${incoming.name} spent All-Star week in our ballpark and has let the front office know a move here would be welcome.`,
-  });
+  const st = StateManager.get();
+  const atMs = Date.now();
+  if (!tradeWindow(st).open) return false;
+  const season = st.seasonNum || 1;
+  const cands = [];
+  for (const t of st.leagueTeams || []) {
+    if (busyWithUs(st, t.id, atMs)) continue;
+    for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) {
+      const p = st.players[id];
+      if ((p?.allStarSeasons || []).includes(season) && LeagueTrades.movable(p, atMs) && wouldStart(p, st, 'user')) cands.push({ t, p });
+    }
+  }
+  for (const { t, p } of cands.sort((x, y) => (y.p.ovr || 0) - (x.p.ovr || 0)).slice(0, 6)) {
+    const a = LeagueTrades.askingOffer(st, t.id, p.id, atMs);
+    if (!a) continue;
+    const offer = LeagueTrades.userOffer(a.deal);
+    if (!_offerCanGo(st, offer, t.id, atMs)) continue;
+    return !!deliverTradeOffer(offer, t.id, {
+      kind: 'sell', room: a.room, subject: `${p.name} wants a move here`,
+      intro: _pick([
+        `${p.name} spent All-Star week in our ballpark and has let ${t.name} know a move here would be welcome. ${t.name} are willing to listen.`,
+        `After a week in our ballpark at the All-Star Game, ${p.name} asked ${t.name} about a move here — and they called us.`,
+      ]),
+      atMs: atMs + (30 + Math.random() * 150) * 60_000,
+    });
+  }
+  return false;
 }
 
 /** Withdraw the lobbying card once the rosters are set. */
@@ -2323,12 +2474,20 @@ function _applyFinanceAction(action, instance, atMs) {
 function _callClubAboutSalary(instance, atMs) {
   const st = StateManager.get();
   const team = (st.leagueTeams || []).find(t => t.id === instance._aboutTeamId);
-  const result = team && generateCPUTradeOffer(team.id, st, {
-    regularSeasonIndex: Math.max(0, (st.currentGameIndex || 0) - SPRING_TRAINING_GAME_COUNT), phase: st.phase, force: true,
-  });
-  if (result && _tradeSalaryOk(st, result.offer, team.id)) {
-    deliverTradeOffer(result.offer, result.evaluation, team.id, {
-      intro: (incoming) => `${team.name} called back about the conversation we started: ${incoming.name} is available, and they need the payroll room.`,
+  // §91 a salary they need off the books, held by a player who would start
+  // for us — in a deal that actually takes money off their payroll.
+  const cands = !team || !tradeWindow(st).open ? [] : (team.rosterIds || []).map(id => st.players[id])
+    .filter(p => LeagueTrades.movable(p, atMs) && Finance.isPaid(p) && wouldStart(p, st, 'user'))
+    .sort((a, b) => (b.contractSalary || 0) - (a.contractSalary || 0)).slice(0, 5);
+  for (const p of cands) {
+    const a = LeagueTrades.askingOffer(st, team.id, p.id, atMs, { premium: false, shedK: Math.round((p.contractSalary || 0) * 0.5) });
+    if (!a) continue;
+    const offer = LeagueTrades.userOffer(a.deal);
+    if (!_offerCanGo(st, offer, team.id, atMs)) continue;
+    deliverTradeOffer(offer, team.id, {
+      kind: 'sell', room: a.room, subject: `${team.name}: ${p.name} is available`,
+      intro: `${team.name} called back about the conversation we started: ${p.name} is available, and they need the payroll room.`,
+      atMs: atMs + (2 + Math.random() * 3) * 3600_000,
     });
     return;
   }
@@ -2358,7 +2517,8 @@ const _TALK_REASON = {
  */
 /** §85 our revised offer replaces the talk's open cards with that club. */
 export function withdrawTalkCards(teamId) {
-  return _withdraw(c => c._talkTeamId === teamId || c._ideaTeamId === teamId);
+  // §91 their own offer to us too: our counter answers it.
+  return _withdraw(c => c._talkTeamId === teamId || c._ideaTeamId === teamId || (c._tradeOffer && c._proposingTeamId === teamId));
 }
 
 export function deliverTalkReply(teamId, r, atMs) {
@@ -2467,7 +2627,7 @@ function _sameRole(p, target) {
  * (their GM's answer comes on the clock), adjust it in the composer first,
  * or pass.
  */
-function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, atMs, sender = 'Pro Scouting' }) {
+function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, atMs, sender = 'Pro Scouting', extra = {} }) {
   const team = (st.leagueTeams || []).find(t => t.id === teamId);
   if (!team || !deal) return null;
   const offer = LeagueTrades.userOffer(deal);
@@ -2482,6 +2642,7 @@ function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, atMs, sen
     _rosterKey: key, _ideaTeamId: teamId, _ideaOffer: offer,
     _reviseOffer: { teamId, offer, round: null },
     _raw: { onYes: 'lt_offer_send', onNo: 'lt_pass', onAuto: 'lt_pass' },
+    ...extra,
   }), atMs);
 }
 
@@ -2524,6 +2685,7 @@ function _leagueTradeCards(tx, atMs) {
         subject: `${to.name} beat us to ${gone.name}`,
         preview: `The next-best option: ${_ref(np)} of ${nt.name}.`,
         lead: `${lead} The next-best option we see is ${_ref(np)} of ${nt.name}.`,
+        extra: { _beatenTalkId: talk.id },
       }) ? 1 : 0;
     }
     return _deliverNotice(`lt:beaten:${tx.id}`, {
@@ -2531,6 +2693,7 @@ function _leagueTradeCards(tx, atMs) {
       subject: `${to.name} beat us to ${gone.name}`,
       preview: 'Nobody else fits the spot right now.',
       body: `${lead} We looked for the next-best option and nobody else fits the spot right now. We'll keep watching.`,
+      _beatenTalkId: talk.id,
     }, atMs + 2 * 3600_000) ? 1 : 0;
   }
 

@@ -65,7 +65,7 @@ const summarize = () => {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { talks: [], calls: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { talks: [], calls: [], offers: [], counters: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -77,11 +77,8 @@ function ghostCards(st) {
       const [, dl, i] = key.split(':');
       return !(needs.short > Number(i) && Number(dl) === needs.deadlineAt);
     }
-    if (c._tradeOffer) {
-      const team = st.leagueTeams.find(t => t.id === c._proposingTeamId);
-      return !team || !c._tradeOffer.outgoingIds.every(id => st.userTeam.rosterIds.includes(id))
-          || !c._tradeOffer.incomingIds.every(id => team.rosterIds.includes(id));
-    }
+    // §91 an offer that can no longer be made (a player moved or hurt, the window closed).
+    if (c._tradeOffer) return !!Trades.tradeBlockers(c._tradeOffer, st, clock.get(), c._proposingTeamId);
     return false;
   });
 }
@@ -134,7 +131,10 @@ function cardDidIt(action, c, st) {
 function gmActs() {
   // Re-read the inbox after every action: one decision can withdraw others.
   for (let guard = 0; guard < 50; guard++) {
-    const c = getInbox().find(x => !gm.seen.has(x.instanceId)
+    // (The seed trade offer is left alone: it is made at the harness's far-future
+    //  anchor, before the season clock starts, so deciding it here would queue
+    //  a trade dated after the season.)
+    const c = getInbox().find(x => !gm.seen.has(x.instanceId) && !(x._seed && x._tradeOffer)
       && (x.autoResolve === 'roster' || !!x._rosterKey || (!!x._tradeOffer && !x._seed)
           || PLAYER_CARD_ACTIONS.has(x._raw?.onYes) || x._raw?.onYes === 'fin_call_club'));
     if (!c) break;
@@ -161,11 +161,23 @@ function gmActs() {
     gm.seen.add(c.instanceId);
     if (c.autoResolve === 'skip') { resolveCard(c.instanceId, 'yes'); continue; }   // notices
     if (isTrade) {
-      if (Math.random() < 0.35) {
+      gm.offers.push({ kind: c._tradeKind, opening: c._opening, subject: c.subject, body: c.body, offer: JSON.parse(JSON.stringify(c._tradeOffer)), team: c._proposingTeamId, at: clock.get(), season: SM.get().seasonNum || 1 });
+      const r = Math.random();
+      if (r < 0.35) {
         const before = JSON.parse(JSON.stringify(c._tradeOffer));
         resolveCard(c.instanceId, 'yes');
         advanceClock(clock.get());
         gm.tradesAccepted.push({ offer: before, at: clock.get(), team: c._proposingTeamId });
+      } else if (r < 0.6 && c._reviseOffer) {
+        // §91 counter from the composer: their offer, and some cash from them.
+        const o = c._reviseOffer.offer;
+        const counter = { ...o, cashK: (o.cashK || 0) + 100 };
+        const res = Negotiation.proposeTrade(c._reviseOffer.teamId, counter, clock.get(), { round: c._reviseOffer.round });
+        const st2 = SM.get();
+        const talk = Negotiation.talkWith(st2, c._reviseOffer.teamId);
+        gm.counters.push({ ok: res.ok, reason: res.reason || null, round: talk?.round,
+          withdrawn: !(st2.inbox || []).some(x => x.instanceId === c.instanceId && !x.resolved) });
+        if (res.ok) gm.talks.push({ team: c._reviseOffer.teamId, ok: true, reason: null, at: clock.get() });
       }
       continue;
     }
@@ -846,7 +858,8 @@ async function checkTradeEngine(st) {
   const T = await import('../../engine/TradeEngine.js');
   const { applyDue } = await import('../../engine/TransactionEngine.js');
   const now = clock.get();
-  const open = () => { const c = structuredClone(st); c.phase = PHASE.SPRING_TRAINING; c.tradeTalks = {}; return c; };
+  // (Neutral rapport: these are checks of how a club values a deal, not of the season's relationships.)
+  const open = () => { const c = structuredClone(st); c.phase = PHASE.SPRING_TRAINING; c.tradeTalks = {}; c.userTeam.gmRelationships = {}; return c; };
   const c0 = open();
   const team = c0.leagueTeams.find(t => (t.rosterIds || []).length >= 20);
   const ok = (p) => p && !p.isInjured && p.group !== PLAYER_GROUP.IN_TRANSIT && p.group !== PLAYER_GROUP.IL && !p._acquiredAtMs;
@@ -922,9 +935,13 @@ function checkTalks(st) {
   const talks = Object.entries(st.tradeTalks || {}).map(([id, t]) => ({ id, t: t.talk })).filter(x => x.t);
   // §89: the answer is decided when the offer goes out and reaches us later
   // as a scheduled card (so it can be pushed with the app closed).
-  const cardsFor = (t) => [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._talkId === t.id || c._rosterKey === `talk:off:${t.id}:${t.round}`);
+  const cardsFor = (t) => [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._talkId === t.id || c._rosterKey === `talk:off:${t.id}:${t.round}` || c._beatenTalkId === t.id);
   const stuck = talks.filter(x => x.t.replyAtMs < clock.get() - 86_400_000 && !cardsFor(x.t).length);
   check(`trade talks: every offer gets an answer on the clock (${talks.length} talks; ${talks.map(x => x.t.status).join(',')})`, stuck.length === 0, stuck.map(x => x.id).join(','));
+  const beaten = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._beatenTalkId);
+  check(`trade talks: talks closed because another club got the player come with word from Pro Scouting (${beaten.length})`,
+        talks.filter(x => x.t.calledOffAtMs && !cardsFor(x.t).length).length === 0);
+  if (process.env.LT_DUMP) for (const x of stuck) console.log('STUCK', x.id, JSON.stringify({ ...x.t, offer: undefined, counter: undefined }), JSON.stringify([...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._talkTeamId === x.id || c._proposingTeamId === x.id || c._ideaTeamId === x.id).map(c => [c.cardId, c._talkId, c.resolved, c.choice, c.subject])));
   check('trade talks: the answer is decided when the offer is sent', talks.every(x => !x.t.answer || x.t.answer.atMs === x.t.sentAtMs));
   const early = talks.filter(x => (st.inbox || []).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.cardId !== 'trade_off' && (c.deliveredAtMs ?? c.deliverAtMs ?? 0) < x.t.replyAtMs - 60_000));
   check('trade talks: no answer reaches us before its reply time', early.length === 0,
@@ -943,7 +960,7 @@ function checkTalks(st) {
                               || (st.inbox || []).some(c => c.cardId === 'trade_off' && c._rosterKey?.startsWith('talk:off:')));
   const pending = (st.transactions || []).filter(x => x.kind === 'trade' && x.status === 'pending');
   check(`trade talks: every deal we finalized was made or voided (${made.length}/${agreed.length})`, made.length === agreed.length && pending.length === 0,
-        agreed.filter(x => !made.includes(x)).map(x => x.id).join(','));
+        agreed.filter(x => !made.includes(x)).map(x => x.id).join(',') + pending.map(x => ` pending ${x.id} ${x.league ? 'league' : ''} eff ${new Date(x.effectiveAt).toISOString()} now ${new Date(clock.get()).toISOString()}`).join(''));
 }
 
 /** §90 Phase 4c: CPU clubs trade with each other when a need meets a fit;
@@ -976,6 +993,38 @@ function checkLeagueTrades(st) {
   const retired = ['dl3', 'dl4'];
   check('league trades: the old deadline trade cards are retired (real targets instead)', !(st.inbox || []).some(c => retired.includes(c.cardId)));
   if (process.env.LT_DUMP) for (const e of cpuTrades) console.log('  ·', new Date(e.atMs).toISOString().slice(0, 10), e.text);
+  checkOffersToUs(st);
+}
+
+/** §91 CPU clubs' offers to us: calls from the trade desk, asking prices, counters. */
+function checkOffersToUs(st) {
+  const s1 = gm.offers.filter(o => o.season === 1);
+  const by = {};
+  for (const o of s1) by[o.kind] = (by[o.kind] || 0) + 1;
+  check(`offers to us: clubs call about our players from the trade desk (${JSON.stringify(by)})`, (by.call || 0) >= 2 && (by.call || 0) <= 30);
+  const calls = gm.offers.filter(o => o.kind === 'call');
+  // The opening bid: their GM stands behind it (clears its own bar), and it is
+  // never a lowball for us (within what a club opens under).
+  const badCall = calls.filter(o => !o.opening || o.opening.theirNet < o.opening.bar - 1 || o.opening.ourNet < -(o.opening.openBy || 0) - 3);
+  check('offers to us: an opening bid their GM would stand behind, never a lowball', badCall.length === 0,
+        badCall.slice(0, 3).map(o => `${o.subject} ${JSON.stringify(o.opening)}`).join(' | '));
+  const under = calls.filter(o => o.opening.ourNet < 0).length;
+  check(`offers to us: clubs open a little under, like a real GM (${under}/${calls.length} below value)`, calls.length < 2 || under >= Math.ceil(calls.length / 2));
+  const sells = gm.offers.filter(o => o.kind === 'sell');
+  check('offers to us: a club offering its own player asks a price it would take', sells.every(o => o.opening && o.opening.theirNet >= o.opening.bar - 1),
+        sells.filter(o => !(o.opening?.theirNet >= o.opening?.bar - 1)).map(o => `${o.subject} ${JSON.stringify(o.opening)}`).join(' | '));
+  const asg = sells.filter(o => /wants a move here/.test(o.subject));
+  check(`offers to us: the All-Star suitor is a real All-Star (${asg.length})`,
+        asg.every(o => o.offer.incomingIds.some(id => (st.players[id]?.allStarSeasons || []).includes(o.season))));
+  const intros = new Set(gm.offers.filter(o => o.kind === 'call').map(o => o.body.split('. ')[0]));
+  check(`offers to us: the wording varies (${intros.size} openings over ${calls.length} calls)`, calls.length < 4 || intros.size >= 2);
+  check('offers to us: offer text reads gender-neutral', gm.offers.every(o => !/\b(he|him|his|she|her)\b/i.test(o.body)),
+        gm.offers.filter(o => /\b(he|him|his|she|her)\b/i.test(o.body)).slice(0, 1).map(o => o.body).join(''));
+  const badCounter = gm.counters.filter(c => c.ok && (!c.withdrawn || c.round !== 2));
+  check(`offers to us: a counter opens talks at round 2 and replaces their offer (${gm.counters.filter(c => c.ok).length} sent)`,
+        badCounter.length === 0, JSON.stringify(badCounter.slice(0, 2)));
+  if (process.env.LT_DUMP) for (const c of [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._tradeKind)) console.log('  ‡', c._tradeKind, c.resolved, c.choice, new Date(c.deliverAtMs || c.arrivedAtMs || 0).toISOString().slice(0, 10), c.subject);
+  if (process.env.LT_DUMP) for (const o of gm.offers) console.log('  ›', o.kind, new Date(o.at).toISOString().slice(0, 10), JSON.stringify(o.opening), o.body);
 }
 
 async function main() {
@@ -1023,12 +1072,19 @@ async function main() {
     const o     = trade[0]?._tradeOffer;
     const prop  = (st0.leagueTeams || []).find(t => t.id === trade[0]?._proposingTeamId);
     check('new team: exactly one seeded (real) trade offer', trade.length === 1, `got ${trade.length}`);
+    const org = (t) => [...(t.rosterIds || []), ...(t.farmIds || [])];
     check('new team: seeded trade direction — user sends own player, receives CPU player',
-          !!o && o.outgoingIds.every(id => st0.userTeam.rosterIds.includes(id))
-              && !!prop && o.incomingIds.every(id => prop.rosterIds.includes(id)),
+          !!o && o.outgoingIds.every(id => org(st0.userTeam).includes(id))
+              && !!prop && o.incomingIds.every(id => org(prop).includes(id)),
           o ? JSON.stringify(o) : 'no offer');
-    check('new team: seeds are real instances (unresolved, game-index expiry, no debug shape)',
-          seeds.every(c => c.resolved === false && Number.isFinite(c.expiresAt)
+    // §91 the seed is whichever situation the league has: a club wanting one
+    // of ours (its opening bid) or a club offering one of its own.
+    const sc = trade[0];
+    check(`new team: the seeded offer is a real situation (${sc?._tradeKind}: ${sc?.subject})`,
+          ['call', 'sell'].includes(sc?._tradeKind) && sc._opening?.theirNet >= sc._opening?.bar - 1 && !!sc._reviseOffer,
+          JSON.stringify(sc?._opening));
+    check('new team: seeds are real instances (unresolved, an expiry, no debug shape)',
+          seeds.every(c => c.resolved === false && (Number.isFinite(c.expiresAt) || (c._tradeOffer && Number.isFinite(c.expiresAtMs)))
                           && !c._debugInjected && c.instanceId),
           JSON.stringify(seeds.map(c => ({ id: c.cardId, r: c.resolved, e: c.expiresAt }))));
     check('new team: no unresolved {tokens} in seed text',
@@ -1113,7 +1169,7 @@ async function main() {
     // §75: odd seeds make the user's club an eligible host before the league decides.
     if (SEED % 2 === 1 && SM.get().allStar && !SM.get().allStar.season.hostId) {
       SM.mutate(s => { s.prestigeTier = Math.max(2, s.prestigeTier || 1); s.allStar.hostingScore = Math.max(900, s.allStar.hostingScore);
-                       s.userTeam.atmosphere = Math.max(70, s.userTeam.atmosphere || 50); });
+                       s.userTeam.atmosphere = Math.max(90, s.userTeam.atmosphere || 50); });   // a margin: a bad day can cost several points before the league names the host
     }
     if (!asgChecked && SM.get().schedule[idx]?.regularSeasonIndex === ALL_STAR_BREAK_AFTER_GAME) { asgChecked = true; await runAllStarChecks(); }
 
@@ -1305,6 +1361,11 @@ async function main() {
       const held = rosterSpotsHeld(post, 'user');
       // A spot can be open while its decision deadline is still ahead (§65).
       const openWithDeadline = held < ROSTER_LIMITS.ACTIVE_TOTAL && post.userTeam.vacancyDeadlineAt > clock.get();
+      if (process.env.ROSTER_DUMP && !(held === ROSTER_LIMITS.ACTIVE_TOTAL || openWithDeadline)) {
+        console.log('ROSTERDBG', JSON.stringify((post.transactions || []).filter(t => t.status === 'pending' && (t.teamId === 'user')).map(t => [t.kind, t.reason, post.players[t.playerId]?.name, post.players[t.playerId]?.pos, t.toFarm])));
+        console.log('ROSTERDBG trades', JSON.stringify((post.transactions || []).filter(t => t.kind === 'trade' && (t.teamId === 'user')).slice(-2).map(t => [t.id, t.status, t.offer.incomingIds.map(id => post.players[id]?.name + ' ' + post.players[id]?.pos + ' ' + post.players[id]?.group), t.offer.outgoingIds.map(id => post.players[id]?.name)])));
+        console.log('ROSTERDBG IL', (post.userTeam.rosterIds || []).filter(id => post.players[id]?.group === 'il').length);
+      }
       check(`game ${idx} (${post.phase}): active + arriving = ${ROSTER_LIMITS.ACTIVE_TOTAL} (or a spot open before its deadline)`,
             held === ROSTER_LIMITS.ACTIVE_TOTAL || openWithDeadline,
             `active ${ac} + arriving ${held - ac}; dl ${post.userTeam.vacancyDeadlineAt}; farm ${post.userTeam.farmIds.map(id => post.players[id]?.pos).join('')}; phase ${post.phase}; clock ${clock.get()} next ${post.schedule[post.currentGameIndex]?.gameTime}`);

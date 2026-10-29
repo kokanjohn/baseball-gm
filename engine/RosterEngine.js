@@ -348,13 +348,15 @@ export function defaultActiveGroup(player) {
 
 /**
  * pendingArrivals(state, teamId)
- * Players already on their way to this team (traded or called up, reporting
- * the next calendar day). They hold their roster spot: every count of the
- * active roster adds them, so nobody calls up a second body for the same spot.
+ * Players already on their way to this team's active roster (traded or
+ * called up, reporting the next calendar day). They hold their roster spot:
+ * every count of the active roster adds them, so nobody calls up a second
+ * body for the same spot. §91 a prospect traded from a farm reports to the
+ * new club's farm (`toFarm`) and holds no active spot.
  */
 export function pendingArrivals(state, teamId) {
   return (state.transactions || []).filter(t =>
-    t.status === 'pending' && t.kind === 'arrival' && t.teamId === teamId);
+    t.status === 'pending' && t.kind === 'arrival' && t.teamId === teamId && !t.toFarm);
 }
 
 /**

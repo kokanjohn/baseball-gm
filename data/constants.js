@@ -441,6 +441,12 @@ export const LEAGUE_TRADES = Object.freeze({
   upgradeMin:   4,                 // a target must beat the incumbent by this much
   buyerSlack:   { buyer: 8, neutral: 3, seller: 0 },   // value a club will overpay to fill a need
   maxPool:      10,                // the pieces a club considers giving (best few, for combinations)
+  // §91 a club that calls us opens in its own favor: a little under our value
+  // when it wants our player, a little over its own when it offers one of its.
+  openUnder:    0.08,              // as a share of the player's value
+  openUnderMin: 4,
+  callMargin:   4,                 // it calls us when our player is about as good a fit (OVR) as the best elsewhere
+  maxCallsPerDay: 1,
   wireKeep:     500,               // league-wire entries kept (this season and last)
 });
 
