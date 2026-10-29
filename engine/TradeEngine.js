@@ -134,8 +134,10 @@ function _playerValue(player, state) {
   const yearsLeft    = Math.max(0, (player.contractExpiry || seasonNum + 1) - seasonNum);
   const salary       = player.contractSalary || 0;
 
-  // Base OVR value — exponential so elite players are worth much more
-  const ovrScore = Math.pow(ovr / 50, 2.5) * 100;
+  // Base OVR value — §90 measured above replacement level (the player any
+  // club can pick up for nothing), so a star is worth several regulars and a
+  // fringe player little.
+  const ovrScore = _ovrScore(ovr, state);
 
   // Age modifier — peak value at 25-28, declining before and after
   const ageScore = age <= 23 ? 1.15         // young prospect premium
@@ -143,9 +145,11 @@ function _playerValue(player, state) {
     : age <= 32 ? 1.0 - (age - 28) * 0.04   // slight decline
     : 1.0 - (age - 28) * 0.08;              // steeper decline
 
-  // Contract years modifier — more years = more value (up to a point)
-  const contractScore = yearsLeft === 0 ? 0.60   // final year / expired
-    : yearsLeft === 1 ? 0.85                     // rental value
+  // Contract years modifier — more years = more value (up to a point). §90 a
+  // player in his final year still plays the rest of this one: a rental is
+  // worth less than control, not a fraction of the player.
+  const contractScore = yearsLeft === 0 ? 0.80   // final year / expired
+    : yearsLeft === 1 ? 0.90                     // one more year after this
     : yearsLeft === 2 ? 1.0                      // standard
     : 1.0 + (yearsLeft - 2) * 0.05;             // small bonus for longer deals
 
@@ -153,12 +157,29 @@ function _playerValue(player, state) {
   const marketSalary = _marketSalary(ovr);
   const salEfficiency = salary === 0 ? 1.0
     : marketSalary / Math.max(salary, 1);
-  const salScore = Math.max(0.5, Math.min(1.5, salEfficiency));
+  const salScore = Math.max(0.85, Math.min(1.15, salEfficiency));   // §90 money is weighed apart (books, cash)
 
   // Injury penalty — injured players worth less
   const injuryMod = player.isInjured ? 0.70 : 1.0;
 
-  return ovrScore * ageScore * contractScore * salScore * injuryMod;
+  // §90 a player is worth what he gives this season plus what he gives
+  // after it: age and contract shape the future part, not the present one.
+  return ovrScore * (0.45 + 0.55 * ageScore * contractScore) * salScore * injuryMod;
+}
+
+/** §90 value above replacement level for a rating (the league's level sets replacement). */
+function _ovrScore(ovr, state) {
+  const R = 44 + (state?.leagueTalentOffset || 0);
+  return 6 * Math.pow(Math.max(1, (ovr || 0) - R), 1.25);
+}
+
+/**
+ * Several lesser pieces are worth less than their sum (roster spots, and
+ * quality over quantity): the best counts fully, the next 60%, the rest 40%.
+ */
+function _packageValue(values) {
+  const w = [1, 0.6, 0.4];
+  return [...values].sort((a, b) => b - a).reduce((a, v, i) => a + v * (w[i] ?? 0.4), 0);
 }
 
 /**
@@ -635,10 +656,36 @@ export function valueToClub(p, state, teamId, receiving) {
     if (mode === 'seller') v *= (age <= 25 ? 1.2 : age >= 31 ? 0.8 : 1) * (rental ? 0.7 : 1);
     v *= wouldStart(p, state, teamId) ? 1.2 : (age <= 24 ? 0.95 : 0.8);
   } else {
-    v *= _isKey(p, state, teamId) ? 1.1 : 0.85;
+    const key = _isKey(p, state, teamId);
+    v *= key ? 1.1 : 0.85;
     if (mode === 'seller' && (rental || age >= 31)) v *= 0.85;   // a seller is glad to move veterans
+    // §90 sending a regular away leaves a hole: what the club loses on the
+    // field, from him to the best it has to fill the spot (a seller minds less).
+    if (key) v += _holeCost(p, state, teamId) * (mode === 'seller' ? 0.3 : mode === 'buyer' ? 0.8 : 0.6);
   }
   return v;
+}
+
+/** The drop, in value, from a regular to the club's best replacement at his spot. */
+function _holeCost(p, state, teamId) {
+  const t = _club(state, teamId);
+  if (!t) return 0;
+  const score = (ovr) => _ovrScore(ovr, state);
+  const org = [...(t.rosterIds || []), ...(t.farmIds || [])].map(id => state.players[id])
+    .filter(x => x && x.id !== p.id && !x.isInjured);
+  let fits;
+  if (p.pos === 'SP') {
+    const rot = new Set(t.rotation?.order || []);
+    fits = org.filter(x => (x.pos === 'SP' || x.pos === 'RP') && !rot.has(x.id));
+  } else if (p.pos === 'RP') {
+    fits = org.filter(x => x.pos === 'RP' && !_isKey(x, state, teamId));
+  } else {
+    const slot = (t.lineupSlots || []).find(sl => sl.playerId === p.id)?.slot || p.nativePos || p.pos;
+    const starters = new Set((t.lineupSlots || []).map(sl => sl.playerId));
+    fits = org.filter(x => !_isPitcher(x) && !starters.has(x.id) && _plays(x, slot));
+  }
+  const repl = Math.max(0, ...fits.map(x => x.ovr || 0)) || (p.ovr || 0) - 15;
+  return Math.max(0, score(p.ovr) - score(repl));
 }
 
 /** What $K is worth in trade value to this club (a strapped club values cash more). */
@@ -668,8 +715,8 @@ export function evaluateForClub(offer, state, teamId) {
   const ret = offer.retain || {};
   const recv = (offer.outgoingIds || []).map(P).filter(Boolean);
   const send = (offer.incomingIds || []).map(P).filter(Boolean);
-  const get  = recv.reduce((a, p) => a + valueToClub(p, state, teamId, true), 0);
-  const give = send.reduce((a, p) => a + valueToClub(p, state, teamId, false), 0);
+  const get  = _packageValue(recv.map(p => valueToClub(p, state, teamId, true)));
+  const give = _packageValue(send.map(p => valueToClub(p, state, teamId, false)));
   const rem = remainingShare(state);
   // Money: cash it pays (+cashK) or gets, salary it keeps paying on players it
   // sends (ret on its players) or that we keep paying on ours.
@@ -677,8 +724,11 @@ export function evaluateForClub(offer, state, teamId) {
   const sparedK = recv.reduce((a, p) => a + (p.contractSalary || 0) * (ret[p.id] || 0) * rem, 0);
   const cashK = offer.cashK || 0;
   const money = cashValue(-cashK - keepsK + sparedK, state, teamId);
-  const payrollIn  = recv.reduce((a, p) => a + (p.contractSalary || 0) * (1 - (ret[p.id] || 0)), 0);
-  const payrollOut = send.reduce((a, p) => a + (p.contractSalary || 0) * (1 - (ret[p.id] || 0)), 0);
+  // §90 payroll is what the club pays: a minor-league deal on the farm isn't
+  // on it, either way (a farm player traded joins the other club's farm).
+  const paid = (p) => Finance.isPaid(p) ? (p.contractSalary || 0) * (1 - (ret[p.id] || 0)) : 0;
+  const payrollIn  = recv.reduce((a, p) => a + paid(p), 0);
+  const payrollOut = send.reduce((a, p) => a + paid(p), 0);
   return {
     get, give, net: get - give + money,
     payrollIn, payrollOut,
@@ -832,3 +882,6 @@ export function scoutRead(offer, state, teamId, ourBlocker = null) {
   lines.push(`Our relationship with their front office: ${rapportGrade(rapportOf(state, teamId))}.`);
   return lines;
 }
+
+// §90 shared with LeagueTrades (CPU-to-CPU deals and the scout's packages).
+export { _isKey as isKeyPiece, _plays as playsSlot, _isRentalPlayer as isRental, _packageValue as packageValue };

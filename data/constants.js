@@ -428,6 +428,29 @@ export const TRADE = Object.freeze({
   rapport:         { completed: 2, lowball: -2, fizzled: -1, counterAccepted: 1 },
 });
 
+// §90 Phase 4c — trades between CPU clubs, made when a club has a need and
+// another club has the player and wants what it can give.
+export const LEAGUE_TRADES = Object.freeze({
+  // The chance, each day, that a club with a need works the phones.
+  dailyChance:  { season: 0.03, deadline: 0.20, spring: 0.02, offseason: 0.08 },
+  maxPerDay:    2,
+  clubRestMs:   14 * 86_400_000,   // a club that just traded waits this long before another
+  reTradeMs:    120 * 86_400_000,  // a player a CPU club traded for isn't moved on again this soon
+  rivalCardGapMs: 7 * 86_400_000,  // at most one "a rival got better" card a week
+  needGap:      5,                 // an incumbent this far below the league's norm at his spot is a need
+  upgradeMin:   4,                 // a target must beat the incumbent by this much
+  buyerSlack:   { buyer: 8, neutral: 3, seller: 0 },   // value a club will overpay to fill a need
+  maxPool:      10,                // the pieces a club considers giving (best few, for combinations)
+  wireKeep:     500,               // league-wire entries kept (this season and last)
+});
+
+// §90 an advance scouting report on a rival (a decision card when it gets better).
+export const ADVANCE_SCOUT = Object.freeze({
+  batHit:    1.03,                 // our hitters' hit rate against them
+  pitchHit:  0.975,                // their hitters' against us
+  costK:     25,                   // at a typical market; scaled like card money (CARD_MONEY_BASE_TARGET_K)
+});
+
 // ─────────────────────────────────────────────────────────────
 // SIM ENGINE — WEATHER WIN PROBABILITY ADJUSTMENTS (Section 7.1 — LOCKED)
 // ─────────────────────────────────────────────────────────────

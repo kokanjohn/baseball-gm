@@ -104,7 +104,7 @@ export function openCardModal(card, onResolve) {
           ${_escape(card.yesLabel || 'Accept')}
         </button>
       </div>
-      ${card._reviseOffer ? '<button class="btn-revise" id="card-modal-revise">Make a New Offer</button>' : ''}
+      ${card._reviseOffer ? `<button class="btn-revise" id="card-modal-revise">${card._ideaOffer ? 'Adjust the Offer' : 'Make a New Offer'}</button>` : ''}
 
     </div>
   `;

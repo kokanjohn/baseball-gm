@@ -132,7 +132,7 @@ function _dealHtml(state) {
 function _payDelta(state) {
   const P = (id) => state.players[id];
   const ret = _d.retain;
-  const inK = _d.theirIds.reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
+  const inK = _d.theirIds.filter(id => Finance.isPaid(P(id))).reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
   const outK = _d.ourIds.filter(id => Finance.isPaid(P(id))).reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
   return Math.round(inK - outK);
 }

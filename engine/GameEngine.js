@@ -82,6 +82,8 @@ import { recordOutings } from './PitchingEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { formatK } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
+import * as LeagueTrades from './LeagueTrades.js';
+import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
 
 import {
@@ -128,6 +130,8 @@ import {
   SUB_RATING_MAX,
   ACTIVITY_FEED_RETENTION_HOURS,
   NEW_TEAM_SEED_CARDS,
+  ADVANCE_SCOUT,
+  LEAGUE_TRADES,
 } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -733,7 +737,7 @@ function _activateGame(game) {
     userTeam,
     opponentTeam,
     players,
-    { phase: state.phase, isSpring, winProb,
+    { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
       norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players) }
   );
 
@@ -787,7 +791,7 @@ function _silentlyCommitGame(game) {
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
   const { plays, boxScore, liveLineups } = generatePlays(
     game, userTeam, opponentTeam, players,
-    { phase: state.phase, isSpring, winProb,
+    { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
       norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players) }
   );
 
@@ -2042,9 +2046,9 @@ function _cpuPayday(teamId, i, atMs) {
       if (move) {
         const name = s.players[move.playerId]?.name || 'A player';
         const to = s.leagueTeams.find(x => x.id === move.toId);
-        s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
-          buildActivityFeedEntry('trade', t.abbr,
-            `${t.name} send ${name} (${formatK(move.salaryK)}) to ${to?.name || move.toId} — a salary move`, atMs)]);
+        const line = `${t.name} send ${name} (${formatK(move.salaryK)}) to ${to?.name || move.toId} — a salary move`;
+        s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('trade', t.abbr, line, atMs)]);
+        _wireAdd(s, [{ atMs, kind: 'trade', teamIds: [t.id, move.toId], text: line }]);
       }
     }
   });
@@ -2450,12 +2454,15 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
       for (const id of clubIds) Finance.ensureSeason(s, id);
     });
   }
+  // §90 the league's trade desk: one moment a day when CPU clubs make deals.
+  if (!state.tradeDesk?.nextAtMs) StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: LeagueTrades.nextDeskAt(clockMs) }; });
   for (let guard = 0; guard < 12000; guard++) {
     const st   = StateManager.get();
     const game = _leagueGameEvents(st, clockMs)[0];
     const os   = Offseason.dueSteps(st, clockMs)[0];
     const fin  = clubIds.flatMap(id => Finance.dueSteps(st, clockMs, id)).sort((a, b) => a.at - b.at)[0];
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }].filter(Boolean);
+    const desk = st.tradeDesk?.nextAtMs <= clockMs ? { kind: 'desk', at: st.tradeDesk.nextAtMs } : null;
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     const step = _rosterStep(next.at, {});
@@ -2464,6 +2471,7 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
     else if (next.kind === 'final') events.push(..._finishLeagueGame(next.date, next.i));
     else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, next.teamId); });
     else if (next.kind === 'fin:payday') events.push(...(next.teamId === 'user' ? _payday(next.i, next.at) : _cpuPayday(next.teamId, next.i, next.at)));
+    else if (next.kind === 'desk') events.push(..._runTradeDesk(next.at));
     else events.push(..._runOffseasonStep(next.step, next.at));
     events.push(..._seasonProgress(next.at));
     changed = true;
@@ -2589,11 +2597,124 @@ function _feedLeagueMoves(events) {
     else if (e.type === 'DEPARTED' && e.reason === 'abroad' && notable) lines.push([abbrOf(e.fromTeamId), `${who} signs with a club in another league`, at]);
     else if (e.type === 'FREE_AGENT' && notable) lines.push([abbrOf(e.fromTeamId), `${who} becomes a free agent`, at]);
   }
+  // §90 the League wire keeps every signing, and the notable departures.
+  const wire = [];
+  for (const e of events || []) {
+    const p = st.players[e.playerId];
+    if (!p) continue;
+    const who = `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
+    const nm = (id) => _clubName(st, id);
+    if (e.type === 'FA_SIGNED') wire.push({ atMs: e.atMs, kind: 'signing', teamIds: [e.teamId], text: `${nm(e.teamId)} sign free agent ${who}` });
+    else if (e.type === 'FREE_AGENT' && e.fromTeamId) wire.push({ atMs: e.atMs, kind: 'release', teamIds: [e.fromTeamId], text: `${who} leaves ${nm(e.fromTeamId)} as a free agent` });
+    else if (e.type === 'RETIRED') wire.push({ atMs: e.atMs, kind: 'retire', teamIds: [e.teamId].filter(Boolean), text: `${who} retires${e.teamId ? ` (${nm(e.teamId)})` : ''}` });
+  }
+  if (wire.length) StateManager.mutate(s => _wireAdd(s, wire));
   if (!lines.length) return;
   StateManager.mutate(s => {
     s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
       ...lines.map(([abbr, text, at]) => buildActivityFeedEntry('signing', abbr, text, at))]);
   });
+}
+
+// ─────────────────────────────────────────────────────────────
+// THE TRADE DESK AND THE LEAGUE WIRE (§90 Phase 4c)
+// ─────────────────────────────────────────────────────────────
+
+const _clubName = (st, id) => id === 'user'
+  ? (st.userTeam.name || [st.userTeam.city, st.userTeam.nickname].filter(Boolean).join(' ') || 'Our club')
+  : ((st.leagueTeams || []).find(t => t.id === id)?.name || id);
+const _clubAbbr = (st, id) => id === 'user' ? st.userTeam.abbr : ((st.leagueTeams || []).find(t => t.id === id)?.abbr || id);
+
+/**
+ * _runTradeDesk(atMs) — the day's moment for CPU clubs to deal: every trade a
+ * club with a need can make with a club that has the player (LeagueTrades),
+ * carried out at once through the ledger. The next desk is tomorrow.
+ */
+function _runTradeDesk(atMs) {
+  const deals = LeagueTrades.findLeagueTrades(StateManager.get(), atMs);
+  StateManager.mutate(s => {
+    const last = { ...(s.tradeDesk?.lastTradeMs || {}) };
+    for (const d of deals) {
+      // (A club in the middle of a game finishes it first — the ledger holds
+      // the deal until the final out: TransactionEngine._executeTrade.)
+      s.transactions = [...(s.transactions || []), LeagueTrades.leagueTradeTx(d, atMs)];
+      last[d.a] = atMs; last[d.b] = atMs;
+    }
+    s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: LeagueTrades.nextDeskAt(atMs), lastTradeMs: last };
+  });
+  // §90 as the deadline nears, Pro Scouting's best target for our biggest need.
+  const g = regularIndex(StateManager.get());
+  if (StateManager.get().phase !== PHASE.SPRING_TRAINING && g >= TRADE_DEADLINE_OPEN - 6 && g <= TRADE_DEADLINE_CLOSE - 1) CardEngine.deliverDeadlineIdea(atMs);
+  return deals.length ? _rosterStep(atMs).events : [];
+}
+
+/** A trade in a line: who got whom, for whom, and the money. */
+function _tradeLine(st, tx, { short = false } = {}) {
+  const P = (id) => st.players[id];
+  const ref = (id) => { const p = P(id); return p ? (short ? p.name : `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})`) : 'a player'; };
+  const list = (ids) => {
+    const xs = (ids || []).map(ref);
+    return xs.length <= 1 ? (xs[0] || 'nothing') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+  };
+  const a = tx.teamId || 'user', b = tx.fromTeamId;
+  const nm = short ? (id) => _clubAbbr(st, id) : (id) => _clubName(st, id);
+  const got = tx.offer?.incomingIds || [], sent = tx.offer?.outgoingIds || [];
+  let line = got.length
+    ? `${nm(a)} acquire ${list(got)} from ${nm(b)}${sent.length ? ` for ${list(sent)}` : ''}`
+    : `${nm(b)} acquire ${list(sent)} from ${nm(a)}`;
+  if (short) return line;
+  const cash = tx.offer?.cashK || 0;
+  if (cash > 0) line += `, with ${formatK(cash)} from ${nm(b)}`;
+  if (cash < 0) line += `, with ${formatK(-cash)} from ${nm(a)}`;
+  for (const [id, pct] of Object.entries(tx.offer?.retain || {})) {
+    const payer = got.includes(id) ? b : a;
+    line += `; ${nm(payer)} keep paying ${Math.round(pct * 100)}% of ${P(id) ? `${P(id).name}'s` : 'a'} salary this season`;
+  }
+  return line;
+}
+
+/** Add entries to the League wire (this season and last, newest kept). */
+function _wireAdd(draft, entries) {
+  const season = draft.seasonNum || 1;
+  const add = entries.map((e, i) => ({ id: `w-${e.atMs}-${(draft.leagueWire || []).length + i}`, season, ...e }));
+  draft.leagueWire = [...(draft.leagueWire || []), ...add]
+    .filter(e => e.season >= season - 1)
+    .slice(-LEAGUE_TRADES.wireKeep);
+}
+
+/** §90 the roster clock's moves on the wire, and CPU trades in Recent. */
+function _recordMoves(events) {
+  const trades = (events || []).filter(e => e.type === 'TRADE_EXECUTED');
+  const claims = (events || []).filter(e => e.type === 'WAIVER_CLAIMED');
+  if (!trades.length && !claims.length) return;
+  const st = StateManager.get();
+  const wire = [], feed = [];
+  for (const e of trades) {
+    const tx = e.tx;
+    wire.push({ atMs: e.atMs, kind: 'trade', teamIds: [tx.teamId || 'user', tx.fromTeamId], text: _tradeLine(st, tx) });
+    feed.push(buildActivityFeedEntry('trade', _clubAbbr(st, tx.teamId || 'user'), _tradeLine(st, tx, { short: true }), e.atMs));
+  }
+  for (const e of claims) {
+    const p = st.players[e.playerId];
+    if (!p) continue;
+    wire.push({ atMs: e.atMs, kind: 'claim', teamIds: [e.teamId],
+      text: `${_clubName(st, e.teamId)} claim ${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr}) off waivers` });
+  }
+  StateManager.mutate(s => {
+    _wireAdd(s, wire);
+    if (feed.length) s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), ...feed]);
+  });
+}
+
+/**
+ * §90 an advance scouting report on tonight's opponent (bought from a card
+ * when a rival got better) covers our games against them through the series
+ * it was made for: our hitters see a little more, theirs a little less.
+ */
+function _scoutFor(state, game, opp, isSpring) {
+  const r = opp && state.userTeam?.advanceReports?.[opp.id];
+  if (!r || isSpring || !((game.gameTime || 0) <= r.coversThroughMs)) return null;
+  return { bat: ADVANCE_SCOUT.batHit, pitch: ADVANCE_SCOUT.pitchHit };
 }
 
 /** One roster-clock step at `atMs`: deadlines, ledger, card sync. */
@@ -2612,6 +2733,7 @@ function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
     StateManager.mutate(s => { dev = Development.applyDevelopment(s, atMs); });
     applied = { changed: true, events: [...applied.events, ...dev] };
   }
+  _recordMoves(applied.events);
   const cards = CardEngine.syncRosterCards([...extra, ...applied.events], atMs);
   return {
     changed: expired > 0 || applied.changed || cards.delivered > 0 || cards.withdrawn > 0,

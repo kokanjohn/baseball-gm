@@ -163,7 +163,7 @@ export function computeWinProbability(userRoster, opponentTeam, players, context
  * @returns {Object} { plays, boxScore }
  */
 export function generatePlays(game, userTeam, opponentTeam, players, context) {
-  const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false } = context;
+  const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false, scout = null } = context;
 
   // When opponentTeam is null (lookup failed), build a synthetic CPU opponent
   // from any available league team so the game can still produce scoring plays.
@@ -198,7 +198,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     userLineup, oppLineup,
     userSP, oppSP,
     players,
-    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs,
+    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs, scout,
       // §75 All-Star Game: both starters work ALLSTAR_STARTER_INNINGS, every
       // other arm one inning; the reserves come in on the squads' plan.
       exhibition: exhibition ? { starterIds: new Set([userSP?.id, oppSP?.id].filter(Boolean)) } : null }
@@ -272,7 +272,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
 // ─────────────────────────────────────────────────────────────
 
 function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
-  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null, atMs = 0 } = ctx;
+  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null, atMs = 0, scout = null } = ctx;
 
   const plays = [];
 
@@ -296,6 +296,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     userBullpenIdx: 0,
     oppBullpenIdx:  0,
     norms,          // league averages the PA model measures against (§65)
+    scout,          // §90 an advance scouting report on this opponent: { bat, pitch } hit-rate factors (null otherwise)
     exhibition,     // §75: All-Star Game workloads / substitutions (null otherwise)
     // §76 the manager's pitching: the bullpen's roles, who has pitched, and the
     // current pitcher's role, batters before he tires, innings wanted, runs allowed.
@@ -594,7 +595,8 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     const pSide = isUserBatting ? 'opp' : 'user';
     const pitcherTired = gs[`${pSide}PitchCount`] >= gs[`${pSide}TireAt`];
     const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
-      { inning, isSpring, norms: gs.norms, pitcherTired });
+      { inning, isSpring, norms: gs.norms, pitcherTired,
+        scoutHit: gs.scout ? (isUserBatting ? gs.scout.bat : gs.scout.pitch) : 1 });
     // Increment the THROWING pitcher's batters-faced count. When the user is
     // batting the opponent is pitching (and vice-versa) — this must match the
     // fatigue check below, which reads the same throwing-pitcher counter.
@@ -876,7 +878,8 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   const hitProb = _clamp(SIM_PA_HIT_BASE
                          + (contact - Ac) * SIM_PA_HIT_PER_CONTACT_PT
                          - (stuff - Ast)  * SIM_PA_HIT_PER_STUFF_PT,
-                         SIM_PA_HIT_MIN, SIM_PA_HIT_MAX) * fatigueHitMod * batterMod * envMod;
+                         SIM_PA_HIT_MIN, SIM_PA_HIT_MAX) * fatigueHitMod * batterMod * envMod
+                         * (context.scoutHit ?? 1);   // §90 advance scouting: our hitters know what's coming
   const infieldBonus = Math.max(0, (speed - As) * SIM_PA_INFIELD_HIT_PER_SPEED_PT);
   const adjHitProb   = Math.min(0.45, hitProb + infieldBonus);
 

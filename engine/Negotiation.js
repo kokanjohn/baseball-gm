@@ -58,7 +58,8 @@ export function talkIsOpen(state, teamId, nowMs = Date.now()) {
 export function ourSideBlocker(state, offer) {
   const P = (id) => state.players[id];
   const ret = offer.retain || {};
-  const inK  = (offer.incomingIds || []).reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
+  const inK  = (offer.incomingIds || []).filter(id => Finance.isPaid(P(id)))
+    .reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
   const outK = (offer.outgoingIds || []).filter(id => Finance.isPaid(P(id)))
     .reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
   if (!Finance.canAddSalary(state, inK, outK)) return 'ownership won\'t approve the added payroll';
@@ -187,7 +188,8 @@ export function act(teamId, action, atMs = Date.now()) {
       const replyAtMs = atMs + Math.round(_replyDelayMs() / 3);
       if (!counter) {
         close(0, false);
-        StateManager.mutate(s => { s.tradeTalks[teamId].talk.replyAtMs = replyAtMs; });
+        // Their answer to "what would it take?" is the talk's next exchange.
+        StateManager.mutate(s => { const t = s.tradeTalks[teamId].talk; t.replyAtMs = replyAtMs; t.round = Math.min(TRADE.maxRounds, (t.round || 1) + 1); });
         deliverTalkReply(teamId, { decision: 'decline', reason: 'nothing' }, replyAtMs);
         return { ok: true };
       }

@@ -927,7 +927,9 @@ function checkTalks(st) {
   check(`trade talks: every offer gets an answer on the clock (${talks.length} talks; ${talks.map(x => x.t.status).join(',')})`, stuck.length === 0, stuck.map(x => x.id).join(','));
   check('trade talks: the answer is decided when the offer is sent', talks.every(x => !x.t.answer || x.t.answer.atMs === x.t.sentAtMs));
   const early = talks.filter(x => (st.inbox || []).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.cardId !== 'trade_off' && (c.deliveredAtMs ?? c.deliverAtMs ?? 0) < x.t.replyAtMs - 60_000));
-  check('trade talks: no answer reaches us before its reply time', early.length === 0, early.map(x => x.id).join(','));
+  check('trade talks: no answer reaches us before its reply time', early.length === 0,
+        early.map(x => `${x.id} r${x.t.round} reply ${new Date(x.t.replyAtMs).toISOString()} sent ${new Date(x.t.sentAtMs).toISOString()} ${x.t.status}: `
+          + (st.inbox || []).filter(c => c._talkId === x.t.id && c._talkRound === x.t.round).map(c => `${c.cardId}@${new Date(c.deliverAtMs).toISOString()}`).join(' ')).join(' | '));
   const unsettled = talks.filter(x => x.t.pending && (st.inbox || []).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.resolved));
   check('trade talks: how an offer landed takes effect once its answer is read', unsettled.length === 0, unsettled.map(x => x.id).join(','));
   check('trade talks: no talk goes past the round limit', talks.every(x => (x.t.round || 1) <= 3));
@@ -942,6 +944,38 @@ function checkTalks(st) {
   const pending = (st.transactions || []).filter(x => x.kind === 'trade' && x.status === 'pending');
   check(`trade talks: every deal we finalized was made or voided (${made.length}/${agreed.length})`, made.length === agreed.length && pending.length === 0,
         agreed.filter(x => !made.includes(x)).map(x => x.id).join(','));
+}
+
+/** §90 Phase 4c: CPU clubs trade with each other when a need meets a fit;
+ *  every move reaches the League wire; cards come only when one touches us. */
+function checkLeagueTrades(st) {
+  const wire = st.leagueWire || [];
+  const cpuTrades = wire.filter(e => e.kind === 'trade' && !e.teamIds.includes('user') && !/salary move/.test(e.text));
+  const s1 = cpuTrades.filter(e => e.season === 1);
+  const byClub = {};
+  for (const e of s1) for (const id of e.teamIds) byClub[id] = (byClub[id] || 0) + 1;
+  check(`league trades: CPU clubs trade with each other (${s1.length} in season 1; most by one club ${Math.max(0, ...Object.values(byClub))})`,
+        s1.length >= 5 && s1.length <= 45, s1.slice(0, 3).map(e => e.text).join(' | '));
+  const hist = (st.history || []).filter(h => h.type === 'trade');
+  const ours = wire.filter(e => e.kind === 'trade' && e.teamIds.includes('user'));
+  check(`league wire: our trades are on it too (${ours.length} wire / ${hist.length} history)`, ours.length >= Math.min(1, hist.length));
+  check('league wire: every entry has a time, a season and text', wire.every(e => Number.isFinite(e.atMs) && e.season >= 1 && e.text));
+  check('league wire: text only, neutral', wire.every(e => !/\b(he|him|his|she|her)\b/i.test(e.text)), wire.filter(e => /\b(he|him|his|she|her)\b/i.test(e.text)).slice(0, 2).map(e => e.text).join(' | '));
+  const cards = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => /^lt_/.test(c.cardId || ''));
+  const kinds = {};
+  for (const c of cards) kinds[(c._rosterKey || '').split(':')[1] || c.cardId] = (kinds[(c._rosterKey || '').split(':')[1] || c.cardId] || 0) + 1;
+  check(`league trades: cards that touch us are decisions (${JSON.stringify(kinds)})`,
+        cards.filter(c => ['lt_offer', 'lt_scout'].includes(c.cardId)).every(c => c.yesLabel && c.noLabel));
+  check('league trades: no card for a trade that doesn\'t touch us without a decision',
+        cards.every(c => ['lt_offer', 'lt_scout', 'lt_beaten', 'lt_unsent', 'lt_noscout', 'lt_none'].includes(c.cardId)),
+        cards.filter(c => ['lt_unsent', 'lt_none'].includes(c.cardId)).map(c => c.preview).join(' | '));
+  const bad = s1.filter(e => !e.text.includes(' acquire '));
+  check('league trades: every trade reads as who acquired whom', bad.length === 0, bad.slice(0, 2).map(e => e.text).join(' | '));
+  const reports = Object.entries(st.userTeam.advanceReports || {});
+  check(`league trades: advance scouting reports cover a coming series (${reports.length} bought)`, reports.every(([, r]) => r.coversThroughMs > r.boughtAtMs));
+  const retired = ['dl3', 'dl4'];
+  check('league trades: the old deadline trade cards are retired (real targets instead)', !(st.inbox || []).some(c => retired.includes(c.cardId)));
+  if (process.env.LT_DUMP) for (const e of cpuTrades) console.log('  ·', new Date(e.atMs).toISOString().slice(0, 10), e.text);
 }
 
 async function main() {
@@ -1283,6 +1317,13 @@ async function main() {
     // §65: one player, one place — every team, every game.
     const audit = auditRosters(post);
     check(`game ${idx}: no player on two rosters / stranded in transit`, audit.length === 0, audit.slice(0, 4).join('; '));
+    if (audit.length && process.env.AUDIT_DUMP) {
+      for (const tx of (post.transactions || []).filter(t => t.status === 'pending' && t.kind === 'arrival' && post.players[t.playerId]?.group !== PLAYER_GROUP.IN_TRANSIT)) {
+        const p = post.players[tx.playerId];
+        console.log('AUDIT', JSON.stringify(tx), p.name, p.group, p.teamId, p.tier, p.injury?.status, p.isInjured, p.unavailable && JSON.stringify(p.unavailable),
+          (post.leagueTeams.find(t => t.id === p.teamId)?.rosterIds || []).includes(p.id), JSON.stringify((post.leagueWire || []).filter(w => w.text.includes(p.name)).map(w => [new Date(w.atMs).toISOString(), w.text])));
+      }
+    }
     // §65: nobody plays for a club he was not with at first pitch.
     recordTx(post);
     if (box && box.away && box.home && g.gameTime) {
@@ -1730,8 +1771,10 @@ async function main() {
       }
       check('balance: contender wins plausible around the 88-win target (60–112)',
             st.userTeam.wins >= 60 && st.userTeam.wins <= 112, `${st.userTeam.wins}-${st.userTeam.losses}`);
-      check('balance: CPU clubs inside a realistic band (≥ 35 and ≤ 100 wins of 132)',
-            Math.min(...cpuW) >= 35 && Math.max(...cpuW) <= 100, cpuW.sort((x, y) => x - y).join(','));
+      // §90 the floor is the worst modern season (the 2024 White Sox, 41–121,
+      // .253 — 33 of 132); the ceiling the best (.716 — 94 of 132) with room.
+      check('balance: CPU clubs inside a realistic band (≥ 33 and ≤ 100 wins of 132)',
+            Math.min(...cpuW) >= 33 && Math.max(...cpuW) <= 100, cpuW.sort((x, y) => x - y).join(','));
       const regBad = [st.userTeam, ...st.leagueTeams].filter(t => (t.wins || 0) + (t.losses || 0) !== REGULAR_SEASON_GAME_COUNT);
       check('postseason: playoff games never touch the regular-season record', regBad.length === 0,
             regBad.map(t => `${t.abbr} ${t.wins}-${t.losses}`).join(', '));
@@ -1754,6 +1797,7 @@ async function main() {
     await checkCardMoney(SM.get());
     await checkTradeEngine(SM.get());
     checkTalks(SM.get());
+    checkLeagueTrades(SM.get());
     await runOffseasonChecks();
     await checkNames('season 2');
     await checkNeutralText(SM.get());

@@ -325,7 +325,7 @@ function _renderCard(card, gameIdx) {
           ${_escape(card.noLabel)}
         </button>` : ''}
       </div>
-      ${card._reviseOffer ? `<button class="btn-revise" data-revise="${card.instanceId}">Make a New Offer</button>` : ''}
+      ${card._reviseOffer ? `<button class="btn-revise" data-revise="${card.instanceId}">${card._ideaOffer ? 'Adjust the Offer' : 'Make a New Offer'}</button>` : ''}
     </div>
   ` : '';
 

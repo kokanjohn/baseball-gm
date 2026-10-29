@@ -6,6 +6,8 @@
  *   Players   — league-wide player list, filterable by pos/team, sortable by stat
  *   Teams     — all 10 teams grouped by division with record and streak
  *   Standings — division standings with W/L/GB + stat leaders (Section 28.7)
+ *   Moves     — §90 the League wire: every trade, signing, claim and release,
+ *               this season and last, newest first (text only)
  *
  * Stat leaders (Section 28.7 — LOCKED):
  *   Batting: AVG, HR, RBI, SB
@@ -42,6 +44,8 @@ let _listeners  = [];
 let _playerFilter = { pos: 'batters', team: 'all', onRosters: false };
 let _playerSort   = { col: 'ovr', dir: 'desc' };
 let _lpSearch     = '';
+// §90 Moves tab filter: 'all' | 'trades' | 'ours'
+let _wireFilter   = 'all';
 
 // ─────────────────────────────────────────────────────────────
 // MOUNT / UNMOUNT
@@ -92,6 +96,7 @@ export function refresh() {
         <button class="league-tab-btn ${_activeTab === 'players'   ? 'active' : ''}" id="ltab-players">Players</button>
         <button class="league-tab-btn ${_activeTab === 'teams'     ? 'active' : ''}" id="ltab-teams">Teams</button>
         <button class="league-tab-btn ${_activeTab === 'standings' ? 'active' : ''}" id="ltab-standings">Standings</button>
+        <button class="league-tab-btn ${_activeTab === 'moves'     ? 'active' : ''}" id="ltab-moves">Moves</button>
         ${state.playoffBracket ? `<button class="league-tab-btn ${_activeTab === 'playoffs' ? 'active' : ''}" id="ltab-playoffs">Playoffs</button>` : ''}
       </div>
       <div class="league-tab-content active" id="league-body">
@@ -108,6 +113,7 @@ function _renderTabBody(state) {
     case 'players':   return _renderPlayers(state);
     case 'teams':     return _renderTeams(state);
     case 'standings': return _renderStandings(state);
+    case 'moves':     return _renderMoves(state);
     case 'playoffs':  return '<div id="playoff-content"></div>';   // filled by PlayoffScreen (§68)
     default:          return '';
   }
@@ -290,6 +296,38 @@ function _renderActivityFeed(state) {
       </div>
     </div>
   `;
+}
+
+// ─────────────────────────────────────────────────────────────
+// MOVES TAB — the League wire (§90)
+// ─────────────────────────────────────────────────────────────
+
+function _renderMoves(state) {
+  const all = (state.leagueWire || []).slice().reverse();
+  const shown = all.filter(e => _wireFilter === 'trades' ? e.kind === 'trade'
+    : _wireFilter === 'ours' ? (e.teamIds || []).includes('user') : true);
+  const chip = (id, label) => `<button class="lw-chip ${_wireFilter === id ? 'active' : ''}" data-wire="${id}">${label}</button>`;
+  const head = `<div class="lw-bar">${chip('all', 'All')}${chip('trades', 'Trades')}${chip('ours', 'Our Club')}</div>`;
+  if (!shown.length) {
+    return `${head}<div class="lw-empty">${all.length ? 'Nothing here yet.' : 'No moves yet. Trades, signings, waiver claims and releases around the league appear here as they happen.'}</div>`;
+  }
+  const dayKey = (ms) => new Date(ms).toDateString();
+  const dayLabel = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const KIND = { trade: 'Trade', signing: 'Signing', claim: 'Waiver claim', release: 'Free agent', retire: 'Retirement' };
+  let html = head, last = null;
+  for (const e of shown.slice(0, 200)) {
+    const k = dayKey(e.atMs);
+    if (k !== last) {
+      html += `<div class="lw-day">${dayLabel(e.atMs)}${e.season !== (state.seasonNum || 1) ? ' · last season' : ''}</div>`;
+      last = k;
+    }
+    const ours = (e.teamIds || []).includes('user');
+    html += `<div class="lw-row${ours ? ' lw-ours' : ''}">
+      <div class="lw-kind">${KIND[e.kind] || 'Move'}</div>
+      <div class="lw-text">${_escape(e.text)}</div>
+    </div>`;
+  }
+  return html;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -631,9 +669,12 @@ function _sortVal(player, col) {
 
 function _attachListeners(state) {
   // Tab switching
-  for (const [id, tab] of [['ltab-players','players'],['ltab-teams','teams'],['ltab-standings','standings'],['ltab-playoffs','playoffs']]) {
+  for (const [id, tab] of [['ltab-players','players'],['ltab-teams','teams'],['ltab-standings','standings'],['ltab-moves','moves'],['ltab-playoffs','playoffs']]) {
     const el = document.getElementById(id);
     if (el) el.addEventListener('click', () => { _activeTab = tab; refresh(); });
+  }
+  for (const btn of document.querySelectorAll('[data-wire]')) {
+    btn.addEventListener('click', () => { _wireFilter = btn.dataset.wire; refresh(); });
   }
   if (_activeTab === 'playoffs') {
     import('./PlayoffScreen.js').then(P => P.refresh());
@@ -996,6 +1037,18 @@ function _injectCSS() {
     .lp-imp-pos{color:var(--accent2);background:rgba(52,201,122,.12);}
     .lp-imp-neg{color:var(--danger);background:rgba(240,82,82,.12);}
     .lp-imp-neu{color:var(--muted);background:transparent;}
+
+    /* §90 Moves (the League wire) — text only */
+    .lw-bar{display:flex;gap:6px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface);}
+    .lw-chip{font-size:11px;font-weight:700;padding:5px 10px;border-radius:7px;border:1px solid var(--border);
+      background:transparent;color:var(--muted);cursor:pointer;font-family:'DM Sans',sans-serif;}
+    .lw-chip.active{background:var(--chip-accent-bg);border-color:var(--accent);color:var(--accent);}
+    .lw-day{padding:12px 16px 5px;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);}
+    .lw-row{padding:9px 16px;border-top:1px solid var(--border);background:var(--surface);}
+    .lw-row.lw-ours{background:var(--chip-accent-bg);}
+    .lw-kind{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:2px;}
+    .lw-text{font-size:13px;line-height:1.4;color:var(--text);}
+    .lw-empty{padding:28px 20px;font-size:13px;line-height:1.5;color:var(--muted);text-align:center;}
 
     /* Clickable team cards */
     .lgt-card{cursor:pointer;}

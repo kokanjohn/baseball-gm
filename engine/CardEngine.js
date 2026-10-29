@@ -45,6 +45,10 @@ import {
   FA_CARDS_PER_ROUND,
   CARD_DAY,
   SPRING_TRAINING_GAME_COUNT,
+  TRADE,
+  ADVANCE_SCOUT,
+  LEAGUE_TRADES,
+  CARD_MONEY_BASE_TARGET_K,
 } from '../data/constants.js';
 
 import {
@@ -72,7 +76,8 @@ import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
-import { rapportOf, rapportGrade, adjustRapport } from './TradeEngine.js';
+import { rapportOf, rapportGrade, adjustRapport, wouldStart, clubMode, isRental, playsSlot } from './TradeEngine.js';
+import * as LeagueTrades from './LeagueTrades.js';
 const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
 
@@ -748,7 +753,9 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
       // (cannot happen: a user claim always makes the user a claimant)
     } else if (ev.type === 'DEV_DONE' && ev.teamId === 'user') {
       if (_deliverDevelopmentReport(ev, ev.atMs ?? atMs)) delivered++;
-    } else if (ev.type === 'TRADE_VOIDED') {
+    } else if (ev.type === 'TRADE_EXECUTED' && ev.tx?.league) {
+      delivered += _leagueTradeCards(ev.tx, ev.atMs ?? atMs);
+    } else if (ev.type === 'TRADE_VOIDED' && !ev.tx?.league) {
       const st = StateManager.get();
       const team = (st.leagueTeams || []).find(t => t.id === ev.tx?.fromTeamId);
       if (_deliverNotice(`tradevoid:${ev.tx?.id}`, {
@@ -826,6 +833,10 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     // got hurt, or is already away) is withdrawn rather than left as a ghost.
     if ((!key || key.startsWith('followup:') || key.startsWith('indie:')) && CARD_ACTIONS[c._raw?.onYes]) return !cardFeasible(state, c);
     if (c._tradeOffer)               return !_tradeStillValid(state, c);
+    // §90 a package Pro Scouting put together that can no longer be offered
+    // (a player in it moved or got hurt, the window closed, the club cooled off).
+    if (c._ideaOffer && c._ideaTeamId) return !!(tradeBlockers(c._ideaOffer, state, Math.max(atMs, c.deliverAtMs || 0), c._ideaTeamId)
+                                                  || Negotiation.ourSideBlocker(state, c._ideaOffer));
     return false;
   });
 
@@ -2347,7 +2358,7 @@ const _TALK_REASON = {
  */
 /** §85 our revised offer replaces the talk's open cards with that club. */
 export function withdrawTalkCards(teamId) {
-  return _withdraw(c => c._talkTeamId === teamId);
+  return _withdraw(c => c._talkTeamId === teamId || c._ideaTeamId === teamId);
 }
 
 export function deliverTalkReply(teamId, r, atMs) {
@@ -2425,6 +2436,258 @@ function _applyTalkAction(action, instance, atMs) {
       body: `We went to finalize it, but the deal is off: ${res.reason}.`,
       yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
     }, atMs);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// LEAGUE TRADES THAT TOUCH US (§90 Phase 4c)
+// ─────────────────────────────────────────────────────────────
+//
+// A trade between two other clubs reaches us through the League wire and the
+// Recent strip. An inbox card comes only when it touches us, and always with
+// a decision (§85 J): someone beat us to a player we were talking about (the
+// next-best option), a player we traded away was flipped (bring them back
+// once they can be moved), a division rival got better (advance scouting), a
+// club just sold (call them), a club now has a surplus (make an offer).
+
+const _IDEA_GAP_MS = 3 * 86_400_000;     // at most one "opportunity" card (sold / surplus) every few days
+
+/** One player's short reference: name (POS, OVR n). */
+const _ref = (p) => `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
+
+/** Same role: a pitcher of the same kind, or a hitter who can play the spot. */
+function _sameRole(p, target) {
+  if (!p || !target) return false;
+  if (['SP', 'RP'].includes(target.pos)) return p.pos === target.pos;
+  return !['SP', 'RP'].includes(p.pos) && playsSlot(p, target.nativePos || target.pos);
+}
+
+/**
+ * An offer Pro Scouting put together, as a decision: send it as our offer
+ * (their GM's answer comes on the clock), adjust it in the composer first,
+ * or pass.
+ */
+function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, atMs, sender = 'Pro Scouting' }) {
+  const team = (st.leagueTeams || []).find(t => t.id === teamId);
+  if (!team || !deal) return null;
+  const offer = LeagueTrades.userOffer(deal);
+  const what = Negotiation.describeOffer(st, offer, team.name);
+  return _deliverAt(_rosterCard(st, {
+    cardId: 'lt_offer', tag: 'TRADE', sender, avatar: '📞', type: 'normal',
+    subject, preview,
+    body: `${lead} Pro Scouting's package: ${what}. `
+        + `We can make the offer as it stands — ${team.name} answers on their own clock — adjust it first, or pass.`,
+    yesLabel: 'Make the Offer', noLabel: 'Pass',
+    autoResolve: 'roster', expiresAtMs: atMs + 2 * 86_400_000,
+    _rosterKey: key, _ideaTeamId: teamId, _ideaOffer: offer,
+    _reviseOffer: { teamId, offer, round: null },
+    _raw: { onYes: 'lt_offer_send', onNo: 'lt_pass', onAuto: 'lt_pass' },
+  }), atMs);
+}
+
+/** Our next series against a club this season: when its last game is. */
+function _nextSeriesEnd(st, teamId, atMs) {
+  const games = (st.schedule || []).filter(g => g.opponentId === teamId && !g._committed && !g.isSpring && !g.isPlayoff
+    && (g.gameTime || 0) > atMs).sort((a, b) => a.gameTime - b.gameTime);
+  if (!games.length) return null;
+  const first = games[0];
+  const series = first.seriesId ? games.filter(g => g.seriesId === first.seriesId) : [first];
+  return { firstAt: first.gameTime, endAt: series[series.length - 1].gameTime, games: series.length };
+}
+
+function _leagueTradeCards(tx, atMs) {
+  const st = StateManager.get();
+  const club = (id) => (st.leagueTeams || []).find(t => t.id === id);
+  const A = club(tx.teamId), B = club(tx.fromTeamId);
+  if (!A || !B) return 0;
+  const P = (id) => st.players[id];
+  const aGot = (tx.offer?.incomingIds || []).map(P).filter(Boolean);   // B → A
+  const bGot = (tx.offer?.outgoingIds || []).map(P).filter(Boolean);   // A → B
+  const year = baseballYear(st);
+  const desk = st.tradeDesk || {};
+
+  // 1. Someone beat us to a player we were talking about.
+  for (const [seller, left, to] of [[B, aGot, A], [A, bGot, B]]) {
+    const talk = Negotiation.talkWith(st, seller.id);
+    if (!talk || !['waiting', 'countered', 'agreed'].includes(talk.status)) continue;
+    const want = [...(talk.offer?.incomingIds || []), ...(talk.counter?.incomingIds || [])];
+    const gone = left.find(p => want.includes(p.id));
+    if (!gone) continue;
+    withdrawTalkCards(seller.id);
+    Negotiation.callOff(seller.id, atMs);
+    const next = LeagueTrades.bestOption(StateManager.get(), (p) => _sameRole(p, gone), atMs, { excludeIds: new Set([gone.id]) });
+    const lead = `${seller.name} traded ${_ref(gone)} to ${to.name} before our talks could finish — those talks are closed.`;
+    if (next) {
+      const nt = club(next.teamId), np = P(next.playerId);
+      return _deliverIdea(StateManager.get(), {
+        key: `lt:beaten:${tx.id}`, teamId: next.teamId, deal: next.deal, atMs: atMs + 2 * 3600_000,
+        subject: `${to.name} beat us to ${gone.name}`,
+        preview: `The next-best option: ${_ref(np)} of ${nt.name}.`,
+        lead: `${lead} The next-best option we see is ${_ref(np)} of ${nt.name}.`,
+      }) ? 1 : 0;
+    }
+    return _deliverNotice(`lt:beaten:${tx.id}`, {
+      cardId: 'lt_beaten', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞',
+      subject: `${to.name} beat us to ${gone.name}`,
+      preview: 'Nobody else fits the spot right now.',
+      body: `${lead} We looked for the next-best option and nobody else fits the spot right now. We'll keep watching.`,
+    }, atMs + 2 * 3600_000) ? 1 : 0;
+  }
+
+  // 2. A player we traded away was flipped: bring them back once they can be moved.
+  const flipped = [...aGot, ...bGot].find(p => p._previouslyWithOrg && wouldStart(p, st, 'user'));
+  if (flipped) {
+    const now = aGot.includes(flipped) ? A : B, from = now === A ? B : A;
+    const when = atMs + TRADE.noFlipMs + 3 * 3600_000;
+    const deal = LeagueTrades.scoutPackage(st, now.id, flipped.id, when);
+    if (deal) return _deliverIdea(st, {
+      key: `lt:flipped:${tx.id}`, teamId: now.id, deal, atMs: when,
+      subject: `${flipped.name} can be moved again`,
+      preview: `${from.name} sent our former player to ${now.name}; a reunion is possible.`,
+      lead: `${from.name} traded ${_ref(flipped)}, who played for us, to ${now.name}. A newly acquired player can't be moved for a few days; that window has passed, and ${flipped.name} would start for us.`,
+    }) ? 1 : 0;
+  }
+
+  // 3. A division rival got better: advance scouting for our next series.
+  const rival = [A, B].find(t => t.divisionId && t.divisionId === (st.userTeam.divisionId || 'A')
+    && tx.why?.need && t.id === tx.teamId);
+  if (rival) {
+    const series = _nextSeriesEnd(st, rival.id, atMs);
+    const star = aGot.sort((x, y) => (y.ovr || 0) - (x.ovr || 0))[0];
+    if (series && star && !_cardsWithKey(st, `lt:rival:${rival.id}:${series.firstAt}`).length
+        && atMs - (desk.lastRivalMs || -Infinity) >= LEAGUE_TRADES.rivalCardGapMs
+        && (star.ovr || 0) >= LeagueTrades.leagueNorms(st).h + 3
+        && (st.phase === PHASE.REGULAR_SEASON || st.phase === PHASE.TRADE_DEADLINE || st.phase === PHASE.ALL_STAR_BREAK)) {
+      const scale = Math.max(0.5, Math.min(1.6, (st.userTeam.finances?.payrollTarget || CARD_MONEY_BASE_TARGET_K) / CARD_MONEY_BASE_TARGET_K));
+      const cost = Math.max(10, Math.round(ADVANCE_SCOUT.costK * scale / 5) * 5);
+      StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), lastRivalMs: atMs }; });
+      return _deliverAt(_rosterCard(st, {
+        cardId: 'lt_scout', tag: 'SCOUTING', sender: 'Pro Scouting', avatar: '🔎', type: 'normal',
+        subject: `${rival.name} got better`,
+        preview: `${rival.name} added ${_ref(star)} from ${B.name}. We see them next in ${Math.max(1, Math.round((series.firstAt - atMs) / 86_400_000))} days.`,
+        body: `${rival.name}, in our division, traded for ${_ref(star)} from ${B.name}. `
+            + `We play them next in a ${series.games}-game series. An advance scout can follow them until then (${formatK(cost)}): `
+            + `our hitters would know what's coming and our pitchers how to work their lineup, for that series.`,
+        yesLabel: `Send an Advance Scout (${formatK(cost)})`, noLabel: 'Not This Time',
+        autoResolve: 'roster', expiresAtMs: Math.min(series.firstAt, atMs + 2 * 86_400_000),
+        _rosterKey: `lt:rival:${rival.id}:${series.firstAt}`,   // one report offer per series
+        _ltTeamId: rival.id, _ltCoversMs: series.endAt + 6 * 3600_000, _ltCostK: cost,
+        _raw: { onYes: 'lt_scout', onNo: 'lt_pass', onAuto: 'lt_pass' },
+      }), atMs + 3 * 3600_000) ? 1 : 0;
+    }
+  }
+
+  // Opportunities: at most one every few days.
+  if (atMs - (desk.lastIdeaMs || -Infinity) < _IDEA_GAP_MS) return 0;
+  const markIdea = () => StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), lastIdeaMs: atMs }; });
+
+  // 4. A club just sold: call them about the veterans still there.
+  if (clubMode(st, B.id) === 'seller' && aGot.some(p => computeAge(p.dob, year) >= 30 || isRental(p, st))) {
+    const vet = (p) => computeAge(p.dob, year) >= 29 || isRental(p, st);
+    const opt = LeagueTrades.bestOption(st, vet, atMs, { excludeTeams: new Set((st.leagueTeams || []).filter(t => t.id !== B.id).map(t => t.id)) });
+    if (opt) {
+      const p = P(opt.playerId);
+      if (_deliverIdea(st, {
+        key: `lt:sold:${tx.id}`, teamId: B.id, deal: opt.deal, atMs: atMs + 3 * 3600_000,
+        subject: `${B.name} are selling`,
+        preview: `They just moved ${aGot[0].name}. ${_ref(p)} is still there.`,
+        lead: `${B.name} just traded ${aGot.map(_ref).join(' and ')} to ${A.name} for younger pieces — they're selling. ${_ref(p)} is still there and would start for us.`,
+      })) { markIdea(); return 1; }
+    }
+  }
+
+  // 5. A club now has a surplus: the starter it just replaced.
+  const was = tx.why?.need?.incumbentId && P(tx.why.need.incumbentId);
+  if (was && !bGot.includes(was) && (A.rosterIds || []).includes(was.id) && wouldStart(was, st, 'user')) {
+    const deal = LeagueTrades.scoutPackage(st, A.id, was.id, atMs);
+    if (deal && _deliverIdea(st, {
+      key: `lt:surplus:${tx.id}`, teamId: A.id, deal, atMs: atMs + 3 * 3600_000,
+      subject: `${A.name} have a player to spare`,
+      preview: `${aGot[0].name} takes over for ${was.name}, who would start for us.`,
+      lead: `${A.name} traded for ${aGot.map(_ref).join(' and ')}, which leaves ${_ref(was)} without a regular spot there. ${was.name} would start for us.`,
+    })) { markIdea(); return 1; }
+  }
+  return 0;
+}
+
+/**
+ * §90 Pro Scouting works the phones for one of our needs: the best player on
+ * another club who fills it and would start for us, with the package their
+ * GM should take — an offer to make, adjust or pass on, a few hours later.
+ */
+function _workThePhones({ key, fits, what, atMs, sender = 'Pro Scouting', subjectNone }) {
+  const st = StateManager.get();
+  const at = atMs + Math.round((3 + Math.random() * 4) * 3600_000);
+  const opt = LeagueTrades.bestOption(st, fits, at);
+  if (!opt) {
+    return _deliverNotice(`${key}:none`, {
+      cardId: 'lt_none', tag: 'TRADE', sender, avatar: '📞',
+      subject: subjectNone || 'Nothing out there right now',
+      preview: `We worked the phones for ${what}; nothing fits.`,
+      body: `We worked the phones for ${what}. Nobody available would be an upgrade at a price their club would take and our owner would carry. We'll keep watching.`,
+    }, at);
+  }
+  const t = (st.leagueTeams || []).find(x => x.id === opt.teamId), p = st.players[opt.playerId];
+  return _deliverIdea(st, {
+    key, teamId: opt.teamId, deal: opt.deal, atMs: at, sender,
+    subject: `${what[0].toUpperCase()}${what.slice(1)}: ${p.name}`,
+    preview: `${_ref(p)} of ${t.name} is the best fit we found.`,
+    lead: `We worked the phones for ${what}. The best fit is ${_ref(p)} of ${t.name}${isRental(p, st) ? ', in the last year of the contract' : ''}.`,
+  });
+}
+
+/**
+ * deliverDeadlineIdea(atMs) — §90 (replaces the dl3/dl4 cards): as the
+ * deadline nears, Pro Scouting's best target for our biggest need, once a
+ * season, when we're not selling.
+ */
+export function deliverDeadlineIdea(atMs) {
+  const st = StateManager.get();
+  const key = `lt:deadline:${st.seasonNum || 1}`;
+  if (_cardsWithKey(st, key).length || _cardsWithKey(st, `${key}:none`).length) return null;
+  if (clubMode(st, 'user') === 'seller') return null;
+  const need = LeagueTrades.clubNeeds(st, 'user')[0];
+  if (!need) return null;
+  const what = need.kind === 'sp' ? 'a starting pitcher before the deadline'
+    : need.kind === 'rp' ? 'a reliever before the deadline'
+    : `a ${need.slot === 'DH' ? 'designated hitter' : need.slot} before the deadline`;
+  return _workThePhones({ key, what, atMs, fits: (p) => LeagueTrades.fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + 3 });
+}
+
+function _applyLeagueTradeAction(action, instance, atMs) {
+  if (action === 'lt_pass') return;
+  if (action === 'lt_find_rp') {
+    _workThePhones({ key: `lt:rp:${instance.instanceId}`, what: 'a reliever', atMs,
+      fits: (p) => p.pos === 'RP' && wouldStart(p, StateManager.get(), 'user') });
+    return;
+  }
+  if (action === 'lt_offer_send') {
+    const res = Negotiation.proposeTrade(instance._ideaTeamId, instance._ideaOffer, atMs);
+    if (!res.ok) {
+      _deliverNotice(`lt:unsent:${instance.instanceId}`, {
+        cardId: 'lt_unsent', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞',
+        subject: 'The offer couldn\'t go out',
+        preview: `It couldn't be sent: ${res.reason}.`,
+        body: `We went to make the offer, but it couldn't be sent: ${res.reason}.`,
+      }, atMs);
+    }
+    return;
+  }
+  if (action === 'lt_scout') {
+    const cost = instance._ltCostK || 0;
+    if (!Finance.canSpend(StateManager.get(), cost)) {
+      _deliverNotice(`lt:noscout:${instance.instanceId}`, {
+        cardId: 'lt_noscout', tag: 'SCOUTING', sender: 'Pro Scouting', avatar: '🔎',
+        subject: 'No advance scout this time', preview: 'Club funds can\'t cover the trip.',
+        body: 'Club funds can\'t cover the advance scout\'s trip right now.',
+      }, atMs);
+      return;
+    }
+    StateManager.mutate(s => {
+      Finance.post(s.userTeam.finances, -cost, 'cards', `Advance scouting — ${(s.leagueTeams || []).find(t => t.id === instance._ltTeamId)?.name || 'a rival'}`, atMs);
+      s.userTeam.advanceReports = { ...(s.userTeam.advanceReports || {}),
+        [instance._ltTeamId]: { coversThroughMs: instance._ltCoversMs, boughtAtMs: atMs } };
+    });
   }
 }
 
@@ -2717,6 +2980,8 @@ function _deliverDevelopmentReport(ev, atMs) {
  */
 export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'talk_finalize', 'talk_backout', 'talk_take_counter', 'talk_walk', 'talk_ask', 'talk_move_on', 'talk_keep_open',
+  // §90 league trades that touch us
+  'lt_offer_send', 'lt_pass', 'lt_scout', 'lt_find_rp',
   'fin_call_club',
   'il_return_activate',
   'il_return_waive',
@@ -2764,6 +3029,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
   if (action.startsWith('as_')) { _applyAllStarAction(action, instance, atMs); return; }
   if (action.startsWith('fin_')) { _applyFinanceAction(action, instance, atMs); return; }
   if (action.startsWith('talk_')) { _applyTalkAction(action, instance, atMs); return; }
+  if (action.startsWith('lt_')) { _applyLeagueTradeAction(action, instance, atMs); return; }
   if (CARD_ACTIONS[action]) { _applyCardAction(action, { ...instance, choice }, atMs, feasible); return; }
 
   const playerId = instance._targetPlayerId || null;

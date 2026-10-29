@@ -7174,3 +7174,46 @@ The dashboard's activity feed (`state.activityFeed`, kept 72 hours) was icon-led
 - A free agent signed to the active roster while games were on joined instantly and could play that night, with no arrival record. `signToClub` now makes him report like anyone joining a club — an arrival the next day (`reason: 'signing'`). A veteran signed to start takes the spot he was signed for when he reports, if the player he replaces still holds it (`tx.startAt`, applied in `_arrive`). Offseason signings remain immediate.
 
 **Harness:** talk checks now verify the answer is decided at send, no answer arrives before its reply time, and how an offer landed takes effect once its answer is read; signing checks accept a pending arrival. 8 seeds green; webpush and refs pass.
+
+## 90. Phase 4c — trades between CPU clubs, the League wire, cards that touch us (r85)
+
+**The trade desk.** Once a day, at a moment between 10:00 and 18:00 local (`state.tradeDesk.nextAtMs`, a step in `advanceClock` like the finance and offseason steps; catch-up replays each day in order), CPU clubs can deal (`engine/LeagueTrades.js`, pure):
+- **A need** (`clubNeeds`): a lineup starter, the weakest rotation arm or the end of the top-4 pen well below the league's norm at that spot (`needGap` 5). A spot the club can fill from its own bench or farm is a lineup decision, not a trade need.
+- **The chance a club with a need works the phones** each day: season 3%, the days around the deadline 20%, spring 2%, offseason 8%. At most 2 trades a day, a club rests 14 days after a trade, and a player a CPU club traded for isn't moved on again for 120 days (the 5-day no-flip still applies to everyone).
+- **The deal** (`buildPackage`): the seller's player who fills the need (at least +4 over the incumbent); the buyer sends the fewest, closest-to-price pieces it can spare (never its key players, never its own answer at the spot; the incumbent being replaced may go). Cash closes a small gap. A selling club keeps part of a salary the buyer's owner can't carry. The seller must clear its bar; the buyer overpays at most a little (buyer 8, neutral 3, seller 0).
+- **Execution** goes through the same ledger as ours: `_executeTrade` now handles any two clubs (history and rapport only when we're in it). **A club in the middle of a game finishes it first:** the ledger holds any trade (ours too) until that club's final out (`clubBusyUntil`). Found when a player traded mid-game was injured in that game while in transit.
+
+**How clubs value players (changes for every trade, ours included):**
+- Value is measured above replacement level (`_ovrScore`: 6 × (OVR − (44 + league level))^1.25), so a star is worth several regulars and a fringe player little.
+- A player is worth this season plus the future: `0.45 + 0.55 × age × contract`. A final-year veteran is a rental, not a fraction of a player (final year 0.80, one more year 0.90).
+- Salary efficiency is narrowed to 0.85–1.15; money is weighed apart (books, cash).
+- **Quality over quantity:** a package counts its best piece fully, the next 60% and the rest 40% (`packageValue`).
+- **Sending a regular away leaves a hole:** the drop to the club's best replacement at the spot counts against it (buyer 0.8, neutral 0.6, seller 0.3).
+- Trade payroll counts only what the club pays (`isPaid`); a farm player on a minor-league deal isn't on it either way.
+
+The first build traded a 77 SS for a 57 SP and bounced players back and forth; these rules fixed it.
+
+**The League wire** (`state.leagueWire`, this season and last, up to 500): every trade (ours too, cash and salary kept included), CPU salary moves, waiver claims, offseason free-agent signings, departures and retirements. The League screen has a new **Moves** tab, text only, grouped by day, with All / Trades / Our Club. CPU trades also get a short line in Recent.
+
+**Cards only when a trade touches us**, each a decision (`CardEngine._leagueTradeCards`), at most one per trade:
+1. **Someone beat us to a player we were talking about:** our talks close. Pro Scouting offers the next-best option (same role, would start for us) as an offer to make, or says nobody fits.
+2. **A player we traded away was flipped:** once the no-flip window has passed, an offer to bring them back.
+3. **A division rival got better** (an above-average starter added, at most one a week, one per series): send an advance scout. The cost is scaled to the market. Our hitters' hit rate is ×1.03 against them and theirs ×0.975 against us, through our next series with them (`userTeam.advanceReports`; `SimEngine` `scout` context).
+4. **A club just sold:** a veteran still there who would start for us. At most one opportunity card every 3 days.
+5. **A club now has a surplus** (the starter it just replaced would start for us).
+
+Offer cards (`lt_offer`) carry Pro Scouting's package (`scoutPackage`: the fewest of our spare pieces their GM should take at our rapport's bar, our owner able to carry it). The choices are **Make the Offer** (sent through `Negotiation.proposeTrade`; the answer comes on their clock, §89), **Adjust the Offer** (the composer, pre-filled), or **Pass**. They are withdrawn if the package can no longer be offered (`tradeBlockers` or our owner), and when we send that club another offer.
+
+**Phase 4 cleanup:**
+- dl3 and dl4 (deadline trade cards that skipped the other club's judgment) are retired. In their place, Pro Scouting's best target for our biggest need arrives as the deadline nears, once a season, when we're not selling (`deliverDeadlineIdea`).
+- b1 (the bullpen crisis) now reads "Work the Phones": a reliever who would pitch the late innings for us, as an offer card a few hours later, or word that nobody fits.
+
+**Also:** "What would it take?" counts as the talk's next exchange (round + 1).
+
+**Harness:**
+- CPU clubs trade with each other: 14–20 in season 1, at most 5–7 by one club.
+- Every trade is on the wire (ours too); wire text is neutral and every trade reads as who acquired whom.
+- The cards that touch us are decisions; advance-scouting reports cover a coming series; the retired cards never appear.
+- **The balance band floor is now 33 of 132** (the 2024 White Sox, 41–121, .253). The weakest CPU club now finishes 37–57 across seeds (it was 28–30 before 4c), and the best 73–84.
+
+8 seeds green; webpush and refs pass.

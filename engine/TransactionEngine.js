@@ -45,6 +45,8 @@ import {
   FARM_PITCHER_MIN_SP,
   FARM_PITCHER_MIN_RP,
   SALARY_BY_OVR,
+  GAME_STATUS as _GS,
+  GAME_DURATION_FALLBACK_MS as _GAME_FALLBACK_MS,
 } from '../data/constants.js';
 
 import {
@@ -425,18 +427,43 @@ function _reconcile(draft, teamId, atMs) {
   applyRosterMutation(draft, mut);
 }
 
+/** When a game in progress involving this club ends (0 if it isn't playing at `atMs`). */
+export function clubBusyUntil(state, teamId, atMs) {
+  const endOf = (g) => {
+    const last = g?.plays?.[g.plays.length - 1];
+    return last && Number.isFinite(last._timestamp) ? last._timestamp + (g._tickOffset || 0) : (g.gameTime || 0) + _GAME_FALLBACK_MS;
+  };
+  let end = 0;
+  for (const games of Object.values(state.leagueSchedule?.dayMap || {})) {
+    for (const cg of games) if (cg.status === _GS.LIVE && (cg.homeId === teamId || cg.awayId === teamId)) end = Math.max(end, endOf(cg));
+  }
+  for (const g of state.schedule || []) {
+    if (g.status === _GS.LIVE && (teamId === 'user' || g.opponentId === teamId)) end = Math.max(end, endOf(g));
+  }
+  return end > atMs ? end : 0;
+}
+
 function _executeTrade(draft, tx, events, touched) {
   const { incomingIds = [], outgoingIds = [] } = tx.offer || {};
-  const cpu  = (draft.leagueTeams || []).find(t => t.id === tx.fromTeamId);
-  const user = draft.userTeam;
+  // §90 a club in the middle of a game finishes it first: its players in the
+  // deal are in that game. The trade goes through at the final out.
+  const busy = Math.max(clubBusyUntil(draft, tx.teamId || 'user', tx.effectiveAt), clubBusyUntil(draft, tx.fromTeamId, tx.effectiveAt));
+  if (busy) { tx.effectiveAt = busy + 60_000; tx.waitedForGame = true; return; }
+  // §90 the two clubs: `teamId` receives incomingIds from `fromTeamId` and
+  // sends outgoingIds. Ours with a CPU club (teamId 'user'), or two CPU clubs.
+  const club = (id) => id === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(t => t.id === id);
+  const aId = tx.teamId || 'user', bId = tx.fromTeamId;
+  const A = club(aId), B = club(bId);
+  const withUser = aId === 'user' || bId === 'user';
   const at   = tx.effectiveAt;
+  const inOrg = (t, id) => (t.rosterIds || []).includes(id) || (t.farmIds || []).includes(id);
 
   // Re-validate at execution: every player still where the deal expects him
   // and healthy. Otherwise the deal is off (a failed physical voids trades).
   const problem =
-      !cpu ? 'team not found'
-    : outgoingIds.some(id => !user.rosterIds.includes(id) && !(user.farmIds || []).includes(id)) ? 'a player is no longer in our organization'
-    : incomingIds.some(id => !cpu.rosterIds.includes(id) && !(cpu.farmIds || []).includes(id))  ? 'a player is no longer in their organization'
+      !A || !B ? 'team not found'
+    : outgoingIds.some(id => !inOrg(A, id)) ? (aId === 'user' ? 'a player is no longer in our organization' : `a player is no longer with ${A.name}`)
+    : incomingIds.some(id => !inOrg(B, id)) ? (bId === 'user' ? 'a player is no longer in our organization' : `a player is no longer with ${B.name}`)
     : [...outgoingIds, ...incomingIds].some(id => draft.players[id]?.isInjured) ? 'a player failed the physical'
     : null;
   if (problem) {
@@ -447,20 +474,22 @@ function _executeTrade(draft, tx, events, touched) {
     return;
   }
 
-  Object.entries(tradePlayerPatches(draft, tx)).forEach(([id, upd]) => Object.assign(draft.players[id], upd));
+  if (withUser) Object.entries(tradePlayerPatches(draft, tx)).forEach(([id, upd]) => Object.assign(draft.players[id], upd));
   const moves = [
-    ...outgoingIds.map(id => ({ id, from: 'user', to: cpu.id })),
-    ...incomingIds.map(id => ({ id, from: cpu.id, to: 'user' })),
+    ...outgoingIds.map(id => ({ id, from: aId, to: bId })),
+    ...incomingIds.map(id => ({ id, from: bId, to: aId })),
   ];
   // §85 everyone in the deal leaves the old club first; only then does each
   // club make room for who is coming (so a corresponding move can never pick
   // a player who is himself in the deal).
   const fromFarm = new Set();
+  const formerClub = {};
   for (const m of moves) {
-    const fromTeam = m.from === 'user' ? user : cpu;
+    const fromTeam = club(m.from);
     if ((fromTeam.farmIds || []).includes(m.id)) fromFarm.add(m.id);   // a prospect reports to the new farm
     fromTeam.rosterIds = fromTeam.rosterIds.filter(x => x !== m.id);
     fromTeam.farmIds = (fromTeam.farmIds || []).filter(x => x !== m.id);
+    formerClub[m.id] = m.from;
   }
   for (const m of moves) {
     const player = draft.players[m.id];
@@ -477,42 +506,50 @@ function _executeTrade(draft, tx, events, touched) {
         touched.add(m.to);
       }
     }
-    Object.assign(player, patch, { _acquiredAtMs: at });   // §85 no flipping a player for a few days
+    Object.assign(player, patch, { _acquiredAtMs: at, _tradedFrom: m.from });   // §85 no flipping a player for a few days
     draft.transactions.push(arr);
   }
   // §85 the money: a one-time payment between the clubs, and salary the
   // sending club keeps paying this season on players it sent.
   const cashK = tx.offer.cashK || 0;
+  const label = (t, other) => other === draft.userTeam ? 'us' : other.name;
   if (cashK) {
-    const [payer, payee] = cashK > 0 ? [cpu, user] : [user, cpu];
+    const [payer, payee] = cashK > 0 ? [B, A] : [A, B];
     const k = Math.abs(cashK);
-    if (payer.finances) postFunds(payer.finances, -k, 'trade', `Cash sent in a trade with ${payer === user ? cpu.name : 'us'}`, at);
-    if (payee.finances) postFunds(payee.finances, k, 'trade', `Cash received in a trade with ${payee === user ? cpu.name : 'us'}`, at);
+    if (payer.finances) postFunds(payer.finances, -k, 'trade', `Cash sent in a trade with ${label(payer, payee)}`, at);
+    if (payee.finances) postFunds(payee.finances, k, 'trade', `Cash received in a trade with ${label(payee, payer)}`, at);
   }
   for (const [id, pct] of Object.entries(tx.offer.retain || {})) {
-    retainSalary(draft, outgoingIds.includes(id) ? 'user' : cpu.id, id, pct);
+    retainSalary(draft, formerClub[id] || (outgoingIds.includes(id) ? aId : bId), id, pct);
   }
-  adjustRapport(draft, cpu.id, 2);   // §85 a completed deal warms the relationship
+  if (withUser) adjustRapport(draft, aId === 'user' ? bId : aId, 2);   // §85 a completed deal warms the relationship
 
   tx.status = 'done';
   tx.doneAt = at;
-  const name = (id) => draft.players[id]?.name || '—';
-  draft.history = [...(draft.history || []), {
-    id:       tx.id,
-    type:     'trade',
-    season:   draft.seasonNum || 1,
-    gameIdx:  draft.currentGameIndex || 0,
-    headline: incomingIds.length === 1 && outgoingIds.length === 1
-      ? `${name(incomingIds[0])} acquired, ${name(outgoingIds[0])} traded away`
-      : `Trade: received ${incomingIds.map(name).join(', ')} — sent ${outgoingIds.map(name).join(', ')}`,
-    detail:   `Acquired from ${cpu.name}: ${incomingIds.map(name).join(', ') || '—'}. Traded away: ${outgoingIds.map(name).join(', ') || '—'}. Record at the time: ${user.wins || 0}–${user.losses || 0}.`,
-    playerId: incomingIds[0] || null,
-    icon:     '🔄',
-    userNote: '',
-  }];
-  touched.add('user');
-  touched.add(cpu.id);
-  events.push({ type: 'TRADE_EXECUTED', tx, atMs: at });
+  if (withUser) {
+    // Our franchise history, from our side.
+    const cpu = aId === 'user' ? B : A;
+    const got  = aId === 'user' ? incomingIds : outgoingIds;
+    const sent = aId === 'user' ? outgoingIds : incomingIds;
+    const name = (id) => draft.players[id]?.name || '—';
+    const user = draft.userTeam;
+    draft.history = [...(draft.history || []), {
+      id:       tx.id,
+      type:     'trade',
+      season:   draft.seasonNum || 1,
+      gameIdx:  draft.currentGameIndex || 0,
+      headline: got.length === 1 && sent.length === 1
+        ? `${name(got[0])} acquired, ${name(sent[0])} traded away`
+        : `Trade: received ${got.map(name).join(', ')} — sent ${sent.map(name).join(', ')}`,
+      detail:   `Acquired from ${cpu.name}: ${got.map(name).join(', ') || '—'}. Traded away: ${sent.map(name).join(', ') || '—'}. Record at the time: ${user.wins || 0}–${user.losses || 0}.`,
+      playerId: got[0] || null,
+      icon:     '🔄',
+      userNote: '',
+    }];
+  }
+  touched.add(aId);
+  touched.add(bId);
+  events.push({ type: 'TRADE_EXECUTED', tx, atMs: at, league: !withUser });
 }
 
 function _resolveWaiver(draft, player, atMs, events, touched) {
