@@ -7057,3 +7057,22 @@ Cash moves between club funds, usually covering part of the traded player's **re
   - **Home pre-game:** a giveaway night (+10% filled tonight), or a rivalry-night event.
 - **Harness (8 seeds green):** at most one version of each family a season (5–6 families a season, versions matching the situation); a call to a club cutting payroll always gets an answer (an offer or word back); the new cards pass the neutral-text scan.
 - **Fixed:** the intro on a called-back trade offer.
+
+## 85. Phase 4 — trades: decisions (Session 8, GM, before building)
+Replaces the locked "no cash in trades" (§9) and the open B7 questions (§76).
+- **A. Cash only as part of a deal that includes players**, plus the occasional CPU offer to sell a fringe player for cash. No buying players outright.
+- **B. Covered salary:** when the other club covers part of a player's salary, our owner counts only our share against the payroll target.
+- **C. Covered salary is paid over the season**, coming off each payday as in real deals. A one-time cash sweetener is paid at once.
+- **D. Starting a trade:** from any player's card (ours: "shop this player"; theirs: "ask about this player"), and from the inbox's compose section through a new "Other GMs" option.
+- **E. Deal size:** up to 3 players a side, plus prospects and cash.
+- **F. Replies are on a realistic clock:** sometimes within a few hours, sometimes more than a full day. Counteroffers are allowed, but every negotiation fizzles out after a few rounds if the sides can't agree.
+- **G. Advice, not a meter:** the GM can run a deal by a scout or other staff for a read. Never a fairness meter.
+- **H. Trade windows:** in season until the trade deadline, and in the offseason.
+- **I. Guardrails:** CPU clubs must judge trades realistically (needs, role, age, contract, buying or selling, their books). A cooling-off period after a declined offer, and no flipping a just-acquired player for a few days.
+- **J. CPU-to-CPU trades happen when situations arise for both clubs** (one short on pitching with hitting to spare, another the reverse), not at a fixed rate. They must reach the GM so the league feels alive, without "got it" messages. Each trade gets a line in the activity feed. An inbox card only when the trade touches us, always with a real decision: a rival got better (advance scouting), a club just sold (call them), a club now has a surplus (make an offer), someone beat us to a player we were pursuing (next-best option), a former player was flipped (reach out).
+- **GM rapport:** the existing per-club `gmRelationships` (0–100, already used by the trade engine) gets shown as a grade (Strong / Good / Neutral / Cool / Strained). Trade talks move it: fair and completed deals warm it; lowballs and fizzled talks cool it.
+- **Build order:**
+  1. 4a: the trade engine (valuation, cash, covered salary, rapport, cooling-off, no-flip, windows).
+  2. 4b: trades the GM starts (composer, the scout's read, timed replies, counters, fizzle).
+  3. 4c: CPU-to-CPU trades and their feed lines and cards.
+  4. Cleanup: the deadline cards b1/dl3/dl4 become real offers or retire; fix `_assessDepthImpact`'s `STARTING_HITTERS` check.
