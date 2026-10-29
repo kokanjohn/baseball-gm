@@ -19,7 +19,7 @@
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../data/constants.js';
 import { createPlayer, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor } from './OffseasonEngine.js';
-import { defaultActiveGroup, eligibleSlotsFor, makeArrival } from './RosterEngine.js';
+import { defaultActiveGroup, eligibleSlotsFor, makeArrival, sendToFarm, applyRosterMutation } from './RosterEngine.js';
 import { rosterIsFull, sideOf } from './TransactionEngine.js';
 import { newPlayerName } from './Names.js';
 
@@ -105,7 +105,7 @@ export function signingTerms(state, player) {
  */
 export function signToClub(draft, playerId, teamId, atMs, { toFarm = false, displaceId = null, terms = null, startAt = null } = {}) {
   const p = draft.players[playerId];
-  const t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
+  let t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
   if (!p || !t || p.group !== PLAYER_GROUP.FREE_AGENT) return [];
   const events = [];
   const pull = () => { draft.freeAgentPool = (draft.freeAgentPool || []).filter(id => id !== playerId); };
@@ -126,8 +126,17 @@ export function signToClub(draft, playerId, teamId, atMs, { toFarm = false, disp
     : rosterIsFull(draft, teamId, sideOf(p));
   if (full) {
     const out = (displaceId && draft.players[displaceId]) || displacementFor(draft, teamId, p);
-    if (out) events.push(..._option(draft, t, out, atMs));
+    // §96 he goes down by the same farm rule as any option: a full farm side
+    // puts its weakest player on waivers (RosterEngine.sendToFarm).
+    if (out) {
+      applyRosterMutation(draft, sendToFarm(draft, out.id, teamId));
+      events.push({ type: 'OPTIONED', playerId: out.id, teamId, atMs, reason: 'corresponding move' });
+    }
   }
+  // (the mutation may replace the club's object — work on the current one)
+  t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
+  for (const s of t.lineupSlots || []) if (s.playerId && !(t.rosterIds || []).includes(s.playerId)) s.playerId = null;
+  if (t.rotation?.order) t.rotation.order = t.rotation.order.filter(id => (t.rosterIds || []).includes(id));
   pull();
   if (_gamesOn(draft)) {
     // §89 with games being played he reports like anyone joining a club — the
@@ -143,22 +152,6 @@ export function signToClub(draft, playerId, teamId, atMs, { toFarm = false, disp
   applyContract(draft, playerId, k, { startNow: _inSeason(draft) });
   events.push({ type: 'SIGNED', playerId, teamId, toFarm: false, atMs });
   return events;
-}
-
-function _option(draft, t, out, atMs) {
-  const side = (t.farmIds || []).filter(id => isPitcher(draft.players[id]) === isPitcher(out)).length;
-  const cap = isPitcher(out) ? ROSTER_LIMITS.FARM_PITCHER_MAX : ROSTER_LIMITS.FARM_HITTER_MAX;
-  t.rosterIds = (t.rosterIds || []).filter(id => id !== out.id);
-  for (const s of t.lineupSlots || []) if (s.playerId === out.id) s.playerId = null;
-  if (t.rotation?.order) t.rotation.order = t.rotation.order.filter(id => id !== out.id);
-  if (side < cap) {
-    t.farmIds = [...(t.farmIds || []), out.id];
-    Object.assign(out, { group: PLAYER_GROUP.PRACTICE_SQUAD, tier: 'farm' });
-    return [{ type: 'OPTIONED', playerId: out.id, teamId: t.id || 'user', atMs }];
-  }
-  Object.assign(out, { group: PLAYER_GROUP.FREE_AGENT, tier: 'freeAgent', teamId: null, _faFrom: t.id || 'user', _faSince: atMs });
-  draft.freeAgentPool = [...(draft.freeAgentPool || []), out.id];
-  return [{ type: 'RELEASED', playerId: out.id, teamId: t.id || 'user', atMs }];
 }
 
 function _farmCap(draft, t, pitchers, atMs, keepId) {
@@ -207,7 +200,10 @@ export function prospectToSend(state, targetOvr) {
 
 /** Games are being played (spring, the season, October). */
 function _gamesOn(draft) {
-  return [PHASE.SPRING_TRAINING, PHASE.REGULAR_SEASON, PHASE.POSTSEASON].includes(draft.phase);
+  // §96 every phase with games on the calendar (the break and the deadline
+  // are the season too; PHASE has no POSTSEASON value — the rounds are named).
+  return [PHASE.SPRING_TRAINING, PHASE.REGULAR_SEASON, PHASE.ALL_STAR_BREAK, PHASE.TRADE_DEADLINE,
+          PHASE.PLAYOFF_BRACKET_BUILD, PHASE.WILD_CARD, PHASE.FIRST_ROUND, PHASE.DIVISION_SERIES, PHASE.WORLD_SERIES].includes(draft.phase);
 }
 
 /** During a season (not between seasons) a new deal covers the current season. */

@@ -24,6 +24,7 @@
  *   openPlayerCard(playerId, state);
  */
 
+import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
 import { getHotColdIndicator, getImpLabel } from '../../engine/IMPEngine.js';
 import { PHASE } from '../../data/constants.js';
@@ -89,6 +90,13 @@ export function openPlayerCard(playerId, state) {
     if (p.teamId === 'user') openTradeComposer({ ourIds: [p.id] });
     else openTradeComposer({ teamId: p.teamId, theirIds: [p.id] });
   });
+  // §96 sign / claim / withdraw
+  document.getElementById('pc-market')?.addEventListener('click', async (e) => {
+    const kind = e.currentTarget.dataset.market;
+    closePlayerCard();
+    const { openSignSheet } = await import('./SignSheet.js');
+    openSignSheet(playerId, kind);
+  });
   overlay.addEventListener('click', e => { if (e.target === overlay) closePlayerCard(); });
 }
 
@@ -116,8 +124,13 @@ function _renderCard(player, playerId, state) {
   const userRosterIds = new Set(state.userTeam?.rosterIds || []);
   const isOwnPlayer  = userRosterIds.has(playerId);
 
+  // §96 a player no club has: on waivers, or a free agent.
+  const formerly = player.onWaivers ? player._waivedBy : player._faFrom;
+  const formerName = formerly === 'user' ? `${state.userTeam?.city || ''} ${state.userTeam?.nickname || ''}`.trim() : _teamName(formerly, state);
   const teamName = isOwnPlayer
     ? `${state.userTeam?.city || ''} ${state.userTeam?.nickname || ''}`.trim()
+    : player.onWaivers ? `On waivers${formerName ? ` — from ${formerName}` : ''}`
+    : player.group === 'freeAgent' ? `Free agent${formerName ? ` — formerly ${formerName}` : ''}`
     : _teamName(player.teamId, state);
 
   return `
@@ -152,8 +165,8 @@ function _renderCard(player, playerId, state) {
     <!-- IMP trend -->
     ${_renderImpTrend(impScores, impLabel)}
 
-    <!-- Contract -->
-    ${_renderContract(player, state)}
+    <!-- Contract (a free agent: what they're asking) -->
+    ${player.group === 'freeAgent' ? _renderAsk(player, state) : _renderContract(player, state)}
 
     <!-- GM relationship (own players only) -->
     ${isOwnPlayer ? _renderRelationship(player) : ''}
@@ -163,7 +176,34 @@ function _renderCard(player, playerId, state) {
 
     <!-- §85 trade talks: start from any player's card -->
     ${_tradeButton(player, state)}
+    <!-- §96 sign a free agent, or claim a player off waivers -->
+    ${_marketButton(player, state)}
   `;
+}
+
+/** §96 what a free agent asks of us. */
+function _renderAsk(player, state) {
+  const t = FreeAgency.termsFor(state, player);
+  const years = t.years || 1;
+  return `
+    <div class="pc-section">
+      <div class="pc-section-label">Asking</div>
+      <div class="pc-contract-row">
+        <div class="pc-contract-salary">${formatSalary(t.salary)}/yr</div>
+        <div class="pc-contract-status">${years} year${years === 1 ? '' : 's'}${t.bonus ? ` · ${formatSalary(t.bonus)} bonus` : ''}${t.toFarm ? ' · signs to the farm' : ''}</div>
+      </div>
+    </div>`;
+}
+
+/** §96 Sign (free agent), Put In a Claim / Withdraw Claim (waivers). */
+function _marketButton(player, state) {
+  if (player.group === 'freeAgent') return `<button class="pc-trade-btn" id="pc-market" data-market="sign">Sign Free Agent</button>`;
+  if (player.onWaivers && player._waivedBy !== 'user') {
+    return player._userClaim
+      ? `<button class="pc-trade-btn" id="pc-market" data-market="withdraw">Withdraw Our Claim</button>`
+      : `<button class="pc-trade-btn" id="pc-market" data-market="claim">Put In a Claim</button>`;
+  }
+  return '';
 }
 
 /** "Shop this player" on ours; "Ask about this player" on another club's. */

@@ -555,14 +555,21 @@ function _executeTrade(draft, tx, events, touched) {
 function _resolveWaiver(draft, player, atMs, events, touched) {
   const claimant = cpuWaiverClaimant(draft, player.id);
   const userClaimed = !!player._userClaim;
+  const userDrop = player._userClaimDrop || null;   // §96 who the GM chose to send down if the claim is ours
   player._userClaim = false;
+  player._userClaimDrop = null;
   if (claimant) {
     draft.waiverPool = (draft.waiverPool || []).filter(id => id !== player.id);
     // The claim won (§73, any club): with no spot on his side (§76), the
     // weakest same-side reserve — the man he's an upgrade on — is optioned so
     // the claimed player has a spot when he reports.
     if (rosterIsFull(draft, claimant, sideOf(player))) {
-      const out = _weakestReserve(draft, player, claimant);
+      // Ours: the player the GM chose, if still on our active roster on his
+      // side; otherwise (or a CPU club) the weakest reserve on his side.
+      const chosen = claimant === 'user' && userDrop ? draft.players[userDrop] : null;
+      const out = chosen && (draft.userTeam.rosterIds || []).includes(chosen.id) && chosen.group !== PLAYER_GROUP.IL
+                  && ['SP', 'RP'].includes(chosen.pos) === ['SP', 'RP'].includes(player.pos)
+        ? chosen : _weakestReserve(draft, player, claimant);
       if (out) { applyRosterMutation(draft, sendToFarm(draft, out.id, claimant)); events.push({ type: 'OPTIONED', playerId: out.id, teamId: claimant, atMs }); }
     }
     const { tx, patch } = makeArrival({ player, teamId: claimant, fromTeamId: player._waivedBy || null,

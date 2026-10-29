@@ -30,6 +30,7 @@ import {
   formatERA, formatAVG, formatStreak,
 } from '../formatters.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
+import * as FreeAgency from '../../engine/FreeAgency.js';
 import { PHASE } from '../../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -386,18 +387,21 @@ function _renderPlayers(state) {
   const impScores     = state.impScores || {};
   const leagueTeams   = state.leagueTeams || [];
 
-  // All active roster players
-  let allPlayers = [
-    ...(state.userTeam?.rosterIds || []),
-    ...leagueTeams.flatMap(t => t.rosterIds || []),
-  ]
-    .map(id => players[id])
-    .filter(Boolean);
-
   const isSearching = _lpSearch.trim().length > 0;
+  const wire = _playerFilter.team === 'waivers' || _playerFilter.team === 'fa';
+
+  // All active roster players — or, §96, the waiver wire or the free agents
+  // (a search looks everywhere: every roster, the wire and the market).
+  const unattached = [...FreeAgency.waiverList(state), ...FreeAgency.freeAgentList(state)];
+  let allPlayers = _playerFilter.team === 'waivers' ? FreeAgency.waiverList(state)
+    : _playerFilter.team === 'fa' ? FreeAgency.freeAgentList(state)
+    : [
+        ...[...(state.userTeam?.rosterIds || []), ...leagueTeams.flatMap(t => t.rosterIds || [])].map(id => players[id]).filter(Boolean),
+        ...(isSearching ? unattached : []),
+      ];
 
   // "Other Teams" = hide user's own players — bypassed when searching
-  if (_playerFilter.onRosters && !isSearching) {
+  if (_playerFilter.onRosters && !isSearching && !wire) {
     allPlayers = allPlayers.filter(p => !userRosterIds.has(p.id));
   }
 
@@ -436,7 +440,7 @@ function _renderPlayers(state) {
   // Team filter
   if (_playerFilter.team === 'user') {
     allPlayers = allPlayers.filter(p => userRosterIds.has(p.id));
-  } else if (_playerFilter.team !== 'all') {
+  } else if (_playerFilter.team !== 'all' && !wire) {
     allPlayers = allPlayers.filter(p => p.teamId === _playerFilter.team);
   }
 
@@ -468,6 +472,8 @@ function _renderPlayers(state) {
   const teamOptions = [
     `<option value="all"  ${_playerFilter.team === 'all'  ? 'selected' : ''}>All Teams</option>`,
     `<option value="user" ${_playerFilter.team === 'user' ? 'selected' : ''}>${_escape(state.userTeam?.abbr || 'My Team')}</option>`,
+    `<option value="waivers" ${_playerFilter.team === 'waivers' ? 'selected' : ''}>On Waivers (${FreeAgency.waiverList(state).length})</option>`,
+    `<option value="fa" ${_playerFilter.team === 'fa' ? 'selected' : ''}>Free Agents (${FreeAgency.freeAgentList(state).length})</option>`,
     ...leagueTeams.map(t =>
       `<option value="${t.id}" ${_playerFilter.team === t.id ? 'selected' : ''}>${_escape(t.name)}</option>`
     ),
@@ -527,6 +533,8 @@ function _renderPlayers(state) {
     // Use team abbr for user's players — never 'YOU'
     const teamAbbr = isUser
       ? ((state.userTeam?.abbr || '').toUpperCase() || '—')
+      : p.onWaivers ? _waiverTag(p)
+      : p.group === 'freeAgent' ? 'Free agent'
       : _teamAbbr(p.teamId, state);
     const statVals = statCols.map(c => {
       if (c.key === 'imp7') {
@@ -563,7 +571,10 @@ function _renderPlayers(state) {
           <div class="lp-th-name lp-col-sticky">Player</div>
           ${heads}
         </div>
-        <div id="lp-list">${rows}</div>
+        <div id="lp-list">${rows || `<div class="lw-empty">${
+          _playerFilter.team === 'waivers' ? 'No one on waivers fits these filters right now. A club puts a player on waivers to clear a roster spot; other clubs have 72 hours to claim them, worst record first.'
+          : _playerFilter.team === 'fa' ? 'No free agents fit these filters right now.'
+          : 'No players match these filters.'}</div>`}</div>
         ${allPlayers.length > 100 ? `<div style="padding:8px 16px;font-size:11px;color:var(--muted);">Showing 100 of ${allPlayers.length}</div>` : ''}
       </div>
     </div>
@@ -889,6 +900,13 @@ function _openLeagueTeamModal(team, state) {
       if (playerId) openPlayerCard(playerId, StateManager.get());
     });
   });
+}
+
+/** §96 a waived player's line: the claim window, and our claim if it's in. */
+function _waiverTag(p) {
+  const left = Math.max(0, FreeAgency.waiverEndsAt(p) - Date.now());
+  const h = Math.floor(left / 3_600_000), m = Math.floor((left % 3_600_000) / 60_000);
+  return `Waivers · ${h ? `${h}h` : `${m}m`} left${p._userClaim ? ' · claim in' : ''}`;
 }
 
 function _teamAbbr(teamId, state) {

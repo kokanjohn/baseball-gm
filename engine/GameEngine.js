@@ -83,6 +83,7 @@ import { recordOutings } from './PitchingEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { formatK } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
+import * as FreeAgency from './FreeAgency.js';
 import * as LeagueTrades from './LeagueTrades.js';
 import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
@@ -2764,6 +2765,49 @@ export function gmCallUp(playerId, nowMs = Date.now()) {
     advanceClock(nowMs);
   }
   return res;
+}
+
+/**
+ * gmSignFreeAgent(playerId, dropId, nowMs) — §96 the GM signs a free agent
+ * from the League screen. If his side of the 28 is full, `dropId` (the GM's
+ * choice) goes down first. With games on he reports the next day.
+ * Returns { ok, reason }.
+ */
+export function gmSignFreeAgent(playerId, dropId = null, nowMs = Date.now()) {
+  const st = StateManager.get();
+  if (!st?.userTeam) return { ok: false, reason: 'no team loaded' };
+  const why = FreeAgency.signBlocker(st, playerId, dropId);
+  if (why) return { ok: false, reason: why };
+  StateManager.mutate(s => {
+    FreeAgency.sign(s, playerId, nowMs, dropId);
+    applyRosterMutation(s, reconcileRoster(s, 'user'));
+    s.userTeam.finances.payroll = computePayroll(s);
+    const p = s.players[playerId];
+    _wireAdd(s, [{ atMs: nowMs, kind: 'signing', teamIds: ['user'],
+      text: `${_clubName(s, 'user')} sign free agent ${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})` }]);
+  });
+  advanceClock(nowMs);
+  return { ok: true };
+}
+
+/**
+ * gmClaimOffWaivers(playerId, dropId, nowMs) — §96 the GM puts in a waiver
+ * claim. It is decided when the 72-hour window closes, in claiming order; if
+ * it's ours and his side is full then, `dropId` goes down. Returns { ok, reason }.
+ */
+export function gmClaimOffWaivers(playerId, dropId = null, nowMs = Date.now()) {
+  const st = StateManager.get();
+  if (!st?.userTeam) return { ok: false, reason: 'no team loaded' };
+  const why = FreeAgency.claimBlocker(st, playerId, dropId, nowMs);
+  if (why) return { ok: false, reason: why };
+  StateManager.mutate(s => { FreeAgency.claim(s, playerId, dropId); });
+  return { ok: true };
+}
+
+/** §96 the GM takes back a waiver claim before the window closes. */
+export function gmWithdrawClaim(playerId) {
+  StateManager.mutate(s => { FreeAgency.withdrawClaim(s, playerId); });
+  return { ok: true };
 }
 
 /**

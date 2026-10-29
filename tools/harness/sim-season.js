@@ -979,6 +979,76 @@ function checkTalks(st) {
         agreed.filter(x => !made.includes(x)).map(x => x.id).join(',') + pending.map(x => ` pending ${x.id} ${x.league ? 'league' : ''} eff ${new Date(x.effectiveAt).toISOString()} now ${new Date(clock.get()).toISOString()}`).join(''));
 }
 
+/** §96 free agents and waivers from the League screen: signing or claiming
+ *  with the GM's choice of who goes down — on copies of the real league. */
+async function checkFreeAgency(st) {
+  const FA = await import('../../engine/FreeAgency.js');
+  const Off = await import('../../engine/OffseasonEngine.js');
+  const { applyDue, rosterIsFull, sideOf } = await import('../../engine/TransactionEngine.js');
+  const now = clock.get();
+  const fresh = () => { const c = structuredClone(st); c.userTeam.finances.payrollTarget *= 3; c.tradeTalks = {}; return c; };
+  const held = (c) => rosterSpotsHeld(c, 'user');
+  // A real veteran made a free agent: a CPU club's bench hitter, released.
+  const benchOf = (c) => {
+    for (const t of c.leagueTeams) {
+      const starters = new Set((t.lineupSlots || []).map(sl => sl.playerId));
+      const p = (t.rosterIds || []).map(id => c.players[id]).find(p => p && !['SP', 'RP'].includes(p.pos) && !starters.has(p.id) && !p.isInjured);
+      if (p) return p;
+    }
+    return null;
+  };
+  {
+    const c = fresh();
+    const vet = benchOf(c);
+    Off.releaseToFreeAgency(c, vet.id, now, { reason: 'released' });
+    vet._marketKind = 'depth';
+    const full = rosterIsFull(c, 'user', 'hitter');
+    const room = FA.roomFor(c, c.players[vet.id]);
+    const ask = FA.signBlocker(c, vet.id, null);
+    check(`free agency: with the hitters full, a signing asks who goes down (${full ? ask : 'not full'})`,
+          !full || (room.needsDrop && /choose a player/.test(ask) && room.candidates.every(x => !['SP', 'RP'].includes(x.player.pos))));
+    const drop = room.candidates[0]?.player.id || null;
+    const before = held(c);
+    const why = FA.signBlocker(c, vet.id, drop);
+    if (!why) {
+      FA.sign(c, vet.id, now, drop);
+      const v = c.players[vet.id];
+      const arriving = (c.transactions || []).some(t => t.kind === 'arrival' && t.status === 'pending' && t.playerId === vet.id && t.teamId === 'user');
+      check(`free agency: the signing reports the next day; the one we chose goes down; still ${before} (${held(c)})`,
+            arriving && !(c.freeAgentPool || []).includes(vet.id) && v.teamId === 'user'
+            && (!drop || (c.userTeam.farmIds || []).includes(drop) || c.players[drop]?.onWaivers) && held(c) === before,
+            `${v.group} drop:${c.players[drop]?.group}`);
+      check('free agency: their salary is on our payroll', Finance.payrollOf(c, 'user') > 0 && v.contractExpiry > (c.seasonNum || 1));
+    } else check(`free agency: a signing we can make goes through (${why})`, false);
+  }
+  {
+    const c = fresh();
+    // Worst record in the league: our claim comes first (reverse standings).
+    c.userTeam.wins = 0; c.userTeam.losses = 99;
+    const vet = benchOf(c);
+    applyRosterMutation(c, Roster.placeOnWaivers(c, vet.id, { atMs: now, reason: 'test' }));
+    const room = FA.roomFor(c, c.players[vet.id]);
+    const drop = room.needsDrop ? room.candidates[room.candidates.length - 1].player.id : null;   // our best bench bat, not the weakest
+    const why = FA.claimBlocker(c, vet.id, drop, now);
+    check(`free agency: we can put in a claim (${why || 'ok'})`, !why);
+    if (!why) {
+      FA.claim(c, vet.id, drop);
+      const before = held(c);
+      applyDue(c, now + 72 * 3_600_000 + 60_000);
+      const v = c.players[vet.id];
+      const ours = v.teamId === 'user' || (c.transactions || []).some(t => t.kind === 'arrival' && t.playerId === vet.id && t.teamId === 'user');
+      check(`free agency: our claim is awarded and the player we chose goes down (${c.players[drop]?.name || 'room to spare'})`,
+            ours && (!drop || !(c.userTeam.rosterIds || []).includes(drop)) && held(c) === Math.max(before, held(c)),
+            `${v.group}/${v.teamId} drop:${c.players[drop]?.group}`);
+    }
+  }
+  {
+    const c = fresh();
+    check(`free agency: the League screen's lists (${FA.waiverList(c).length} on waivers, ${FA.freeAgentList(c).length} free agents)`,
+          FA.waiverList(c).every(p => p.onWaivers) && FA.freeAgentList(c).every(p => p.group === PLAYER_GROUP.FREE_AGENT && p.teamId == null));
+  }
+}
+
 /** §90 Phase 4c: CPU clubs trade with each other when a need meets a fit;
  *  every move reaches the League wire; cards come only when one touches us. */
 function checkLeagueTrades(st) {
@@ -1179,7 +1249,7 @@ async function main() {
   let gamesWithRelief = 0; // r51: games where at least one side used >1 pitcher
   let seasonRuns = 0, seasonHits = 0, seasonGames = 0; // §60 run environment
 
-  let asgChecked = false;
+  let asgChecked = false, faChecked = false;
   for (let i = 0; i < target; i++) {
     const idx = SM.get().currentGameIndex;
     if (idx == null || idx >= s0.schedule.length) break;
@@ -1189,6 +1259,7 @@ async function main() {
                        s.userTeam.atmosphere = Math.max(90, s.userTeam.atmosphere || 50); });   // a margin: a bad day can cost several points before the league names the host
     }
     if (!asgChecked && SM.get().schedule[idx]?.regularSeasonIndex === ALL_STAR_BREAK_AFTER_GAME) { asgChecked = true; await runAllStarChecks(); }
+    if (!faChecked && SM.get().schedule[idx]?.regularSeasonIndex === 30) { faChecked = true; await checkFreeAgency(SM.get()); }
 
     const reachedFinal = playToFinal(idx);
     const pre = SM.get().schedule[idx];
