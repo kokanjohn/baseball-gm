@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Map preview</title>
+<style>body{margin:0;background:#0F1117;color:#ccc;font:12px sans-serif;display:flex;flex-wrap:wrap;gap:8px;padding:8px}figure{margin:0}figcaption{padding:2px 0}</style></head>
+<body><script type="module">
+import { regionMap } from '../../engine/WeatherMap.js';
+import { drawBaseMap, RADAR_ZOOMS } from '../../ui/components/RadarMap.js';
+const q = new URLSearchParams(location.search);
+const regions = (q.get('regions') || 'north,south,east,west').split(',');
+const theme = q.get('theme') || 'dark', W = +(q.get('w') || 360), H = +(q.get('h') || 360);
+for (const r of regions) for (const z of RADAR_ZOOMS) {
+  const fig = document.createElement('figure');
+  const c = document.createElement('canvas'); const dpr = 2;
+  c.width = W * dpr; c.height = H * dpr; c.style.width = W + 'px'; c.style.height = H + 'px';
+  const ctx = c.getContext('2d'); ctx.scale(dpr, dpr);
+  drawBaseMap(ctx, regionMap(r), { cx: 0, cy: 0, spanKm: z.spanKm, w: W, h: H }, { theme, userCity: q.get('city') || 'Springfield' });
+  fig.innerHTML = `<figcaption>${r} · ${z.label} (${z.spanKm} km)</figcaption>`; fig.prepend(c); document.body.append(fig);
+}
+document.body.dataset.done = '1';
+</script></body></html>

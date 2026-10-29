@@ -7502,3 +7502,43 @@ The map also carries a few highways and city labels (the club name without the n
 2. **Radar component** (Canvas) and the full-screen sheet; screenshots at all three zoom levels and loop windows.
 3. **Forecast surfaces:** dashboard next-game forecast, a 10-day forecast view and the schedule screen.
 4. **Game effects:** watch / delay / postponement / suspension in the tick loop, league-wide makeups and doubleheaders, actual weather recorded on each game, sim modifiers, and weather cards. Requires a fresh team.
+
+### 100.1 Step 1 broken down; 1a done — the regional maps
+
+**Step 1 (the weather model) sub-steps:**
+- **1a** Regional maps and ballpark positions.
+- **1b** Deterministic foundation and climate (baseball-calendar date, real hour, region).
+- **1c** What happens: weather systems and the precipitation field.
+- **1d** Ballpark conditions from that field.
+- **1e** Forecast runs.
+- **1f** Calibrated rain chances and the 10-day forecast.
+- **1g** Weather harness and tuning.
+
+**1a — what was built:**
+- **`engine/WeatherNoise.js`** — the only randomness weather code uses: hashes, seeded streams and value/fractal noise, all pure functions of a seed and integers. No `Math.random`.
+- **`data/region-maps.js`** — the four authored maps. Units are km, x east and y north, with our park at (0, 0).
+  - North: Lake Northmere along the top, Long Lake to the northeast, small lakes.
+  - South: The Gulf, a delta, a bay, a long river.
+  - East: Atlantic Reach, a deep bay toward us, barrier islands.
+  - West: the Sawtooth Range, High Mesa, the Salt Flat, Mirror Reservoir.
+
+  The file also has fictional state lines, rivers, each club's park and city, and the town-name parts.
+- **`engine/WeatherMap.js`** (pure, cached per region) builds on that data:
+  - roughens the outlines deterministically into natural shores;
+  - generates the highways (a spanning tree over the parks plus a few extra links, never crossing water, with exits off the map edges);
+  - adds a city area around each park, ~500 small towns plus suburbs per region (unique fictional names), and local roads.
+
+  It answers `isWater`, `distanceToWater`, `parkOf`, `venueOf(game)` (the home club's park, so away games use the host's) and `cityOf`.
+- **`ui/components/RadarMap.js`** — the Canvas base-map renderer, in a flat radar-app style, with dark and light palettes.
+  - **Zoom levels:** Region 720 km / Metro 240 km (default) / Ballpark 64 km.
+  - **What each zoom shows:** towns and local roads appear at Metro and Ballpark; a street grid inside the city areas at Ballpark only; water names at Region only.
+  - **Labels:** placed without collisions. Our park is ringed.
+- **Tools:**
+  - `tools/harness/map-preview.html` + `render-maps.mjs` render all regions and zooms to PNGs.
+  - `tools/harness/check-weather.mjs` checks, per region: parks on land, every park on the highway network, unique town names on land, and identical output from a separate fresh build.
+
+  20/20 pass.
+
+**Not yet wired** into the app, so there's no `sw.js` change. The new modules join the precache when the radar is wired in.
+
+**Note for 1c:** `isWater` walks polygons (a region builds in 40–300 ms in Node). The weather will ask it far more often, so 1b/1c adds a raster land/water mask.
