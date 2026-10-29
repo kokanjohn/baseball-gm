@@ -104,6 +104,7 @@ export function openCardModal(card, onResolve) {
           ${_escape(card.yesLabel || 'Accept')}
         </button>
       </div>
+      ${card._reviseOffer ? '<button class="btn-revise" id="card-modal-revise">Make a New Offer</button>' : ''}
 
     </div>
   `;
@@ -123,6 +124,15 @@ export function openCardModal(card, onResolve) {
   document.getElementById('card-modal-no')?.addEventListener('click', () => {
     if (onResolve) onResolve(card.instanceId, 'no');
     closeCardModal();
+  });
+
+  // §85 answer a counter with our own revised offer
+  document.getElementById('card-modal-revise')?.addEventListener('click', async () => {
+    const r = card._reviseOffer;
+    closeCardModal();
+    const { openTradeComposer } = await import('./TradeComposer.js');
+    openTradeComposer({ teamId: r.teamId, theirIds: r.offer.incomingIds || [], ourIds: r.offer.outgoingIds || [],
+                        cashK: r.offer.cashK || 0, retain: r.offer.retain || {}, round: r.round });
   });
 }
 

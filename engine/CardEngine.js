@@ -71,6 +71,9 @@ import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
+import * as Negotiation from './Negotiation.js';
+import { rapportOf, rapportGrade, adjustRapport } from './TradeEngine.js';
+const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -2303,6 +2306,103 @@ function _callClubAboutSalary(instance, atMs) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// TRADE TALKS (§85 Phase 4b) — the other GM's answer, and our decision
+// ─────────────────────────────────────────────────────────────
+
+const _TALK_REASON = {
+  value:    'it isn\'t enough for them',
+  lowball:  'they didn\'t think it was a serious offer',
+  fizzled:  'the two sides couldn\'t meet after a few rounds',
+  nothing:  'nothing we could add would get it done right now',
+};
+
+/**
+ * deliverTalkReply(teamId, response, atMs) — the other club's answer to our
+ * offer, as a card with a real decision (§85 F).
+ */
+/** §85 our revised offer replaces the talk's open cards with that club. */
+export function withdrawTalkCards(teamId) {
+  return _withdraw(c => c._talkTeamId === teamId);
+}
+
+export function deliverTalkReply(teamId, r, atMs) {
+  const state = StateManager.get();
+  const team = (state.leagueTeams || []).find(t => t.id === teamId);
+  const talk = Negotiation.talkWith(state, teamId);
+  if (!team || !talk) return null;
+  const name = team.name;
+  const grade = rapportGrade(rapportOf(state, teamId));
+  const key = `talk:${teamId}:${talk.id}:${r.decision}:${talk.round}`;
+  const base = { tag: 'TRADE', sender: `${name} front office`, avatar: '📞', _talkTeamId: teamId, _talkId: talk.id, _talkRound: talk.round, _rosterKey: key };
+  if (r.decision === 'accept') {
+    return _deliverAt(_rosterCard(state, { ...base, cardId: 'talk_accepted', type: 'good',
+      subject: `${name} accepted our offer`,
+      preview: `They'll do it: ${Negotiation.describeOffer(state, talk.offer, name)}.`,
+      body: `${name} called back: they'll do the deal — ${Negotiation.describeOffer(state, talk.offer, name)}. `
+          + `It's ours to finalize. Backing out now would cost us with their front office (rapport: ${grade}).`,
+      yesLabel: 'Finalize the Deal', noLabel: 'Back Out',
+      autoResolve: 'roster', expiresAtMs: atMs + 24 * 3600_000,
+      _raw: { onYes: 'talk_finalize', onNo: 'talk_backout', onAuto: 'talk_finalize' } }), atMs);
+  }
+  if (r.decision === 'counter') {
+    const counter = r.counter || talk.counter;
+    return _deliverAt(_rosterCard(state, { ...base, cardId: 'talk_counter', type: 'normal',
+      subject: `${name} came back with a counter`,
+      preview: `Their counter: ${Negotiation.describeOffer(state, counter, name)}.`,
+      body: `${name} won't do it as offered, but they're interested. Their counter: ${Negotiation.describeOffer(state, counter, name)}. `
+          + `We can take it, walk away, or send a revised offer.`,
+      yesLabel: 'Take Their Counter', noLabel: 'Walk Away',
+      autoResolve: 'roster', expiresAtMs: atMs + 36 * 3600_000,
+      _reviseOffer: { teamId, offer: counter, round: (talk.round || 1) + 1 },
+      _raw: { onYes: 'talk_take_counter', onNo: 'talk_walk', onAuto: 'talk_walk' } }), atMs);
+  }
+  const why = _TALK_REASON[r.reason] || r.reason || _TALK_REASON.value;
+  if (r.reason === 'fizzled' || r.reason === 'nothing') {
+    return _deliverAt(_rosterCard(state, { ...base, cardId: 'talk_fizzled', type: 'normal',
+      subject: `Talks with ${name} have run their course`,
+      preview: `No deal — ${why}.`,
+      body: `No deal with ${name}: ${why}. We can tell them to keep us in mind if things change — it keeps the relationship warm — or simply move on.`,
+      yesLabel: 'Keep the Door Open', noLabel: 'Move On',
+      autoResolve: 'roster', expiresAtMs: atMs + 36 * 3600_000,
+      _raw: { onYes: 'talk_keep_open', onNo: 'talk_move_on', onAuto: 'talk_move_on' } }), atMs);
+  }
+  return _deliverAt(_rosterCard(state, { ...base, cardId: 'talk_passed', type: 'normal',
+    subject: `${name} passed on our offer`,
+    preview: `They said no — ${why}.`,
+    body: `${name} passed: ${why}. We can ask what it would take to get something done, or move on.`
+        + (r.reason === 'lowball' ? ' They weren\'t pleased with the offer.' : ''),
+    yesLabel: 'Ask What It Would Take', noLabel: 'Move On',
+    autoResolve: 'roster', expiresAtMs: atMs + 36 * 3600_000,
+    _raw: { onYes: 'talk_ask', onNo: 'talk_move_on', onAuto: 'talk_move_on' } }), atMs);
+}
+
+function _applyTalkAction(action, instance, atMs) {
+  const teamId = instance._talkTeamId;
+  if (!teamId) return;
+  // A card only speaks for the round of talks it was written in (a revised
+  // offer since then has moved the talk on).
+  const talk = Negotiation.talkWith(StateManager.get(), teamId);
+  if (!talk || talk.id !== instance._talkId || talk.round !== instance._talkRound) return;
+  const map = { talk_finalize: 'finalize', talk_backout: 'backout', talk_take_counter: 'take_counter',
+                talk_walk: 'walk', talk_ask: 'ask', talk_move_on: 'move_on' };
+  if (action === 'talk_keep_open') {
+    StateManager.mutate(s => { TradeRapportBump(s, teamId); });
+    Negotiation.act(teamId, 'move_on', atMs);
+    return;
+  }
+  const res = Negotiation.act(teamId, map[action], atMs);
+  if (res && res.ok === false && res.reason) {
+    _deliverNotice(`talk:off:${instance.instanceId}`, {
+      cardId: 'trade_off', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', type: 'normal',
+      subject: 'The deal can\'t go through',
+      preview: `The deal is off: ${res.reason}.`,
+      body: `We went to finalize it, but the deal is off: ${res.reason}.`,
+      yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
+    }, atMs);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // OFFSEASON CARDS (§70)
 // ─────────────────────────────────────────────────────────────
 //
@@ -2590,6 +2690,7 @@ function _deliverDevelopmentReport(ev, atMs) {
  * name here in the same change that adds its handler (§60).
  */
 export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
+  'talk_finalize', 'talk_backout', 'talk_take_counter', 'talk_walk', 'talk_ask', 'talk_move_on', 'talk_keep_open',
   'fin_call_club',
   'il_return_activate',
   'il_return_waive',
@@ -2636,6 +2737,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
   if (action.startsWith('os_')) { _applyOffseasonAction(action, instance, atMs); return; }
   if (action.startsWith('as_')) { _applyAllStarAction(action, instance, atMs); return; }
   if (action.startsWith('fin_')) { _applyFinanceAction(action, instance, atMs); return; }
+  if (action.startsWith('talk_')) { _applyTalkAction(action, instance, atMs); return; }
   if (CARD_ACTIONS[action]) { _applyCardAction(action, { ...instance, choice }, atMs, feasible); return; }
 
   const playerId = instance._targetPlayerId || null;

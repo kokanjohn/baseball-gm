@@ -40,6 +40,15 @@ let _listeners    = [];
 // ─────────────────────────────────────────────────────────────
 
 const COMPOSE_CHANNELS = [
+  // §85 trade talks with the other clubs' GMs (opens the trade composer).
+  {
+    id:       'other_gms',
+    label:    'Other GMs',
+    icon:     '📞',
+    role:     'Around the League',
+    priority: 'high',
+    topics:   [],
+  },
   // High priority — built in initial release
   {
     id:       'manager',
@@ -316,6 +325,7 @@ function _renderCard(card, gameIdx) {
           ${_escape(card.noLabel)}
         </button>` : ''}
       </div>
+      ${card._reviseOffer ? `<button class="btn-revise" data-revise="${card.instanceId}">Make a New Offer</button>` : ''}
     </div>
   ` : '';
 
@@ -544,6 +554,19 @@ function _attachTabListeners(state) {
     });
   });
 
+  // §85 a counter we want to answer with our own revised offer
+  document.querySelectorAll('[data-revise]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const card = getInbox().find(c => c.instanceId === btn.dataset.revise);
+      const r = card?._reviseOffer;
+      if (!r) return;
+      const { openTradeComposer } = await import('../components/TradeComposer.js');
+      openTradeComposer({ teamId: r.teamId, theirIds: r.offer.incomingIds || [], ourIds: r.offer.outgoingIds || [],
+                          cashK: r.offer.cashK || 0, retain: r.offer.retain || {}, round: r.round });
+    });
+  });
+
   // Card resolution buttons
   document.querySelectorAll('[data-resolve]').forEach(btn => {
     btn.addEventListener('click', async (e) => {
@@ -577,6 +600,10 @@ function _attachTabListeners(state) {
     el.addEventListener('click', () => {
       const ch = COMPOSE_CHANNELS.find(c => c.id === el.dataset.channel);
       if (!ch) return;
+      if (ch.id === 'other_gms') {
+        import('../components/TradeComposer.js').then(m => m.openTradeComposer({}));
+        return;
+      }
       const onCooldown = _isOnCooldown(ch, state.composeCooldowns || {}, state.currentGameIndex || 0);
       if (onCooldown) return;
       _composeChannel = el.dataset.channel;

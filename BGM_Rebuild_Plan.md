@@ -7123,3 +7123,38 @@ The dashboard's activity feed (`state.activityFeed`, kept 72 hours) was icon-led
   - cooling off and the deadline block talks.
   
   7 of 8 seeds green. **Seed 1: the weakest CPU club finished 30–102** (no trades of its own; the r78 open item, a weak club with no in-season way to improve, reached by a different random path), plus a development-variety check that depends on chance. **4c's needs-based CPU-to-CPU trades are the planned fix.**
+
+## 88. Phase 4b — trades the GM starts (r83)
+- **`engine/Negotiation.js`** runs one open talk per club (`state.tradeTalks[teamId].talk`: offer, round, sentAtMs, replyAtMs, status).
+  - `proposeTrade` checks the deal (`tradeBlockers`) and our owner (`ourSideBlocker`: the added payroll, any cash we send), then sets the answer for 2–36 hours later (skewed toward the same day).
+  - `advanceClock` merges due answers into the league's ordered steps (`dueReplies` → `replyNow` → `cpuRespond`), so an answer due while the app was closed arrives in time order.
+  - **Limitation:** an answer is decided when it comes due, so it isn't pushed while the app is closed (the push worker only knows cards already scheduled).
+- **Every answer is a decision card** (roster cards with a deadline and an auto path):
+  - accepted: Finalize, or Back Out (rapport −3 and the club cools off). Finalizes by default after 24h, since it was our offer.
+  - countered: Take Their Counter (rapport +1), Walk Away, or **Make a New Offer**, which opens the composer pre-filled with their counter and continues the same talk. Walks away by default after 36h.
+  - passed: Ask What It Would Take (their counter, if one exists within reach), or Move On. A lowball costs rapport −2.
+  - run its course (fizzled after 3 rounds, or nothing would work): Keep the Door Open (rapport +1), or Move On.
+  
+  A revised offer withdraws the talk's open cards. A card only acts for the talk and round it was written in.
+- **The scout's read** (`TradeEngine.scoutRead`, §85 G), in words only:
+  - how close the deal is, from "they would jump at this" to "a lowball";
+  - whether the club is buying or selling;
+  - whether each of our players would play every day for them, or be a prospect or depth;
+  - their owner's books and their cash, plus our owner;
+  - whether we'd be giving up more than we get;
+  - the relationship.
+- **`ui/components/TradeComposer.js`:**
+  - the club list (record, buying/selling or "not taking calls" / "talks open", relationship grade);
+  - up to 3 a side from either roster or farm (hurt players disabled);
+  - "they / we keep paying" None / 25% / 50% per player when it's in season;
+  - a cash stepper ($50K steps, either way);
+  - our payroll after the deal against the target (red when over);
+  - the reasons a deal can't be sent;
+  - Ask Pro Scouting and Send Offer.
+- **Ways in:** "Shop This Player" or "Ask About This Player" at the bottom of every player card, and **Other GMs** in the inbox's compose section. "Make a New Offer" on a counter card (inline and in the long-card sheet).
+- **Harness:**
+  - the simulated GM starts trades (a fair package for a player who would start for us, and a lowball one time in five);
+  - every offer is answered on the clock, and no talk goes past the round limit;
+  - answers arrive as decisions, and every finalized deal is made or voided (checked against the franchise history; old transaction records are pruned).
+  
+  6 of 8 seeds green. Seed 5's weakest CPU club went 30–102 (the open weak-club item; **4c**). Seed 1 failed a chance-based follow-up-chain check.

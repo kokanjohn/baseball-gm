@@ -25,6 +25,8 @@ import * as Offseason from '../../engine/OffseasonEngine.js';
 import * as AllStar from '../../engine/AllStarEngine.js';
 import * as Pitching from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
+import * as Trades from '../../engine/TradeEngine.js';
+import * as Negotiation from '../../engine/Negotiation.js';
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
@@ -63,7 +65,7 @@ const summarize = () => {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { calls: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { talks: [], calls: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -186,7 +188,40 @@ function stepTo(t) {
     advanceClock(clock.get());
     releaseDueCards();
     gmActs();
+    gmProposes();
   }
+}
+
+/**
+ * §85 Phase 4b — the GM starts trades: now and then asks a club about a
+ * player who would start for us, offering a package that should interest
+ * them (sometimes a lowball, as a real GM tests the water).
+ */
+function gmProposes() {
+  if (Math.random() > 0.03) return;
+  const st = SM.get();
+  const now = clock.get();
+  if (!Trades.tradeWindow(st).open) return;
+  const teams = (st.leagueTeams || []).filter(t => Trades.cooldownUntil(st, t.id) <= now
+    && !['waiting', 'countered', 'agreed'].includes(Negotiation.talkWith(st, t.id)?.status));
+  const team = teams[Math.floor(Math.random() * teams.length)];
+  if (!team) return;
+  const usable = (p) => p && !p.isInjured && p.group !== PLAYER_GROUP.IL && p.group !== PLAYER_GROUP.IN_TRANSIT
+    && !(p._acquiredAtMs && now - p._acquiredAtMs < 5 * 86_400_000);
+  const want = team.rosterIds.map(id => st.players[id]).filter(p => usable(p) && Trades.wouldStart(p, st, 'user'))
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0];
+  if (!want) return;
+  const need = Trades.valueToClub(want, st, team.id, false) * (Math.random() < 0.2 ? 0.4 : 1.0);   // fair value (a lowball now and then)
+  const keyIds = new Set([...(st.userTeam.lineupSlots || []).map(sl => sl.playerId), ...(st.userTeam.rotation?.order || [])]);
+  const pool = [...st.userTeam.rosterIds, ...(st.userTeam.farmIds || [])].map(id => st.players[id])
+    .filter(p => usable(p) && !keyIds.has(p.id))
+    .map(p => ({ p, v: Trades.valueToClub(p, st, team.id, true) })).sort((a, b) => b.v - a.v);
+  const give = [];
+  let sum = 0;
+  for (const o of pool) { if (sum >= need || give.length >= 3) break; if (sum + o.v <= need * 1.3) { give.push(o.p.id); sum += o.v; } }
+  if (!give.length) return;
+  const res = Negotiation.proposeTrade(team.id, { incomingIds: [want.id], outgoingIds: give, cashK: 0, retain: {} }, now);
+  gm.talks.push({ team: team.id, ok: res.ok, reason: res.reason || null, at: now });
 }
 
 // ── §68: after the regular season, live the league clock to the end ──
@@ -868,6 +903,28 @@ async function checkTradeEngine(st) {
     check('trades: rapport grades read Strong / Good / Neutral / Cool / Strained',
           ['Strong', 'Good', 'Neutral', 'Cool', 'Strained'].join() === [80, 65, 50, 30, 10].map(T.rapportGrade).join());
   }
+}
+
+/** §85 Phase 4b: trades the GM starts — answered on the clock, every answer
+ *  a decision, talks that end within the round limit. */
+function checkTalks(st) {
+  const sent = gm.talks.filter(t => t.ok);
+  check(`trade talks: the GM starts trades (${sent.length} sent, ${gm.talks.length - sent.length} refused before sending: ${[...new Set(gm.talks.filter(t => !t.ok).map(t => t.reason))].slice(0, 3).join('; ')})`, sent.length >= 1);
+  const talks = Object.entries(st.tradeTalks || {}).map(([id, t]) => ({ id, t: t.talk })).filter(x => x.t);
+  const stuck = talks.filter(x => x.t.status === 'waiting' && x.t.replyAtMs < clock.get() - 86_400_000);
+  check(`trade talks: every offer gets an answer on the clock (${talks.length} talks; ${talks.map(x => x.t.status).join(',')})`, stuck.length === 0, stuck.map(x => x.id).join(','));
+  check('trade talks: no talk goes past the round limit', talks.every(x => (x.t.round || 1) <= 3));
+  const replies = (st.inbox || []).filter(c => /^talk_/.test(c.cardId || ''));
+  const kinds = {};
+  for (const c of replies) kinds[c.cardId] = (kinds[c.cardId] || 0) + 1;
+  check(`trade talks: answers arrive as decisions (${JSON.stringify(kinds)})`, replies.length >= 1 && replies.every(c => c.yesLabel && c.noLabel));
+  // A finalized deal is in the franchise history (made) or came back as "the deal is off" (voided).
+  const agreed = talks.filter(x => x.t.status === 'done');
+  const made = agreed.filter(x => (st.history || []).some(h => h.type === 'trade' && String(h.id).startsWith(`tx-trade-${x.id}-`))
+                              || (st.inbox || []).some(c => c.cardId === 'trade_off' && c._rosterKey?.startsWith('talk:off:')));
+  const pending = (st.transactions || []).filter(x => x.kind === 'trade' && x.status === 'pending');
+  check(`trade talks: every deal we finalized was made or voided (${made.length}/${agreed.length})`, made.length === agreed.length && pending.length === 0,
+        agreed.filter(x => !made.includes(x)).map(x => x.id).join(','));
 }
 
 async function main() {
@@ -1678,6 +1735,7 @@ async function main() {
   if (SM.get().phase === PHASE.SEASON_SUMMARY) {
     await checkCardMoney(SM.get());
     await checkTradeEngine(SM.get());
+    checkTalks(SM.get());
     await runOffseasonChecks();
     await checkNames('season 2');
     await checkNeutralText(SM.get());

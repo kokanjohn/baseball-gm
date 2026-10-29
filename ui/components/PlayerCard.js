@@ -79,6 +79,16 @@ export function openPlayerCard(playerId, state) {
 
   // Wire close
   document.getElementById('player-card-close')?.addEventListener('click', closePlayerCard);
+  // §85 open the trade composer from this player
+  document.getElementById('pc-trade')?.addEventListener('click', async () => {
+    const st = StateManager.get();
+    const p = st.players[playerId];
+    if (!p) return;
+    closePlayerCard();
+    const { openTradeComposer } = await import('./TradeComposer.js');
+    if (p.teamId === 'user') openTradeComposer({ ourIds: [p.id] });
+    else openTradeComposer({ teamId: p.teamId, theirIds: [p.id] });
+  });
   overlay.addEventListener('click', e => { if (e.target === overlay) closePlayerCard(); });
 }
 
@@ -150,7 +160,18 @@ function _renderCard(player, playerId, state) {
 
     <!-- Farm arc (farm players only) -->
     ${isFarm ? _renderFarmArc(player) : ''}
+
+    <!-- §85 trade talks: start from any player's card -->
+    ${_tradeButton(player, state)}
   `;
+}
+
+/** "Shop this player" on ours; "Ask about this player" on another club's. */
+function _tradeButton(player, state) {
+  const ours = player.teamId === 'user';
+  const theirs = (state.leagueTeams || []).some(t => t.id === player.teamId);
+  if (!ours && !theirs) return '';
+  return `<button class="pc-trade-btn" id="pc-trade" data-trade-player="${player.id}">${ours ? 'Shop This Player' : 'Ask About This Player'}</button>`;
 }
 
 function _renderSubRatings(player, isPitcher) {
@@ -364,6 +385,7 @@ function _injectCSS() {
   _cssInjected = true;
   const style = document.createElement('style');
   style.textContent = `
+    .pc-trade-btn{display:block;width:100%;margin:16px 0 4px;padding:12px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font:inherit;font-size:14px;font-weight:600;cursor:pointer;}
     .player-card-body{overflow-y:auto;padding:0 20px 32px;flex:1;min-height:0;}
     .pc-identity{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;}
     .pc-ovr-block{text-align:center;flex-shrink:0;background:var(--surface2);

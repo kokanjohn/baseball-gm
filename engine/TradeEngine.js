@@ -795,3 +795,40 @@ export function buildCounter(offer, state, teamId, gap, ev = evaluateForClub(off
   return next;
 }
 
+
+/**
+ * scoutRead(offer, state, teamId, ourBlocker) — §85 G: the GM runs a deal by
+ * Pro Scouting before sending it. Words, never a number: how close it is,
+ * whether our players would play there, whether the club is buying or
+ * selling, both owners' books, and the relationship.
+ */
+export function scoutRead(offer, state, teamId, ourBlocker = null) {
+  const lines = [];
+  const club = _club(state, teamId);
+  const ev = evaluateForClub(offer, state, teamId);
+  const gap = clubBar(state, teamId) - ev.net;
+  lines.push(gap <= -25 ? 'They would jump at this — we may be giving more than we need to.'
+           : gap <= 0   ? 'This should get it done.'
+           : gap <= 15  ? 'Close. They will likely want a little more — some cash, or a prospect.'
+           : gap <= 30  ? 'They will want noticeably more before this gets done.'
+           : gap <= 60  ? 'This is well short of what they will want.'
+           : 'This won\'t get a serious conversation — they would take it as a lowball.');
+  const mode = clubMode(state, teamId);
+  if (mode === 'buyer')  lines.push(`${club?.name || 'They'} are buying — they want help now, and a proven player matters more than a prospect.`);
+  if (mode === 'seller') lines.push(`${club?.name || 'They'} are selling — they would rather have young players than veterans, and cash goes a long way with them.`);
+  for (const id of offer.outgoingIds || []) {
+    const p = state.players[id];
+    if (!p) continue;
+    if (wouldStart(p, state, teamId)) lines.push(`${p.name} would play every day for them.`);
+    else if ((state.userTeam.farmIds || []).includes(id)) lines.push(`${p.name} would be a prospect in their system, not a big-leaguer yet.`);
+    else lines.push(`${p.name} wouldn't crack their lineup — they won't pay much for depth.`);
+  }
+  if (!ev.booksOk) lines.push('Their owner won\'t take on that much salary. We would have to keep paying part of it, or take salary back.');
+  if (!ev.cashOk)  lines.push('They can\'t send that much cash right now.');
+  if (ourBlocker)  lines.push(`On our side: ${ourBlocker}.`);
+  const ours = evaluateTrade(offer, state);
+  if (ours.fairnessRating <= -2) lines.push('From where we sit, we would be giving up more than we get.');
+  else if (ours.fairnessRating >= 2) lines.push('From where we sit, this looks like a win for us.');
+  lines.push(`Our relationship with their front office: ${rapportGrade(rapportOf(state, teamId))}.`);
+  return lines;
+}
