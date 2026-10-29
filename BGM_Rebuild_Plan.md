@@ -7658,3 +7658,57 @@ The field is painted per cell, then scaled up with smoothing.
 - cool-season thunder days are low;
 - region frames at 4 km cells show slight stair-stepping at the edges (radar step 2 will render finer);
 - light snow's fade-in edge looks a little grey on the dark map.
+
+### 100.4 Step 1d done — the ballpark report (r96)
+
+**`engine/WeatherConditions.js`** (pure) reads everything off the same weather the radar draws.
+- **`conditionsAt(ctx, x, y, t)`** returns:
+  - temperature, dew point, humidity, and feels-like (heat index / wind chill);
+  - wind: mph, gusts, direction it comes from;
+  - cloud (0..1) and sky;
+  - precipitation: dBZ, rain / mix / snow, rate in mm/h and in/hr, convective;
+  - lightning (a thunderstorm of 43+ dBZ within 16 km ≈ 10 miles — the play-stopping rule) and the storm's dBZ;
+  - day or night;
+  - a label ('Severe Thunderstorm', 'Thunderstorm', 'Heavy Rain', 'Rain', 'Light Rain', 'Drizzle', 'Sleet', 'Rain and Snow', 'Heavy Snow' / 'Snow' / 'Light Snow', 'Storms Nearby', 'Sunny' / 'Clear', 'Mostly Sunny' / 'Mostly Clear', 'Partly Cloudy', 'Mostly Cloudy', 'Cloudy', plus ', Windy' or ', Hot');
+  - an icon key.
+- **`parkConditions(ctx, teamId, t)`** adds the park's orientation (`WeatherMap.parkBearing`, home plate → centre field, fixed per club, 15–90°) and `windAtPark`: 'out to center' / 'out to left|right' / 'left to right' / 'right to left' / 'in from left|right' / 'in from center' / 'calm', with mph blowing out (+) or in (−).
+- **`rainTotal(ctx, x, y, t0, t1)`** gives inches of liquid, for field condition.
+- **`daylight`** gives sunrise and sunset on the baseball calendar.
+- **Temperature:**
+  - It reads the same lattice the radar uses for rain / mix / snow, less heavy precipitation's drag and less rain's evaporative cooling.
+  - Rain-cooled air lingers: the coolest of now and the last 90 minutes, recovering with a one-hour half-life.
+  - A park reporting snow is never above 33 °F, and rain never below 33.4 °F.
+- **Wind:**
+  - It blows from about 35° to the right of where systems are heading (so south-westerly in the usual flow).
+  - It is stronger in the afternoon.
+  - Ahead of a front it swings south and freshens; behind it, north-west and gusty. A squall's outflow and nearby thunderstorms gust 22–52 mph.
+  - Sea and lake breezes come off the water on summer afternoons.
+
+**Added to `engine/WeatherSystems.js`:**
+- **`cloudAt`** — each system's cloud is wider than its rain and builds before it, over a drifting background cloud and fair-weather cumulus on humid afternoons.
+- **`frontAir`:**
+  - Cold air behind a front: 9–18 °F, half that in midsummer. It fades over about 1,400 km behind the front and lingers 18 hours after the front's rain ends.
+  - A warm, humid sector ahead.
+  - A squall's rain-cooled outflow.
+  - The strongest of each kind counts; fronts don't stack.
+- **`surfaceTemp`** — sunny days run warmer and cloudy ones cooler; clear nights colder and cloudy ones milder. It is zero-mean about an average sky, plus the fronts.
+- **`stormNear`.**
+- The rain/mix/snow lattice now samples `surfaceTemp`.
+- `activeSystems` takes a separate box for pop-up storms, so cloud lookups stay fast.
+
+**Harness (`check-weather.mjs`, 78 checks; 19 new):**
+- every ballpark report agrees with the radar (2,336 reports, wet and kind);
+- snow is never reported warm;
+- the label says rain exactly when it rains, under a full sky, and thunderstorm only with lightning;
+- temperatures move smoothly (worst 6.5 °F in 5 minutes, a gust front);
+- afternoon highs still match normals in every region (−4.7…+1.1 °F);
+- dry afternoons run the range of skies (Clear…Cloudy);
+- the wind is from S through NW (100%) at about normal strength;
+- behind a cold front the wind comes from the NW (97%);
+- a front's passage cools things about 8 °F a day later;
+- wind-at-park directions;
+- June sunrise 5:33, sunset 8:39;
+- rain totals add up;
+- a report takes about 6 ms.
+
+**Left for 1g:** highs run 3–5 °F cool in some months; this is in the background climate, not the new layers.

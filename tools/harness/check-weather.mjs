@@ -279,5 +279,130 @@ const BOX = { x0: -360, y0: -360, x1: 360, y1: 360 };
   check(`a region radar frame builds in ${ms.toFixed(0)} ms`, ms < 600);
 }
 
+// ── 1d: the ballpark report ─────────────────────────────────────────────────
+console.log('\nBallpark conditions');
+const WC = await import('../../engine/WeatherConditions.js');
+const { conditionsAt, parkConditions, rainTotal, daylight, windAtPark } = WC;
+{
+  // Every report agrees with the radar: wet ⇔ precipitation, and the kind.
+  let n = 0, wet = 0, bad = [], snowWarm = 0, rainCold = 0, labelBad = [], storms = 0, stormBad = 0;
+  for (const region of ['north', 'south', 'east', 'west']) {
+    const c = ctxFor(region, 'wx-a');
+    for (let d = 0; d < 200; d += 1.37) {
+      const t = START + d * MS_DAY;
+      for (const id of Object.keys(c.map.parks).slice(0, 4)) {
+        const pk = c.map.parks[id];
+        const r = parkConditions(c, id, t), p = precipAt(c, pk.x, pk.y, t);
+        n++;
+        const isWet = p.dbz > DBZ_MIN;
+        if (isWet) wet++;
+        const kind = isWet ? ['rain', 'mix', 'snow'][p.kind] : null;
+        if (r.precip.kind !== kind) bad.push(`${region} ${id} d${d.toFixed(1)}`);
+        if (r.precip.kind === 'snow' && r.tempF > 33) snowWarm++;
+        if (r.precip.kind === 'rain' && r.tempF < 33.4) rainCold++;
+        const precipWord = /Rain|Drizzle|Snow|Sleet|Thunderstorm/.test(r.label);
+        if (precipWord !== isWet && !(r.label === 'Storms Nearby' && !isWet)) labelBad.push(`${r.label} wet=${isWet}`);
+        if (/Thunderstorm/.test(r.label)) { storms++; if (!(r.lightning || r.precip.convective)) stormBad++; }
+        if (isWet && r.cloud < 0.85) labelBad.push(`raining under ${r.cloud} cloud`);
+      }
+    }
+  }
+  check(`every ballpark report agrees with the radar (${n} reports, ${wet} wet)`, bad.length === 0 && wet > 50, bad.slice(0, 3).join(' | '));
+  check(`snow is never reported warm, rain never below freezing (${snowWarm}, ${rainCold})`, snowWarm === 0 && rainCold === 0);
+  check(`the label says rain exactly when it's raining, under a full sky; thunderstorms only with lightning (${storms} thunderstorm reports)`,
+        labelBad.length === 0 && stormBad === 0, labelBad.slice(0, 3).join(' | '));
+}
+{
+  // Temperatures move smoothly — even a front or a storm's outflow takes some minutes.
+  let worst = 0, at = '';
+  for (const region of ['north', 'south']) {
+    const c = ctxFor(region, 'wx-b');
+    for (let d = 30; d < 70; d += 3) {
+      let prev = null;
+      for (let m = 0; m < 24 * 60; m += 5) {
+        const v = conditionsAt(c, 0, 0, START + d * MS_DAY + m * 60_000).tempF;
+        if (prev != null && Math.abs(v - prev) > worst) { worst = Math.abs(v - prev); at = `${region} d${d} ${(m / 60).toFixed(1)}h`; }
+        prev = v;
+      }
+    }
+  }
+  // (A thunderstorm's gust front can knock 10 °F off in minutes; nothing faster than that.)
+  check(`ballpark temperatures move smoothly (largest 5-minute change ${worst.toFixed(1)} °F, ${at})`, worst <= 8);
+}
+{
+  // Clouds and fronts don't move the averages: monthly highs still match normals; skies vary.
+  for (const region of ['north', 'south', 'east', 'west']) {
+    const months = REGION_CLIMATE[region].months;
+    let worstOff = 0;
+    const skies = {};
+    for (const mi of [1, 3, 5]) {
+      const midDoy = [74, 105, 135, 166, 196, 227, 258][mi];
+      let hi = 0, k = 0;
+      for (const seed of ['wx-a', 'wx-c']) {
+        const c = ctxFor(region, seed);
+        for (let d = -12; d < 13; d += 2) {
+          const day = START + (midDoy - dayOf('2027-03-14') + d) * MS_DAY;
+          let dayHi = -999;
+          for (const h of [13, 14, 15, 16, 17]) dayHi = Math.max(dayHi, conditionsAt(c, 0, 0, day + h * MS_HOUR).tempF);
+          hi += dayHi; k++;
+          const r = conditionsAt(c, 0, 0, day + 15 * MS_HOUR);
+          if (!r.precip.kind) skies[r.sky] = (skies[r.sky] || 0) + 1;
+        }
+      }
+      const off = hi / k - months[mi].hi;
+      if (Math.abs(off) > Math.abs(worstOff)) worstOff = off;
+    }
+    const total = Object.values(skies).reduce((a, b) => a + b, 0);
+    const clearish = ((skies.Clear || 0) + (skies['Mostly Clear'] || 0)) / total, cloudy = (skies.Cloudy || 0) / total;
+    check(`${region}: afternoon highs still match the normals (worst ${worstOff >= 0 ? '+' : ''}${worstOff.toFixed(1)} °F)`, Math.abs(worstOff) <= 6);
+    check(`${region}: dry afternoons run the range of skies (${Object.entries(skies).map(([k, v]) => `${k} ${v}`).join(', ')})`,
+          Object.keys(skies).length >= 4 && clearish > (region === 'south' ? 0.1 : 0.2) && clearish < 0.85 && cloudy < 0.35);
+  }
+}
+{
+  // Wind: mostly from the south round to the north-west; north-west and cooler once a front has passed.
+  const c = ctxFor('north', 'wx-a');
+  let n = 0, sw = 0, mph = 0, normal = 0, behindNW = 0, behindN = 0, coolings = [];
+  for (let d = 10; d < 190; d += 0.5) {
+    const t = START + d * MS_DAY;
+    const s0 = WS.surfaceTemp(c, 0, 0, t);
+    const r = conditionsAt(c, 0, 0, t);
+    n++; mph += r.wind.mph; normal += W.normalsAt(c, t).wind;
+    if (r.wind.fromDeg >= 160 && r.wind.fromDeg <= 340) sw++;
+    if (s0.front.behind > 0.6) { behindN++; if (r.wind.fromDeg >= 270 && r.wind.fromDeg <= 360) behindNW++; }
+  }
+  // Each front passage: the same hour a day later against a day before.
+  for (let d = 10; d < 190; d += 0.25) {
+    const t = START + d * MS_DAY;
+    const a = WS.frontAir(c, 0, 0, t), b = WS.frontAir(c, 0, 0, t + 3 * MS_HOUR);
+    if (a.behind < 0.2 && b.behind > 0.6) coolings.push(conditionsAt(c, 0, 0, t + 18 * MS_HOUR).tempF - conditionsAt(c, 0, 0, t - 6 * MS_HOUR).tempF);
+  }
+  const avgCool = coolings.reduce((x, y) => x + y, 0) / Math.max(1, coolings.length);
+  check(`wind mostly from the south round to the north-west (${(100 * sw / n).toFixed(0)}%), about normal strength (${(mph / n).toFixed(1)} vs ${(normal / n).toFixed(1)} mph)`,
+        sw / n >= 0.7 && mph / n > 0.6 * normal / n && mph / n < 1.5 * normal / n);
+  check(`behind a cold front the wind comes from the north-west (${behindNW}/${behindN})`, behindN > 10 && behindNW / behindN >= 0.7);
+  check(`a front's passage cools things off (${coolings.length} passages, ${avgCool.toFixed(1)} °F a day later)`, coolings.length >= 5 && avgCool < -3);
+}
+{
+  // Wind at the park: straight out to centre, in from centre, across.
+  const out = windAtPark({ mph: 12, fromDeg: 225 }, 45), inn = windAtPark({ mph: 12, fromDeg: 45 }, 45);
+  const lr = windAtPark({ mph: 12, fromDeg: 315 }, 45), outL = windAtPark({ mph: 12, fromDeg: 180 }, 45);
+  check(`wind reads right at the park (${out.text}, ${inn.text}, ${lr.text}, ${outL.text})`,
+        out.text === 'out to center' && out.outMph > 11 && inn.text === 'in from center' && inn.outMph < -11 && lr.text === 'left to right' && outL.text === 'out to left');
+  const dl = daylight(ctxFor('north', 'wx-a'), START + 100 * MS_DAY);
+  check(`sunrise and sunset in June (${dl.sunrise.toFixed(2)} / ${dl.sunset.toFixed(2)})`, dl.sunrise > 5 && dl.sunrise < 6.2 && dl.sunset > 20 && dl.sunset < 21);
+}
+{
+  // Rain totals add up, and it rains more where the climate is wetter.
+  const c = ctxFor('south', 'wx-a');
+  const t0 = START + 100 * MS_DAY;
+  const day = rainTotal(c, 0, 0, t0, t0 + MS_DAY), halves = rainTotal(c, 0, 0, t0, t0 + MS_DAY / 2) + rainTotal(c, 0, 0, t0 + MS_DAY / 2, t0 + MS_DAY);
+  check(`rain totals add up (${day}" for the day; ${halves.toFixed(2)}" in two halves)`, Math.abs(day - halves) <= 0.02);
+  const ms0 = performance.now();
+  for (let k = 0; k < 20; k++) parkConditions(ctxFor('east', 'wx-c'), 'HBR', START + (40 + k * 1.7) * MS_DAY);
+  const per = (performance.now() - ms0) / 20;
+  check(`a ballpark report takes ${per.toFixed(1)} ms`, per < 40);
+}
+
 console.log(`\n${pass}/${pass + fail} checks passed`);
 process.exit(fail ? 1 : 0);

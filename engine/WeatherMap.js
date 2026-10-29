@@ -85,7 +85,7 @@ export function regionMap(region) {
     const pts = _roughen(f.pts, hash(src.seed, i), rough, closed);
     return { kind: f.kind, name: f.name || null, closed, pts, bbox: _bbox(pts) };
   });
-  const map = { region: key, half: MAP_HALF_KM, parks: src.parks, features, roads: [], urban: [], towns: [], local: [] };
+  const map = { region: key, seed: src.seed, half: MAP_HALF_KM, parks: src.parks, features, roads: [], urban: [], towns: [], local: [] };
   map.roads = _buildRoads(map, src.seed);
   map.urban = _buildUrban(map, src.seed);
   map.towns = _buildTowns(map, src.seed);
@@ -130,6 +130,14 @@ export function venueOf(map, game) {
   if (!game) return null;
   const home = game.homeId ?? (game.isHome ? 'user' : game.opponentId);
   return { teamId: home, ...(map.parks[home] || map.parks.user) };
+}
+
+/**
+ * The compass bearing (degrees) from home plate to centre field. Real parks
+ * face every which way (most roughly east-northeast); each of ours is fixed.
+ */
+export function parkBearing(map, teamId) {
+  return Math.round(15 + 75 * hash01(map.seed, 7401, hashSigned(map.seed, teamId.length, teamId.charCodeAt(0), teamId.charCodeAt(teamId.length - 1)) * 1e6));
 }
 
 /** City name for a park; ours comes from the save. */

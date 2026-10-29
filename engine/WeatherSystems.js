@@ -28,7 +28,7 @@
  */
 
 import { stream, hash, fbm3, valueNoise3 } from './WeatherNoise.js';
-import { normalsAt, steeringAt, stormPotential, airAt, localHour, MS_HOUR } from './WeatherClimate.js';
+import { normalsAt, steeringAt, stormPotential, airAt, localHour, diurnal, MS_HOUR } from './WeatherClimate.js';
 
 export const DBZ_MIN = 12;                 // below this nothing shows on radar or reaches the ground
 const SLOT_MS = 6 * MS_HOUR;               // synoptic systems are born in 6-hour slots
@@ -140,6 +140,9 @@ function _make(ctx, kind, r, t0, warm, N, id) {
     s.breakAt = s.t0 + (s.t1 - s.t0) * s.breakFrac;
     s.breakDecayMs = r.range(1.2, 2.5) * MS_HOUR;
   }
+  // The air a front brings (°F cooler behind it); a squall line's rain-cooled outflow.
+  if (kind === 'front') s.drop = r.range(9, 18) * (1 - 0.45 * warm);
+  if (kind === 'squall') s.drop = r.range(5, 11);
   return s;
 }
 
@@ -213,12 +216,14 @@ function _reach(s) {
  * activeSystems(ctx, t, bounds) — the systems alive at t that can touch the
  * box { x0, y0, x1, y1 } (km): [{ s, cx, cy, life }].
  */
-export function activeSystems(ctx, t, bounds) {
+export function activeSystems(ctx, t, bounds, cellBounds = bounds) {
   const out = [];
-  const near = (s, cx, cy) => {
+  const inBox = (b, s, cx, cy) => {
     const R = _reach(s);
-    return cx + R >= bounds.x0 && cx - R <= bounds.x1 && cy + R >= bounds.y0 && cy - R <= bounds.y1;
+    return cx + R >= b.x0 && cx - R <= b.x1 && cy + R >= b.y0 && cy - R <= b.y1;
   };
+  const near = (s, cx, cy) => inBox(bounds, s, cx, cy);
+  const nearCell = (s, cx, cy) => inBox(cellBounds, s, cx, cy);
   for (let slot = Math.floor((t - MAX_LIFE_MS) / SLOT_MS); slot <= Math.floor(t / SLOT_MS) + 1; slot++) {
     for (const s of _slotSystems(ctx, slot)) {
       const life = _life(s, t);
@@ -227,16 +232,16 @@ export function activeSystems(ctx, t, bounds) {
       if (near(s, cx, cy)) out.push({ s, cx, cy, life });
     }
   }
-  const pad = 40;
-  const gx0 = Math.floor((bounds.x0 - pad) / CELL_GRID_KM), gx1 = Math.floor((bounds.x1 + pad) / CELL_GRID_KM);
-  const gy0 = Math.floor((bounds.y0 - pad) / CELL_GRID_KM), gy1 = Math.floor((bounds.y1 + pad) / CELL_GRID_KM);
+  const pad = 40, cb = cellBounds;
+  const gx0 = Math.floor((cb.x0 - pad) / CELL_GRID_KM), gx1 = Math.floor((cb.x1 + pad) / CELL_GRID_KM);
+  const gy0 = Math.floor((cb.y0 - pad) / CELL_GRID_KM), gy1 = Math.floor((cb.y1 + pad) / CELL_GRID_KM);
   const sl0 = Math.floor((t - CELL_MAX_LIFE_MS - 3 * 35 * 60_000) / CELL_SLOT_MS), sl1 = Math.floor(t / CELL_SLOT_MS);
   for (let gx = gx0; gx <= gx1; gx++) for (let gy = gy0; gy <= gy1; gy++) for (let sl = sl0; sl <= sl1; sl++) {
     for (const s of _cellsAt(ctx, gx, gy, sl)) {
       const life = _life(s, t);
       if (life <= 0) continue;
       const [cx, cy] = _centre(s, t);
-      if (near(s, cx, cy)) out.push({ s, cx, cy, life });
+      if (nearCell(s, cx, cy)) out.push({ s, cx, cy, life });
     }
   }
   return out;
@@ -350,8 +355,145 @@ function _sum(dbzs) {
 }
 const _power = (d) => (d > -Infinity ? 10 ** (d / 10) : 0);
 
+// ── Clouds and the air fronts bring ─────────────────────────────────────────
+
+const FRONT_LINGER_MS = 18 * MS_HOUR;   // a front's air stays most of a day after its rain is gone
+const CLOUD_MEAN = 0.45;                // an average sky — temperatures are normal under it
+const CLOUD_PAD_KM = 220;               // a big system's cloud reaches this far beyond its rain
+const CELL_CLOUD_PAD_KM = 60;           // a thunderstorm's anvil, this far
+
+/** A front's / squall line's geometry at a point: n (km ahead of the line, + ahead), u (along it, −1..1 over its length). */
+function _lineAt(s, x, y, t) {
+  const [cx, cy] = _centre(s, t);
+  const dx = x - cx, dy = y - cy;
+  const along = dx * s.mx + dy * s.my, across = -dx * s.my + dy * s.mx;
+  const u = across / (s.len / 2);
+  return { n: along - s.tilt * across - s.curve * (1 - Math.min(1, u * u)), u, along, across };
+}
+
+/**
+ * frontAir(ctx, x, y, t) — what fronts and squall lines do to the air here:
+ * { dT, dDew (°F), behind, ahead (0..1 — how far into the cold air / warm
+ * sector), outflow (0..1 — in a squall line's rain-cooled outflow) }.
+ * A front's air lingers a day after its rain is gone, fading smoothly.
+ */
+export function frontAir(ctx, x, y, t) {
+  // The strongest effect of each kind counts — fronts don't stack.
+  let cold = 0, coldDew = 0, warm = 0, warmDew = 0, behind = 0, ahead = 0, outflow = 0, outT = 0, outDew = 0;
+  const first = Math.floor((t - MAX_LIFE_MS - FRONT_LINGER_MS) / SLOT_MS), last = Math.floor(t / SLOT_MS);
+  for (let slot = first; slot <= last; slot++) {
+    for (const s of _slotSystems(ctx, slot)) {
+      if ((s.kind !== 'front' && s.kind !== 'squall') || t <= s.t0) continue;
+      if (s.kind === 'front') {
+        if (t >= s.t1 + FRONT_LINGER_MS) continue;
+        const up = Math.min(1, (t - s.t0) / s.rampMs);
+        const w0 = t < s.t1 ? up : 1 - (t - s.t1) / FRONT_LINGER_MS;
+        const w = w0 * w0 * (3 - 2 * w0);
+        if (w <= 0) continue;
+        const L = _lineAt(s, x, y, t);
+        const span = _sst(1.7, 1.0, Math.abs(L.u));
+        if (span <= 0) continue;
+        // The cold air behind it (modified as it moves on), the warm sector ahead.
+        const b = _sst(0, 140, -L.n) * _sst(1400, 500, -L.n) * span * w;
+        const a = _sst(-10, 25, L.n) * _sst(500, 120, L.n) * span * w;
+        cold = Math.max(cold, s.drop * b); coldDew = Math.max(coldDew, 0.8 * s.drop * b);
+        warm = Math.max(warm, 0.6 * s.drop * a); warmDew = Math.max(warmDew, 0.3 * s.drop * a);
+        behind = Math.max(behind, b); ahead = Math.max(ahead, a);
+      } else {
+        const life = _life(s, t);
+        if (life <= 0) continue;
+        const L = _lineAt(s, x, y, t);
+        if (Math.abs(L.u) > 1.3) continue;
+        const o = _sst(-5, 12, -L.n) * _sst(s.trail * 1.3, s.trail * 0.6, -L.n) * _sst(1.25, 0.8, Math.abs(L.u)) * life;
+        outT = Math.max(outT, s.drop * o); outDew = Math.max(outDew, 0.3 * s.drop * o);
+        outflow = Math.max(outflow, o);
+      }
+    }
+  }
+  // Inside the cold air the warm sector doesn't apply.
+  const dT = -cold - outT + warm * (1 - behind), dDew = -coldDew - outDew + warmDew * (1 - behind);
+  return { dT, dDew, behind, ahead: ahead * (1 - behind), outflow };
+}
+
+/** How much of the sky one system's clouds cover at a point (0..1). */
+function _systemCloud(a, x, y, t) {
+  const { s, cx, cy, life } = a;
+  const dx = x - cx, dy = y - cy;
+  const along = dx * s.mx + dy * s.my, across = -dx * s.my + dy * s.mx;
+  const lit = Math.sqrt(life);   // clouds build before the rain and linger after it
+  switch (s.kind) {
+    case 'front':
+    case 'squall': {
+      const L = _lineAt(s, x, y, t);
+      const aheadKm = s.kind === 'squall' ? 110 : 60 + s.wid;
+      const v = _sst(aheadKm + 60, aheadKm, L.n) * _sst(-(s.trail + 200), -(s.trail + 120), L.n) * _sst(1.4, 1.0, Math.abs(L.u));
+      return v * lit;
+    }
+    case 'shield':  return _sst(1.15, 0.75, Math.hypot(along / (s.len * 1.5), across / (s.wid * 1.5))) * lit;
+    case 'showers': return 0.8 * _sst(1.15, 0.7, Math.hypot(along / (s.len * 1.2), across / (s.wid * 1.2))) * lit;
+    default: {
+      const ex = along > 0 ? Math.max(0, along - s.anvil * 1.6) : along;
+      return 0.85 * _sst(1.2, 0.45, Math.hypot(ex, across) / (s.rad * 3.5)) * lit;
+    }
+  }
+}
+
+/**
+ * cloudAt(ctx, x, y, t) — sky cover 0 (clear) .. 1 (overcast): the systems'
+ * cloud (wider than their rain) over a background of everyday cloud that
+ * drifts with the flow, and fair-weather cumulus on humid afternoons.
+ */
+export function cloudAt(ctx, x, y, t, air = null) {
+  const pad = CLOUD_PAD_KM;
+  let sys = 0;
+  const cp = CELL_CLOUD_PAD_KM;
+  for (const a of activeSystems(ctx, t, { x0: x - pad, y0: y - pad, x1: x + pad, y1: y + pad }, { x0: x - cp, y0: y - cp, x1: x + cp, y1: y + cp })) {
+    sys = Math.max(sys, _systemCloud(a, x, y, t));
+    if (sys >= 0.999) break;
+  }
+  const h = t / MS_HOUR;
+  let bg = 0.06 + 0.5 * Math.max(0, 0.5 + 0.6 * fbm3(hash(ctx.seed, 41), (x - 30 * h) / 420, y / 420, h / 30, 3));
+  const hour = localHour(t, ctx.tzMin);
+  const dew = (air || airAt(ctx, x, y, t)).dewF;
+  if (hour > 10.5 && hour < 19.5 && dew > 50) bg += 0.22 * Math.sin(Math.PI * (hour - 10.5) / 9) * Math.min(1, (dew - 50) / 16);
+  bg = Math.max(0, Math.min(0.95, bg));
+  return 1 - (1 - bg) * (1 - sys);
+}
+
+/**
+ * surfaceTemp(ctx, x, y, t) — the air at the surface, before any rain cools
+ * it: the background (WeatherClimate.airAt) with the sky (sunny days run
+ * warmer, cloudy ones cooler; clear nights colder, cloudy ones milder) and
+ * the fronts. { tempF, dewF, cloud }.
+ */
+export function surfaceTemp(ctx, x, y, t) {
+  const air = airAt(ctx, x, y, t);
+  const cloud = cloudAt(ctx, x, y, t, air);
+  const N = normalsAt(ctx, t);
+  const range = N.hi - N.lo, dh = diurnal(localHour(t, ctx.tzMin));
+  const f = frontAir(ctx, x, y, t);
+  const tempF = air.tempF + (CLOUD_MEAN - cloud) * range * (0.42 * dh - 0.22 * (1 - dh)) + f.dT;
+  const dewF = Math.min(air.dewF + f.dDew, tempF - 0.5);
+  return { tempF, dewF, cloud, front: f };
+}
+
+/**
+ * stormNear(ctx, x, y, t, km) — the strongest thunderstorm reflectivity
+ * within `km` of a point (−Infinity when none): what decides "lightning in
+ * the area" (a game stops when it's within about 10 miles).
+ */
+export function stormNear(ctx, x, y, t, km = 16) {
+  let best = -Infinity;
+  const act = activeSystems(ctx, t, { x0: x - km, y0: y - km, x1: x + km, y1: y + km }).filter(a => a.s.conv > 0.5);
+  if (!act.length) return best;
+  const pts = [[0, 0]];
+  for (let r = km / 2; r <= km; r += km / 2) for (let i = 0; i < 8; i++) pts.push([Math.cos(i * Math.PI / 4) * r, Math.sin(i * Math.PI / 4) * r]);
+  for (const a of act) for (const [ox, oy] of pts) best = Math.max(best, _systemDbz(a, x + ox, y + oy, t));
+  return best;
+}
+
 // ── Rain, mix or snow: one temperature for the radar and the ballparks ──────
-// The air temperature that decides rain / mix / snow is read from a fixed
+// The surface temperature that decides rain / mix / snow is read from a fixed
 // lattice (every 24 km, anchored to the map, every 15 minutes) and
 // interpolated — the same numbers whether the radar or a ballpark asks, so
 // the radar's colour over a park always matches what the park reports.
@@ -364,7 +506,7 @@ function _latNode(ctx, i, j, k) {
   let v = _latCache.get(key);
   if (v === undefined) {
     _cap(_latCache, 200000);
-    v = airAt(ctx, i * LAT_KM, j * LAT_KM, k * LAT_MS).tempF;
+    v = surfaceTemp(ctx, i * LAT_KM, j * LAT_KM, k * LAT_MS).tempF;
     _latCache.set(key, v);
   }
   return v;
