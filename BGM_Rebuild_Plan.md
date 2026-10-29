@@ -7388,3 +7388,117 @@ Watch specs are data (`need` / `rp` / `role` / `club`), turned into a fit test b
 - Keep Watching opens a 14-day watch; a watch with no fit stays open a day later and ends at 15 days with a Recent line; a watch any club can meet turns into an `lt_offer` at the next desk.
 - These injected cases run on a snapshot of the season, which is restored afterwards so they don't change the rest of it.
 - Natural watch cards carry the labels and a spec.
+
+## 100. Weather, forecasts and the radar — plan (GM decisions, before build)
+
+Replaces the weather parts of §6.9 and §8.8 where they conflict. The game-state machine in §8.8 (SCHEDULED → PRE_GAME_WATCH → DELAYED → LIVE / POSTPONED, SUSPENDED → RESUMED) and the field-condition idea stay.
+
+### What existed (audit)
+- `WeatherEngine.js` is never called. Every game is hardcoded `Clear`, and the schedule icons never show (`_weatherGenerated` is never set).
+- `RadarWidget.js` is imported but never rendered.
+- `GameEngine.applyWeatherDelay` / `suspendGame` / `resumeSuspendedGame` exist, but nothing calls them. No makeup scheduling exists.
+- The old engine can't support a trustworthy radar:
+  - it generates one random condition per hour for a single location, using `Math.random`;
+  - the radar "cell" is a random position every frame;
+  - the buffer is re-rolled on refresh, so a forecast already shown could silently change.
+
+  Its core is replaced. Its constants (region modifiers, delay and postponement thresholds, card expiries, penalties) carry over where they still fit.
+- The sim already reads `game.weather` (`label`, `scoringMod`) and `fieldCondition`. Real weather affects play once it flows in.
+
+### GM decisions
+1. **Forecasts are realistic but nearly always right.** Systems sometimes break up before reaching a park that was forecast to get rain. Pop-up storms sometimes form where none was forecast. The past is always exact.
+2. **League-wide.** The same weather delays and rains out CPU games at rival parks. Makeup games and doubleheaders happen across the league.
+3. **The radar loop runs from 2 hours ago to 24 hours ahead.** The loop choices are Past 2 hours (10-minute steps), Next 6 hours (15-minute steps) and Next 24 hours (hourly steps). Future frames are labeled as forecast.
+4. **A separate 10-day forecast**, apart from the radar. The schedule screen shows weather from the same source.
+5. **No premium split.** Everyone gets the full radar and the 10-day forecast.
+6. **Zoom:** three levels, Region / Metro (the default) / Ballpark, centered on the game's park.
+7. **Colors follow real radar conventions:**
+   - rain: green → yellow → orange → red → magenta at the top end;
+   - mixed precipitation: pink;
+   - snow: light blue → dark blue.
+
+   The base map is a flat map.
+
+### Two layers: what happens, and what was forecast
+**What happens** is one weather model for the league's region: a set of systems.
+- System types: stratiform rain shields, frontal lines, squall lines / thunderstorm clusters, pop-up afternoon cells, and snow / mixed bands when the column is cold enough.
+- Each system has a shape, a track (mostly west → east, drifting a little SW → NE), a speed and a lifecycle (forms, grows, peaks, decays). Some break up early.
+- Every system comes from the save's `weatherSeed` and the time slot it forms in. The precipitation at any (x, y, t) is a pure function, so it's never stored, never re-rolled, and comes out the same every time it's asked.
+- Climate follows the **baseball calendar** (the date the schedule shows), so April in the North can bring frost and snow. Hour of day follows the real clock, so pop-ups peak in the afternoon. Region shapes frequencies:
+  - East: the most rain;
+  - West: the driest;
+  - South: afternoon thunderstorms and heat;
+  - North: cold, with snow early and late in the season.
+
+**What was forecast** is a forecast "run" issued every hour. Like the truth, it's a pure function of the seed and the run's hour. A run projects the systems that exist (or are about to) along their *expected* track and lifecycle. Its error grows with lead time, and it is correlated from run to run, so forecasts firm up as time approaches instead of flip-flopping:
+- **Track, speed and timing errors** grow with lead time.
+- **Breakups** of a system that dies early: a run only "sees" the decay inside a short horizon, so forecasts several hours out can still show it arriving.
+- **Pop-ups:** a run doesn't know where individual cells will form. Its future radar places its own plausible cells, and its point forecasts give a chance of storms from the convective setup. Real pop-ups form where the truth puts them.
+- **Precipitation chances** come from an ensemble: perturbed members of the same run. They are **calibrated**: across a season, "40%" rains about 40% of the time. The harness checks this. Calibration is what makes the forecast trustworthy without being perfect.
+
+The radar and every forecast display at a given moment read the **same current run**. The radar, the dashboard and the schedule can never disagree with each other.
+
+### One source of truth, everything reads it
+`engine/WeatherEngine.js` (pure) provides:
+- `precipAt(seed, region, x, y, t)` and `conditionsAt(park, t)` — what happens;
+- `forecastRun(seed, region, issueHour)`, with `forecastAt(run, park, t)` and `dailyForecast(run, park, days=10)`;
+- `radarFrame(seed, region, t, run?)` — a grid of intensity and type;
+- `gameWeather(game)`.
+
+Readers:
+- **Radar:** the past is truth; the future is the current run.
+- **Ballpark conditions:** truth at the park's map point. **Away games use the host park.**
+- **Dashboard:** next-game forecast and a compact radar.
+- **Schedule screen:**
+  - completed games show the weather that actually happened (recorded on the game when it's played);
+  - games within 10 days show the current run's forecast icon and chance of rain;
+  - games further out show nothing.
+- **Game decisions:** watch, delay, postponement, suspension.
+- **Groundskeeper and weather cards.**
+- **Sim modifiers:** temperature, wind, wet field.
+
+### Map
+Each region gets a fictional flat map, built from data in `data/regions-map.js`. Ballparks sit at fixed points, with the user's park near the middle:
+- East: a coastline and bays.
+- South: a Gulf coast and bayous.
+- North: lakes.
+- West: mountains and desert basins.
+
+The map also carries a few highways and city labels (the club name without the nickname). It's drawn in the app's dark theme, flat style, with no satellite or terrain imagery.
+
+### Radar UI (`ui/components/RadarWidget.js`, rewritten on Canvas)
+**Placement:** a compact live radar on the dashboard's next-game card. Tapping it opens a full-screen radar.
+
+**Rendering:**
+- Precipitation is drawn as a smooth field with soft, slightly textured edges, like real reflectivity, using the color scales above.
+- A legend bar shows Rain / Mix / Snow, light → heavy.
+- Each frame has a timestamp, with a FORECAST tag on future frames.
+- The park is marked, and the other parks are labeled.
+
+**Controls:**
+- Play / pause, with the loop repeating.
+- A scrubber with a Now marker.
+- Loop window choices: Past 2 hrs / Next 6 hrs / Next 24 hrs.
+- Zoom −/+ across the three levels.
+- Text labels rather than icons, per GM preference.
+
+**Performance:** frames render from the model grid on demand and are cached per frame. No stored images.
+
+### Game effects (league-wide)
+- **Thresholds carry over from §8.8:** intensity bands → delay and postponement odds, temperature overrides and region modifiers. These are re-tuned so a season comes out MLB-like: roughly 2–4 rainouts per club (more in the East, fewer in the West) and rain delays more common than rainouts.
+- **Decision rolls** are seeded per game, so a reload never changes an outcome.
+- **Decision timing:** the delay or postponement call is made from the truth at the park, starting about 2 hours before first pitch. A game in progress can be delayed or suspended. A game suspended after 5 innings is official.
+- **Makeups:** the next common off-day within 10 games; otherwise a doubleheader. This applies to CPU games too, and the All-Star schedule is respected.
+- **Weather cards** reuse the §8.8 timing. Quiet hours are bypassed only for minute-scale weather cards (§8.8). No clock times appear in card text (§93).
+
+### Build phases
+1. **Weather model** (truth, forecast runs, ensemble chances) and the regional maps. Harness checks:
+   - determinism;
+   - west → east motion;
+   - forecast error grows with lead;
+   - calibration;
+   - region climate rates;
+   - the radar sample equals the park conditions.
+2. **Radar component** (Canvas) and the full-screen sheet; screenshots at all three zoom levels and loop windows.
+3. **Forecast surfaces:** dashboard next-game forecast, a 10-day forecast view and the schedule screen.
+4. **Game effects:** watch / delay / postponement / suspension in the tick loop, league-wide makeups and doubleheaders, actual weather recorded on each game, sim modifiers, and weather cards. Requires a fresh team.
