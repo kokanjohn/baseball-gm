@@ -26,6 +26,8 @@ import {
   STRETCH_RUN_FINAL_GAMES,
   LEAGUE_TEAMS_PER_DIVISION,
   ACTIVITY_FEED_RETENTION_HOURS,
+  SPRING_START_MONTH,
+  SPRING_START_DAY,
 } from '../data/constants.js';
 
 import { LEAGUE_TEAMS } from './LeagueFactory.js';
@@ -39,9 +41,6 @@ const MS_PER_DAY = 86_400_000;
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_MINUTE = 60_000;
 
-// Canonical (display) spring start: March 14.
-const SPRING_START_MONTH = 2;  // March (0-indexed)
-const SPRING_START_DAY   = 14;
 
 // ─────────────────────────────────────────────────────────────
 // ONE LEAGUE CALENDAR (§67)

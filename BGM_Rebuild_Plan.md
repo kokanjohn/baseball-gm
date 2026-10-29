@@ -7542,3 +7542,71 @@ The map also carries a few highways and city labels (the club name without the n
 **Not yet wired** into the app, so there's no `sw.js` change. The new modules join the precache when the radar is wired in.
 
 **Note for 1c:** `isWater` walks polygons (a region builds in 40–300 ms in Node). The weather will ask it far more often, so 1b/1c adds a raster land/water mask.
+
+### 100.2 Step 1b done — the climate; weather during a game in progress (r94)
+
+**Built:**
+- **`data/region-climate.js`** — monthly normals for March–November per region, modeled on real climates (north ≈ Chicago/Minneapolis, south ≈ Houston/New Orleans, east ≈ Philadelphia/Boston coast, west ≈ Denver/Salt Lake City high desert). Each month has:
+  - high and low;
+  - dew point;
+  - wet-day chance;
+  - thunderstorm share of wet days;
+  - storm-system speed (fast in spring and fall, slow in midsummer);
+  - surface wind.
+
+  Region extras: the north–south temperature gradient, how much big water evens out temperatures, high ground colder, lake effect (north), sea breeze (south, east), monsoon (west).
+- **`engine/WeatherClimate.js`** (pure):
+  - **`weatherContext(state)`** — seed, region, calendar, clock, map.
+  - **`calendarDay`** — real time → baseball calendar.
+  - **`normalsAt`** — normals for that day.
+  - **`diurnal`** — low near 6 AM, high near 4 PM.
+  - **`tempAnomaly`** — warm and cold spells about 1,300 km wide that drift east and evolve over a few days. Their size follows the season: s.d. about 7–8 °F in spring and fall, 3–4 °F in midsummer.
+  - **`airAt(x, y, t)`** — temperature and dew point:
+    - colder to the north;
+    - near big water: a smaller day/night swing and about six weeks behind the season;
+    - colder over high ground.
+  - **`steeringAt(t)`** — the flow that carries systems: always west → east, wandering about ±40°.
+  - **`stormPotential(x, y, t)`** — how readily pop-up storms form: humid afternoons, sea breezes, monsoon over high ground.
+- **`engine/WeatherMap.js`** — a 2 km raster of the map (water / high ground / salt flat) plus a distance-to-water field, for fast lookups (`maskAt`, `waterKmAt`). It agrees with the exact polygons on 99.8% of points; the rest are shoreline cells.
+- **Save state (`store/schema.js`):**
+  - `weatherSeed` is fixed for the life of the franchise.
+  - `weatherTzMin` is the save's clock, for time of day.
+  - `weatherCalendar` is append-only. It holds an entry per season (`realStartMs`, `dispIso`) and per offseason. Through the offseason the climate blends from where the season ended to the next spring's first day, so temperatures never jump and the climate never passes through winter.
+  - `GameEngine` writes the entries at new team, at offseason day 1 and at spring.
+  - The migration gives older saves a seed built from fields that never change, so running it twice gives the same weather. It also adds the current season's entry, plus the offseason entry if one is in progress.
+- **`SPRING_START_MONTH` / `SPRING_START_DAY`** moved from SeasonEngine to `data/constants.js`.
+- **`sw.js`** precaches the new weather modules.
+
+**Harness:**
+- **`check-weather.mjs`**, 46 checks:
+  - the same place and moment always gives the same air;
+  - real days map one-for-one onto the baseball calendar;
+  - monthly highs and lows within about 5 °F of normals, per region, over three seeds;
+  - warmest mid-afternoon, coolest near dawn;
+  - weather moves west to east;
+  - 300 km south is warmer;
+  - the mountains are colder;
+  - storms brew in the afternoon, ordered by climate;
+  - no temperature jumps through an offseason;
+  - the blend weights are correct.
+- **`sim-season.js`** — the save has its seed, clock and calendar entries (season 1; then season 1, offseason 1, season 2). Every scheduled game falls on its own date on the weather calendar.
+- All 8 seeds pass.
+
+**Weather during a game in progress (GM request).** A game is simulated in full at first pitch, with its plays spread over about three real hours. The weather at the park is a fixed fact for every minute, so the sim can read the weather along the game's own timeline. Built in step 4; the model supports it now:
+- **Conditions change as the game goes.** Each half-inning gets the park's conditions at its moment: temperature falling into the night, the wind shifting, rain starting or stopping. These feed the sim:
+  - wind in or out changes how far fly balls carry;
+  - cold hurts contact;
+  - heat wears on pitchers;
+  - rain makes the ball slick (walks, wild pitches) and the field wet (errors, ground-ball hits).
+- **Light rain plays through.**
+- **Rain delay mid-game.** When the rain at the park crosses the delay threshold:
+  - the play timeline gets a gap, and every later play shifts by the delay: until the rain falls back below the threshold, plus time to get the field ready;
+  - the live view shows the delay (tarp, radar) while the clock is inside the gap;
+  - the §8.8 delay cards fire;
+  - a starter whose delay runs past about 45 minutes doesn't come back.
+- **If it won't clear** (the delay passes its limit, or it's too late at night), the game is called:
+  - **official** after 5 innings (4½ if the home team leads) — the result stands, "called after N innings";
+  - **suspended** otherwise — it resumes from the exact spot (score, inning, outs, bases) at its makeup date.
+- **Before first pitch**, the call starts about 2 hours out: on time, a delayed start, or postponed.
+- **The forecast is what the GM sees; what happens decides.** A game can start under a dry forecast and be interrupted by a pop-up storm, as in real life. The radar shows it coming.
+- **CPU games follow the same rules** (delays, called and suspended games, rainouts), so the standings and the map always agree.

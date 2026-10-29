@@ -26,6 +26,9 @@ export const SCHEMA_VERSION = '1.0.0';
 
 export const SPRING_TRAINING_GAME_COUNT      = 10;  // matches the schedule generator; off-day pattern [2,5,8] is tuned for 10
 export const REGULAR_SEASON_GAME_COUNT       = 132;
+// Canonical (display) spring start: March 14 on the baseball calendar.
+export const SPRING_START_MONTH = 2;   // March (0-indexed)
+export const SPRING_START_DAY   = 14;
 export const ALL_STAR_BREAK_AFTER_GAME       = 66;
 export const TRADE_DEADLINE_OPEN             = 88;  // game index (0-based) deadline window opens
 export const TRADE_DEADLINE_CLOSE            = 92;  // game index (0-based) deadline window closes

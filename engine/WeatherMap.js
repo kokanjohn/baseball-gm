@@ -72,7 +72,8 @@ function _bbox(pts) {
  *   features: [{ kind, name?, pts, closed, bbox }]   (authored, roughened),
  *   urban: [{ teamId, pts, bbox }]                    (city area around each park),
  *   towns: [{ x, y, name, size: 1|2|3, suburb? }]      (small towns and suburbs, generated),
- *   roads: [[x,y]...][]  (highways)   local: [[x,y]...][]  (local roads) }
+ *   roads: [[x,y]...][]  (highways)   local: [[x,y]...][]  (local roads),
+ *   grid: { cell, n, half, mask: Uint8Array, waterKm: Float32Array }  (fast lookups) }
  */
 export function regionMap(region) {
   const key = REGION_MAPS[region] ? region : 'north';
@@ -89,6 +90,7 @@ export function regionMap(region) {
   map.urban = _buildUrban(map, src.seed);
   map.towns = _buildTowns(map, src.seed);
   map.local = _buildLocalRoads(map, src.seed);
+  map.grid = _buildGrid(map);
   _cache.set(key, map);
   return map;
 }
@@ -286,4 +288,86 @@ function _buildLocalRoads(map, seed) {
     }
   });
   return lines;
+}
+
+// ── Fast lookups: a raster of the map ───────────────────────────────────────
+// The weather asks "is this water / high ground, how far to the shore" far too
+// often for polygon tests, so the map is also rasterised once: a 2 km grid
+// covering the drawn map and a margin (points beyond it use the edge cell).
+
+export const MASK_WATER = 1, MASK_RELIEF = 2, MASK_FLAT = 4;
+const GRID_CELL_KM = 2;
+const GRID_HALF_KM = 480;
+const WATER_DIST_CAP_KM = 250;
+
+function _buildGrid(map) {
+  const cell = GRID_CELL_KM, half = GRID_HALF_KM, n = Math.round((2 * half) / cell);
+  const mask = new Uint8Array(n * n);
+  const fill = (pts, apply) => {
+    const b = _bbox(pts);
+    const r0 = Math.max(0, Math.floor((b.y0 + half) / cell)), r1 = Math.min(n - 1, Math.ceil((b.y1 + half) / cell));
+    for (let r = r0; r <= r1; r++) {
+      const y = -half + (r + 0.5) * cell;
+      const xs = [];
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const [xi, yi] = pts[i], [xj, yj] = pts[j];
+        if ((yi > y) !== (yj > y)) xs.push(((xj - xi) * (y - yi)) / (yj - yi) + xi);
+      }
+      xs.sort((a, c) => a - c);
+      for (let k = 0; k + 1 < xs.length; k += 2) {
+        const c0 = Math.max(0, Math.ceil((xs[k] + half) / cell - 0.5));
+        const c1 = Math.min(n - 1, Math.floor((xs[k + 1] + half) / cell - 0.5));
+        for (let c = c0; c <= c1; c++) apply(r * n + c);
+      }
+    }
+  };
+  for (const f of map.features) {
+    if (f.kind === 'water')  fill(f.pts, (i) => { mask[i] |= MASK_WATER; });
+    if (f.kind === 'relief') fill(f.pts, (i) => { mask[i] |= MASK_RELIEF; });
+    if (f.kind === 'flat')   fill(f.pts, (i) => { mask[i] |= MASK_FLAT; });
+  }
+  for (const f of map.features) if (f.kind === 'island') fill(f.pts, (i) => { mask[i] &= ~MASK_WATER; });
+
+  // Distance to water (km): two-pass chamfer transform.
+  const INF = 1e9, d = new Float32Array(n * n);
+  for (let i = 0; i < n * n; i++) d[i] = mask[i] & MASK_WATER ? 0 : INF;
+  const a = cell, dg = cell * Math.SQRT2;
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+    const i = r * n + c; let v = d[i];
+    if (c > 0) v = Math.min(v, d[i - 1] + a);
+    if (r > 0) {
+      v = Math.min(v, d[i - n] + a);
+      if (c > 0) v = Math.min(v, d[i - n - 1] + dg);
+      if (c < n - 1) v = Math.min(v, d[i - n + 1] + dg);
+    }
+    d[i] = v;
+  }
+  for (let r = n - 1; r >= 0; r--) for (let c = n - 1; c >= 0; c--) {
+    const i = r * n + c; let v = d[i];
+    if (c < n - 1) v = Math.min(v, d[i + 1] + a);
+    if (r < n - 1) {
+      v = Math.min(v, d[i + n] + a);
+      if (c < n - 1) v = Math.min(v, d[i + n + 1] + dg);
+      if (c > 0) v = Math.min(v, d[i + n - 1] + dg);
+    }
+    d[i] = v;
+  }
+  for (let i = 0; i < n * n; i++) d[i] = Math.min(d[i], WATER_DIST_CAP_KM);
+  return { cell, n, half, mask, waterKm: d };
+}
+
+function _cellIndex(g, x, y) {
+  const c = Math.min(g.n - 1, Math.max(0, Math.floor((x + g.half) / g.cell)));
+  const r = Math.min(g.n - 1, Math.max(0, Math.floor((y + g.half) / g.cell)));
+  return r * g.n + c;
+}
+
+/** Map bits at (x, y): MASK_WATER | MASK_RELIEF | MASK_FLAT. Fast (raster). */
+export function maskAt(map, x, y) {
+  return map.grid.mask[_cellIndex(map.grid, x, y)];
+}
+
+/** km to the nearest water (0 on water), capped at 250. Fast (raster). */
+export function waterKmAt(map, x, y) {
+  return map.grid.waterKm[_cellIndex(map.grid, x, y)];
 }

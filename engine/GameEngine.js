@@ -87,6 +87,7 @@ import * as FreeAgency from './FreeAgency.js';
 import * as LeagueTrades from './LeagueTrades.js';
 import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
+import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso } from './WeatherClimate.js';
 
 import {
   PHASE,
@@ -513,6 +514,13 @@ export async function startNewGame(config) {
     s.schedule       = schedule;
     s.leagueSchedule = leagueSchedule;
     s.allStar        = AllStar.createAllStarState(s, baseYear);   // §75
+
+    // §100 The franchise's weather: its seed, the save's clock, and where real
+    // time falls on the baseball calendar.
+    s.weatherSeed     = newWeatherSeed([config.city, config.nickname, config.region, Date.now()]);
+    s.weatherTzMin    = -new Date().getTimezoneOffset();
+    s.weatherCalendar = [];
+    addCalendarEntry(s, calendarAnchor(schedule, 1, s.weatherTzMin));
 
     // §78 Club Funds: the market (ballpark, local revenue, ticket yield) and the
     // opening funds, from the archetype — now that the staff's salaries exist.
@@ -2509,7 +2517,12 @@ function _runOffseasonStep(step, atMs) {
     _applyPhase(PHASE.OFFSEASON);
     events.push({ type: 'PHASE', to: PHASE.OFFSEASON });
     let ev = [];
-    StateManager.mutate(s => { ev = Offseason.beginOffseason(s, atMs); });
+    StateManager.mutate(s => {
+      ev = Offseason.beginOffseason(s, atMs);
+      // §100 the offseason on the weather calendar: the climate blends from
+      // where the season ended to the next spring's first day.
+      addCalendarEntry(s, offseasonAnchor(os.dayStarts[0], springAt, springStartIso(baseballYear(s) + 1), s.seasonNum || 1));
+    });
     _feedLeagueMoves(ev);
     const offer = Offseason.ownershipOffer(StateManager.get());
     CardEngine.deliverOwnershipCard(offer, cardAt(1, OFFSEASON_CARD_HOUR), springAt);
@@ -2562,6 +2575,7 @@ function _runOffseasonStep(step, atMs) {
         { year: baseballYear(s), userDivisionId: s.userTeam.divisionId || 'A' });
       s.schedule       = schedule;
       s.leagueSchedule = leagueSchedule;
+      addCalendarEntry(s, calendarAnchor(schedule, s.seasonNum, s.weatherTzMin));   // §100
       s.userTeam.finances.payroll = computePayroll(s);
     });
     _feedLeagueMoves(ev);

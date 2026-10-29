@@ -14,6 +14,7 @@
  */
 
 import { renameLeague, lastNameOnly } from '../engine/Names.js';
+import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso } from '../engine/WeatherClimate.js';
 import {
   SCHEMA_VERSION,
   PHASE,
@@ -149,7 +150,18 @@ export function createGameState(config = {}) {
     },
     currentGameIndex: 0,  // index into schedule[]
 
-    // ── Weather buffer ─────────────────────────────────────
+    // ── Weather (§100) ─────────────────────────────────────
+    // weatherSeed: fixed for the life of the franchise — every place and
+    //   moment's weather is a pure function of it (engine/WeatherClimate.js).
+    // weatherTzMin: the save's clock (minutes east of UTC) for time of day.
+    // weatherCalendar: where real time falls on the baseball calendar —
+    //   { kind:'season', season, realStartMs, dispIso } per season and
+    //   { kind:'offseason', season, fromMs, toMs, nextDispIso } per offseason.
+    //   Append-only: an entry is never changed once written.
+    weatherSeed:     null,
+    weatherTzMin:    null,
+    weatherCalendar: [],
+    // Legacy hourly buffer (§8.8) — unused since §100; removed when step 4 lands.
     weatherBuffer: {
       generatedAt:  0,
       hourlyFrames: [],
@@ -591,6 +603,24 @@ function _fillDefaults(state) {
     }
   }
   delete state.metricHistory;
+
+  // §100 weather: a seed, the save's clock and the baseball calendar for
+  // saves from before them. The seed comes from things that never change in
+  // the save, so running this twice gives the same weather.
+  if (!state.weatherSeed) {
+    state.weatherSeed = newWeatherSeed([state.userTeam?.id, state.userTeam?.city, state.userTeam?.nickname,
+                                        state.baseYear, state.schedule?.[0]?.gameTime]);
+  }
+  if (!Number.isFinite(state.weatherTzMin)) state.weatherTzMin = -new Date().getTimezoneOffset();
+  if (!Array.isArray(state.weatherCalendar)) state.weatherCalendar = [];
+  if (!state.weatherCalendar.length) {
+    addCalendarEntry(state, calendarAnchor(state.schedule, state.seasonNum || 1, state.weatherTzMin));
+    const os = state.offseason;
+    if (os?.dayStarts?.length && os.springAt) {
+      addCalendarEntry(state, offseasonAnchor(os.dayStarts[0], os.springAt,
+        springStartIso((state.baseYear || new Date().getFullYear()) + (state.seasonNum || 1)), state.seasonNum || 1));
+    }
+  }
 
   // Fill new top-level fields
   const newTopLevel = {

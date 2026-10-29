@@ -38,6 +38,7 @@ import {
   ALLSTAR_SQUAD_SIZE, ALLSTAR_STARTER_INNINGS, LINEUP_SLOTS,
 } from '../../data/constants.js';
 import * as Roster from '../../engine/RosterEngine.js';
+import * as WxClimate from '../../engine/WeatherClimate.js';
 import {
   reconcileRoster, applyRosterMutation, eligibleSlotsFor, pendingArrivals, nextCalendarDay,
 } from '../../engine/RosterEngine.js';
@@ -459,6 +460,7 @@ async function runOffseasonChecks() {
   check(`season 2: a full new calendar (${sched2.length} games, first ${sched2[0]?.date})`,
         sched2.length === sched1Len && sched2[0].gameTime >= os.springAt && String(sched2[0].date).startsWith(String(year2))
         && Object.keys(st.leagueSchedule.dayMap).length > 50);
+  checkWeatherCalendar(st, 'season 2', ['season:1', 'offseason:1', 'season:2']);
   // §75: last season's All-Star Game is on the record; this season's is on the calendar, its story not yet begun.
   const asHist = st.allStar?.history || [];
   const asg2 = Object.values(st.leagueSchedule.dayMap).flat().filter(g => g.isAllStar);
@@ -1137,6 +1139,24 @@ function checkLeagueTrades(st) {
   checkOffersToUs(st);
 }
 
+/**
+ * §100 The weather's calendar: a seed and clock for the save, an entry per
+ * season and offseason, and every scheduled game falls on its own date.
+ */
+function checkWeatherCalendar(st, label, kinds) {
+  const cal = st.weatherCalendar || [];
+  check(`weather (${label}): a seed, a clock and the calendar entries (${cal.map(a => `${a.kind}:${a.season}`).join(', ')})`,
+        typeof st.weatherSeed === 'string' && st.weatherSeed.startsWith('wx-') && Number.isFinite(st.weatherTzMin)
+        && JSON.stringify(cal.map(a => `${a.kind}:${a.season}`)) === JSON.stringify(kinds));
+  const doyOf = (iso) => { const [y, m, d] = iso.split('-').map(Number); return (Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / 86_400_000; };
+  const off = (st.schedule || []).filter(g => {
+    const day = WxClimate.calendarDay(cal, g.gameTime);
+    return day.blendDoy != null || Math.floor(day.doy + 1e-9) !== doyOf(g.date);
+  });
+  check(`weather (${label}): every game falls on its own date on the weather calendar (${st.schedule.length} games)`,
+        off.length === 0, off.slice(0, 3).map(g => `${g.date} @ ${new Date(g.gameTime).toISOString()}`).join(' | '));
+}
+
 /** §91 CPU clubs' offers to us: calls from the trade desk, asking prices, counters. */
 function checkOffersToUs(st) {
   const s1 = gm.offers.filter(o => o.season === 1);
@@ -1314,7 +1334,7 @@ async function main() {
                        s.userTeam.atmosphere = Math.max(90, s.userTeam.atmosphere || 50); });   // a margin: a bad day can cost several points before the league names the host
     }
     if (!asgChecked && SM.get().schedule[idx]?.regularSeasonIndex === ALL_STAR_BREAK_AFTER_GAME) { asgChecked = true; await runAllStarChecks(); }
-    if (!faChecked && SM.get().schedule[idx]?.regularSeasonIndex === 30) { faChecked = true; await checkFreeAgency(SM.get()); await checkRemindersAndWatches(); }
+    if (!faChecked && SM.get().schedule[idx]?.regularSeasonIndex === 30) { faChecked = true; await checkFreeAgency(SM.get()); await checkRemindersAndWatches(); checkWeatherCalendar(SM.get(), 'season 1', ['season:1']); }
 
     const reachedFinal = playToFinal(idx);
     const pre = SM.get().schedule[idx];
