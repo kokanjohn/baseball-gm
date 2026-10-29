@@ -540,6 +540,13 @@ export async function startNewGame(config) {
     CardEngine.deliverSeedCards(NEW_TEAM_SEED_CARDS, ctx);
     // One real, engine-generated trade proposal (actual players from both rosters).
     CardEngine.deliverSeedTradeOffer(ctx);
+    // §86 the Recent list starts the day the club does.
+    StateManager.mutate(s => {
+      const at = Date.now();
+      s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+        buildActivityFeedEntry('milestone', s.userTeam.abbr, `${s.userTeam.gmName || 'A new GM'} takes over the ${s.userTeam.city} ${s.userTeam.nickname}`.trim(), at),
+        buildActivityFeedEntry('milestone', s.userTeam.abbr, `Spring training opens — Season ${s.seasonNum || 1}`, at + 1)]);
+    });
     // §80: the day the GM takes over is a moment of its own; then the first
     // game day's inbox is planned now — there is no game before it to plan it.
     CardEngine.deliverMomentCard('takeover', ctx, null, 'soon');
@@ -908,6 +915,14 @@ export async function commitGame(gameIndex) {
       }
 
       g._recordApplied = true;
+      // §86 our result goes on the Recent list (spring included).
+      if (outcome !== 'tie' || g.isSpring) {
+        const ua = s.userTeam.abbr, oa = oppRecordTeam?.abbr || String(g.opponent || 'OPP').slice(0, 3).toUpperCase();
+        const tag = g.isPlayoff ? 'Playoffs: ' : g.isSpring ? 'Spring: ' : '';
+        const line = us === them ? `${tag}${ua} and ${oa} tie ${us}–${them}`
+          : us > them ? `${tag}${ua} def. ${oa} ${us}–${them}` : `${tag}${oa} def. ${ua} ${them}–${us}`;
+        s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('result', ua, line, endMs)]);
+      }
     }
 
     // ── Step 1b: the gate (§78) — a home game's crowd pays (not in spring).
@@ -1928,10 +1943,13 @@ function _finishLeagueGame(date, i) {
     g.boxScore  = g._precomputedBoxScore;
     delete g.plays;
     delete g._precomputedBoxScore;
-    if (home && away && !g.isSpring) {
+    if (home && away) {
       const [w, l, ws, ls] = homeScore > awayScore ? [home, away, homeScore, awayScore] : [away, home, awayScore, homeScore];
+      const tag = g.isPlayoff ? 'Playoffs: ' : g.isSpring ? 'Spring: ' : '';
       s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
-        buildActivityFeedEntry('result', w.abbr, `${g.isPlayoff ? 'Playoffs: ' : ''}${w.abbr} def. ${l.abbr} ${ws}–${ls}`)]);
+        buildActivityFeedEntry('result', w.abbr, homeScore === awayScore
+          ? `${tag}${home.abbr} and ${away.abbr} tie ${homeScore}–${awayScore}`
+          : `${tag}${w.abbr} def. ${l.abbr} ${ws}–${ls}`, endMs)]);
     }
     s.standings = computeFullStandings(s);
   });

@@ -7076,3 +7076,10 @@ Replaces the locked "no cash in trades" (§9) and the open B7 questions (§76).
   2. 4b: trades the GM starts (composer, the scout's read, timed replies, counters, fizzle).
   3. 4c: CPU-to-CPU trades and their feed lines and cards.
   4. Cleanup: the deadline cards b1/dl3/dl4 become real offers or retire; fix `_assessDepthImpact`'s `STARTING_HITTERS` check.
+
+## 86. The Recent strip (r81, GM feedback)
+The dashboard's activity feed (`state.activityFeed`, kept 72 hours) was icon-led, took vertical space, and stayed hidden until Opening Day: nothing wrote to it in spring, and our own results never appeared there. Now:
+- **Text only.** No icons anywhere in it (GM preference: icons as little as possible).
+- **Collapsed by default:** one line showing the newest entry, with "More". A tap opens the list (the newest 12, scrolling inside its own box) with "Less". The state holds across refreshes in the session and starts collapsed each launch.
+- **It starts with the club:** "‹GM› takes over the ‹city› ‹nickname›" and "Spring training opens — Season 1" at team creation. Our own results ("Spring: TST def. CLW 5–3", spring, regular season and playoffs) and every CPU game's final, spring included, are written at the final.
+- **Role (agreed with §85 J):** Recent is the at-a-glance log of scores, paydays and milestones. The full record of league moves will be the League wire (a Transactions view on the League screen, built with 4c). The inbox gets a card only when a move touches us and there's a decision.

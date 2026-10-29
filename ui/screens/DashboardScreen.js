@@ -1174,11 +1174,6 @@ function _renderHotColdStrip(state) {
 // ACTIVITY FEED
 // ─────────────────────────────────────────────────────────────
 
-const _FEED_ICONS = {
-  trade:'🔄',injury:'🏥',promotion:'⬆️',demotion:'⬇️',
-  signing:'✍️',release:'👋',milestone:'🏆',card:'📋',
-  waiver:'📋',win:'✅',loss:'❌',weather:'⛈️',result:'⚾',allstar:'⭐',payday:'💵',
-};
 
 /** Real-time label for a feed entry (the league runs on the real clock). */
 function _agoText(ms) {
@@ -1192,23 +1187,33 @@ function _agoText(ms) {
   return d === 1 ? 'yesterday' : `${d}d ago`;
 }
 
+/**
+ * §86 Recent — the league's latest, text only. Collapsed it is one line (the
+ * newest entry); a tap opens the list. Kept short so the dashboard doesn't scroll.
+ */
+let _recentOpen = false;
+const RECENT_SHOWN = 12;
 function _renderActivityFeed(state) {
-  const feed = (state.activityFeed || []).slice(-8).reverse();
+  const feed = (state.activityFeed || []).slice().sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)).slice(-RECENT_SHOWN).reverse();
   if (!feed.length) return '';
-
-  const entries = feed.map(e => {
-    const time = _agoText(e.timestamp);
-    return `<div class="activity-entry">
-      <div class="activity-icon">${_FEED_ICONS[e.type] || '·'}</div>
-      <div class="activity-text">${_escape(e.text || '')}</div>
-      <div class="activity-time">${time}</div>
-    </div>`;
-  }).join('');
-
-  return `<div class="activity-feed-wrap">
-    <div class="activity-feed-label">RECENT</div>
-    ${entries}
+  const row = (e) => `<div class="recent-row"><span class="recent-text">${_escape(e.text || '')}</span><span class="recent-time">${_agoText(e.timestamp)}</span></div>`;
+  return `<div class="recent-wrap${_recentOpen ? ' open' : ''}" id="recent-wrap">
+    <button class="recent-head" id="recent-toggle" aria-expanded="${_recentOpen}">
+      <span class="recent-label">Recent</span>
+      <span class="recent-latest">${_recentOpen ? '' : _escape(feed[0].text || '')}</span>
+      <span class="recent-more">${_recentOpen ? 'Less' : 'More'}</span>
+    </button>
+    ${_recentOpen ? `<div class="recent-list">${feed.map(row).join('')}</div>` : ''}
   </div>`;
+}
+
+function _wireRecent() {
+  document.getElementById('recent-toggle')?.addEventListener('click', () => {
+    _recentOpen = !_recentOpen;
+    const wrap = document.getElementById('recent-wrap');
+    const st = StateManager.get();
+    if (wrap && st) { wrap.outerHTML = _renderActivityFeed(st); _wireRecent(); }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1281,6 +1286,7 @@ function _refreshLeagueRow() {
 
 function _attachListeners(state) {
   wireLeagueGameTaps(document.getElementById('dash-league-live'));
+  _wireRecent();
   document.getElementById('dash-wins-card')?.addEventListener('click', () => {
     App.playClick();
     _openGameLogModal(state, 'wins');
@@ -1422,13 +1428,16 @@ function _injectCSS() {
     .fp-card.fp-warm .fp-time{color:#f97316;}
     .fp-card.fp-hot  .fp-time{color:var(--danger);}
     .fp-sub{font-size:10px;color:var(--muted);margin-top:2px;}
-    .activity-feed-wrap{margin-top:8px;padding-bottom:16px;}
-    .activity-feed-label{padding:12px 16px 6px;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
-    .activity-entry{display:flex;align-items:flex-start;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);}
-    .activity-entry:last-child{border-bottom:none;}
-    .activity-icon{font-size:14px;flex-shrink:0;width:20px;text-align:center;margin-top:1px;}
-    .activity-text{flex:1;font-size:12px;color:var(--soft);line-height:1.4;}
-    .activity-time{font-size:10px;color:var(--muted);flex-shrink:0;white-space:nowrap;}
+    .recent-wrap{margin:8px 16px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface);overflow:hidden;}
+    .recent-head{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;background:none;border:0;color:var(--text);font-family:inherit;text-align:left;cursor:pointer;}
+    .recent-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);flex-shrink:0;}
+    .recent-latest{flex:1;min-width:0;font-size:12px;color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .recent-more{font-size:11px;font-weight:600;color:var(--muted);flex-shrink:0;}
+    .recent-list{border-top:1px solid var(--border);max-height:260px;overflow-y:auto;}
+    .recent-row{display:flex;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border);}
+    .recent-row:last-child{border-bottom:none;}
+    .recent-text{flex:1;font-size:12px;color:var(--soft);line-height:1.4;}
+    .recent-time{font-size:10px;color:var(--muted);flex-shrink:0;white-space:nowrap;}
     .game-result{font-size:13px;font-weight:700;font-family:'Bebas Neue',sans-serif;letter-spacing:.5px;}
     .game-result.win{color:var(--accent2);}
     .game-result.loss{color:var(--danger);}
