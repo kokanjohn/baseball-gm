@@ -2639,6 +2639,7 @@ function _runTradeDesk(atMs) {
   const found = LeagueTrades.findLeagueTrades(StateManager.get(), atMs);
   const deals = found.filter(d => !d.call);
   for (const d of found.filter(x => x.call)) CardEngine.deliverTradeCall(d, atMs);
+  CardEngine.runWatches(atMs);   // §99 searches Pro Scouting is keeping an eye on
   StateManager.mutate(s => {
     const last = { ...(s.tradeDesk?.lastTradeMs || {}) };
     for (const d of deals) {

@@ -1049,6 +1049,52 @@ async function checkFreeAgency(st) {
   }
 }
 
+/** §99 the game reminder and Pro Scouting's watches, at game 30. */
+async function checkRemindersAndWatches() {
+  const CE = await import('../../engine/CardEngine.js');
+  let st = SM.get();
+  const g = (st.schedule || []).slice(st.currentGameIndex || 0).find(x => !x._committed && Number.isFinite(x.gameTime));
+  if (g) {
+    const at = g.gameTime - 30 * 60_000;
+    const rem = CE.getPushSchedule(st, g.gameTime - 3 * 3_600_000).filter(i => i.id.startsWith('game-reminder-'));
+    const quiet = inQuietHours(at, st.push?.quietStart, st.push?.quietEnd);
+    check(`game reminder: a push 30 minutes before first pitch (${new Date(g.gameTime).toISOString().slice(11, 16)} UTC game${quiet ? ', in quiet hours' : ''}; ${rem.length} queued)`,
+          quiet ? !rem.some(i => i.deliverAt === at) : rem.some(i => i.deliverAt === at && /First pitch in 30 minutes/.test(i.title)));
+  }
+  // A "nobody fits" card, answered Keep Watching: the watch is checked at the
+  // next desk; one that can't be met ends after two weeks with a Recent line.
+  // Run on a copy of the season: the cards and watches injected here would
+  // otherwise change the rest of it (a found deal can move our roster).
+  const snap = structuredClone(SM.get());
+  const restore = () => SM.mutate(s => { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, structuredClone(snap)); });
+  const now = clock.get();
+  SM.mutate(s => { s.inbox = [...s.inbox, { instanceId: 'h-watch-1', cardId: 'lt_none', resolved: false, autoResolve: 'roster', subject: 'h',
+    sender: 'Pro Scouting', yesLabel: 'Keep Watching', noLabel: 'Drop It', _rosterKey: 'h:watch:1', _watch: { spec: { type: 'need', need: { kind: 'sp' }, minOvr: 999 }, what: 'an impossible starter' },
+    _raw: { onYes: 'lt_watch', onNo: 'lt_pass', onAuto: 'lt_pass' } }]; });
+  resolveCard('h-watch-1', 'yes');
+  st = SM.get();
+  const w = (st.tradeDesk?.watches || []).find(x => x.key === 'h:watch:1');
+  check('watch: Keep Watching opens a two-week watch', !!w && w.untilMs - w.startedAtMs === 14 * 86_400_000);
+  // and one any club can meet: the first desk turns it into an offer to make.
+  SM.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), watches: [...(s.tradeDesk?.watches || []),
+    { key: 'h:watch:2', spec: { type: 'need', need: { kind: 'rp' }, minOvr: 0 }, what: 'a reliever', startedAtMs: now, untilMs: now + 14 * 86_400_000 }] }; });
+  CE.runWatches(now + 86_400_000);
+  check('watch: still open after a day with no fit', (SM.get().tradeDesk?.watches || []).some(x => x.key === 'h:watch:1'));
+  {
+    const st2 = SM.get();
+    const found = [...(st2.inbox || []), ...(st2.scheduledCards || [])].find(c => c._rosterKey === 'h:watch:2:found');
+    check(`watch: a fit found at the next desk is an offer to make (${found ? found.subject : 'none fit today'})`,
+          found ? (found.cardId === 'lt_offer' && !(st2.tradeDesk?.watches || []).some(x => x.key === 'h:watch:2'))
+                : (st2.tradeDesk?.watches || []).some(x => x.key === 'h:watch:2'));
+  }
+  CE.runWatches(now + 15 * 86_400_000);
+  st = SM.get();
+  check('watch: ends after two weeks with a line in Recent, not a card',
+        !(st.tradeDesk?.watches || []).some(x => x.key === 'h:watch:1')
+        && (st.activityFeed || []).some(e => /stopped watching for an impossible starter/.test(e.text || e.message || JSON.stringify(e))));
+  restore();
+}
+
 /** §90 Phase 4c: CPU clubs trade with each other when a need meets a fit;
  *  every move reaches the League wire; cards come only when one touches us. */
 function checkLeagueTrades(st) {
@@ -1069,6 +1115,15 @@ function checkLeagueTrades(st) {
   for (const c of cards) kinds[(c._rosterKey || '').split(':')[1] || c.cardId] = (kinds[(c._rosterKey || '').split(':')[1] || c.cardId] || 0) + 1;
   check(`league trades: cards that touch us are decisions (${JSON.stringify(kinds)})`,
         cards.filter(c => ['lt_offer', 'lt_scout'].includes(c.cardId)).every(c => c.yesLabel && c.noLabel));
+  // §99 "nobody fits" is a decision now: keep watching, or drop it.
+  const all = [...(st.inbox || []), ...(st.scheduledCards || [])];
+  const watchCards = all.filter(c => ['lt_none', 'lt_beaten', 'fin_called_back'].includes(c.cardId));
+  const watches = st.tradeDesk?.watches || [];
+  const foundCards = all.filter(c => /:found$/.test(c._rosterKey || ''));
+  check(`league trades: "nobody fits" asks to keep watching (${watchCards.length} cards, ${watches.length} open watches, ${foundCards.length} found later)`,
+        watchCards.every(c => c.yesLabel === 'Keep Watching' && c.noLabel === 'Drop It' && c._watch?.spec)
+        && watches.every(w => w.untilMs - w.startedAtMs <= 14 * 86_400_000 && w.spec)
+        && foundCards.every(c => c.cardId === 'lt_offer' && c._ideaOffer));
   check('league trades: no card for a trade that doesn\'t touch us without a decision',
         cards.every(c => ['lt_offer', 'lt_scout', 'lt_beaten', 'lt_unsent', 'lt_noscout', 'lt_none'].includes(c.cardId)),
         cards.filter(c => ['lt_unsent', 'lt_none'].includes(c.cardId)).map(c => c.preview).join(' | '));
@@ -1259,7 +1314,7 @@ async function main() {
                        s.userTeam.atmosphere = Math.max(90, s.userTeam.atmosphere || 50); });   // a margin: a bad day can cost several points before the league names the host
     }
     if (!asgChecked && SM.get().schedule[idx]?.regularSeasonIndex === ALL_STAR_BREAK_AFTER_GAME) { asgChecked = true; await runAllStarChecks(); }
-    if (!faChecked && SM.get().schedule[idx]?.regularSeasonIndex === 30) { faChecked = true; await checkFreeAgency(SM.get()); }
+    if (!faChecked && SM.get().schedule[idx]?.regularSeasonIndex === 30) { faChecked = true; await checkFreeAgency(SM.get()); await checkRemindersAndWatches(); }
 
     const reachedFinal = playToFinal(idx);
     const pre = SM.get().schedule[idx];
@@ -1646,6 +1701,17 @@ async function main() {
           getPushSchedule(st, 0).every(i => !inQuietHours(i.deliverAt, st.push?.quietStart, st.push?.quietEnd)));
     check('push schedule: only future items, each with id/title/body',
           ps.every(i => i.deliverAt > clock.get() - 60000 && i.id && i.title && i.body), `${ps.length} items`);
+    // §99 the game reminder: 30 minutes before each of our next first pitches
+    // (none in quiet hours), and none once it's switched off.
+    {
+      const next = (st.schedule || []).slice(st.currentGameIndex || 0).find(g => !g._committed && g.gameTime - 30 * 60_000 > clock.get());
+      const rem = ps.filter(i => i.id.startsWith('game-reminder-'));
+      const want = next && !inQuietHours(next.gameTime - 30 * 60_000, st.push?.quietStart, st.push?.quietEnd);
+      check(`push schedule: a reminder 30 minutes before our next first pitch (${rem.length} queued)`,
+            !want || rem.some(i => i.deliverAt === next.gameTime - 30 * 60_000), next ? new Date(next.gameTime).toISOString() : 'no game');
+      const off = getPushSchedule({ ...st, push: { ...(st.push || {}), gameReminder: false } }, clock.get());
+      check('push schedule: no game reminders when switched off', !off.some(i => i.id.startsWith('game-reminder-')));
+    }
 
     // Planner unit checks (deterministic RNG)
     let seedR = 42; const rnd = () => ((seedR = (seedR * 16807) % 2147483647) / 2147483647);

@@ -450,6 +450,10 @@ export const LEAGUE_TRADES = Object.freeze({
   wireKeep:     500,               // league-wire entries kept (this season and last)
 });
 
+// §99 the game reminder: a push this long before each of our first pitches,
+// for the next few games (re-synced as the schedule moves).
+export const GAME_REMINDER = Object.freeze({ leadMs: 30 * 60_000, ahead: 3 });
+
 // §90 an advance scouting report on a rival (a decision card when it gets better).
 export const ADVANCE_SCOUT = Object.freeze({
   batHit:    1.03,                 // our hitters' hit rate against them

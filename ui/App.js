@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r92';
+export const APP_VERSION = 'tfo-v2-r93';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -1160,6 +1160,8 @@ function _refreshSettingsSwatches() {
   const _push = StateManager.get()?.push || {};
   if (qStart) qStart.value = _push.quietStart || '22:00';
   if (qEnd)   qEnd.value   = _push.quietEnd   || '08:00';
+  const gr = document.getElementById('game-reminder-toggle');
+  if (gr) gr.checked = _push.gameReminder !== false;   // §99 on unless turned off
 
   // Always reset to main view
   document.getElementById('settings-view-main')?.classList.remove('tdm-view-hidden');
@@ -1220,6 +1222,12 @@ function _initSettingsPickers() {
   };
   document.getElementById('quiet-start')?.addEventListener('change', (e) => _setQuiet('quietStart', e.target.value));
   document.getElementById('quiet-end')?.addEventListener('change', (e) => _setQuiet('quietEnd', e.target.value));
+  // §99 the 30-minute game reminder (a push, never an inbox card).
+  document.getElementById('game-reminder-toggle')?.addEventListener('change', (e) => {
+    if (!StateManager.get()) return;
+    StateManager.mutate(s => { s.push = { ...(s.push || {}), gameReminder: e.target.checked }; });
+    _syncPush({ immediate: true });
+  });
 
   // ── Team info edit ────────────────────────────────────────
   document.getElementById('settings-team-edit-btn')?.addEventListener('click', () => {

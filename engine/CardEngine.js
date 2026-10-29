@@ -48,6 +48,7 @@ import {
   TRADE,
   ADVANCE_SCOUT,
   LEAGUE_TRADES,
+  GAME_REMINDER,
   CARD_MONEY_BASE_TARGET_K,
 } from '../data/constants.js';
 
@@ -78,6 +79,7 @@ import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
 import { rapportOf, rapportGrade, adjustRapport, wouldStart, clubMode, isRental, playsSlot } from './TradeEngine.js';
 import * as LeagueTrades from './LeagueTrades.js';
+import { buildActivityFeedEntry, pruneActivityFeed } from './SeasonEngine.js';
 const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
 
@@ -1323,7 +1325,7 @@ export function releaseDueCards(nowMs = Date.now()) {
  */
 export function getPushSchedule(state, nowMs = Date.now()) {
   const qs = state?.push?.quietStart, qe = state?.push?.quietEnd;
-  return (state?.scheduledCards || [])
+  const cards = (state?.scheduledCards || [])
     .filter(c => !c._seed)
     // Pool cards are already planned outside quiet hours; real-time roster
     // cards reach the inbox when they happen and only the alert waits (§65).
@@ -1337,6 +1339,34 @@ export function getPushSchedule(state, nowMs = Date.now()) {
       body:      c.subject || 'New message in your inbox',
       tag:       c.instanceId,
     }));
+  return [...cards, ...gameReminders(state, nowMs)].sort((a, b) => a.deliverAt - b.deliverAt);
+}
+
+/**
+ * gameReminders(state, nowMs) — §99 a push 30 minutes before each of our next
+ * first pitches (spring, season and postseason alike), so the GM can catch up
+ * on the inbox before the game. A push only, never an inbox card; none inside
+ * quiet hours (moved later it would land after first pitch); off in Settings.
+ */
+export function gameReminders(state, nowMs = Date.now()) {
+  if (state?.push?.gameReminder === false || !state?.userTeam) return [];
+  const qs = state.push?.quietStart, qe = state.push?.quietEnd;
+  const out = [];
+  for (const g of (state.schedule || []).slice(state.currentGameIndex || 0)) {
+    if (out.length >= GAME_REMINDER.ahead) break;
+    if (!g || g._committed || !Number.isFinite(g.gameTime)) continue;
+    const at = g.gameTime - GAME_REMINDER.leadMs;
+    if (at <= nowMs - 60 * 1000 || pushTimeFor(at, qs, qe) !== at) continue;
+    const opp = g.opponent || g.opp || 'today\'s opponent';
+    out.push({
+      id:        `game-reminder-${g.gameTime}`,
+      deliverAt: at,
+      title:     'First pitch in 30 minutes',
+      body:      `${g.isHome ? 'vs' : '@'} ${opp} — a good time to catch up on the inbox before the game.`,
+      tag:       `game-reminder-${g.gameTime}`,
+    });
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2484,8 +2514,22 @@ function _applyFinanceAction(action, instance, atMs) {
 function _callClubAboutSalary(instance, atMs) {
   const st = StateManager.get();
   const team = (st.leagueTeams || []).find(t => t.id === instance._aboutTeamId);
-  // §91 a salary they need off the books, held by a player who would start
-  // for us — in a deal that actually takes money off their payroll.
+  if (_salaryCallOffer(st, team, atMs)) return;
+  _deliverWatchCard(`fin:called:${instance.instanceId}`, {
+    subject: `${team?.name || 'The club'} — nothing that fits`,
+    preview: 'We made the call. Nothing on their roster works for both sides right now.',
+    body: `We talked to ${team?.name || 'them'} about their payroll. Nothing they are willing to move fits what we need and what our owner will carry right now.`,
+    spec: { type: 'club', teamId: team?.id || null }, what: `a deal with ${team?.name || 'them'}`,
+    atMs: atMs + 3 * 3600_000, cardId: 'fin_called_back',
+  });
+}
+
+/**
+ * §91 a club cutting payroll offers the biggest salary it can move that
+ * would start for us, in a deal that takes money off its books. True when an
+ * offer went out.
+ */
+function _salaryCallOffer(st, team, atMs, { intro = null } = {}) {
   const cands = !team || !tradeWindow(st).open ? [] : (team.rosterIds || []).map(id => st.players[id])
     .filter(p => LeagueTrades.movable(p, atMs, st) && Finance.isPaid(p) && wouldStart(p, st, 'user'))
     .sort((a, b) => (b.contractSalary || 0) - (a.contractSalary || 0)).slice(0, 5);
@@ -2496,18 +2540,12 @@ function _callClubAboutSalary(instance, atMs) {
     if (!_offerCanGo(st, offer, team.id, atMs)) continue;
     deliverTradeOffer(offer, team.id, {
       kind: 'sell', room: a.room, subject: `${team.name}: ${p.name} is available`,
-      intro: `${team.name} called back about the conversation we started: ${p.name} is available, and they need the payroll room.`,
+      intro: intro || `${team.name} called back about the conversation we started: ${p.name} is available, and they need the payroll room.`,
       atMs: atMs + (2 + Math.random() * 3) * 3600_000,
     });
-    return;
+    return true;
   }
-  _deliverNotice(`fin:called:${instance.instanceId}`, {
-    cardId: 'fin_called_back', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', type: 'normal',
-    subject: `${team?.name || 'The club'} — nothing that fits`,
-    preview: 'We made the call. Nothing on their roster works for both sides right now.',
-    body: `We talked to ${team?.name || 'them'} about their payroll. Nothing they are willing to move fits what we need and what our owner will carry right now. The line is open if that changes.`,
-    yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
-  }, atMs + 3 * 3600_000);
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2698,13 +2736,15 @@ function _leagueTradeCards(tx, atMs) {
         extra: { _beatenTalkId: talk.id },
       }) ? 1 : 0;
     }
-    return _deliverNotice(`lt:beaten:${tx.id}`, {
-      cardId: 'lt_beaten', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞',
+    return _deliverWatchCard(`lt:beaten:${tx.id}`, {
+      cardId: 'lt_beaten',
       subject: `${to.name} beat us to ${gone.name}`,
       preview: 'Nobody else fits the spot right now.',
-      body: `${lead} We looked for the next-best option and nobody else fits the spot right now. We'll keep watching.`,
-      _beatenTalkId: talk.id,
-    }, atMs + 2 * 3600_000) ? 1 : 0;
+      body: `${lead} We looked for the next-best option and nobody else fits the spot right now.`,
+      spec: { type: 'role', pos: gone.pos, nativePos: gone.nativePos || gone.pos, excludeId: gone.id },
+      what: `someone to fill ${gone.name}'s role`,
+      atMs: atMs + 2 * 3600_000, extra: { _beatenTalkId: talk.id },
+    }) ? 1 : 0;
   }
 
   // 2. A player we traded away was flipped: bring them back once they can be moved.
@@ -2788,17 +2828,18 @@ function _leagueTradeCards(tx, atMs) {
  * another club who fills it and would start for us, with the package their
  * GM should take — an offer to make, adjust or pass on, a few hours later.
  */
-function _workThePhones({ key, fits, what, atMs, sender = 'Pro Scouting', subjectNone }) {
+function _workThePhones({ key, spec, what, atMs, sender = 'Pro Scouting', subjectNone }) {
   const st = StateManager.get();
   const at = atMs + Math.round((3 + Math.random() * 4) * 3600_000);
-  const opt = LeagueTrades.bestOption(st, fits, at);
+  const opt = LeagueTrades.bestOption(st, _fitsFor(spec, st), at, { excludeIds: new Set(spec.excludeId ? [spec.excludeId] : []) });
   if (!opt) {
-    return _deliverNotice(`${key}:none`, {
-      cardId: 'lt_none', tag: 'TRADE', sender, avatar: '📞',
+    return _deliverWatchCard(`${key}:none`, {
+      cardId: 'lt_none', sender,
       subject: subjectNone || 'Nothing out there right now',
       preview: `We worked the phones for ${what}; nothing fits.`,
-      body: `We worked the phones for ${what}. Nobody available would be an upgrade at a price their club would take and our owner would carry. We'll keep watching.`,
-    }, at);
+      body: `We worked the phones for ${what}. Nobody available would be an upgrade at a price their club would take and our owner would carry.`,
+      spec, what: what.replace(/ before the deadline$/, ''), atMs: at,
+    });
   }
   const t = (st.leagueTeams || []).find(x => x.id === opt.teamId), p = st.players[opt.playerId];
   return _deliverIdea(st, {
@@ -2807,6 +2848,81 @@ function _workThePhones({ key, fits, what, atMs, sender = 'Pro Scouting', subjec
     preview: `${_ref(p)} of ${t.name} is the best fit we found.`,
     lead: `We worked the phones for ${what}. The best fit is ${_ref(p)} of ${t.name}${isRental(p, st) ? ', in the last year of the contract' : ''}.`,
   });
+}
+
+// ── §99 "nobody fits right now": keep watching, or drop it ──────────────
+
+const WATCH_DAYS = 14;
+
+/** What a search is for, kept as data (it waits in state between days). */
+function _fitsFor(spec, st) {
+  if (!spec) return () => false;
+  if (spec.type === 'need') return (p) => LeagueTrades.fillsNeed(p, spec.need) && (p.ovr || 0) >= (spec.minOvr || 0);
+  if (spec.type === 'rp')   return (p) => p.pos === 'RP' && wouldStart(p, st, 'user');
+  if (spec.type === 'role') return (p) => p.id !== spec.excludeId && _sameRole(p, { pos: spec.pos, nativePos: spec.nativePos });
+  return () => false;
+}
+
+/**
+ * A search that came up empty, as a decision: Pro Scouting keeps watching
+ * (checks at every day's trade desk for two weeks and calls with the first
+ * fit), or we drop it. Unanswered, it's dropped.
+ */
+function _deliverWatchCard(key, { subject, preview, body, spec, what, atMs, cardId = 'lt_none', sender = 'Pro Scouting', extra = {} }) {
+  const st = StateManager.get();
+  if (_cardsWithKey(st, key).length) return null;
+  return _deliverAt(_rosterCard(st, {
+    cardId, tag: 'TRADE', sender, avatar: '📞', type: 'normal',
+    subject, preview,
+    body: `${body} Pro Scouting can keep watching — checking every day for the next two weeks and calling as soon as someone fits — or we can drop it.`,
+    yesLabel: 'Keep Watching', noLabel: 'Drop It',
+    autoResolve: 'roster', expiresAtMs: atMs + 2 * 86_400_000,
+    _rosterKey: key, _watch: { spec, what },
+    _raw: { onYes: 'lt_watch', onNo: 'lt_pass', onAuto: 'lt_pass' },
+    _autoLabel: 'No answer — dropped',
+    ...extra,
+  }), atMs);
+}
+
+/**
+ * runWatches(atMs) — §99 at each day's trade desk, every search Pro Scouting
+ * is keeping an eye on: the first fit becomes an offer card and ends the
+ * watch; two weeks without one (or the window closing) ends it with a line
+ * in Recent.
+ */
+export function runWatches(atMs) {
+  const st = StateManager.get();
+  const watches = st.tradeDesk?.watches || [];
+  if (!watches.length) return 0;
+  const keep = [], ended = [];
+  let found = 0;
+  for (const w of watches) {
+    const cur = StateManager.get();
+    if (w.untilMs <= atMs || !tradeWindow(cur).open) { ended.push(w); continue; }
+    let hit = false;
+    if (w.spec?.type === 'club') {
+      const team = (cur.leagueTeams || []).find(t => t.id === w.spec.teamId);
+      hit = !!team && _salaryCallOffer(cur, team, atMs, { intro: `${team.name} called back: their owner still wants payroll gone, and now there's a deal that works for both sides.` });
+    } else {
+      const opt = LeagueTrades.bestOption(cur, _fitsFor(w.spec, cur), atMs, { excludeIds: new Set(w.spec?.excludeId ? [w.spec.excludeId] : []) });
+      if (opt) {
+        const t = (cur.leagueTeams || []).find(x => x.id === opt.teamId), p = cur.players[opt.playerId];
+        hit = !!_deliverIdea(cur, {
+          key: `${w.key}:found`, teamId: opt.teamId, deal: opt.deal, atMs: atMs + Math.round((1 + Math.random() * 3) * 3600_000), sender: w.sender || 'Pro Scouting',
+          subject: `Found: ${p.name}`,
+          preview: `${_ref(p)} of ${t.name} — the fit we've been watching for.`,
+          lead: `We've been watching for ${w.what}. ${_ref(p)} of ${t.name} now fits${isRental(p, cur) ? ', in the last year of the contract' : ''}.`,
+        });
+      }
+    }
+    if (hit) found++; else keep.push(w);
+  }
+  StateManager.mutate(s => {
+    s.tradeDesk = { ...(s.tradeDesk || {}), watches: keep };
+    if (ended.length) s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
+      ...ended.map(w => buildActivityFeedEntry('milestone', s.userTeam.abbr, `Pro Scouting stopped watching for ${w.what} — nobody fit`, atMs))]);
+  });
+  return found;
 }
 
 /**
@@ -2824,14 +2940,24 @@ export function deliverDeadlineIdea(atMs) {
   const what = need.kind === 'sp' ? 'a starting pitcher before the deadline'
     : need.kind === 'rp' ? 'a reliever before the deadline'
     : `a ${need.slot === 'DH' ? 'designated hitter' : need.slot} before the deadline`;
-  return _workThePhones({ key, what, atMs, fits: (p) => LeagueTrades.fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + 3 });
+  return _workThePhones({ key, what, atMs, spec: { type: 'need', need: { kind: need.kind, slot: need.slot || null }, minOvr: need.ovr + 3 } });
 }
 
 function _applyLeagueTradeAction(action, instance, atMs) {
   if (action === 'lt_pass') return;
   if (action === 'lt_find_rp') {
-    _workThePhones({ key: `lt:rp:${instance.instanceId}`, what: 'a reliever', atMs,
-      fits: (p) => p.pos === 'RP' && wouldStart(p, StateManager.get(), 'user') });
+    _workThePhones({ key: `lt:rp:${instance.instanceId}`, what: 'a reliever', atMs, spec: { type: 'rp' } });
+    return;
+  }
+  if (action === 'lt_watch') {
+    // §99 Pro Scouting keeps watching: checked at each day's trade desk.
+    const w = instance._watch;
+    if (!w) return;
+    StateManager.mutate(s => {
+      s.tradeDesk = { ...(s.tradeDesk || {}) };
+      s.tradeDesk.watches = [...(s.tradeDesk.watches || []).filter(x => x.key !== instance._rosterKey),
+        { key: instance._rosterKey, spec: w.spec, what: w.what, sender: instance.sender, startedAtMs: atMs, untilMs: atMs + WATCH_DAYS * 86_400_000 }];
+    });
     return;
   }
   if (action === 'lt_offer_send') {
@@ -3154,7 +3280,7 @@ function _deliverDevelopmentReport(ev, atMs) {
 export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'talk_finalize', 'talk_backout', 'talk_take_counter', 'talk_walk', 'talk_ask', 'talk_move_on', 'talk_keep_open',
   // §90 league trades that touch us
-  'lt_offer_send', 'lt_pass', 'lt_scout', 'lt_find_rp',
+  'lt_offer_send', 'lt_pass', 'lt_scout', 'lt_find_rp', 'lt_watch',
   'fin_call_club',
   'il_return_activate',
   'il_return_waive',

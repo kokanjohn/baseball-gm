@@ -7362,3 +7362,29 @@ Harness: the rating history is kept across seasons, in time order, one point per
 **Harness (`test-webpush.mjs`):** a full day of idle cron minutes plus 50 unchanged registers cost 0 writes and 0 list calls; the existing send/decrypt/VAPID checks pass.
 
 **Deploying:** the worker is deployed by pasting into Cloudflare (the connector reads code but can't deploy). After pasting, today's exhausted allowance still has to reset at 00:00 UTC (8 PM Eastern) before the first run can build the index; from then on it stays far inside the limits.
+
+## 99. The 30-minute game reminder; "nobody fits" cards become Keep Watching / Drop It (r93, GM feedback)
+
+**Game reminder.** A push 30 minutes before first pitch, so the GM can clear the inbox before the game. It's built into the push schedule the app already syncs (`CardEngine.getPushSchedule` → `gameReminders`). It covers the next `GAME_REMINDER.ahead` (3) uncommitted games, so it still fires when the app has been closed for a day or two. Title "First pitch in 30 minutes"; body "vs/@ Opponent — a good time to catch up on the inbox before the game." No clock time appears in the text (§93). A reminder falling inside quiet hours is skipped. Settings has a **Game Reminder** toggle (`push.gameReminder`, default on; older saves treat a missing value as on). Push only — no inbox card. It needs the redeployed worker (§98).
+
+**Fewer "got it" cards.** Three notices said "nobody fits" and left the GM nothing to decide. They now ask **Keep Watching** / **Drop It**:
+- the deadline-idea / bullpen search with no fit (`lt_none`);
+- beaten to a player, with no other fit (`lt_beaten`);
+- a club that wanted to shed payroll and had no deal that worked (`fin_called_back`).
+
+Keep Watching opens a 14-day watch (`state.tradeDesk.watches`: spec, what, sender, startedAtMs, untilMs). Every daily trade desk runs `CardEngine.runWatches`:
+- The first fit becomes the usual offer-to-make card (`lt_offer`, key `…:found`, "Found: Name"), or the club's offer for `fin_called_back`. That ends the watch.
+- If two weeks pass, or the trade window closes, the watch ends with a line in Recent, not another card.
+- Drop It, or no answer, ends it.
+
+Watch specs are data (`need` / `rp` / `role` / `club`), turned into a fit test by `_fitsFor` at each desk, so a watch survives a save and reload.
+
+**Kept as notices (GM's call).** These five report a fact with no real choice in it, so they stay one-button: `lt_unsent`, `lt_noscout`, `owner_no_taker`, `owner_trade_blocked`, `trade_off`.
+
+**Dashboard team colors** stay as they are for now (GM's call).
+
+**Harness:**
+- The reminder lands at gameTime − 30 min unless it falls in quiet hours, and there are none when the toggle is off.
+- Keep Watching opens a 14-day watch; a watch with no fit stays open a day later and ends at 15 days with a Recent line; a watch any club can meet turns into an `lt_offer` at the next desk.
+- These injected cases run on a snapshot of the season, which is restored afterwards so they don't change the rest of it.
+- Natural watch cards carry the labels and a spec.

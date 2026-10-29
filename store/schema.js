@@ -277,6 +277,7 @@ export function createGameState(config = {}) {
       enabled:    false,
       quietStart: NOTIFICATION_QUIET_START_DEFAULT,
       quietEnd:   NOTIFICATION_QUIET_END_DEFAULT,
+      gameReminder: true,   // §99 a push 30 minutes before each of our first pitches
     },
 
     // ── Settings (per-slot) ────────────────────────────────
