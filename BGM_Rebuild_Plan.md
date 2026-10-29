@@ -7340,3 +7340,9 @@ Harness: the rating history is kept across seasons, in time order, one point per
 - **Found and fixed:** `MarketEngine.signToClub` released a player made room for when the farm side was full — a big-leaguer cut outright. It now uses the same farm rule as every option (`RosterEngine.sendToFarm`: the farm's weakest goes on waivers) and clears a lineup or rotation spot the player held. Its "games on" check missed the All-Star break, the trade-deadline phase and the postseason rounds (it named a `PHASE.POSTSEASON` that doesn't exist), so a signing in those phases joined at once instead of reporting the next day.
 
 **Harness** (on copies of the real league at game 30): with our hitters full, a signing asks who goes down and offers only hitters; the signing reports the next day, our choice goes down, the 28 still holds, the salary is on our payroll; with our claim first in order, the claim is awarded and the player we chose (our best bench bat, not the weakest) goes down; the lists hold only waived players and unattached free agents. 8 seeds green; webpush and refs pass.
+
+## 97. Waiver order stays by record; the Hitting Coach's icon (r92, GM decision)
+
+**Waiver claims (decision, supersedes §20.2's priority cycling):** claims are decided when the 72-hour window closes, worst winning percentage first (fewer wins breaks a tie); the waiving club is skipped. We claim only by putting a claim in; a CPU club claims when the player is at least `WAIVER_CLAIM_MIN_UPGRADE` (3) OVR better than its weakest healthy active player at his position and its owner can carry the contract. §20.2's rolling priority (a claim drops the club to last; order set from last season; "your priority: 4th of 10") is **not** being built. `state.waiverPriority` stays unused.
+
+**The Hitting Coach's icon** was a cricket bat (🏏 — Unicode has no baseball bat). It is now ⚾ on the compose screen and on the Hitting Coach's three report cards.

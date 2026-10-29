@@ -77,7 +77,7 @@ const COMPOSE_CHANNELS = [
   {
     id:       'hitting_coach',
     label:    'Hitting Coach',
-    icon:     '🏏',
+    icon:     '⚾',
     role:     'Field Staff',
     priority: 'high',
     topics: [

@@ -2606,7 +2606,7 @@ export const COMPOSE_RESPONSE_POOL = {
 
   hc_slump: {
     id:'compose_hc_slump', autoResolve:'yes', type:'normal', tag:'OPERATIONS',
-    sender:'Hitting Coach', avatar:'🏏',
+    sender:'Hitting Coach', avatar:'⚾',
     subject:'{active_hitter_name} — working through it',
     body:'The hitting coach has been working closely with {active_hitter_name} on the mechanical issue the coach spotted last week. The swing decision-making has been better — fewer chases — but the results haven\'t caught up yet. The coach is staying patient and thinks the correction is in place and it just needs time to show up in the box score.',
     yesLabel:'Stay the course', yesEffect:{}, yesMsg:'Hitting coach confirmed — staying patient.',
@@ -2614,7 +2614,7 @@ export const COMPOSE_RESPONSE_POOL = {
 
   hc_development: {
     id:'compose_hc_development', autoResolve:'yes', type:'normal', tag:'SCOUTING',
-    sender:'Hitting Coach', avatar:'🏏',
+    sender:'Hitting Coach', avatar:'⚾',
     subject:'Development check-in — young hitters',
     body:'The hitting coach\'s development check: the young hitters are coming along. The adjustments take longer at the major league level than anyone likes, but the approach is better. {active_hitter_name} in particular has shown real improvement at recognizing breaking balls. It\'s a process, but it\'s moving.',
     yesLabel:'Good to hear', yesEffect:{}, yesMsg:'Development update noted.',
@@ -2622,7 +2622,7 @@ export const COMPOSE_RESPONSE_POOL = {
 
   hc_lineup: {
     id:'compose_hc_lineup', autoResolve:'yes', type:'normal', tag:'OPERATIONS',
-    sender:'Hitting Coach', avatar:'🏏',
+    sender:'Hitting Coach', avatar:'⚾',
     subject:'Lineup construction — hitting coach\'s take',
     body:'The hitting coach weighed in on the order: {active_hitter_name} should be higher — the on-base skills are being underutilized at the bottom of the lineup. The coach also mentioned that the leadoff spot has been inconsistent and it\'s affecting the top of the order\'s rhythm. A few adjustments could add a run or two per week.',
     yesLabel:'Will discuss with manager', yesEffect:{}, yesMsg:'Lineup notes passed along.',
