@@ -130,8 +130,7 @@ function _playerValue(player, state) {
 
   const ovr          = player.ovr || 55;
   const age          = computeAge(player.dob, baseballYear(state));
-  const seasonNum    = state.seasonNum || 1;
-  const yearsLeft    = Math.max(0, (player.contractExpiry || seasonNum + 1) - seasonNum);
+  const yearsLeft    = yearsAfterThis(player, state);   // §94 seasons covered after this one
   const salary       = player.contractSalary || 0;
 
   // Base OVR value — §90 measured above replacement level (the player any
@@ -288,7 +287,7 @@ export function generateCPUCashSale(teamId, state, context = {}) {
   if (!context.force && Math.random() > 0.04) return null;
   const now = context.atMs || Date.now();
   const pool = (team.rosterIds || []).map(id => state.players[id])
-    .filter(p => p && isAvailable(p) && !p.isInjured && !_isKey(p, state, teamId)
+    .filter(p => p && isAvailable(p) && !p.isInjured && !contractRunOut(p, state) && !_isKey(p, state, teamId)
               && !(p._acquiredAtMs && now - p._acquiredAtMs < TRADE.noFlipMs) && wouldStart(p, state, 'user'));
   const p = pool.sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
   if (!p) return null;
@@ -367,7 +366,27 @@ export function tradePlayerPatches(state, tx) {
  * Rental players have modified value — high for contenders, lower for rebuilders.
  */
 function _isRentalPlayer(player, state) {
-  return player.contractExpiry === (state.seasonNum || 1);
+  return yearsAfterThis(player, state) === 0;
+}
+
+/**
+ * §94 the seasons a contract still covers after this one. `contractExpiry` is
+ * the first season NOT covered (§70: a one-year deal for season S expires at
+ * S+1), so a player in the last year of a deal has 0. (Before r89 the trade
+ * engine read expiry === S as the final year — one year off, so final-year
+ * players were valued as if they had a year left.)
+ */
+export function yearsAfterThis(player, state) {
+  const s = state.seasonNum || 1;
+  return Math.max(0, (player?.contractExpiry ?? s + 1) - s - 1);
+}
+
+/**
+ * §94 in the offseason, a player whose deal has run out and who hasn't
+ * re-signed is headed for free agency: no club can trade him.
+ */
+export function contractRunOut(player, state) {
+  return state.phase === PHASE.OFFSEASON && yearsAfterThis(player, state) === 0 && !player?.pendingContract;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -641,6 +660,7 @@ export function tradeBlockers(offer, state, atMs, teamId) {
     if (p.group === PLAYER_GROUP.IN_TRANSIT) return `${p.name} is in transit`;
     if (p.isInjured || p.group === PLAYER_GROUP.IL) return `${p.name} is hurt — no club takes an injured player`;
     if (p._acquiredAtMs && atMs - p._acquiredAtMs < TRADE.noFlipMs) return `${p.name} was acquired too recently to be moved`;
+    if (contractRunOut(p, state)) return `${p.name}'s contract is up — headed for free agency, not a trade`;
   }
   for (const [id, pct] of Object.entries(offer.retain || {})) {
     if (!(pct > 0 && pct <= TRADE.maxRetainPct)) return 'a club keeps paying at most half of a salary';
@@ -699,7 +719,7 @@ export function buildCounter(offer, state, teamId, gap, ev = evaluateForClub(off
   if (next.outgoingIds.length < TRADE.maxPerSide) {
     const u = state.userTeam;
     const pool = [...(u.farmIds || []), ...(u.rosterIds || [])].map(id => state.players[id])
-      .filter(p => p && !next.outgoingIds.includes(p.id) && !_isKey(p, state, 'user') && !p.isInjured && p.group !== PLAYER_GROUP.IN_TRANSIT
+      .filter(p => p && !next.outgoingIds.includes(p.id) && !_isKey(p, state, 'user') && !p.isInjured && p.group !== PLAYER_GROUP.IN_TRANSIT && !contractRunOut(p, state)
                 && !(p._acquiredAtMs && Date.now() - p._acquiredAtMs < TRADE.noFlipMs));
     for (const p of pool) {
       const add = valueToClub(p, state, teamId, true);

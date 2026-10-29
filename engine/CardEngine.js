@@ -181,6 +181,7 @@ export function checkAndDeliver(context) {
   };
   const delivered = [];
   const taken = new Set();
+  const takenFamilies = new Set();   // §94 one version of a family a season — across today's moments too
   for (const moment of ['pregame', 'ingame', 'between', 'leave']) {
     const pools = byMoment[moment];
     let n = Math.min(want[moment], room - delivered.length);
@@ -188,11 +189,12 @@ export function checkAndDeliver(context) {
     const eligible = [];
     for (const poolName of pools) {
       for (const card of _filterEligible(ALL_POOLS[poolName] || [], context, state)) {
-        if (!taken.has(card.id)) eligible.push({ ...card, _fromPool: poolName });
+        if (!taken.has(card.id) && !(card._family && takenFamilies.has(card._family))) eligible.push({ ...card, _fromPool: poolName });
       }
     }
     for (const cardDef of _selectCards(eligible, context, state, n)) {
       taken.add(cardDef.id);
+      if (cardDef._family) takenFamilies.add(cardDef._family);
       const { _fromPool, ...def } = cardDef;
       const instance = _createInstance(def, context, state);
       if (instance) delivered.push({ ...instance, _pool: _fromPool, _moment: moment });
@@ -502,9 +504,9 @@ export function deliverInjuryAct1(playerId, atMs = Date.now()) {
     _rosterKey: `injury:${playerId}:act1`,
     _targetPlayerId: playerId,
     subject:  `${player.name} hurt — evaluation needed`,
-    preview:  `${player.name}${_hand(player)} came out of tonight's game with a possible ${label}.`,
-    body:     `${player.name}${_hand(player)} (${player.pos}) came out of tonight's game with what looks like a ${label}. ${player.name} is unavailable until we know more. An MRI tonight returns results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a call-up made tomorrow won't report until the day after.`,
-    yesLabel: `MRI tonight (${'$'}${INJURY_MRI_COST_K}K)`,
+    preview:  `${player.name}${_hand(player)} came out of today's game with a possible ${label}.`,
+    body:     `${player.name}${_hand(player)} (${player.pos}) came out of today's game with what looks like a ${label}. ${player.name} is unavailable until we know more. An MRI now returns results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a call-up made tomorrow won't report until the day after.`,
+    yesLabel: `MRI Now (${'$'}${INJURY_MRI_COST_K}K)`,
     noLabel:  'Wait for the morning exam',
     _budgetCost: INJURY_MRI_COST_K,
     // Answer by midnight (at least an hour) or the doctor waits for morning.
@@ -1413,7 +1415,7 @@ export function deliverSeedTradeOffer(context) {
     for (const t of shuffle(st.leagueTeams || [])) {
       for (const need of LeagueTrades.clubNeeds(st, t.id).slice(0, 2)) {
         const fits = [...(st.userTeam.rosterIds || []), ...(st.userTeam.farmIds || [])].map(id => st.players[id])
-          .filter(p => LeagueTrades.movable(p, atMs) && LeagueTrades.fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + LEAGUE_TRADES.upgradeMin)
+          .filter(p => LeagueTrades.movable(p, atMs, st) && LeagueTrades.fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + LEAGUE_TRADES.upgradeMin)
           .sort((x, y) => (y.ovr || 0) - (x.ovr || 0)).slice(0, 3);
         for (const p of shuffle(fits)) {
           const c = LeagueTrades.callOffer(st, t.id, p.id, atMs, { need });
@@ -1431,7 +1433,7 @@ export function deliverSeedTradeOffer(context) {
     for (const t of st.leagueTeams || []) {
       for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) {
         const p = st.players[id];
-        if (!LeagueTrades.movable(p, atMs) || !wouldStart(p, st, 'user')) continue;
+        if (!LeagueTrades.movable(p, atMs, st) || !wouldStart(p, st, 'user')) continue;
         if (ourNeed && !LeagueTrades.fillsNeed(p, ourNeed)) continue;
         cands.push({ t, p });
       }
@@ -1486,8 +1488,9 @@ export function deliverSeedCards(cardIds, context) {
 
   if (instances.length === 0) return 0;
 
+  const arrivedAtMs = Date.now();
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), ...instances];
+    s.inbox = [...(s.inbox || []), ...instances.map(c => ({ ...c, arrivedAtMs }))];
     _sortInbox(s.inbox);
   });
   return instances.length;
@@ -1538,7 +1541,7 @@ export function deliverCardById(cardId) {
   if (!instance) return;
 
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), { ...instance, _debugInjected: true }];
+    s.inbox = [...(s.inbox || []), { ...instance, _debugInjected: true, arrivedAtMs: Date.now() }];
     _sortInbox(s.inbox);
   });
 }
@@ -1561,6 +1564,7 @@ export function deliverComposeCard(topicId, channelId) {
     // Fallback — generic acknowledgement for topics not yet in the pool
     StateManager.mutate(s => {
       s.inbox = [...(s.inbox || []), {
+        arrivedAtMs:  Date.now(),
         instanceId:   _uuid(),
         cardId:       `compose_${topicId}`,
         type:         'normal',
@@ -1609,7 +1613,7 @@ export function deliverComposeCard(topicId, channelId) {
   };
 
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), instance];
+    s.inbox = [...(s.inbox || []), { ...instance, arrivedAtMs: Date.now() }];
     _sortInbox(s.inbox);
   });
 }
@@ -1910,8 +1914,11 @@ function _selectCards(eligible, context, state, maxCount) {
       r -= pool[j].weight;
       if (r <= 0) { idx = j; break; }
     }
-    selected.push(pool[idx].card);
+    const pick = pool[idx].card;
+    selected.push(pick);
     pool.splice(idx, 1);
+    // §94 one version of a family: the others of its family leave this draw.
+    if (pick._family) for (let j = pool.length - 1; j >= 0; j--) if (pool[j].card._family === pick._family) pool.splice(j, 1);
   }
 
   return selected;
@@ -2286,7 +2293,7 @@ export function deliverAllStarTradeOffer(context) {
     if (busyWithUs(st, t.id, atMs)) continue;
     for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) {
       const p = st.players[id];
-      if ((p?.allStarSeasons || []).includes(season) && LeagueTrades.movable(p, atMs) && wouldStart(p, st, 'user')) cands.push({ t, p });
+      if ((p?.allStarSeasons || []).includes(season) && LeagueTrades.movable(p, atMs, st) && wouldStart(p, st, 'user')) cands.push({ t, p });
     }
   }
   for (const { t, p } of cands.sort((x, y) => (y.p.ovr || 0) - (x.p.ovr || 0)).slice(0, 6)) {
@@ -2477,7 +2484,7 @@ function _callClubAboutSalary(instance, atMs) {
   // §91 a salary they need off the books, held by a player who would start
   // for us — in a deal that actually takes money off their payroll.
   const cands = !team || !tradeWindow(st).open ? [] : (team.rosterIds || []).map(id => st.players[id])
-    .filter(p => LeagueTrades.movable(p, atMs) && Finance.isPaid(p) && wouldStart(p, st, 'user'))
+    .filter(p => LeagueTrades.movable(p, atMs, st) && Finance.isPaid(p) && wouldStart(p, st, 'user'))
     .sort((a, b) => (b.contractSalary || 0) - (a.contractSalary || 0)).slice(0, 5);
   for (const p of cands) {
     const a = LeagueTrades.askingOffer(st, team.id, p.id, atMs, { premium: false, shedK: Math.round((p.contractSalary || 0) * 0.5) });

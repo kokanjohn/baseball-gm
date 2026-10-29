@@ -7287,3 +7287,25 @@ Team colors stay on non-text elements (borders, underlines, bars, button fills, 
 **The dashboard scrolls only when it has to.** With no game in progress and Recent collapsed, the dashboard had 36px of trailing space (the tab's 20px bottom padding and Recent's 16px margin). On a phone where the cards fit with a few pixels to spare, that made it scroll a little for nothing (measured at 390×664: content 531px in a 536px view, scroll height 567). `DashboardScreen._syncScrollRoom` now marks the idle dashboard (`dash-idle`), which drops that trailing space; a live game or an open Recent list gets it back. Nothing is hidden: a screen genuinely too short for the cards (about 640px tall or less, before the hot/cold strip appears) still scrolls.
 
 8 seeds green; webpush and refs pass.
+
+## 94. Messages say when they arrived, never a clock time they can't keep; push sync on hide; contract-year fix (r89, GM feedback)
+
+**From the GM (on r87):** several messages arrived over a few hours with the app closed and no push came. A seeded message said the clubhouse meeting was "at 9" when the team was created after 9 and the first game was at 1 PM. Should messages carry a received time, and should card text stop naming times?
+
+**When a message arrived.** Every inbox row shows its arrival time at the top right (the time today, "Yesterday", the weekday this week, the date before that); an open card starts with "Received Thu, Oct 29 at 11:42 AM". `arrivedAtMs` is now stamped on every path into the inbox (scheduled releases already had it; seeds, compose replies and debug cards get it too). Cards from before r89 that never recorded it show no time rather than a wrong one. A scheduled card's time is the moment it was due, so a card that came due with the app closed shows when it arrived, not when the app was opened.
+
+**No clock times in card text.** Decision: a message never names a time it can't guarantee. Rewritten:
+- clock times: the clubhouse meeting "at 9" (now: before the first game), "until approximately 6am", "until 3pm", "by 4pm", "by noon", "by lunch";
+- time-of-day words that could be wrong when the card arrives: "dinner tonight", "this morning", "overnight", "confirm this morning";
+- "tonight" in game-day cards (41 places; spring games and many regular-season games are 1:05 PM): pre-game and in-game cards arrive the same calendar day as the game, so they say "today"; between-games cards say "the game", "the next game" or nothing;
+- the injury evaluation card: "came out of today's game", "MRI Now". Its midnight and morning-exam wording stays: those are the card's real deadlines.
+
+**Push: the schedule is sent when the app goes to the background.** A schedule change waited 1.5 s (debounce) before syncing; if the app was swiped away in that window the phone froze the page and the worker never got it. `visibilitychange` → hidden now syncs immediately, and `/register` uses `keepalive` (under the browser's 64 KB cap) so the request finishes after the page is frozen. The deployed worker matches `workers/push-worker.js` (checked through the Cloudflare connector). **Not yet diagnosed:** why this morning's cards didn't push. The worker's `/status` page (last cron run, per-device schedule size, last push result) isn't reachable from the build session; the GM will send it.
+
+**Found and fixed on the way (harness, seed 6):**
+- **The trade engine read contracts one year off.** `contractExpiry` is the first season not covered (§70), but `_isRentalPlayer` and `_playerValue` read `expiry === season` as the final year. Final-year players were valued as if a year remained, and real rentals weren't treated as rentals. `TradeEngine.yearsAfterThis` now follows §70 and both use it.
+- **A player whose contract had run out could be traded in the offseason** (an expiring regular of ours went in an offseason call, then re-signed with the new club). `contractRunOut`: in the offseason, a player in the last year of a deal who hasn't re-signed is headed for free agency — `tradeBlockers`, `movable`, the cash sale and counters all leave them out.
+- **Two versions of a card family could arrive the same day** (one draw picked two, or two moments each picked one). `_selectCards` drops the rest of a family once one is picked, and the day's plan carries the families already chosen across its moments.
+- Harness: the "fair deal" copy check picks a player the other owner's books can carry (it checks value, not payroll); "clubs open a little under" needs at least one under-value opening once a season has 3+ calls (packages come in whole players and $25K steps).
+
+8 seeds green; webpush and refs pass.

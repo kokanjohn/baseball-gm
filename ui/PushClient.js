@@ -139,10 +139,14 @@ async function _syncNow() {
 async function _register(schedule) {
   const sub = await _getSubscription({ create: false });
   if (!sub) throw new Error('no push subscription');
+  const body = JSON.stringify({ userId: _deviceId(), subscription: sub.toJSON(), schedule });
   const res = await fetch(`${PUSH_WORKER_URL}/register`, {
     method:  'POST',
+    // §94 may be sent as the app goes to the background; let it finish
+    // (browsers cap keepalive requests at 64 KB).
+    keepalive: body.length < 60_000,
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ userId: _deviceId(), subscription: sub.toJSON(), schedule }),
+    body,
   });
   if (!res.ok) throw new Error(`worker /register ${res.status}`);
 }

@@ -294,6 +294,24 @@ function _renderToDo(inbox, state) {
   return `<div style="padding:0 16px 16px;">${cards}</div>`;
 }
 
+// §94 when a message reached the inbox: the time today, "Yesterday", the
+// weekday this week, the date before that; in full when the card is open.
+function _clock(ms) {
+  return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+function _shortWhen(ms) {
+  const d = new Date(ms), now = new Date();
+  const day = (x) => { const y = new Date(x); y.setHours(0, 0, 0, 0); return y.getTime(); };
+  const days = Math.round((day(now) - day(d)) / 86_400_000);
+  if (days <= 0) return _clock(ms);
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return d.toLocaleDateString('en-US', { weekday: 'short' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function _longWhen(ms) {
+  return `${new Date(ms).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${_clock(ms)}`;
+}
+
 function _renderCard(card, gameIdx) {
   const isExpanded  = _expandedCard === card.instanceId;
   const isUrgent    = card.type === 'urgent';
@@ -316,6 +334,7 @@ function _renderCard(card, gameIdx) {
 
   const bodyHtml = isExpanded ? `
     <div class="msg-body open">
+      ${Number.isFinite(card.arrivedAtMs) ? `<div class="msg-received">Received ${_longWhen(card.arrivedAtMs)}</div>` : ''}
       <div class="msg-body-text">${_escape(card.body || '')}</div>
       <div class="msg-actions" style="${isSingleAction ? 'justify-content:center' : ''}">
         <button class="btn-yes" ${isSingleAction ? 'style="max-width:280px;flex:0 1 auto;"' : ''}
@@ -343,7 +362,10 @@ function _renderCard(card, gameIdx) {
           <div class="msg-subject">${_escape(card.subject || '')}</div>
           <div class="msg-preview">${_escape(card.preview || '')}</div>
         </div>
-        <div class="unread-dot"></div>
+        <div class="msg-side">
+          ${Number.isFinite(card.arrivedAtMs) ? `<div class="msg-time">${_shortWhen(card.arrivedAtMs)}</div>` : ''}
+          <div class="unread-dot"></div>
+        </div>
       </div>
       ${bodyHtml}
     </div>

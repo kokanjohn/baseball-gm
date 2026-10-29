@@ -273,12 +273,16 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;
 .msg-preview{font-size:12px;color:var(--muted);margin-top:2px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .unread-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);flex-shrink:0;margin-top:4px;}
+.msg-side{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;}
+.msg-time{font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;}
+.msg-received{font-size:11px;font-weight:600;color:var(--muted);padding-top:12px;}
 .ttl-badge{font-size:9px;font-weight:800;color:var(--danger);background:var(--chip-red-bg);
   border-radius:5px;padding:1px 5px;letter-spacing:.3px;display:flex;align-items:center;gap:2px;}
 .ttl-badge.ttl-warn{color:#c8821a;background:#3a2a10;}
 .msg-body{display:none;padding:0 16px 16px;border-top:1px solid var(--border);}
 .msg-body.open{display:block;}
 .msg-body-text{font-size:14px;color:var(--soft);line-height:1.7;padding:14px 0 16px;}
+.msg-received + .msg-body-text{padding-top:6px;}
 .msg-actions{display:flex;gap:10px;}
 .btn-yes{flex:1;background:var(--accent2);color:var(--accent2-txt);border:none;padding:13px;
   border-radius:10px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;

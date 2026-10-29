@@ -30,7 +30,7 @@ import { PLAYER_GROUP, PHASE, TRADE, LEAGUE_TRADES, TRADE_DEADLINE_OPEN, TRADE_D
 import {
   valueToClub, evaluateForClub, wouldStart, tradeWindow, regularIndex, clubMode, cashValue,
   remainingShare, clubBar, isKeyPiece, playsSlot, packageValue,
-  busyWithUs, offerAwaitingUs, evaluateForUser, talkWith,
+  busyWithUs, offerAwaitingUs, evaluateForUser, talkWith, contractRunOut,
 } from './TradeEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { isAvailable } from './PlayerFactory.js';
@@ -101,9 +101,9 @@ export function fillsNeed(p, need) {
 
 // ── Who can be moved ────────────────────────────────────────────────────────
 
-/** Can this player be traded right now (healthy, settled, not just acquired)? */
-export function movable(p, atMs) {
-  return !!p && isAvailable(p) && !p.isInjured
+/** Can this player be traded right now (healthy, settled, not just acquired, still under contract)? */
+export function movable(p, atMs, state) {
+  return !!p && isAvailable(p) && !p.isInjured && !contractRunOut(p, state)
     && ![PLAYER_GROUP.IN_TRANSIT, PLAYER_GROUP.IL, PLAYER_GROUP.FREE_AGENT, PLAYER_GROUP.RETIRED, PLAYER_GROUP.DEPARTED].includes(p.group)
     && !p.onWaivers
     && !(p._acquiredAtMs && atMs - p._acquiredAtMs < TRADE.noFlipMs);
@@ -124,7 +124,7 @@ function _spare(state, teamId, atMs, { keep = new Set(), allow = new Set() } = {
   const t = _club(state, teamId);
   const promised = teamId === 'user' ? new Set() : promisedToUs(state, teamId);
   return _org(t).map(id => state.players[id])
-    .filter(p => movable(p, atMs) && _settled(p, atMs, teamId !== 'user') && !keep.has(p.id) && !promised.has(p.id)
+    .filter(p => movable(p, atMs, state) && _settled(p, atMs, teamId !== 'user') && !keep.has(p.id) && !promised.has(p.id)
               && (allow.has(p.id) || !isKeyPiece(p, state, teamId)));
 }
 
@@ -208,7 +208,7 @@ export function buildPackage(state, buyerId, sellerId, targetIds, opts = {}) {
   const atMs = opts.atMs ?? Date.now();
   const sellerBar = opts.sellerBar ?? 0;
   const targets = targetIds.map(id => state.players[id]).filter(Boolean);
-  if (!targets.length || targets.some(p => !movable(p, atMs))) return null;
+  if (!targets.length || targets.some(p => !movable(p, atMs, state))) return null;
   const give = packageValue(targets.map(p => valueToClub(p, state, sellerId, false)));
   const need = give + sellerBar;
   // What the buyer can spare, ranked by what it's worth to the seller.
@@ -325,7 +325,7 @@ export function findLeagueTrades(state, atMs, rand = Math.random) {
       if (seller.id === buyer.id || used.has(seller.id)) continue;
       const promised = promisedToUs(state, seller.id);
       const fits = _org(seller).map(id => state.players[id])
-        .filter(p => movable(p, atMs) && _settled(p, atMs, true) && !promised.has(p.id) && fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + LEAGUE_TRADES.upgradeMin)
+        .filter(p => movable(p, atMs, state) && _settled(p, atMs, true) && !promised.has(p.id) && fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + LEAGUE_TRADES.upgradeMin)
         .sort((x, y) => (y.ovr || 0) - (x.ovr || 0))
         .slice(0, 3);
       for (const p of fits) {
@@ -344,7 +344,7 @@ export function findLeagueTrades(state, atMs, rand = Math.random) {
     if (calls > 0 && !busyWithUs(state, buyer.id, atMs)) {
       for (const [i, n] of needs.slice(0, 2).entries()) {
         const fits = _org(state.userTeam).map(id => state.players[id])
-          .filter(p => movable(p, atMs) && fillsNeed(p, n) && (p.ovr || 0) >= n.ovr + LEAGUE_TRADES.upgradeMin)
+          .filter(p => movable(p, atMs, state) && fillsNeed(p, n) && (p.ovr || 0) >= n.ovr + LEAGUE_TRADES.upgradeMin)
           .sort((x, y) => (y.ovr || 0) - (x.ovr || 0))
           .slice(0, 3);
         for (const p of fits) {
@@ -457,7 +457,7 @@ export function bestOption(state, fits, atMs, { excludeTeams = new Set(), exclud
     if (excludeTeams.has(t.id)) continue;
     for (const id of _org(t)) {
       const p = state.players[id];
-      if (excludeIds.has(id) || !movable(p, atMs) || !fits(p) || !wouldStart(p, state, 'user')) continue;
+      if (excludeIds.has(id) || !movable(p, atMs, state) || !fits(p) || !wouldStart(p, state, 'user')) continue;
       cands.push({ t, p });
     }
   }

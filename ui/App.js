@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r88';
+export const APP_VERSION = 'tfo-v2-r89';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -852,8 +852,11 @@ export function getDevTimeScale() { return _devTimeScale; }
 
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') {
-    // Going to background — record the time
+    // Going to background — record the time, and hand the push worker the
+    // latest schedule NOW: a sync still waiting on its debounce would never
+    // run once the phone freezes the page (§94).
     _lastActiveTime = Date.now();
+    _syncPush({ immediate: true });
     return;
   }
 
