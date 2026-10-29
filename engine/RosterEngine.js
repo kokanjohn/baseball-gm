@@ -1299,3 +1299,37 @@ function _mergeMutations(a, b) {
 }
 
 
+
+
+// ─────────────────────────────────────────────────────────────
+// §95 THE CLUB'S RATING, AND ITS HISTORY
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * teamRating(state, teamId) — the Rating on the dashboard: the average OVR of
+ * the club's healthy active roster (injured players and the IL left out).
+ * The one definition; the dashboard, cards and the history all read it.
+ */
+export function teamRating(state, teamId = 'user') {
+  const team = teamId === 'user' ? state?.userTeam : (state?.leagueTeams || []).find(t => t.id === teamId);
+  const active = (team?.rosterIds || []).map(id => state.players?.[id])
+    .filter(p => p && !p.isInjured && p.group !== PLAYER_GROUP.IL);
+  if (!active.length) return 0;
+  return Math.round(active.reduce((a, p) => a + (p.ovr || 0), 0) / active.length);
+}
+
+/**
+ * recordRating(draft, atMs) — add a point to `ratingHistory` ({ t, r, s }:
+ * the moment, the rating, the season) when the rating has changed, or a new
+ * season has started. Kept for the life of the franchise. Mutates draft.
+ */
+export function recordRating(draft, atMs) {
+  const r = teamRating(draft, 'user');
+  if (!r) return;
+  const s = draft.seasonNum || 1;
+  const h = draft.ratingHistory || (draft.ratingHistory = []);
+  const last = h[h.length - 1];
+  if (last && last.r === r && last.s === s) return;
+  if (last && atMs < last.t) atMs = last.t;   // never out of order
+  h.push({ t: atMs, r, s });
+}

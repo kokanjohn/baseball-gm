@@ -22,6 +22,7 @@
 
 import { COLOR_PALETTE, COLOR_PRIMARY_DEFAULT, COLOR_SECONDARY_DEFAULT } from '../data/constants.js';
 import { computeAge } from '../engine/PlayerFactory.js';
+import { teamRating } from '../engine/RosterEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // MONEY FORMATTING
@@ -65,11 +66,7 @@ export function metricBarColor(val) {
 
 /** Team rating shown on the Dashboard: mean OVR of healthy rostered players. */
 export function computeRosterOvr(state) {
-  const ids = state?.userTeam?.rosterIds || [];
-  if (!ids.length) return 0;
-  const active = ids.map(id => state.players?.[id]).filter(p => p && !p.isInjured && p.group !== 'IL');
-  if (!active.length) return 0;
-  return Math.round(active.reduce((s, p) => s + (p.ovr || 0), 0) / active.length);
+  return state ? teamRating(state, 'user') : 0;   // §95 one definition (RosterEngine)
 }
 
 /** Snapshot of every metric a card decision can move. */

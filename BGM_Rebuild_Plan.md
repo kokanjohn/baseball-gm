@@ -7309,3 +7309,18 @@ Team colors stay on non-text elements (borders, underlines, bars, button fills, 
 - Harness: the "fair deal" copy check picks a player the other owner's books can carry (it checks value, not payroll); "clubs open a little under" needs at least one under-value opening once a season has 3+ calls (packages come in whole players and $25K steps).
 
 8 seeds green; webpush and refs pass.
+
+## 95. The Completed tab shows messages in full; the Rating card opens the rating's history (r90, GM feedback)
+
+**Completed tab.** Each decided message is shown in full instead of a summary line: sender and tag, subject, when it was received and when it was decided, the whole message, the decision ("Your decision", or "No answer in time — decided by default" with the default's label), and how it turned out (the card's own outcome line, or its expiry line for a default). Notices read as "Read". Cards now record `resolvedAtMs` on every path (a decision, a default, a notice read); the tab lists the newest decision first by that moment (older saves fall back to game order). Delete / Delete All / Undo are unchanged.
+
+**The Rating card opens "Rating" (`ui/components/RatingHistory.js`).** A bottom sheet with:
+- the rating now and its change since the GM took over; the high and low (with dates) and the number of seasons;
+- a line chart of every change since the first day — drawn as steps, since the rating moves at moments (a trade, a call-up, an injury, development) and holds between them; a dashed line and label where each later season begins; touch-and-drag (or hover) shows the date, season and rating at that point;
+- the changes as a list (newest first, up to 40): the same data as text;
+- a fixed readable blue for the line in each theme, never the team color (§93).
+Before the first change it says the history starts the day the GM took over.
+
+**The history (`state.ratingHistory`, `{ t, r, s }`).** `RosterEngine.teamRating` is now the one definition of the Rating (average OVR of the healthy active roster); the dashboard (`formatters.computeRosterOvr`) reads it. `recordRating` adds a point when the rating changes or a new season starts: at team creation, at each committed game, and after every roster-clock pass (moves, injuries, development, offseason steps). It is kept for the life of the franchise. It replaces `metricHistory` (per game, this season only, written but never read, and computed with a different average that counted injured players); saves from before r90 convert this season's per-game points to the new history.
+
+Harness: the rating history is kept across seasons, in time order, one point per change, and its last point is the rating the dashboard shows. 8 seeds green; webpush and refs pass.

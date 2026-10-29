@@ -567,8 +567,8 @@ function _renderDashboard(state) {
           <div class="stat-label" style="text-align:center;">Losses</div>
           <div class="stat-value">${losses}</div>
         </div>
-        <div class="stat-card ${ovrClass}"
-          style="flex-direction:column;align-items:center;justify-content:center;padding:10px 8px;">
+        <div class="stat-card ${ovrClass}" id="dash-rating-card"
+          style="flex-direction:column;align-items:center;justify-content:center;padding:10px 8px;cursor:pointer;">
           <div class="stat-label" style="text-align:center;">Rating</div>
           <div class="stat-value">${formatOVR(rosterOvr)}</div>
         </div>
@@ -1303,6 +1303,12 @@ function _refreshLeagueRow() {
 function _attachListeners(state) {
   wireLeagueGameTaps(document.getElementById('dash-league-live'));
   _wireRecent();
+  // §95 the Rating card opens the club's rating over time.
+  document.getElementById('dash-rating-card')?.addEventListener('click', async () => {
+    const { openRatingHistory } = await import('../components/RatingHistory.js');
+    openRatingHistory(StateManager.get());
+    App.playSoundOpen();
+  });
   document.getElementById('dash-wins-card')?.addEventListener('click', () => {
     App.playClick();
     _openGameLogModal(state, 'wins');

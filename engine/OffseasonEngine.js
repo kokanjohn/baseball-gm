@@ -868,7 +868,6 @@ export function openNewSeason(draft, atMs) {
   draft.currentGameIndex = 0;
   draft.standings      = null;
   draft.playoffBracket = null;
-  draft.metricHistory  = [];
   draft.offseason      = null;
   for (const p of Object.values(draft.players || {})) {
     if (!p) continue;

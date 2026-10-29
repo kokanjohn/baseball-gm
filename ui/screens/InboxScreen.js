@@ -417,28 +417,44 @@ function _renderCompleted(state) {
     </div>`;
   }
 
+  // §95 each decided message in full: who sent it and when, the whole
+  // message, the decision, and how it turned out.
   const cards = history.map(card => {
-    const choiceLabel = card.choice === 'yes' ? card.yesLabel || 'Accepted'
-                      : card.choice === 'no'  ? card.noLabel  || 'Declined'
-                      : card.choice === 'auto' ? (card._autoLabel || 'Auto-resolved')
-                      : 'Dismissed';
-    const choiceCls   = card.choice === 'yes' ? 'yes'
-                      : card.choice === 'no'  ? 'no'
-                      : 'dismissed';
-    const gameRef     = card.resolvedAt !== null && card.resolvedAt !== undefined
-                      ? `Game ${card.resolvedAt + 1}`
-                      : '';
+    const auto = card.choice === 'auto';
+    const autoPick = card.autoChoice || null;
+    const decision = card.choice === 'yes' ? (card.yesLabel || 'Accepted')
+                   : card.choice === 'no'  ? (card.noLabel  || 'Declined')
+                   : auto ? (card._autoLabel || (autoPick === 'yes' ? card.yesLabel : autoPick === 'no' ? card.noLabel : null) || 'Decided by default')
+                   : (card.yesLabel || 'Read');
+    const choiceCls = card.choice === 'yes' ? 'yes' : card.choice === 'no' ? 'no' : 'dismissed';
+    const outcome = card.choice === 'yes' ? card.yesMsg
+                  : card.choice === 'no'  ? card.noMsg
+                  : auto ? (card.expireMsg || (autoPick === 'yes' ? card.yesMsg : autoPick === 'no' ? card.noMsg : null))
+                  : null;
+    const decidedLine = card.choice === 'skip' ? 'Read' : auto ? 'No answer in time — decided by default' : 'Your decision';
+    const when = [
+      Number.isFinite(card.arrivedAtMs)  ? `Received ${_longWhen(card.arrivedAtMs)}` : '',
+      Number.isFinite(card.resolvedAtMs) ? `${card.choice === 'skip' ? 'Read' : 'Decided'} ${_longWhen(card.resolvedAtMs)}` : '',
+    ].filter(Boolean).join(' · ');
+    const tagLabel = card.tag || 'INFO';
 
     return `
-      <div class="completed-card">
-        <div class="completed-avatar">${card.avatar || '📋'}</div>
-        <div class="completed-meta">
-          <div class="completed-from">${_escape(card.sender || '')}</div>
-          <div class="completed-subject">${_escape(card.subject || '')}</div>
-          <span class="completed-action ${choiceCls}">${_escape(choiceLabel)}</span>
-          ${gameRef ? `<div class="completed-game">${gameRef}</div>` : ''}
+      <div class="completed-card completed-full">
+        <div class="completed-head">
+          <div class="completed-avatar">${card.avatar || '📋'}</div>
+          <div class="completed-meta">
+            <div class="completed-from">${_escape(card.sender || '')} <span class="msg-from-tag tag-normal">${_escape(tagLabel)}</span></div>
+            <div class="completed-subject">${_escape(card.subject || '')}</div>
+          </div>
+          <button class="completed-del" data-clear="${card.instanceId}" title="Delete" aria-label="Delete">×</button>
         </div>
-        <button class="completed-del" data-clear="${card.instanceId}" title="Delete" aria-label="Delete">×</button>
+        ${when ? `<div class="completed-when">${when}</div>` : ''}
+        <div class="completed-body">${_escape(card.body || card.preview || '')}</div>
+        <div class="completed-decision">
+          <div class="completed-decision-label">${decidedLine}</div>
+          ${card.choice === 'skip' ? '' : `<span class="completed-action ${choiceCls}">${_escape(decision)}</span>`}
+          ${outcome ? `<div class="completed-outcome">${_escape(outcome)}</div>` : ''}
+        </div>
       </div>
     `;
   }).join('');
@@ -747,6 +763,15 @@ function _injectCSS() {
     .completed-tool{font-size:11px;font-weight:700;padding:5px 10px;border-radius:8px;border:1px solid var(--accent);color:var(--text);background:transparent;cursor:pointer;}
     .completed-tool.muted{border-color:var(--border);color:var(--muted);}
     .completed-card{position:relative;}
+    .completed-full{display:block;padding:14px 16px;}
+    .completed-head{display:flex;align-items:flex-start;gap:10px;}
+    .completed-full .completed-from{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;font-weight:700;color:var(--text);}
+    .completed-full .completed-subject{font-size:14px;margin-top:3px;margin-bottom:0;}
+    .completed-when{font-size:11px;font-weight:600;color:var(--muted);margin-top:10px;}
+    .completed-body{font-size:14px;color:var(--soft);line-height:1.65;margin-top:6px;white-space:pre-line;}
+    .completed-decision{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);}
+    .completed-decision-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;}
+    .completed-outcome{font-size:13px;color:var(--text);line-height:1.5;margin-top:8px;}
     .completed-del{margin-left:auto;align-self:flex-start;flex-shrink:0;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;}
     @keyframes slideUp{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
   `;

@@ -57,6 +57,7 @@ import {
   applyRosterMutation,
   defaultActiveGroup,
   pendingArrivals,
+  teamRating, recordRating,
 } from './RosterEngine.js';
 
 import { rosterClock, applyDue, hasDue, callUp, cpuSalaryMove } from './TransactionEngine.js';
@@ -521,6 +522,7 @@ export async function startNewGame(config) {
       winPct:          (s.userTeam._ownerWinTarget || 66) / REGULAR_SEASON_GAME_COUNT,
     });
     s.userTeam.finances.payroll = Finance.payrollOf(s, 'user');
+    recordRating(s, Date.now());   // §95 the rating the day the GM takes over
     // §78.5 every CPU club keeps books of its own.
     for (const t of s.leagueTeams || []) Finance.initClubBooks(s, t.id);
 
@@ -1022,14 +1024,8 @@ export async function commitGame(gameIndex) {
     // Append stat increments for each player who appeared in this game
     // (play._statDeltas handles this via accumulateStats — log appended here)
     // IMPEngine.appendGameLog called per player by accumulateStats caller
-    // Full IMP recompute happens below after all mutations are applied.    // ── Step 7: Metric history snapshot ───────────────────
-    const avgOvr = _computeRosterAvgOvr(s);
-    s.metricHistory.push({
-      gameIndex,
-      ovr:    avgOvr,
-      wins:   s.userTeam.wins,
-      losses: s.userTeam.losses,
-    });
+    // Full IMP recompute happens below after all mutations are applied.    // ── Step 7: the rating's history (§95) ────────────────
+    recordRating(s, Date.now());
 
     // ── Step 8: Strip per-game play data (§8.1) ────────────
     // All play-dependent processing is done; game.boxScore holds the
@@ -2478,6 +2474,12 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
   }
   events.push(..._seasonProgress(clockMs));
   const step = _rosterStep(clockMs, { reconcileAll: !!opts.reconcileAll, events });
+  // §95 any move, injury, development or offseason step that changed the
+  // club's rating is a point on its history.
+  if (teamRating(StateManager.get(), 'user') !== (StateManager.get().ratingHistory || []).slice(-1)[0]?.r
+      || (StateManager.get().ratingHistory || []).slice(-1)[0]?.s !== (StateManager.get().seasonNum || 1)) {
+    StateManager.mutate(s => { recordRating(s, clockMs); });
+  }
   return { changed: changed || step.changed || events.some(e => e.type === 'PHASE'),
            events: [...events, ...step.events], clockMs };
 }
@@ -2812,13 +2814,6 @@ function _appearances(state, gameIndex) {
   }
   // Other CPU clubs' injuries come from their own games (_finishLeagueGame).
   return out;
-}
-
-function _computeRosterAvgOvr(state) {
-  const ids = state.userTeam.rosterIds || [];
-  if (ids.length === 0) return 55;
-  const sum = ids.reduce((s, id) => s + (state.players[id]?.ovr || 55), 0);
-  return Math.round(sum / ids.length);
 }
 
 function _userQualifiedForPlayoffs(state) {

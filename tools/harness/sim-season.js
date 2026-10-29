@@ -37,6 +37,7 @@ import {
   NEW_TEAM_SEED_CARDS, ALL_STAR_BREAK_AFTER_GAME, ALLSTAR_ANNOUNCE_GAME_MIN, ALLSTAR_ANNOUNCE_GAME_MAX,
   ALLSTAR_SQUAD_SIZE, ALLSTAR_STARTER_INNINGS, LINEUP_SLOTS,
 } from '../../data/constants.js';
+import * as Roster from '../../engine/RosterEngine.js';
 import {
   reconcileRoster, applyRosterMutation, eligibleSlotsFor, pendingArrivals, nextCalendarDay,
 } from '../../engine/RosterEngine.js';
@@ -378,6 +379,17 @@ async function runOffseasonChecks() {
   check(`offseason: amateur prospects join every farm (${prospects})`, prospects >= 20);
   const recs = teams.every(t => !t.wins && !t.losses && !t.springWins && !t.postseasonWins);
   check('season 2: every record starts at zero', recs && st.standings === null && st.playoffBracket === null && st.currentGameIndex === 0);
+  {
+    // §95 the rating's history: kept across seasons, in time order, a point
+    // for each change, and its last point is the rating the dashboard shows.
+    const h = st.ratingHistory || [];
+    const ordered = h.every((p, i) => i === 0 || p.t >= h[i - 1].t);
+    const changesOnly = h.every((p, i) => i === 0 || p.r !== h[i - 1].r || p.s !== h[i - 1].s);
+    check(`rating history: kept across seasons (${h.length} points, seasons ${[...new Set(h.map(p => p.s))].join(',')})`,
+          h.length >= 10 && h.some(p => p.s === 1) && h.some(p => p.s === 2) && ordered && changesOnly
+          && h[h.length - 1].r === Roster.teamRating(st, 'user') && st.metricHistory === undefined,
+          JSON.stringify(h.slice(-3)));
+  }
   {
     // §78: season 1's books — closed, reconciled to the dollar, salaries truly paid.
     const f = st.userTeam.finances, h = (f.history || [])[0];

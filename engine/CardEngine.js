@@ -244,6 +244,7 @@ export function resolve(instanceId, choice) {
       card.resolved    = true;
       card.resolvedAt  = s.currentGameIndex || 0;
       card.choice      = choice;
+      card.resolvedAtMs = Date.now();   // §95 when the decision was made (Completed tab)
     }
 
     // Apply soft metric effects
@@ -366,7 +367,7 @@ export function expire(instanceId, atMs = Date.now()) {
     // Silently dismiss
     StateManager.mutate(s => {
       const card = s.inbox.find(c => c.instanceId === instanceId);
-      if (card) { card.resolved = true; card.choice = 'skip'; }
+      if (card) { card.resolved = true; card.choice = 'skip'; card.resolvedAtMs = atMs; }
     });
     return;
   }
@@ -383,6 +384,7 @@ export function expire(instanceId, atMs = Date.now()) {
       card.choice    = 'auto';
       card.autoChoice = def;
       card.resolvedAt = s.currentGameIndex || 0;
+      card.resolvedAtMs = atMs;
     }
     _applySoftEffects(s, def === 'yes' ? instance.yesEffect : instance.noEffect, def, instance);
     _applyChoiceMoney(s, instance, def);
@@ -1692,7 +1694,8 @@ export function getHistory(limit = 20) {
   const state = StateManager.get();
   return (state.inbox || [])
     .filter(c => c.resolved && !c._cleared)
-    .sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0))
+    // newest decision first (§95: by the moment it was made; older saves by game)
+    .sort((a, b) => ((b.resolvedAtMs || 0) - (a.resolvedAtMs || 0)) || ((b.resolvedAt || 0) - (a.resolvedAt || 0)))
     .slice(0, limit);
 }
 

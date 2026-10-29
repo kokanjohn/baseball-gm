@@ -75,7 +75,7 @@ export function createGameState(config = {}) {
     seenMilestones:         [],   // 'MILESTONE_ID@season' keys — serialized as Array (not Set)
     milestoneQueue:         [],   // milestones queued by league events, shown in order (§68)
     seasonHistory:          [],   // season summary objects added each offseason
-    metricHistory:          [],   // { gameIndex, ovr, wins, losses } per game
+    ratingHistory:          [],   // §95 { t, r, s }: the club's Rating each time it changed, for the life of the franchise
 
     // ── Impact Rating (IMP) scores — cached per player ────
     // { [playerId]: { imp7, imp15, imp30, impS, updatedAtGame } }
@@ -577,6 +577,19 @@ function _fillDefaults(state) {
   // which GameEngine builds on first use for saves from before it existed.
   delete state.allStarHostingScore; delete state.allStarHostedCount; delete state.allStarLastHostedSeason;
   if (state.userTeam) delete state.userTeam.hostingScore;
+
+  // §95 the per-game metricHistory (this season only, never read) becomes
+  // the franchise's ratingHistory: each game's rating at its first pitch.
+  if (state.ratingHistory === undefined) {
+    state.ratingHistory = [];
+    for (const m of state.metricHistory || []) {
+      const t = state.schedule?.[m.gameIndex]?.gameTime;
+      const last = state.ratingHistory[state.ratingHistory.length - 1];
+      if (Number.isFinite(t) && Number.isFinite(m.ovr) && !(last && last.r === m.ovr))
+        state.ratingHistory.push({ t, r: m.ovr, s: state.seasonNum || 1 });
+    }
+  }
+  delete state.metricHistory;
 
   // Fill new top-level fields
   const newTopLevel = {
