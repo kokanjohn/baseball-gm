@@ -255,9 +255,10 @@ export function claimFromWaivers(state, playerId, claimingTeamId) {
  *
  * @param {Object} state
  * @param {String} playerId
+ * @param {Number} [atMs]  when he cleared (stamps a free agent's _faSince)
  * @returns {Object} mutations
  */
-export function clearWaivers(state, playerId) {
+export function clearWaivers(state, playerId, atMs = null) {
   _assertPlayerExists(state, playerId);
   const player = state.players[playerId];
   const owner  = player._waivedBy;
@@ -276,7 +277,9 @@ export function clearWaivers(state, playerId) {
 
   return {
     players: {
-      [playerId]: { ...reset, group: 'freeAgent', tier: 'farm', teamId: null },
+      // A free agent like any other: on the market, from the club that let him go.
+      [playerId]: { ...reset, group: 'freeAgent', tier: 'freeAgent', teamId: null,
+                    _faFrom: owner || null, _faSince: atMs ?? player.waiverStartTime ?? null, _faReason: 'waivers' },
     },
     waiverPool:    pool,
     freeAgentPool: [...(state.freeAgentPool || []), playerId],

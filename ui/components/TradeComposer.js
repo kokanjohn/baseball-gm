@@ -17,7 +17,7 @@ import { TRADE } from '../../data/constants.js';
 import {
   tradeBlockers, scoutRead, rapportOf, rapportGrade, clubMode, cooldownUntil, remainingShare,
 } from '../../engine/TradeEngine.js';
-import { proposeTrade, talkWith, ourSideBlocker } from '../../engine/Negotiation.js';
+import { proposeTrade, talkIsOpen, ourSideBlocker } from '../../engine/Negotiation.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatK } from '../../engine/CardTokens.js';
 
@@ -60,9 +60,8 @@ function _teamsHtml(state) {
   const rows = (state.leagueTeams || []).map(t => {
     const mode = clubMode(state, t.id);
     const cool = cooldownUntil(state, t.id) > now;
-    const talk = talkWith(state, t.id);
-    const status = cool ? 'Not taking calls'
-      : talk && ['waiting', 'countered', 'agreed'].includes(talk.status) ? 'Talks open'
+    const status = talkIsOpen(state, t.id, now) ? 'Talks open'
+      : cool ? 'Not taking calls'
       : mode === 'buyer' ? 'Buying' : mode === 'seller' ? 'Selling' : '';
     return `<button class="tc-team" data-team="${t.id}">
       <span class="tc-team-name">${_esc(t.name)}</span>

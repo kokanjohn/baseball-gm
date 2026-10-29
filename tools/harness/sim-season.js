@@ -98,6 +98,9 @@ function cardDidIt(action, c, st) {
   const tp = (r) => st.players[c._tokenPlayers?.[r]];
   const inLineup = (id) => (u.lineupSlots || []).some(sl => sl.playerId === id);
   const inRot = (id) => (u.rotation?.order || []).includes(id);
+  // §89 a player signed while games are on reports the next day (a pending arrival).
+  const joining = (id) => u.rosterIds.includes(id)
+    || (st.transactions || []).some(t => t.kind === 'arrival' && t.status === 'pending' && t.teamId === 'user' && t.playerId === id);
   if (AWAY_ACTIONS.has(action)) return !!p?.unavailable && !inLineup(p.id) && !inRot(p.id);
   switch (action) {
     case 'ill2_sick_start': return !!p?.condition;
@@ -111,14 +114,14 @@ function cardDidIt(action, c, st) {
     case 'move_bp_to_rotation': return inRot(p?.id) && p.group === 'sp';
     // §73 outside players
     case 'sign_acquire_hitter': case 'sign_veteran_hitter': case 'sign_dfa':
-      return u.rosterIds.includes(c._tokenPlayers.acq_hitter || c._tokenPlayers.dfa_player);
+      return joining(c._tokenPlayers.acq_hitter || c._tokenPlayers.dfa_player);
     case 'sign_acquire_pitcher': case 'sign_prospect_pitcher': return (u.farmIds || []).includes(c._tokenPlayers.acq_pitcher);
     case 'sign_intl_player': case 'sign_intl_flyer': return (u.farmIds || []).includes(c._tokenPlayers.intl_player);
     case 'indie_sign': return (u.farmIds || []).includes(c._targetPlayerId);
     case 'waiver_dfa': return !!st.players[c._tokenPlayers.dfa_player]?._userClaim;
     case 'trade_acquire_pitcher': case 'trade_acquire_hitter': case 'dl3_acquire':
       return (st.transactions || []).some(t => t.kind === 'trade' && t.offer?.incomingIds?.includes(c._offer?.incomingIds?.[0]));
-    case 'sp15_callup': return u.rosterIds.includes(c._tokenPlayers.nri);
+    case 'sp15_callup': return joining(c._tokenPlayers.nri);
     case 'intl_workout': return (st.scheduledCards || []).some(x => (x._rosterKey || '').includes(c._tokenPlayers.intl_player));
     case 'scouting_intl_trip': return (st.scheduledCards || []).some(x => x.cardId === 'sc3');
     case 'scouting_indie_tip': return (st.scheduledCards || []).some(x => x.cardId === 'indie_report');
@@ -203,7 +206,7 @@ function gmProposes() {
   const now = clock.get();
   if (!Trades.tradeWindow(st).open) return;
   const teams = (st.leagueTeams || []).filter(t => Trades.cooldownUntil(st, t.id) <= now
-    && !['waiting', 'countered', 'agreed'].includes(Negotiation.talkWith(st, t.id)?.status));
+    && !Negotiation.talkIsOpen(st, t.id, now));
   const team = teams[Math.floor(Math.random() * teams.length)];
   if (!team) return;
   const usable = (p) => p && !p.isInjured && p.group !== PLAYER_GROUP.IL && p.group !== PLAYER_GROUP.IN_TRANSIT
@@ -332,8 +335,14 @@ async function runOffseasonChecks() {
   const upAfter = [...where.keys()].filter(id => Offseason.yearsLeft(st.players[id], st.seasonNum) < 1);
   check('offseason: every player on a club is under contract for season 2', upAfter.length === 0,
         upAfter.slice(0, 5).map(id => `${st.players[id].name} exp ${st.players[id].contractExpiry} ${where.get(id)}/${st.players[id].group}/${st.players[id].tier}/${st.players[id]._amateurSigning || ''}${st.players[id]._depthSigning ? 'D' : ''}`).join(', '));
-  check('offseason: free-agent pool empties at spring (unsigned players leave)',
-        (st.freeAgentPool || []).length === 0 && !Object.values(st.players).some(p => p.group === PLAYER_GROUP.FREE_AGENT));
+  // Players let go once spring has opened (a waiver that clears, a farm
+  // overflow) are free agents in their own right; the offseason's unsigned are gone.
+  const fas = Object.values(st.players).filter(p => p.group === PLAYER_GROUP.FREE_AGENT);
+  const leftover = fas.filter(p => !(p._faSince >= os.springAt));
+  const poolSet = new Set(st.freeAgentPool || []);
+  check(`offseason: free-agent pool empties at spring (unsigned players leave; ${fas.length - leftover.length} let go since)`,
+        leftover.length === 0 && fas.every(p => poolSet.has(p.id)) && [...poolSet].every(id => st.players[id]?.group === PLAYER_GROUP.FREE_AGENT),
+        leftover.slice(0, 4).map(p => `${p.name} ${p.tier} from=${p._faFrom} since=${p._faSince} ${p._faReason}`).join(', '));
   check(`offseason: one re-sign card per expiring user player (${resignCards.size}/${expiringUser.filter(id => SM.get().players[id]?.group !== PLAYER_GROUP.RETIRED).length})`,
         expiringUser.filter(id => st.players[id]?.retiredSeason !== 1).every(id => resignCards.has(id)));
   check(`offseason: in-season extensions take effect (${extendedUser.length})`,
@@ -911,8 +920,16 @@ function checkTalks(st) {
   const sent = gm.talks.filter(t => t.ok);
   check(`trade talks: the GM starts trades (${sent.length} sent, ${gm.talks.length - sent.length} refused before sending: ${[...new Set(gm.talks.filter(t => !t.ok).map(t => t.reason))].slice(0, 3).join('; ')})`, sent.length >= 1);
   const talks = Object.entries(st.tradeTalks || {}).map(([id, t]) => ({ id, t: t.talk })).filter(x => x.t);
-  const stuck = talks.filter(x => x.t.status === 'waiting' && x.t.replyAtMs < clock.get() - 86_400_000);
+  // §89: the answer is decided when the offer goes out and reaches us later
+  // as a scheduled card (so it can be pushed with the app closed).
+  const cardsFor = (t) => [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._talkId === t.id || c._rosterKey === `talk:off:${t.id}:${t.round}`);
+  const stuck = talks.filter(x => x.t.replyAtMs < clock.get() - 86_400_000 && !cardsFor(x.t).length);
   check(`trade talks: every offer gets an answer on the clock (${talks.length} talks; ${talks.map(x => x.t.status).join(',')})`, stuck.length === 0, stuck.map(x => x.id).join(','));
+  check('trade talks: the answer is decided when the offer is sent', talks.every(x => !x.t.answer || x.t.answer.atMs === x.t.sentAtMs));
+  const early = talks.filter(x => (st.inbox || []).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.cardId !== 'trade_off' && (c.deliveredAtMs ?? c.deliverAtMs ?? 0) < x.t.replyAtMs - 60_000));
+  check('trade talks: no answer reaches us before its reply time', early.length === 0, early.map(x => x.id).join(','));
+  const unsettled = talks.filter(x => x.t.pending && (st.inbox || []).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.resolved));
+  check('trade talks: how an offer landed takes effect once its answer is read', unsettled.length === 0, unsettled.map(x => x.id).join(','));
   check('trade talks: no talk goes past the round limit', talks.every(x => (x.t.round || 1) <= 3));
   const replies = (st.inbox || []).filter(c => /^talk_/.test(c.cardId || ''));
   const kinds = {};
@@ -1278,6 +1295,7 @@ async function main() {
       ];
       check(`game ${idx}: nobody plays before reporting / after leaving`, wrong.length === 0,
             wrong.map(x => x.name).join(', '));
+      if (wrong.length && process.env.TX_DUMP) for (const x of wrong) console.log(x.name, JSON.stringify([...txSeen.values()].filter(t => t.playerId === x.id).map(t => [t.kind, t.teamId, t.fromTeamId, t.reason, t.status, t.createdAt - g.gameTime, t.effectiveAt - g.gameTime])), post.players[x.id]?.teamId, post.players[x.id]?.group);
     }
     assertNoGhosts(`after game ${idx}`);
     for (const pl of Object.values(post.players)) {

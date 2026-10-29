@@ -537,7 +537,7 @@ function _resolveWaiver(draft, player, atMs, events, touched) {
     return;
   }
   const from = player._waivedBy;
-  applyRosterMutation(draft, clearWaivers(draft, player.id));
+  applyRosterMutation(draft, clearWaivers(draft, player.id, atMs));
   if (from) touched.add(from);
   events.push({ type: 'WAIVER_CLEARED', playerId: player.id, teamId: draft.players[player.id]?.teamId || null, atMs });
 }
@@ -641,6 +641,12 @@ function _arrive(draft, tx, events, touched) {
       applyRosterMutation(draft, sendToFarm(draft, out.id, tx.teamId));
       events.push({ type: 'OPTIONED', playerId: out.id, teamId: tx.teamId, atMs: tx.effectiveAt, reason: 'corresponding move' });
     }
+  }
+  // §89 a veteran signed to start takes the spot he was signed for, if the
+  // player he replaces still holds it.
+  if (tx.startAt) {
+    const sl = (team.lineupSlots || []).find(x => x.slot === tx.startAt.slot && x.playerId === tx.startAt.replacing);
+    if (sl && eligibleSlotsFor(player).includes(sl.slot)) sl.playerId = player.id;
   }
   tx.status = 'done';
   touched.add(tx.teamId);

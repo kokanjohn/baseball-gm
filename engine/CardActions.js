@@ -267,12 +267,11 @@ const signStarter = {
     && affords(st, signingTerms(st, st.players[role(c, 'acq_hitter')]).salary, role(c, 'drop_hitter'), 'hitter'),
   apply(d, c, atMs) {
     const id = role(c, 'acq_hitter');
-    const events = signToClub(d, id, 'user', atMs, { displaceId: role(c, 'drop_hitter') });
     const p = d.players[id];
-    const i = (d.userTeam.lineupSlots || []).findIndex(s => s.slot === p?._startAt && s.playerId === role(c, 'replaced_starter'));
-    if (i >= 0 && eligibleSlotsFor(p).includes(d.userTeam.lineupSlots[i].slot)) d.userTeam.lineupSlots[i].playerId = id;
+    const startAt = p?._startAt ? { slot: p._startAt, replacing: role(c, 'replaced_starter') } : null;
     if (p) p._startAt = undefined;
-    return events;
+    // He takes the spot when he reports (TransactionEngine._arrive).
+    return signToClub(d, id, 'user', atMs, { displaceId: role(c, 'drop_hitter'), startAt });
   },
 };
 

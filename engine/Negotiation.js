@@ -3,9 +3,11 @@
  * §85 Phase 4b — trade talks the GM starts.
  *
  * One open conversation per club (`state.tradeTalks[teamId].talk`). The GM
- * sends an offer; the other GM answers on the real clock — sometimes within
- * a couple of hours, sometimes after more than a day — with one of three
- * cards, each a real decision:
+ * sends an offer; the other GM decides then, and the answer is scheduled to
+ * reach us on the real clock — sometimes within a couple of hours, sometimes
+ * after more than a day — as an ordinary inbox card, so it can arrive as a
+ * push notification with the app closed (§89). It is one of three cards,
+ * each a real decision:
  *   - accepted  → finalize the deal, or back out (it costs rapport);
  *   - countered → take their counter, or walk away (or revise our offer from
  *                 the composer, which keeps the same talk going);
@@ -39,6 +41,17 @@ export function talkWith(state, teamId) {
 }
 
 /**
+ * Are we in talks with this club right now — waiting to hear back, or
+ * holding an answer we haven't acted on?
+ */
+export function talkIsOpen(state, teamId, nowMs = Date.now()) {
+  const t = talkWith(state, teamId);
+  if (!t) return false;
+  if ((t.replyAtMs || 0) > nowMs) return true;                    // their answer hasn't reached us yet
+  return ['countered', 'agreed'].includes(t.status);
+}
+
+/**
  * ourSideOk(state, offer) — can our owner carry the deal (salary we'd add,
  * cash we'd send)? Returns null or the reason.
  */
@@ -69,7 +82,8 @@ export function proposeTrade(teamId, offer, atMs = Date.now(), { round = null } 
   const blocked = tradeBlockers(clean, state, atMs, teamId) || ourSideBlocker(state, clean);
   if (blocked) return { ok: false, reason: blocked };
   const open = talkWith(state, teamId);
-  const nextRound = round ?? (open && open.status !== 'closed' ? (open.round || 1) + 1 : 1);
+  if (open && (open.replyAtMs || 0) > atMs) return { ok: false, reason: 'we are still waiting to hear back from them' };
+  const nextRound = round ?? (open && ['countered', 'agreed'].includes(open.status) ? (open.round || 1) + 1 : 1);
   if (nextRound > TRADE.maxRounds) return { ok: false, reason: 'these talks have run their course' };
   const replyAtMs = atMs + _replyDelayMs();
   withdrawTalkCards(teamId);   // a revised offer replaces the open counter
@@ -78,34 +92,58 @@ export function proposeTrade(teamId, offer, atMs = Date.now(), { round = null } 
     s.tradeTalks[teamId] = { ...(s.tradeTalks[teamId] || {}),
       talk: { id: `talk-${teamId}-${atMs}`, round: nextRound, offer: clean, sentAtMs: atMs, replyAtMs, status: 'waiting' } };
   });
+  // The other GM looks at the offer now; the answer reaches us later, like
+  // any message — scheduled, so it can arrive as a push with the app closed.
+  _decide(teamId, atMs, replyAtMs);
   return { ok: true, replyAtMs };
 }
 
-/** Talks whose answer is due by the clock (for advanceClock's ordered steps). */
-export function dueReplies(state, clockMs) {
-  const out = [];
-  for (const [teamId, t] of Object.entries(state.tradeTalks || {})) {
-    if (t?.talk?.status === 'waiting' && t.talk.replyAtMs <= clockMs) out.push({ kind: 'talk', teamId, at: t.talk.replyAtMs });
-  }
-  return out.sort((a, b) => a.at - b.at);
-}
-
-/** The other GM answers (at the moment it was due). */
-export function replyNow(teamId, atMs) {
+/** The other GM's decision on the offer (made at `atMs`, delivered at `deliverAtMs`). */
+function _decide(teamId, atMs, deliverAtMs) {
   const state = StateManager.get();
   const talk = talkWith(state, teamId);
-  if (!talk || talk.status !== 'waiting') return null;
+  if (!talk) return null;
   const r = cpuRespond(talk.offer, state, teamId, { round: talk.round, atMs });
   StateManager.mutate(s => {
     const t = s.tradeTalks[teamId].talk;
     t.status = r.decision === 'accept' ? 'agreed' : r.decision === 'counter' ? 'countered' : 'closed';
     t.answer = { decision: r.decision, reason: r.reason || null, atMs };
     if (r.counter) t.counter = r.counter;
-    if (r.reason === 'lowball') adjustRapport(s, teamId, TRADE.rapport.lowball);
-    if (r.reason === 'fizzled') { adjustRapport(s, teamId, TRADE.rapport.fizzled); startCooldown(s, teamId, atMs); }
+    // How the offer landed with them shows once their answer reaches us
+    // (settle), not while we're still waiting to hear.
+    const rapport = r.reason === 'lowball' ? TRADE.rapport.lowball : r.reason === 'fizzled' ? TRADE.rapport.fizzled : 0;
+    t.pending = (rapport || r.reason === 'fizzled') ? { rapport, coolFromMs: r.reason === 'fizzled' ? deliverAtMs : null } : null;
   });
-  deliverTalkReply(teamId, r, atMs);
+  deliverTalkReply(teamId, r, deliverAtMs);
   return r;
+}
+
+/**
+ * settle(teamId) — their answer has reached us: whatever the offer did to the
+ * relationship (a lowball, talks that fizzled) takes effect, once.
+ */
+export function settle(teamId) {
+  const talk = talkWith(StateManager.get(), teamId);
+  if (!talk?.pending) return;
+  StateManager.mutate(s => {
+    const t = s.tradeTalks[teamId].talk;
+    const p = t.pending;
+    if (p.rapport) adjustRapport(s, teamId, p.rapport);
+    if (p.coolFromMs) startCooldown(s, teamId, p.coolFromMs);
+    t.pending = null;
+  });
+}
+
+/**
+ * callOff(teamId, reason, atMs) — something changed before the deal could be
+ * done (a player in it got hurt or moved, the window closed): the talk ends.
+ */
+export function callOff(teamId, atMs) {
+  settle(teamId);
+  StateManager.mutate(s => {
+    const t = s.tradeTalks?.[teamId]?.talk;
+    if (t) s.tradeTalks[teamId].talk = { ...t, status: 'closed', calledOffAtMs: atMs };
+  });
 }
 
 /**
@@ -146,11 +184,17 @@ export function act(teamId, action, atMs = Date.now()) {
       // What would it take? Their counter, if one exists within reach.
       const ev = evaluateForClub(talk.offer, state, teamId);
       const counter = talk.round < TRADE.maxRounds ? buildCounter(talk.offer, state, teamId, Math.max(0, clubBar(state, teamId) - ev.net), ev) : null;
-      if (!counter) { close(0, false); deliverTalkReply(teamId, { decision: 'decline', reason: 'nothing' }, atMs + _replyDelayMs() / 3); return { ok: true }; }
+      const replyAtMs = atMs + Math.round(_replyDelayMs() / 3);
+      if (!counter) {
+        close(0, false);
+        StateManager.mutate(s => { s.tradeTalks[teamId].talk.replyAtMs = replyAtMs; });
+        deliverTalkReply(teamId, { decision: 'decline', reason: 'nothing' }, replyAtMs);
+        return { ok: true };
+      }
       StateManager.mutate(s => {
-        s.tradeTalks[teamId].talk = { ...s.tradeTalks[teamId].talk, status: 'countered', counter, round: (talk.round || 1) + 1 };
+        s.tradeTalks[teamId].talk = { ...s.tradeTalks[teamId].talk, status: 'countered', counter, round: (talk.round || 1) + 1, replyAtMs };
       });
-      deliverTalkReply(teamId, { decision: 'counter', counter }, atMs + _replyDelayMs() / 3);
+      deliverTalkReply(teamId, { decision: 'counter', counter }, replyAtMs);
       return { ok: true };
     }
     default: return { ok: false };

@@ -781,6 +781,31 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     });
   }
 
+  // §89: an answer to our offer, decided when we sent it, that can no longer
+  // be carried out (a player in it got hurt or moved, the window closed) is
+  // replaced by their call that the deal is off — at the time the answer
+  // would have reached us.
+  state = StateManager.get();
+  for (const c of [...(state.inbox || []).filter(x => !x.resolved), ...(state.scheduledCards || [])]) {
+    if (!['talk_accepted', 'talk_counter'].includes(c.cardId) || !c._talkTeamId) continue;
+    const talk = Negotiation.talkWith(state, c._talkTeamId);
+    if (!talk || talk.id !== c._talkId || talk.round !== c._talkRound) continue;
+    const offer = c.cardId === 'talk_counter' ? talk.counter : talk.offer;
+    const reason = offer && tradeBlockers(offer, state, atMs, c._talkTeamId);
+    if (!reason) continue;
+    const name = (state.leagueTeams || []).find(t => t.id === c._talkTeamId)?.name || 'They';
+    const when = Math.max(atMs, c.deliverAtMs || 0);
+    _withdraw(x => x.instanceId === c.instanceId);
+    Negotiation.callOff(c._talkTeamId, atMs);
+    if (_deliverNotice(`talk:off:${talk.id}:${talk.round}`, {
+      cardId: 'trade_off', tag: 'TRADE', sender: `${name} front office`, avatar: '📞',
+      subject: `The deal with ${name} is off`,
+      preview: `Things changed before it could be done: ${reason}.`,
+      body: `${name} called: ${c.cardId === 'talk_counter' ? 'they had a counter ready' : 'they were ready to do the deal'}, but things changed before it could be done — ${reason}. The talks are closed for now; we can start over with a new offer.`,
+    }, when)) delivered++;
+    state = StateManager.get();
+  }
+
   // Withdraw cards whose situation no longer exists.
   state = StateManager.get();
   const players = state.players;
@@ -2383,6 +2408,7 @@ function _applyTalkAction(action, instance, atMs) {
   // offer since then has moved the talk on).
   const talk = Negotiation.talkWith(StateManager.get(), teamId);
   if (!talk || talk.id !== instance._talkId || talk.round !== instance._talkRound) return;
+  Negotiation.settle(teamId);   // their answer has reached us
   const map = { talk_finalize: 'finalize', talk_backout: 'backout', talk_take_counter: 'take_counter',
                 talk_walk: 'walk', talk_ask: 'ask', talk_move_on: 'move_on' };
   if (action === 'talk_keep_open') {

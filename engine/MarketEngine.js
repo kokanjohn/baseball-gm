@@ -19,7 +19,7 @@
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../data/constants.js';
 import { createPlayer, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor } from './OffseasonEngine.js';
-import { defaultActiveGroup, eligibleSlotsFor } from './RosterEngine.js';
+import { defaultActiveGroup, eligibleSlotsFor, makeArrival } from './RosterEngine.js';
 import { rosterIsFull, sideOf } from './TransactionEngine.js';
 import { newPlayerName } from './Names.js';
 
@@ -103,7 +103,7 @@ export function signingTerms(state, player) {
  * `displaceId` to the farm, or releases him if the farm side is full), or to
  * the farm (farm caps: the farm's weakest prospect of that side is released).
  */
-export function signToClub(draft, playerId, teamId, atMs, { toFarm = false, displaceId = null, terms = null } = {}) {
+export function signToClub(draft, playerId, teamId, atMs, { toFarm = false, displaceId = null, terms = null, startAt = null } = {}) {
   const p = draft.players[playerId];
   const t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
   if (!p || !t || p.group !== PLAYER_GROUP.FREE_AGENT) return [];
@@ -129,8 +129,17 @@ export function signToClub(draft, playerId, teamId, atMs, { toFarm = false, disp
     if (out) events.push(..._option(draft, t, out, atMs));
   }
   pull();
-  t.rosterIds = [...(t.rosterIds || []), playerId];
-  Object.assign(p, { teamId, group: defaultActiveGroup(p), tier: 'active', _faFrom: null, _faSince: null });
+  if (_gamesOn(draft)) {
+    // §89 with games being played he reports like anyone joining a club — the
+    // next day — and (signed to start) takes the spot he was signed for then.
+    const { tx, patch } = makeArrival({ player: p, teamId, fromTeamId: null, reason: 'signing', atMs, by: teamId === 'user' ? 'gm' : 'cpu' });
+    if (startAt) tx.startAt = startAt;
+    draft.transactions = [...(draft.transactions || []), tx];
+    Object.assign(p, patch, { _faFrom: null, _faSince: null });
+  } else {
+    t.rosterIds = [...(t.rosterIds || []), playerId];
+    Object.assign(p, { teamId, group: defaultActiveGroup(p), tier: 'active', _faFrom: null, _faSince: null });
+  }
   applyContract(draft, playerId, k, { startNow: _inSeason(draft) });
   events.push({ type: 'SIGNED', playerId, teamId, toFarm: false, atMs });
   return events;
@@ -194,6 +203,11 @@ export function rentalTarget(state, side, minOvr = 0, exclude = new Set()) {
 export function prospectToSend(state, targetOvr) {
   return (state.userTeam.farmIds || []).map(id => state.players[id]).filter(p => p && isAvailable(p))
     .sort((a, b) => Math.abs((a.ovr || 0) - targetOvr) - Math.abs((b.ovr || 0) - targetOvr))[0] || null;
+}
+
+/** Games are being played (spring, the season, October). */
+function _gamesOn(draft) {
+  return [PHASE.SPRING_TRAINING, PHASE.REGULAR_SEASON, PHASE.POSTSEASON].includes(draft.phase);
 }
 
 /** During a season (not between seasons) a new deal covers the current season. */

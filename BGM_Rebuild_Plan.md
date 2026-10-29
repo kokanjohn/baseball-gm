@@ -7158,3 +7158,19 @@ The dashboard's activity feed (`state.activityFeed`, kept 72 hours) was icon-led
   - answers arrive as decisions, and every finalized deal is made or voided (checked against the franchise history; old transaction records are pruned).
   
   6 of 8 seeds green. Seed 5's weakest CPU club went 30–102 (the open weak-club item; **4c**). Seed 1 failed a chance-based follow-up-chain check.
+
+## 89. Trade answers decided at send, delivered later (r84, GM feedback)
+
+**Question from the GM:** why can't the other GM's answer be settled when the offer goes out and simply shown later, so it arrives as a push notification with the app closed like every other inbox message?
+
+**Decision:** that is the right model, and it replaces §88's "decided when due."
+- **Decided at send.** `Negotiation.proposeTrade` runs `cpuRespond` at the moment the offer is sent (the talk records `answer.atMs === sentAtMs`). The reply card is built then and scheduled via `_deliverAt` 2–36 hours out, so it sits in `scheduledCards` and reaches the push worker. The `dueReplies` / `replyNow` step is gone from `advanceClock`.
+- **"What would it take?"** works the same way: the counter (or "nothing there") is decided when the GM asks and is delivered a third of a normal delay later.
+- **Nothing leaks early.** How the offer landed (a lowball's rapport hit; fizzled talks' rapport hit and cooling-off) is stored on the talk as `pending` and takes effect only when the answer reaches us and is acted on or runs out (`Negotiation.settle`, called from the talk card's action). The club list shows "Talks open" while we wait (`talkIsOpen`: the reply time hasn't come, or there's an answer we haven't acted on), and a new offer to that club is refused until we hear back.
+- **The gap is guarded.** `syncRosterCards` checks every scheduled or unanswered accept / counter card against `tradeBlockers` (a player hurt, moved, in transit, the window closed). One that can't be carried out is withdrawn and replaced by the club's "the deal is off" call, at the time the answer would have arrived; the talk closes (`Negotiation.callOff`). Finalizing still re-checks everything.
+
+**Found and fixed on the way (harness, seed 3):**
+- A player who cleared waivers with nowhere to go became a half-formed free agent (`tier: 'farm'`, no `_faFrom` / `_faSince`). `clearWaivers` now makes him a proper free agent (tier, the club that let him go, when, reason `waivers`). The harness's spring check now separates the offseason's unsigned (gone at spring) from players let go after spring opened (free agents in their own right).
+- A free agent signed to the active roster while games were on joined instantly and could play that night, with no arrival record. `signToClub` now makes him report like anyone joining a club — an arrival the next day (`reason: 'signing'`). A veteran signed to start takes the spot he was signed for when he reports, if the player he replaces still holds it (`tx.startAt`, applied in `_arrive`). Offseason signings remain immediate.
+
+**Harness:** talk checks now verify the answer is decided at send, no answer arrives before its reply time, and how an offer landed takes effect once its answer is read; signing checks accept a pending arrival. 8 seeds green; webpush and refs pass.

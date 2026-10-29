@@ -80,7 +80,6 @@ import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint 
 import * as AllStar from './AllStarEngine.js';
 import { recordOutings } from './PitchingEngine.js';
 import * as Finance from './FinanceEngine.js';
-import * as Negotiation from './Negotiation.js';
 import { formatK } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Development from './DevelopmentEngine.js';
@@ -2456,8 +2455,7 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
     const game = _leagueGameEvents(st, clockMs)[0];
     const os   = Offseason.dueSteps(st, clockMs)[0];
     const fin  = clubIds.flatMap(id => Finance.dueSteps(st, clockMs, id)).sort((a, b) => a.at - b.at)[0];
-    const talk = Negotiation.dueReplies(st, clockMs)[0];   // §85 a GM's answer to our offer
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, talk].filter(Boolean);
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     const step = _rosterStep(next.at, {});
@@ -2466,7 +2464,6 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
     else if (next.kind === 'final') events.push(..._finishLeagueGame(next.date, next.i));
     else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, next.teamId); });
     else if (next.kind === 'fin:payday') events.push(...(next.teamId === 'user' ? _payday(next.i, next.at) : _cpuPayday(next.teamId, next.i, next.at)));
-    else if (next.kind === 'talk') Negotiation.replyNow(next.teamId, next.at);
     else events.push(..._runOffseasonStep(next.step, next.at));
     events.push(..._seasonProgress(next.at));
     changed = true;
