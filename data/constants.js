@@ -408,11 +408,25 @@ export const CARD_COST_LG      = { min: 150, max:  400 };  // stadium renovation
 export const CARD_COST_EXT     = { min: 200, max:  500 };
 // §78.8 card amounts above are for a contender-sized market (this payroll
 // target, $K); each club's are scaled to its own (×0.5–1.6).
-export const CARD_MONEY_BASE_TARGET_K = 22000;  // contract extension fee
+export const CARD_MONEY_BASE_TARGET_K = 22000;
 
-// Trade cash — no cash in trades (Option C — locked)
-// Trade fairness communicated via fairness rating, not cash exchange
-export const TRADE_CASH_ENABLED = false;
+// §85 (Phase 4) cash in trades is ON: a one-time sweetener either way, or a
+// share of a player's salary the sending club keeps paying this season.
+export const TRADE_CASH_ENABLED = true;
+
+// §85 the trade rules and the CPU's judgment.
+export const TRADE = Object.freeze({
+  maxPerSide:      3,                    // players a side (prospects included)
+  cooldownMs:      2 * 86_400_000,       // after a declined or fizzled negotiation, before that club talks again
+  noFlipMs:        5 * 86_400_000,       // a player just acquired can't be traded again for this long
+  maxRounds:       3,                    // counteroffers before talks fizzle
+  cashPerValueK:   15,                   // $K of cash ≈ one point of trade value (a strapped club values it more)
+  maxRetainPct:    0.5,                  // the most of a salary a sending club will keep paying
+  // The bar a CPU club sets by rapport (net value it needs from the deal).
+  bar:             { strong: -8, good: -3, neutral: 0, cool: 6, strained: 12 },
+  counterBand:     30,                   // within this much of the bar, the club counters instead of declining
+  rapport:         { completed: 2, lowball: -2, fizzled: -1, counterAccepted: 1 },
+});
 
 // ─────────────────────────────────────────────────────────────
 // SIM ENGINE — WEATHER WIN PROBABILITY ADJUSTMENTS (Section 7.1 — LOCKED)

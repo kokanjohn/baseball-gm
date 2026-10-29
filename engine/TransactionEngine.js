@@ -63,7 +63,9 @@ import {
 import { cpuWaiverClaimant } from './LeagueEngine.js';
 
 import { tradePlayerPatches } from './TradeEngine.js';
-import { payrollRoom, contractToMove, cutOrderAmount } from './FinanceEngine.js';
+import { payrollRoom, contractToMove, cutOrderAmount, post as postFunds, retainSalary } from './FinanceEngine.js';
+import { adjustRapport } from './TradeEngine.js';
+import { releaseToFreeAgency } from './OffseasonEngine.js';
 import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate } from './InjuryEngine.js';
 import { computeAge, createPlayer, baseballYear } from './PlayerFactory.js';
 import { newPlayerName } from './Names.js';
@@ -433,8 +435,8 @@ function _executeTrade(draft, tx, events, touched) {
   // and healthy. Otherwise the deal is off (a failed physical voids trades).
   const problem =
       !cpu ? 'team not found'
-    : outgoingIds.some(id => !user.rosterIds.includes(id)) ? 'a player is no longer on your roster'
-    : incomingIds.some(id => !cpu.rosterIds.includes(id))  ? 'a player is no longer on their roster'
+    : outgoingIds.some(id => !user.rosterIds.includes(id) && !(user.farmIds || []).includes(id)) ? 'a player is no longer in our organization'
+    : incomingIds.some(id => !cpu.rosterIds.includes(id) && !(cpu.farmIds || []).includes(id))  ? 'a player is no longer in their organization'
     : [...outgoingIds, ...incomingIds].some(id => draft.players[id]?.isInjured) ? 'a player failed the physical'
     : null;
   if (problem) {
@@ -450,18 +452,47 @@ function _executeTrade(draft, tx, events, touched) {
     ...outgoingIds.map(id => ({ id, from: 'user', to: cpu.id })),
     ...incomingIds.map(id => ({ id, from: cpu.id, to: 'user' })),
   ];
+  // §85 everyone in the deal leaves the old club first; only then does each
+  // club make room for who is coming (so a corresponding move can never pick
+  // a player who is himself in the deal).
+  const fromFarm = new Set();
+  for (const m of moves) {
+    const fromTeam = m.from === 'user' ? user : cpu;
+    if ((fromTeam.farmIds || []).includes(m.id)) fromFarm.add(m.id);   // a prospect reports to the new farm
+    fromTeam.rosterIds = fromTeam.rosterIds.filter(x => x !== m.id);
+    fromTeam.farmIds = (fromTeam.farmIds || []).filter(x => x !== m.id);
+  }
   for (const m of moves) {
     const player = draft.players[m.id];
-    const fromTeam = m.from === 'user' ? user : cpu;
-    fromTeam.rosterIds = fromTeam.rosterIds.filter(x => x !== m.id);
     const { tx: arr, patch } = makeArrival({ player, teamId: m.to, fromTeamId: m.from,
                                              reason: 'trade', atMs: at, by: 'trade' });
-    Object.assign(player, patch);
+    if (fromFarm.has(m.id)) arr.toFarm = true;
+    // Room is made when the deal is made: a side that is already full options
+    // its weakest reserve now, not when the new player reports.
+    if (!fromFarm.has(m.id) && rosterIsFull(draft, m.to, sideOf(player))) {
+      const out = _weakestReserve(draft, player, m.to, player.id);
+      if (out) {
+        applyRosterMutation(draft, sendToFarm(draft, out.id, m.to));
+        events.push({ type: 'OPTIONED', playerId: out.id, teamId: m.to, atMs: at, reason: 'corresponding move' });
+        touched.add(m.to);
+      }
+    }
+    Object.assign(player, patch, { _acquiredAtMs: at });   // §85 no flipping a player for a few days
     draft.transactions.push(arr);
   }
-  const rels = { ...(user.gmRelationships || {}) };
-  rels[cpu.id] = Math.min(100, (rels[cpu.id] ?? GM_RELATIONSHIP_DEFAULT) + 1);
-  user.gmRelationships = rels;
+  // §85 the money: a one-time payment between the clubs, and salary the
+  // sending club keeps paying this season on players it sent.
+  const cashK = tx.offer.cashK || 0;
+  if (cashK) {
+    const [payer, payee] = cashK > 0 ? [cpu, user] : [user, cpu];
+    const k = Math.abs(cashK);
+    if (payer.finances) postFunds(payer.finances, -k, 'trade', `Cash sent in a trade with ${payer === user ? cpu.name : 'us'}`, at);
+    if (payee.finances) postFunds(payee.finances, k, 'trade', `Cash received in a trade with ${payee === user ? cpu.name : 'us'}`, at);
+  }
+  for (const [id, pct] of Object.entries(tx.offer.retain || {})) {
+    retainSalary(draft, outgoingIds.includes(id) ? 'user' : cpu.id, id, pct);
+  }
+  adjustRapport(draft, cpu.id, 2);   // §85 a completed deal warms the relationship
 
   tx.status = 'done';
   tx.doneAt = at;
@@ -580,6 +611,22 @@ function _arrive(draft, tx, events, touched) {
   if (!player || !team || player.group !== PLAYER_GROUP.IN_TRANSIT) {
     tx.status = 'cancelled';
     tx.note   = 'player no longer in transit';
+    return;
+  }
+  if (tx.toFarm) {
+    // §85 a traded prospect joins the farm; a full farm side releases its weakest.
+    const isP = ['SP', 'RP'].includes(player.pos);
+    const side = (team.farmIds || []).map(id => draft.players[id]).filter(p => p && ['SP', 'RP'].includes(p.pos) === isP);
+    if (side.length >= (isP ? ROSTER_LIMITS.FARM_PITCHER_MAX : ROSTER_LIMITS.FARM_HITTER_MAX)) {
+      const weakest = side.sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0];
+      const ev = weakest && releaseToFreeAgency(draft, weakest.id, tx.effectiveAt, { reason: 'farm full' });
+      if (ev) events.push(ev);
+    }
+    team.farmIds = [...(team.farmIds || []).filter(x => x !== player.id), player.id];
+    Object.assign(player, { group: PLAYER_GROUP.PRACTICE_SQUAD, teamId: tx.teamId, tier: 'farm' });
+    tx.status = 'done';
+    touched.add(tx.teamId);
+    events.push({ type: 'ARRIVED', tx, playerId: player.id, teamId: tx.teamId, atMs: tx.effectiveAt });
     return;
   }
   if (!team.rosterIds.includes(player.id)) team.rosterIds = [...team.rosterIds, player.id];

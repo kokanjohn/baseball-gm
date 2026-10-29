@@ -243,12 +243,35 @@ export function isPaid(p) {
 export function payrollOf(state, teamId = 'user') {
   const t = _club(state, teamId);
   if (!t) return 0;
+  const season = state.seasonNum || 1;
   let sum = 0;
   for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) {
     const p = state.players[id];
-    if (p && p.teamId === (teamId === 'user' ? 'user' : t.id) && isPaid(p)) sum += p.contractSalary || 0;
+    if (!(p && p.teamId === (teamId === 'user' ? 'user' : t.id) && isPaid(p))) continue;
+    // §85 a share another club is still paying this season isn't ours.
+    const kept = p.retained && p.retained.season === season && p.retained.payerId !== teamId ? p.retained.pct : 0;
+    sum += (p.contractSalary || 0) * (1 - kept);
   }
-  return sum;
+  // §85 and the shares we keep paying on players we traded away.
+  for (const r of t.finances?.retained || []) {
+    if (r.season !== season) continue;
+    const p = state.players[r.playerId];
+    if (p && isPaid(p)) sum += (p.contractSalary || 0) * r.pct;
+  }
+  return Math.round(sum);
+}
+
+/**
+ * retainSalary(draft, payerId, playerId, pct) — §85 the club that sends a
+ * player keeps paying this share of the salary for the rest of the season
+ * (paid on its paydays; counted on its payroll, not the new club's).
+ */
+export function retainSalary(draft, payerId, playerId, pct) {
+  const payer = _club(draft, payerId), p = draft.players[playerId];
+  if (!payer?.finances || !p || !(pct > 0)) return;
+  const season = draft.seasonNum || 1;
+  p.retained = { payerId, pct, season };
+  payer.finances.retained = [...(payer.finances.retained || []).filter(r => r.playerId !== playerId), { playerId, pct, season }];
 }
 
 /** A player released in season is owed the rest of it: dead money on the club's books. */
@@ -624,6 +647,7 @@ export function seasonEndReview(draft, atMs, teamId = 'user') {
   fin.season = { income: {}, spend: {} };
   fin.dead = [];
   fin.seasonTargetAdj = 0;     // a mid-season loosening (or tightening) lasts the season
+  fin.retained = [];           // §85 salary kept on traded players runs out with the season
   fin.promo = null;
   if (fin.owner) { fin.owner.order = null; fin.owner.stage = 'content'; }
   return summary;

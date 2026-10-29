@@ -55,7 +55,7 @@ import {
   activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation,
   defaultActiveGroup, nextCalendarDay, computePayroll,
 } from './RosterEngine.js';
-import { evaluateTrade, queueTrade, recordDeclinedOffer, generateCPUTradeOffer } from './TradeEngine.js';
+import { evaluateTrade, queueTrade, generateCPUTradeOffer, generateCPUCashSale, tradeWindow, tradeBlockers, cooldownUntil, startCooldown } from './TradeEngine.js';
 import {
   getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull, sideOf,
 } from './TransactionEngine.js';
@@ -847,17 +847,23 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = f
   const team     = (state.leagueTeams || []).find(t => t.id === proposingTeamId);
   const teamName = team?.name || 'Another team';
 
-  const incoming = evaluation.incomingPlayers[0];
-  const outgoing = evaluation.outgoingPlayers[0];
-  if (!incoming || !outgoing) return;
-
-  const isPitcherIn  = ['SP','RP'].includes(incoming.pos);
-  const handIn       = isPitcherIn ? ` ${PITCHER_HAND_DISPLAY[incoming.hand] || '(R)'}` : '';
-  const isPitcherOut = ['SP','RP'].includes(outgoing.pos);
-  const handOut      = isPitcherOut ? ` ${PITCHER_HAND_DISPLAY[outgoing.hand] || '(R)'}` : '';
-
-  const inRef  = `${incoming.name}${handIn} (${incoming.pos}, OVR ${incoming.ovr})`;
-  const outRef = `${outgoing.name}${handOut} (${outgoing.pos}, OVR ${outgoing.ovr})`;
+  const ins  = evaluation.incomingPlayers || [];
+  const outs = evaluation.outgoingPlayers || [];
+  const incoming = ins[0];
+  if (!incoming) return;
+  // §85 up to three a side, plus cash and salary kept by the sending club.
+  const ref  = (p) => `${p.name}${['SP','RP'].includes(p.pos) ? ` ${PITCHER_HAND_DISPLAY[p.hand] || '(R)'}` : ''} (${p.pos}, OVR ${p.ovr})`;
+  const list = (ps) => ps.length <= 1 ? ps.map(ref).join('') : `${ps.slice(0, -1).map(ref).join(', ')} and ${ref(ps[ps.length - 1])}`;
+  const inRef = list(ins), outRef = list(outs);
+  const cashK = offer.cashK || 0;
+  const cashNote = cashK > 0 ? ` They'll send ${formatK(cashK)} to complete it.`
+                 : cashK < 0 ? ` We'd send ${formatK(-cashK)}.` : '';
+  const keepNote = Object.entries(offer.retain || {}).map(([id, pct]) => {
+    const p = [...ins, ...outs].find(x => x.id === id);
+    if (!p) return '';
+    return ins.includes(p) ? ` They'll keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`
+                           : ` We'd keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`;
+  }).join('');
 
   const fairnessNote = evaluation.fairnessRating >= 1
     ? `Our scouting grades this as ${evaluation.fairnessLabel.toLowerCase()} for us.`
@@ -886,8 +892,12 @@ export function deliverTradeOffer(offer, evaluation, proposingTeamId, { seed = f
     tag:             'TRADE',
     sender:          teamName,
     subject:         `Trade offer from ${teamName}`,
-    preview:         `${teamName} is offering ${incoming.name} for ${outgoing.name}.`,
-    body:            `${intro ? intro(incoming, teamName) + ' ' : ''}${teamName} has proposed a trade: you send ${outRef} and receive ${inRef}. ${fairnessNote}${payrollNote}`,
+    preview:         outs.length ? `${teamName} is offering ${ins.map(p => p.name).join(', ')} for ${outs.map(p => p.name).join(', ')}.`
+                                 : `${teamName} will sell ${incoming.name} for ${formatK(-cashK)}.`,
+    body:            `${intro ? intro(incoming, teamName) + ' ' : ''}`
+                   + (outs.length ? `${teamName} has proposed a trade: you send ${outRef} and receive ${inRef}.`
+                                  : `${teamName} needs to move salary and will sell ${inRef} to us outright.`)
+                   + `${cashNote}${keepNote} ${fairnessNote}${payrollNote}`,
     yesLabel:        'Accept the Trade',
     noLabel:         'Decline',
     yesEffect:       {},
@@ -1197,10 +1207,7 @@ export function getPushSchedule(state, nowMs = Date.now()) {
  * Trades are allowed in spring, and in the regular season up to the deadline.
  */
 function _tradeWindowOpen(state, context) {
-  const phase = state.phase;
-  if (phase === PHASE.SPRING_TRAINING) return true;
-  if (phase !== PHASE.REGULAR_SEASON && phase !== PHASE.TRADE_DEADLINE) return false;
-  return (context.regularSeasonIndex || 0) <= TRADE_DEADLINE_CLOSE;
+  return tradeWindow(state).open;   // §85 H: spring, in season to the deadline, the offseason
 }
 
 /**
@@ -1219,20 +1226,27 @@ function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = fals
       .filter(c => !c.resolved && c._proposingTeamId)
       .map(c => c._proposingTeamId));
 
+  const now = Date.now();
   const teams = (state.leagueTeams || [])
-    .filter(t => !pendingFrom.has(t.id))
+    .filter(t => !pendingFrom.has(t.id) && cooldownUntil(state, t.id) <= now)   // §85 cooling off after a no
     .map(t => ({ t, r: Math.random() }))
     .sort((a, b) => a.r - b.r)
     .map(x => x.t);
 
   for (const team of teams) {
+    // §85 A: a club that has to sell sometimes offers a player for cash.
+    const sale = generateCPUCashSale(team.id, state, { atMs: now, force });
+    if (sale && _tradeSalaryOk(state, sale.offer, team.id) && !tradeBlockers(sale.offer, state, now, team.id)) {
+      deliverTradeOffer(sale.offer, sale.evaluation, team.id, { seed, intro });
+      return true;
+    }
     const result = generateCPUTradeOffer(team.id, state, {
       regularSeasonIndex: context.regularSeasonIndex || 0,
       phase: state.phase,
       force,
     });
-    // §78: only offers ownership would pay for.
-    if (result && _tradeSalaryOk(state, result.offer, team.id)) {
+    // §78: only offers ownership would pay for; §85 only deals that can be made.
+    if (result && _tradeSalaryOk(state, result.offer, team.id) && !tradeBlockers(result.offer, state, now, team.id)) {
       deliverTradeOffer(result.offer, result.evaluation, team.id, { seed, intro });
       return true;
     }
@@ -1246,18 +1260,21 @@ function _maybeDeliverCPUTradeOffer(state, context, { force = false, seed = fals
  * minor-league deal frees nothing).
  */
 function _tradeSalaryDelta(state, offer) {
-  const inK  = (offer.incomingIds || []).reduce((a, id) => a + (state.players[id]?.contractSalary || 0), 0);
+  const ret = offer.retain || {};                // §85 a share the sending club keeps paying
+  const inK  = (offer.incomingIds || []).reduce((a, id) => a + (state.players[id]?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
   const outK = (offer.outgoingIds || []).filter(id => Finance.isPaid(state.players[id]))
-    .reduce((a, id) => a + (state.players[id]?.contractSalary || 0), 0);
-  return { inK, outK };
+    .reduce((a, id) => a + (state.players[id]?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
+  return { inK: Math.round(inK), outK: Math.round(outK) };
 }
 /** Both owners can carry the deal: ours (§78), and the CPU club's (§78.5) when named. */
 const _tradeSalaryOk = (state, offer, cpuId = null) => {
   const d = _tradeSalaryDelta(state, offer);
   if (!Finance.canAddSalary(state, d.inK, d.outK)) return false;
+  if ((offer.cashK || 0) < 0 && !Finance.canSpend(state, -offer.cashK)) return false;   // §85 cash we send
   if (!cpuId) return true;
-  const toCpu = (offer.outgoingIds || []).reduce((a, id) => a + (state.players[id]?.contractSalary || 0), 0);
-  return Finance.canAddSalary(state, toCpu, d.inK, cpuId);
+  const ret = offer.retain || {};
+  const toCpu = (offer.outgoingIds || []).reduce((a, id) => a + (state.players[id]?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
+  return Finance.canAddSalary(state, toCpu, d.inK, cpuId) && ((offer.cashK || 0) <= 0 || Finance.canSpend(state, offer.cashK, cpuId));
 };
 
 /**
@@ -2742,6 +2759,19 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
       const offer    = instance._tradeOffer;
       const proposer = instance._proposingTeamId;
       if (!offer || !proposer) break;
+      // §85 the deal must still be makeable (the window, a player just
+      // acquired, someone hurt or moved since it was offered).
+      const blocked = tradeBlockers(offer, state, atMs, proposer);
+      if (blocked) {
+        _deliverNotice(`trade:off:${instance.instanceId}`, {
+          cardId: 'trade_off', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', type: 'normal',
+          subject: 'The trade can\'t go through',
+          preview: `The deal is off: ${blocked}.`,
+          body: `We went to finalize it, but the deal is off: ${blocked}.`,
+          yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
+        }, atMs);
+        break;
+      }
       // §78: ownership approves added salary — its patience may have run out
       // since the offer arrived.
       if (!_tradeSalaryOk(state, offer)) {
@@ -2766,10 +2796,8 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
     case 'trade_decline': {
       const proposer = instance._proposingTeamId;
       if (!proposer) break;
-      const mutations = recordDeclinedOffer(proposer, state);
-      StateManager.mutate(s => {
-        s._tradeDeclinedAt = mutations._tradeDeclinedAt;
-      });
+      // §85 that club cools off for a couple of days (real time).
+      StateManager.mutate(s => { startCooldown(s, proposer, atMs); });
       break;
     }
 

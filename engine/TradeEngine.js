@@ -4,7 +4,12 @@
  *
  * Rules:
  *   - Pure functions. No state reads or writes. GameEngine applies mutations.
- *   - No cash in trades (LOCKED — Section 9.1). Fairness communicated via rating signal.
+ *   - §85 Cash is part of trades: a one-time sweetener either way (`cashK`,
+ *     + = the other club pays us) and a share of a player's salary the
+ *     sending club keeps paying this season (`retain: { playerId: share }`).
+ *   - A CPU club judges a deal from where it stands (§85 I): its needs and
+ *     depth, buying or selling, its books, age, contract and rating — and
+ *     sets its bar by its GM's rapport with ours.
  *   - evaluateTrade() is the single place trade value is assessed — used for both
  *     CPU-proposed trades and user-initiated trades. No special casing.
  *   - Accepting a trade queues ONE ledger transaction (queueTrade); the roster
@@ -16,14 +21,16 @@
 
 import {
   PLAYER_GROUP,
+  PHASE,
   TRADE_DEADLINE_OPEN,
   TRADE_DEADLINE_CLOSE,
   GM_RELATIONSHIP_DEFAULT,
   SALARY_BY_OVR,
-  TRADE_CASH_ENABLED,
+  TRADE,
 } from '../data/constants.js';
 
 import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
+import * as Finance from './FinanceEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // TRADE VALUE CALCULATION
@@ -49,18 +56,18 @@ import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 export function evaluateTrade(offer, state) {
   const { incomingIds = [], outgoingIds = [], proposingTeamId } = offer;
 
-  // Cash in trades is permanently disabled — Section 9.1 (LOCKED)
-  // If this constant is ever changed to true, this guard surfaces it immediately.
-  if (TRADE_CASH_ENABLED) {
-    throw new Error('TradeEngine.evaluateTrade: TRADE_CASH_ENABLED is true — cash in trades is retired (Section 9.1)');
-  }
-
   const incomingPlayers = incomingIds.map(id => state.players[id]).filter(Boolean);
   const outgoingPlayers = outgoingIds.map(id => state.players[id]).filter(Boolean);
 
   const incomingValue  = incomingPlayers.reduce((sum, p) => sum + _playerValue(p, state), 0);
   const outgoingValue  = outgoingPlayers.reduce((sum, p) => sum + _playerValue(p, state), 0);
-  const valueDiff      = incomingValue - outgoingValue;
+  // §85 money is value too: cash they send (or we send), salary they keep
+  // paying on players we get (or we keep paying on players we send).
+  const ret = offer.retain || {}, rem = remainingShare(state);
+  const theyKeepK = incomingPlayers.reduce((a, p) => a + (p.contractSalary || 0) * (ret[p.id] || 0) * rem, 0);
+  const weKeepK   = outgoingPlayers.reduce((a, p) => a + (p.contractSalary || 0) * (ret[p.id] || 0) * rem, 0);
+  const moneyValue = cashValue((offer.cashK || 0) + theyKeepK - weKeepK, state, 'user');
+  const valueDiff      = incomingValue - outgoingValue + moneyValue;
 
   const fairnessRating = _fairnessRating(valueDiff);
   const fairnessLabel  = _fairnessLabel(fairnessRating);
@@ -68,11 +75,12 @@ export function evaluateTrade(offer, state) {
   // Depth impact — does this trade leave the user thin at a position?
   const depthImpact    = _assessDepthImpact(outgoingPlayers, incomingPlayers, state);
 
-  // Payroll impact (all in $K)
-  const payrollDelta   = _payrollDelta(incomingPlayers, outgoingPlayers);
-  const newPayroll     = (state.userTeam.finances.payroll || 0) + payrollDelta;
+  // Payroll impact (all in $K) — what we would pay, net of salary the other
+  // club keeps paying (§85) and of shares we keep on players we send.
+  const payrollDelta   = _payrollDelta(incomingPlayers, outgoingPlayers, offer.retain || {});
+  const newPayroll     = Finance.payrollOf(state, 'user') + payrollDelta;
   // §78: the owner's (soft) payroll target, not a cap.
-  const payrollTarget  = state.userTeam.finances.payrollTarget || 22000;
+  const payrollTarget  = Finance.seasonTarget(state.userTeam.finances) || 22000;
   const overTarget     = newPayroll > payrollTarget;
 
   // GM relationship with proposing team
@@ -222,12 +230,10 @@ function _assessDepthImpact(outgoing, incoming, state) {
     if (compatible.length === 1) return 'WARNING';
   }
 
-  // Check if incoming players improve a thin position
-  const incomingGroups = incoming.map(p => p.group);
-  if (incomingGroups.includes(PLAYER_GROUP.STARTING_PITCHERS) ||
-      incomingGroups.includes(PLAYER_GROUP.STARTING_HITTERS)) {
-    return 'IMPROVEMENT';
-  }
+  // Would an incoming player start for us — better than the weakest player
+  // in the lineup at a position he plays, or in the rotation? (§85: the
+  // lineup slots are the source of truth, not the old STARTING_HITTERS group.)
+  if (incoming.some(p => wouldStart(p, state, 'user'))) return 'IMPROVEMENT';
 
   return 'NEUTRAL';
 }
@@ -236,10 +242,10 @@ function _assessDepthImpact(outgoing, incoming, state) {
 // PAYROLL IMPACT
 // ─────────────────────────────────────────────────────────────
 
-function _payrollDelta(incoming, outgoing) {
-  const inSalary  = incoming.reduce((s, p) => s + (p.contractSalary || 0), 0);
-  const outSalary = outgoing.reduce((s, p) => s + (p.contractSalary || 0), 0);
-  return inSalary - outSalary;
+function _payrollDelta(incoming, outgoing, retain = {}) {
+  const inSalary  = incoming.reduce((s, p) => s + (p.contractSalary || 0) * (1 - (retain[p.id] || 0)), 0);
+  const outSalary = outgoing.reduce((s, p) => s + (p.contractSalary || 0) * (1 - (retain[p.id] || 0)), 0);
+  return Math.round(inSalary - outSalary);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -304,7 +310,10 @@ export function generateCPUTradeOffer(teamId, state, context = {}) {
     outgoingIds:     [target.id],
     proposingTeamId: teamId,
     isRental:        _isRentalPlayer(offering, state),
+    cashK:           0,
+    retain:          {},
   };
+  _dressWithMoney(offer, state, teamId);
 
   // Evaluate the offer — if it's too unfair for the user, the CPU adjusts
   const evaluation = evaluateTrade(offer, state);
@@ -316,6 +325,50 @@ export function generateCPUTradeOffer(teamId, state, context = {}) {
   if (gmRel >= 70 && evaluation.fairnessRating < -1) return null;
 
   return { offer, evaluation };
+}
+
+/**
+ * §85 the CPU puts money in its own offer when the deal needs it:
+ *   - our owner can't carry the player's salary and the club is selling (or
+ *     cutting): it keeps paying a share of it this season;
+ *   - the deal is a little short for us and the club can spend: it adds cash.
+ */
+function _dressWithMoney(offer, state, teamId) {
+  const P = (id) => state.players[id];
+  const inSal  = offer.incomingIds.reduce((a, id) => a + (P(id)?.contractSalary || 0), 0);
+  const outSal = offer.outgoingIds.reduce((a, id) => a + (P(id)?.contractSalary || 0), 0);
+  const room = Finance.payrollRoom(state, 'user');
+  if (inSal - outSal > Math.max(0, room) && clubMode(state, teamId) === 'seller' && remainingShare(state) > 0) {
+    const big = offer.incomingIds.map(P).filter(Boolean).sort((a, b) => (b.contractSalary || 0) - (a.contractSalary || 0))[0];
+    const need = inSal - outSal - Math.max(0, room);
+    const pct = big?.contractSalary ? Math.ceil((need / big.contractSalary) * 20) / 20 : 0;
+    if (pct > 0 && pct <= TRADE.maxRetainPct) offer.retain[big.id] = pct;
+  }
+  const ev = evaluateTrade(offer, state);
+  if (ev.valueDiff < -8 && ev.valueDiff > -40) {
+    const k = Math.round(((-ev.valueDiff - 4) / Math.max(0.01, cashValue(1, state, 'user'))) / 25) * 25;
+    if (k > 0 && Finance.canSpend(state, k, teamId)) offer.cashK = k;
+  }
+}
+
+/**
+ * generateCPUCashSale(teamId, state, context) — §85 A: a selling (or cutting)
+ * club offers a fringe player who would start for us, for cash, nothing back.
+ */
+export function generateCPUCashSale(teamId, state, context = {}) {
+  const team = _club(state, teamId);
+  if (!team || clubMode(state, teamId) !== 'seller') return null;
+  if (!context.force && Math.random() > 0.04) return null;
+  const now = context.atMs || Date.now();
+  const pool = (team.rosterIds || []).map(id => state.players[id])
+    .filter(p => p && isAvailable(p) && !p.isInjured && !_isKey(p, state, teamId)
+              && !(p._acquiredAtMs && now - p._acquiredAtMs < TRADE.noFlipMs) && wouldStart(p, state, 'user'));
+  const p = pool.sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+  if (!p) return null;
+  const price = Math.max(50, Math.round((valueToClub(p, state, teamId, false) / Math.max(0.01, cashValue(1, state, teamId))) / 25) * 25);
+  const offer = { incomingIds: [p.id], outgoingIds: [], proposingTeamId: teamId, cashK: -price, retain: {}, isRental: _isRentalPlayer(p, state) };
+  if (!Finance.canSpend(state, price, 'user') || !Finance.canAddSalary(state, p.contractSalary || 0, 0, 'user')) return null;
+  return { offer, evaluation: evaluateTrade(offer, state) };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -345,6 +398,8 @@ export function queueTrade(offer, proposingTeamId, atMs) {
     offer: {
       incomingIds: [...(offer.incomingIds || [])],
       outgoingIds: [...(offer.outgoingIds || [])],
+      cashK:       offer.cashK || 0,             // §85 + = they pay us (once, at the trade)
+      retain:      { ...(offer.retain || {}) },  // §85 salary share the sending club keeps paying this season
     },
     createdAt:   atMs,
     effectiveAt: atMs,
@@ -373,51 +428,6 @@ export function tradePlayerPatches(state, tx) {
     if (state.players[id]) patches[id] = { _previouslyWithOrg: true };
   }
   return patches;
-}
-
-// ─────────────────────────────────────────────────────────────
-// USER-INITIATED TRADE EVALUATION
-// ─────────────────────────────────────────────────────────────
-
-/**
- * evaluateCPUResponse(offer, state)
- * Simulates the CPU team's response to a user-initiated trade offer.
- * Returns { decision: 'accept'|'decline'|'counter', counterOffer? }
- *
- * @param {Object} offer
- * @param {Object} state
- * @returns {Object} response
- */
-export function evaluateCPUResponse(offer, state) {
-  const { proposingTeamId } = offer;
-  const evaluation = evaluateTrade(offer, state);
-  const gmRel      = state.userTeam.gmRelationships?.[proposingTeamId] ?? GM_RELATIONSHIP_DEFAULT;
-
-  // Cooldown check — per-team 15-game cooldown after declined offer
-  const lastDeclined = state._tradeDeclinedAt?.[proposingTeamId] || 0;
-  if ((state.currentGameIndex || 0) - lastDeclined < 15) {
-    return { decision: 'decline', reason: 'cooldown' };
-  }
-
-  // CPU accepts if the deal is fair or better for them (i.e., worse for user)
-  // Adjusted by gmRelationship — friendly teams accept marginal deals
-  const acceptThreshold = gmRel >= 70 ? -1   // friendly: accepts slight disadvantage
-    : gmRel >= 50 ? 0                         // neutral: accepts fair deals
-    : 1;                                      // cold: requires slight advantage
-
-  if (evaluation.fairnessRating <= -acceptThreshold) {
-    // Deal is good enough for CPU to accept
-    return { decision: 'accept', evaluation };
-  }
-
-  // Consider countering (Phase 9 — return counter flag for now)
-  if (evaluation.fairnessRating > acceptThreshold && evaluation.fairnessRating <= 2) {
-    if (gmRel >= 40 && Math.random() < 0.60) {
-      return { decision: 'counter', evaluation };
-    }
-  }
-
-  return { decision: 'decline', evaluation, reason: 'value' };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -509,22 +519,279 @@ function _assembleCPUOffer(team, target, state, gmRel, isDeadlineWindow) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// TRADE COOLDOWN MANAGEMENT
+// §85 PHASE 4 — HOW CLUBS JUDGE A DEAL
 // ─────────────────────────────────────────────────────────────
 
+const POSTSEASON = new Set([PHASE.PLAYOFF_BRACKET_BUILD, PHASE.WILD_CARD, PHASE.FIRST_ROUND, PHASE.DIVISION_SERIES, PHASE.WORLD_SERIES]);
+const _club = (state, id) => (id === 'user' ? state.userTeam : (state.leagueTeams || []).find(t => t.id === id) || null);
+const _isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
+const _plays = (p, slot) => slot === 'DH' ? !_isPitcher(p)
+  : [p.nativePos, ...(String(p.pos || '').split('/'))].includes(slot);
+
+/** Our committed regular-season games (the season's position against the deadline). */
+export function regularIndex(state) {
+  return (state.schedule || []).filter(g => g._committed && !g.isSpring && !g.isPlayoff).length;
+}
+
 /**
- * recordDeclinedOffer(teamId, state)
- * Returns mutations to record a declined trade offer (starts 15-game cooldown).
- *
- * @param {String} teamId
- * @param {Object} state
- * @returns {Object} mutations
+ * tradeWindow(state) — §85 H: trades are open in spring, in season until the
+ * deadline, and in the offseason; closed from the deadline through October.
  */
-export function recordDeclinedOffer(teamId, state) {
+export function tradeWindow(state) {
+  const ph = state.phase;
+  if (ph === PHASE.OFFSEASON || ph === PHASE.SPRING_TRAINING) return { open: true };
+  if (ph === PHASE.SEASON_SUMMARY || POSTSEASON.has(ph)) return { open: false, reason: 'the trade window is closed until the offseason' };
+  if (regularIndex(state) > TRADE_DEADLINE_CLOSE) return { open: false, reason: 'the trade deadline has passed' };
+  return { open: true };
+}
+
+// ── GM rapport (the per-club relationship, shown as a grade) ──────────────
+
+export function rapportOf(state, teamId) {
+  return state.userTeam?.gmRelationships?.[teamId] ?? GM_RELATIONSHIP_DEFAULT;
+}
+/** The grade the GM sees: Strong / Good / Neutral / Cool / Strained. */
+export function rapportGrade(score) {
+  return score >= 75 ? 'Strong' : score >= 60 ? 'Good' : score >= 40 ? 'Neutral' : score >= 25 ? 'Cool' : 'Strained';
+}
+export function adjustRapport(draft, teamId, delta) {
+  if (!delta || teamId === 'user') return;
+  const rels = { ...(draft.userTeam.gmRelationships || {}) };
+  rels[teamId] = Math.max(0, Math.min(100, (rels[teamId] ?? GM_RELATIONSHIP_DEFAULT) + delta));
+  draft.userTeam.gmRelationships = rels;
+}
+
+// ── Cooling off (real time) ────────────────────────────────────────────────
+
+export function cooldownUntil(state, teamId) {
+  return state.tradeTalks?.[teamId]?.cooldownUntilMs || 0;
+}
+export function startCooldown(draft, teamId, atMs) {
+  draft.tradeTalks = { ...(draft.tradeTalks || {}), [teamId]: { ...(draft.tradeTalks?.[teamId] || {}), cooldownUntilMs: atMs + TRADE.cooldownMs } };
+}
+
+// ── Where a club stands ────────────────────────────────────────────────────
+
+/** 'buyer' | 'seller' | 'neutral': the record (and the owner, if he is cutting). */
+export function clubMode(state, teamId) {
+  const t = _club(state, teamId);
+  if (!t) return 'neutral';
+  if (['cuts', 'concerned'].includes(t.finances?.owner?.stage)) return 'seller';
+  const n = (t.wins || 0) + (t.losses || 0);
+  if (n < 15) return 'neutral';
+  const pct = t.wins / n;
+  return pct >= 0.54 ? 'buyer' : pct <= 0.46 ? 'seller' : 'neutral';
+}
+
+function _lineupOf(state, t) {
+  return (t.lineupSlots || []).map(sl => ({ slot: sl.slot, p: state.players[sl.playerId] })).filter(x => x.p);
+}
+function _rotationOf(state, t) {
+  return (t.rotation?.order || []).map(id => state.players[id]).filter(Boolean);
+}
+function _bullpenOf(state, t) {
+  return (t.rosterIds || []).map(id => state.players[id])
+    .filter(p => p && [PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group) && p.pos === 'RP');
+}
+
+/** Would this player start for the club — over its weakest at a spot he fills? */
+export function wouldStart(p, state, teamId) {
+  const t = _club(state, teamId);
+  if (!t || !p) return false;
+  if (p.pos === 'SP') {
+    const rot = _rotationOf(state, t).filter(x => x.id !== p.id);
+    return rot.length < 5 || (p.ovr || 0) > Math.min(...rot.map(x => x.ovr || 0));
+  }
+  if (p.pos === 'RP') {
+    const pen = _bullpenOf(state, t).filter(x => x.id !== p.id).map(x => x.ovr || 0).sort((a, b) => b - a);
+    return pen.length < 4 || (p.ovr || 0) > pen[3];
+  }
+  return _lineupOf(state, t).some(x => x.p.id !== p.id && _plays(p, x.slot) && (p.ovr || 0) > (x.p.ovr || 0));
+}
+
+/** Does the player hold a key spot for his club now (lineup, rotation, top of the pen)? */
+function _isKey(p, state, teamId) {
+  const t = _club(state, teamId);
+  if (!t) return false;
+  if ((t.lineupSlots || []).some(sl => sl.playerId === p.id)) return true;
+  if ((t.rotation?.order || []).includes(p.id)) return true;
+  const pen = _bullpenOf(state, t).sort((a, b) => (b.ovr || 0) - (a.ovr || 0)).slice(0, 3);
+  return pen.some(x => x.id === p.id);
+}
+
+/**
+ * valueToClub(p, state, teamId, receiving) — what a player is worth to this
+ * club, from where it stands: the base value (rating, age, contract, salary,
+ * health), weighed by whether it is buying or selling, and by whether he
+ * would play for it (receiving) or is a piece it can spare (giving).
+ */
+export function valueToClub(p, state, teamId, receiving) {
+  let v = _playerValue(p, state);
+  const mode = clubMode(state, teamId);
+  const age = computeAge(p.dob, baseballYear(state));
+  const rental = _isRentalPlayer(p, state);
+  if (receiving) {
+    if (mode === 'buyer')  v *= (1 + Math.max(-0.1, Math.min(0.2, ((p.ovr || 55) - 60) * 0.01))) * (rental ? 1.1 : 1);
+    if (mode === 'seller') v *= (age <= 25 ? 1.2 : age >= 31 ? 0.8 : 1) * (rental ? 0.7 : 1);
+    v *= wouldStart(p, state, teamId) ? 1.2 : (age <= 24 ? 0.95 : 0.8);
+  } else {
+    v *= _isKey(p, state, teamId) ? 1.1 : 0.85;
+    if (mode === 'seller' && (rental || age >= 31)) v *= 0.85;   // a seller is glad to move veterans
+  }
+  return v;
+}
+
+/** What $K is worth in trade value to this club (a strapped club values cash more). */
+export function cashValue(k, state, teamId) {
+  const t = _club(state, teamId);
+  const stage = t?.finances?.owner?.stage;
+  const tgt = Finance.seasonTarget(t?.finances) || 1;
+  const funds = t?.finances?.funds ?? 0;
+  const mult = ['cuts', 'concerned'].includes(stage) || funds < tgt * 0.1 ? 1.3 : funds > tgt * 0.25 ? 0.8 : 1;
+  return (k / TRADE.cashPerValueK) * mult;
+}
+
+/** The share of this season's salary still to be paid (for salary kept on a traded player). */
+export function remainingShare(state) {
+  const cal = state.userTeam?.finances?.cal;
+  if (!cal || cal.seasonNum !== (state.seasonNum || 1)) return 0;
+  return Math.max(0, Math.min(1, (cal.endDay - cal.accruedThrough) / cal.days));
+}
+
+/**
+ * evaluateForClub(offer, state, teamId) — the deal from the CPU club's side.
+ * It receives offer.outgoingIds (ours) and gives offer.incomingIds (its own).
+ * Returns { get, give, net, payrollIn, payrollOut, booksOk, cashOk }.
+ */
+export function evaluateForClub(offer, state, teamId) {
+  const P = (id) => state.players[id];
+  const ret = offer.retain || {};
+  const recv = (offer.outgoingIds || []).map(P).filter(Boolean);
+  const send = (offer.incomingIds || []).map(P).filter(Boolean);
+  const get  = recv.reduce((a, p) => a + valueToClub(p, state, teamId, true), 0);
+  const give = send.reduce((a, p) => a + valueToClub(p, state, teamId, false), 0);
+  const rem = remainingShare(state);
+  // Money: cash it pays (+cashK) or gets, salary it keeps paying on players it
+  // sends (ret on its players) or that we keep paying on ours.
+  const keepsK  = send.reduce((a, p) => a + (p.contractSalary || 0) * (ret[p.id] || 0) * rem, 0);
+  const sparedK = recv.reduce((a, p) => a + (p.contractSalary || 0) * (ret[p.id] || 0) * rem, 0);
+  const cashK = offer.cashK || 0;
+  const money = cashValue(-cashK - keepsK + sparedK, state, teamId);
+  const payrollIn  = recv.reduce((a, p) => a + (p.contractSalary || 0) * (1 - (ret[p.id] || 0)), 0);
+  const payrollOut = send.reduce((a, p) => a + (p.contractSalary || 0) * (1 - (ret[p.id] || 0)), 0);
   return {
-    _tradeDeclinedAt: {
-      ...(state._tradeDeclinedAt || {}),
-      [teamId]: state.currentGameIndex || 0,
-    },
+    get, give, net: get - give + money,
+    payrollIn, payrollOut,
+    booksOk: Finance.canAddSalary(state, payrollIn, payrollOut, teamId),
+    cashOk:  cashK <= 0 || Finance.canSpend(state, cashK, teamId),
   };
 }
+
+/** The bar this club sets (net value it needs), by its GM's rapport with ours. */
+export function clubBar(state, teamId) {
+  const g = rapportGrade(rapportOf(state, teamId)).toLowerCase();
+  return TRADE.bar[g] ?? 0;
+}
+
+/**
+ * tradeBlockers(offer, state, atMs, teamId) — why this deal can't be made
+ * right now (null when it can): the window, cooling off, the size of the
+ * deal, players who aren't where the deal needs them, a player acquired too
+ * recently to move (§85 I).
+ */
+export function tradeBlockers(offer, state, atMs, teamId) {
+  const w = tradeWindow(state);
+  if (!w.open) return w.reason;
+  if (cooldownUntil(state, teamId) > atMs) return `${_club(state, teamId)?.name || 'They'} aren't taking calls from us for a couple of days`;
+  const ins = offer.incomingIds || [], outs = offer.outgoingIds || [];
+  if (ins.length > TRADE.maxPerSide || outs.length > TRADE.maxPerSide) return `a deal can have at most ${TRADE.maxPerSide} players a side`;
+  if (!ins.length && !outs.length) return 'there is nothing in the deal';
+  const cpu = _club(state, teamId), user = state.userTeam;
+  const on = (t, id) => (t?.rosterIds || []).includes(id) || (t?.farmIds || []).includes(id);
+  for (const id of outs) if (!on(user, id)) return `${state.players[id]?.name || 'A player'} isn't ours to trade`;
+  for (const id of ins) if (!on(cpu, id)) return `${state.players[id]?.name || 'A player'} isn't theirs to trade`;
+  for (const id of [...ins, ...outs]) {
+    const p = state.players[id];
+    if (!p) return 'a player in the deal no longer exists';
+    if (p.group === PLAYER_GROUP.IN_TRANSIT) return `${p.name} is in transit`;
+    if (p.isInjured || p.group === PLAYER_GROUP.IL) return `${p.name} is hurt — no club takes an injured player`;
+    if (p._acquiredAtMs && atMs - p._acquiredAtMs < TRADE.noFlipMs) return `${p.name} was acquired too recently to be moved`;
+  }
+  for (const [id, pct] of Object.entries(offer.retain || {})) {
+    if (!(pct > 0 && pct <= TRADE.maxRetainPct)) return 'a club keeps paying at most half of a salary';
+    if (!ins.includes(id) && !outs.includes(id)) return 'salary can only be kept on a player in the deal';
+  }
+  return null;
+}
+
+/**
+ * cpuRespond(offer, state, teamId, { round, atMs }) — the club's answer:
+ *   { decision: 'accept' | 'counter' | 'decline', reason, counter?, eval }
+ * A deal at or above its bar is accepted. Close enough, it counters (asking
+ * for cash or another piece, or keeping salary) until TRADE.maxRounds, when
+ * talks fizzle. Far off, it declines — a lowball if very far.
+ */
+export function cpuRespond(offer, state, teamId, { round = 1, atMs = Date.now() } = {}) {
+  const blocked = tradeBlockers(offer, state, atMs, teamId);
+  if (blocked) return { decision: 'decline', reason: blocked };
+  const ev = evaluateForClub(offer, state, teamId);
+  const bar = clubBar(state, teamId);
+  const gap = bar - ev.net;
+  if (ev.net >= bar && ev.booksOk && ev.cashOk) return { decision: 'accept', eval: ev };
+  if (round >= TRADE.maxRounds) return { decision: 'decline', reason: 'fizzled', eval: ev };
+  if (gap <= TRADE.counterBand || !ev.booksOk) {
+    const counter = buildCounter(offer, state, teamId, Math.max(0, gap), ev);
+    if (counter) return { decision: 'counter', counter, eval: ev };
+  }
+  return { decision: 'decline', reason: gap > TRADE.counterBand * 2 ? 'lowball' : 'value', eval: ev };
+}
+
+/**
+ * buildCounter(offer, state, teamId, gap, ev) — the club's counter: if its
+ * books can't carry the deal, we keep paying part of a salary we send; then
+ * the smallest addition that closes the value gap — cash from us (small
+ * gaps, if our owner can spend it), one more of our players (a prospect or a
+ * bench piece it would use), or one of its own players taken back out.
+ */
+export function buildCounter(offer, state, teamId, gap, ev = evaluateForClub(offer, state, teamId)) {
+  const next = { ...offer, incomingIds: [...(offer.incomingIds || [])], outgoingIds: [...(offer.outgoingIds || [])], retain: { ...(offer.retain || {}) }, cashK: offer.cashK || 0 };
+  // Books first: we keep paying part of the biggest salary we send.
+  if (!ev.booksOk) {
+    const over = ev.payrollIn - ev.payrollOut - Math.max(0, Finance.payrollRoom(state, teamId));
+    const big = next.outgoingIds.map(id => state.players[id]).filter(Boolean).sort((a, b) => (b.contractSalary || 0) - (a.contractSalary || 0))[0];
+    if (!big || !(big.contractSalary > 0)) return null;
+    const pct = Math.min(TRADE.maxRetainPct, Math.ceil((over / big.contractSalary) * 20) / 20);
+    if (pct <= 0 || over > big.contractSalary * TRADE.maxRetainPct) return null;
+    next.retain[big.id] = pct;
+    const after = evaluateForClub(next, state, teamId);
+    return after.booksOk ? (after.net >= clubBar(state, teamId) ? next : buildCounter(next, state, teamId, clubBar(state, teamId) - after.net, after)) : null;
+  }
+  const options = [];
+  // Cash from us, for a small gap our owner can fund.
+  const cashNeed = Math.ceil((gap / cashValue(1, state, teamId)) / 25) * 25;
+  if (gap <= 20 && Finance.canSpend(state, cashNeed, 'user')) options.push({ kind: 'cash', over: 0, apply: (o) => { o.cashK -= cashNeed; } });
+  // One more of ours (prospects and bench pieces it would value).
+  if (next.outgoingIds.length < TRADE.maxPerSide) {
+    const u = state.userTeam;
+    const pool = [...(u.farmIds || []), ...(u.rosterIds || [])].map(id => state.players[id])
+      .filter(p => p && !next.outgoingIds.includes(p.id) && !_isKey(p, state, 'user') && !p.isInjured && p.group !== PLAYER_GROUP.IN_TRANSIT
+                && !(p._acquiredAtMs && Date.now() - p._acquiredAtMs < TRADE.noFlipMs));
+    for (const p of pool) {
+      const add = valueToClub(p, state, teamId, true);
+      if (add >= gap) options.push({ kind: 'player', over: add - gap, id: p.id, apply: (o) => { o.outgoingIds.push(p.id); } });
+    }
+  }
+  // One of theirs taken back out (only when more than one comes to us).
+  if (next.incomingIds.length > 1) {
+    for (const id of next.incomingIds) {
+      const p = state.players[id];
+      const back = valueToClub(p, state, teamId, false);
+      if (back >= gap) options.push({ kind: 'remove', over: back - gap, id, apply: (o) => { o.incomingIds = o.incomingIds.filter(x => x !== id); delete o.retain[id]; } });
+    }
+  }
+  if (!options.length) return null;
+  const pick = options.sort((a, b) => (a.kind === 'cash' ? -1 : 0) - (b.kind === 'cash' ? -1 : 0) || a.over - b.over)[0];
+  pick.apply(next);
+  return next;
+}
+

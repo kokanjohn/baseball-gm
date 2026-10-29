@@ -7083,3 +7083,43 @@ The dashboard's activity feed (`state.activityFeed`, kept 72 hours) was icon-led
 - **Collapsed by default:** one line showing the newest entry, with "More". A tap opens the list (the newest 12, scrolling inside its own box) with "Less". The state holds across refreshes in the session and starts collapsed each launch.
 - **It starts with the club:** "‹GM› takes over the ‹city› ‹nickname›" and "Spring training opens — Season 1" at team creation. Our own results ("Spring: TST def. CLW 5–3", spring, regular season and playoffs) and every CPU game's final, spring included, are written at the final.
 - **Role (agreed with §85 J):** Recent is the at-a-glance log of scores, paydays and milestones. The full record of league moves will be the League wire (a Transactions view on the League screen, built with 4c). The inbox gets a card only when a move touches us and there's a decision.
+
+## 87. Phase 4a — the trade engine (r82)
+- **Cash in trades is on** (`TRADE_CASH_ENABLED`). An offer is `{ incomingIds, outgoingIds, cashK, retain }`:
+  - `cashK` is a one-time payment, + when the other club pays us.
+  - `retain` is `{ playerId: share }`, the share of a traded player's salary the sending club keeps paying this season (at most 50%).
+  - Execution posts cash to both clubs' funds as 'trade' and records retained shares (`Finance.retainSalary`).
+- **Covered salary (§85 B, C):** `payrollOf` counts a player's salary less any share another club keeps paying, and adds the shares a club keeps on players it traded away. Paydays pay each club exactly its share; owner checks see only the club's own part. Shares end with the season.
+- **How a CPU club judges a deal (§85 I):** `valueToClub(p, state, teamId, receiving)` starts from the base value (rating, age, contract, salary, health) and weighs it by:
+  - the club's mode (`clubMode`: buyer ≥ .540; seller ≤ .460 or an owner cutting): buyers favor current rating and rentals; sellers favor youth, discount rentals and veterans, and are glad to move veterans;
+  - whether the player would start there (`wouldStart`, read from the real lineup slots, rotation and top of the pen);
+  - whether a player sent away is a key piece.
+  
+  `cashValue` turns money into value, worth more to a strapped club. `evaluateForClub` returns the net value and checks both owners' books.
+- **Answers:** `cpuRespond` accepts at the club's bar, which is set by rapport (Strong −8 … Strained +12). Within 30 of the bar, it counters (`buildCounter`):
+  - its books first: we keep paying part of a salary we send;
+  - then the smallest fix: cash from us for a small gap, one more of our players (a prospect or a bench piece it would use), or one of its own players taken back out.
+  
+  Talks fizzle after 3 rounds (`TRADE.maxRounds`). Far below the bar is a decline, a lowball if very far.
+- **Rules:** `tradeWindow` (open in spring, in season to the deadline and in the offseason; closed from the deadline through the postseason) and `tradeBlockers`:
+  - the window and cooling off;
+  - at most 3 players a side;
+  - every player must be in the club's organization, active roster or farm;
+  - no injured or in-transit players;
+  - no flipping: `_acquiredAtMs`, 5 days;
+  - salary kept only on a player in the deal, at most 50%.
+  
+  Cooling off is now real time (`state.tradeTalks[teamId].cooldownUntilMs`, 2 days), replacing the old game-count `_tradeDeclinedAt`. The unused `evaluateCPUResponse` and `recordDeclinedOffer` are gone.
+- **Rapport:** `rapportOf`, `rapportGrade` (Strong ≥ 75 / Good ≥ 60 / Neutral ≥ 40 / Cool ≥ 25 / Strained) and `adjustRapport`. A completed trade adds +2.
+- **Execution:** every player leaves the old club first, then each receiving club makes room. A full side options its weakest reserve at the moment of the deal, so a player in the deal can never be the corresponding move. A prospect traded from a farm reports to the new club's farm, and a full farm side releases its weakest.
+- **CPU offers carry money** (`_dressWithMoney`): a selling club keeps paying part of a salary when our owner couldn't carry it, and adds a cash sweetener when the deal is a little short for us. **§85 A:** a selling club occasionally offers a fringe player who would start for us, for cash (`generateCPUCashSale`).
+- **Offer cards** describe up to 3 a side, cash and salary kept. The `_assessDepthImpact` STARTING_HITTERS check is fixed (`wouldStart`).
+- **Harness:** on copies of the real league:
+  - a fair deal is accepted or countered, and a lowball refused;
+  - counters improve the deal for the club and end within the round limit;
+  - cash moves between the funds;
+  - the sending club keeps its share and our payroll counts only ours;
+  - a just-acquired player can't be flipped;
+  - cooling off and the deadline block talks.
+  
+  7 of 8 seeds green. **Seed 1: the weakest CPU club finished 30–102** (no trades of its own; the r78 open item, a weak club with no in-season way to improve, reached by a different random path), plus a development-variety check that depends on chance. **4c's needs-based CPU-to-CPU trades are the planned fix.**
