@@ -370,8 +370,8 @@ function _openSeriesLog(series, state) {
       .series-log-game{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border);}
       .series-log-gnum{font-size:11px;font-weight:700;color:var(--muted);width:20px;flex-shrink:0;}
       .series-log-teams{flex:1;font-size:14px;font-weight:600;color:var(--text);}
-      .series-log-winner{font-size:12px;color:var(--accent2);font-weight:700;}
-      .series-log-user{color:var(--accent);}
+      .series-log-winner{font-size:12px;color:var(--text);font-weight:700;}
+      .series-log-user{color:var(--text);}
     `;
     document.head.appendChild(style);
   }
@@ -457,11 +457,11 @@ function _injectCSS() {
       display: flex; align-items: center; gap: 4px;
     }
     .playoff-chip-team.elim { opacity: .45; text-decoration: line-through; }
-    .playoff-chip-team.user-team { color: var(--accent); }
+    .playoff-chip-team.user-team { color:var(--text); }
     .playoff-chip-vs { font-size: 9px; color: var(--muted); margin: 2px 0; }
     .chip-seed { font-size: 9px; color: var(--muted); font-weight: 600;
       background: var(--surface2); padding: 1px 4px; border-radius: 3px; }
-    .chip-wins { font-size: 11px; font-weight: 800; color: var(--accent2);
+    .chip-wins { font-size: 11px; font-weight: 800; color:var(--text);
       background: var(--chip-green-bg); padding: 0 4px; border-radius: 4px;
       margin-left: 4px; }
 
@@ -473,13 +473,13 @@ function _injectCSS() {
     .ws-matchup { display: flex; align-items: center; justify-content: center; gap: 12px; }
     .ws-team { font-size: 15px; font-weight: 700; color: var(--text);
       display: flex; align-items: center; gap: 6px; }
-    .ws-team.user-team { color: var(--accent); }
+    .ws-team.user-team { color:var(--text); }
     .ws-team.elim { opacity: .4; text-decoration: line-through; }
     .ws-vs { font-size: 13px; color: var(--muted); font-weight: 600; min-width: 32px; text-align: center; }
-    .ws-wins { font-size: 16px; font-weight: 800; color: var(--accent2); }
+    .ws-wins { font-size: 16px; font-weight: 800; color:var(--text); }
     .ws-live-pill { background: var(--chip-red-bg); color: var(--danger);
       font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 10px; letter-spacing: .5px; }
-    .ws-champion-banner { font-size: 16px; font-weight: 700; color: var(--accent2);
+    .ws-champion-banner { font-size: 16px; font-weight: 700; color:var(--text);
       text-align: center; padding: 4px 0; }
 
     /* Playoff content container */

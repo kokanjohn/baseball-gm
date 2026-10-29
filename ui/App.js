@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r87';
+export const APP_VERSION = 'tfo-v2-r88';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -662,7 +662,7 @@ function _injectEffectsCSS() {
       display:flex;flex-direction:column;gap:9px;opacity:0;pointer-events:none;transition:all .3s;}
     #effects-panel.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto;cursor:pointer;}
     #effects-panel .ep-title{font-size:13px;font-weight:700;color:var(--text);text-align:center;line-height:1.4;margin-bottom:2px;}
-    #effects-panel .ep-title.pos{color:var(--accent2, #22C55E);}
+    #effects-panel .ep-title.pos{color:var(--text);}
     #effects-panel .ep-row{display:flex;align-items:center;gap:8px;}
     #effects-panel .ep-label{width:84px;font-size:11px;color:var(--muted);text-align:right;flex-shrink:0;}
     #effects-panel .ep-track{flex:1;height:7px;background:var(--border);border-radius:4px;overflow:hidden;}
@@ -1727,7 +1727,7 @@ async function _refreshUpdateStatus() {
     }
     if (waiting) {
       statusEl.textContent = '🔄 New version ready — tap “Check for updates & refresh”';
-      statusEl.style.color = 'var(--accent, #F5D253)';
+      statusEl.style.color = 'var(--text)';
     } else {
       statusEl.textContent = '';
     }

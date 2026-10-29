@@ -722,7 +722,7 @@ function _injectCSS() {
     /* Compose topic panel slide */
     #compose-topic-panel{animation:slideUp .2s ease;}
     .completed-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;min-height:28px;}
-    .completed-tool{font-size:11px;font-weight:700;padding:5px 10px;border-radius:8px;border:1px solid var(--accent);color:var(--accent);background:transparent;cursor:pointer;}
+    .completed-tool{font-size:11px;font-weight:700;padding:5px 10px;border-radius:8px;border:1px solid var(--accent);color:var(--text);background:transparent;cursor:pointer;}
     .completed-tool.muted{border-color:var(--border);color:var(--muted);}
     .completed-card{position:relative;}
     .completed-del{margin-left:auto;align-self:flex-start;flex-shrink:0;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;}

@@ -391,8 +391,8 @@ function _injectCSS() {
     .pc-ovr-block{text-align:center;flex-shrink:0;background:var(--surface2);
       border-radius:10px;padding:8px 12px;border:1px solid var(--border);}
     .pc-ovr-num{font-family:'Bebas Neue',sans-serif;font-size:36px;line-height:1;}
-    .pc-ovr-num.elite{color:var(--accent2);}
-    .pc-ovr-num.good{color:var(--accent);}
+    .pc-ovr-num.elite{color:var(--text);}
+    .pc-ovr-num.good{color:var(--text);}
     .pc-ovr-num.avg{color:var(--soft);}
     .pc-ovr-num.poor{color:var(--danger);}
     .pc-ovr-label{font-size:9px;font-weight:700;letter-spacing:1.5px;
@@ -402,7 +402,7 @@ function _injectCSS() {
     .pc-pos{font-weight:700;color:var(--text);}
     .pc-dot{color:var(--border);}
     .pc-team{font-size:13px;color:var(--soft);margin-bottom:3px;}
-    .pc-farm-badge{font-size:10px;font-weight:700;color:var(--accent);
+    .pc-farm-badge{font-size:10px;font-weight:700;color:var(--text);
       background:var(--chip-accent-bg);padding:1px 6px;border-radius:4px;display:inline-block;}
     .pc-trait{font-size:11px;color:var(--muted);font-style:italic;margin-top:2px;}
     .pc-hot-cold{font-size:24px;flex-shrink:0;}
@@ -423,7 +423,7 @@ function _injectCSS() {
     .pc-imp-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;}
     .pc-imp-cell{background:var(--surface2);border-radius:8px;padding:8px;text-align:center;}
     .pc-imp-val{font-family:'DM Mono',monospace;font-size:14px;font-weight:700;color:var(--text);}
-    .pc-imp-val.positive{color:var(--accent2);}
+    .pc-imp-val.positive{color:var(--text);}
     .pc-imp-val.negative{color:var(--danger);}
     .pc-imp-val.muted{color:var(--muted);}
     .pc-imp-win{font-size:9px;color:var(--muted);margin-top:3px;font-weight:600;}

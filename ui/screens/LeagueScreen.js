@@ -560,7 +560,7 @@ function _renderPlayers(state) {
       </div>
       <div class="lp-scroll-wrap">
         <div class="lp-header">
-          <div class="lp-th lp-th-name lp-col-sticky">Player</div>
+          <div class="lp-th-name lp-col-sticky">Player</div>
           ${heads}
         </div>
         <div id="lp-list">${rows}</div>
@@ -845,7 +845,7 @@ function _openLeagueTeamModal(team, state) {
       <span style="flex:1;font-size:13px;font-weight:600;color:var(--text);">${_escape(p.name)}</span>
       <span style="font-size:11px;color:var(--muted);margin-right:4px;">${p.nativePos || p.pos}</span>
       <span style="font-size:13px;font-weight:700;min-width:26px;text-align:right;
-        color:${p.ovr >= 75 ? 'var(--accent2)' : p.ovr >= 60 ? 'var(--text)' : 'var(--muted)'};">${p.ovr}</span>
+        color:${p.ovr >= 75 ? 'var(--text)' : p.ovr >= 60 ? 'var(--text)' : 'var(--muted)'};">${p.ovr}</span>
       <span style="font-size:11px;color:var(--border);margin-left:2px;">›</span>
     </div>`;
 
@@ -864,7 +864,7 @@ function _openLeagueTeamModal(team, state) {
           <div style="font-size:18px;font-weight:800;">${_escape(team.name || team.abbr || '?')}</div>
           <div style="font-size:12px;color:var(--muted);margin-top:2px;">
             ${team.wins || 0}–${team.losses || 0} · Avg OVR ${avgOvr}
-            ${isUser ? ' · <span style="color:var(--accent);font-weight:700;">Your Team</span>' : ''}
+            ${isUser ? ' · <span style="color:var(--text);font-weight:700;">Your Team</span>' : ''}
           </div>
         </div>
         <button class="modal-close" id="league-team-close">×</button>
@@ -953,7 +953,7 @@ function _injectCSS() {
     .lp-pos-btn{font-size:10px;font-weight:700;letter-spacing:.3px;padding:4px 8px;
       border-radius:6px;border:1px solid var(--border);background:transparent;
       color:var(--muted);cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;flex-shrink:0;}
-    .lp-pos-btn.active{background:var(--chip-accent-bg);border-color:var(--accent);color:var(--accent);}
+    .lp-pos-btn.active{background:var(--chip-accent-bg);border-color:var(--accent);color:var(--text);}
     .lp-pos-btn:active{opacity:.7;}
     .lp-sep{color:var(--border);font-size:13px;line-height:1;align-self:center;margin:0 1px;flex-shrink:0;}
 
@@ -963,7 +963,7 @@ function _injectCSS() {
     .lp-roster-btn{font-size:10px;font-weight:700;padding:4px 7px;border-radius:6px;
       border:1px solid var(--border);background:transparent;color:var(--muted);
       cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;flex-shrink:0;}
-    .lp-roster-btn.active{background:var(--chip-accent-bg);border-color:var(--accent);color:var(--accent);}
+    .lp-roster-btn.active{background:var(--chip-accent-bg);border-color:var(--accent);color:var(--text);}
     .lp-team-select{width:130px;flex-shrink:0;font-size:11px;font-weight:500;
       background:var(--surface);border:1px solid var(--border);border-radius:7px;
       color:var(--text);padding:4px 6px;font-family:'DM Sans',sans-serif;outline:none;}
@@ -979,7 +979,7 @@ function _injectCSS() {
     /* Horizontal scroll wrapper — name col sticks left, stats scroll right */
     .lp-tab-wrap{display:block;}
     .lp-sticky-header{position:sticky;top:0;z-index:10;background:var(--bg);}
-    .lp-scroll-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+    .lp-scroll-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;}
     .lp-scroll-wrap::-webkit-scrollbar{height:3px;}
     .lp-scroll-wrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
 
@@ -990,18 +990,17 @@ function _injectCSS() {
       cursor:pointer;min-width:max-content;}
     .lp-row:active{background:var(--surface2);}
 
-    /* Sticky name column — must be identical width in both header and rows */
-    .lp-col-sticky{
-      position:sticky;left:0;z-index:3;
+    /* Sticky name column — ONE width rule for the heading and every row, so
+       the heading always sits over its column (§93). */
+    .lp-col-sticky,.lp-td-name{
+      position:sticky;left:0;
       width:120px;min-width:120px;max-width:120px;flex-shrink:0;
-      background:var(--surface2);padding:5px 8px;
+      padding-left:8px;padding-right:8px;text-align:left;overflow:hidden;
     }
-    .lp-td-name{
-      position:sticky;left:0;z-index:2;
-      width:120px;min-width:120px;max-width:120px;flex-shrink:0;
-      background:var(--bg);padding:7px 8px;overflow:hidden;
-    }
-    .user-player-row .lp-td-name{background:var(--chip-accent-bg);}
+    .lp-col-sticky{z-index:3;background:var(--surface2);padding-top:5px;padding-bottom:5px;}
+    .lp-td-name{z-index:2;background:var(--bg);padding-top:7px;padding-bottom:7px;}
+    /* our players' tint over a solid fill, so stats scrolling under the frozen name never show through */
+    .user-player-row .lp-td-name{background:linear-gradient(var(--chip-accent-bg),var(--chip-accent-bg)),var(--bg);}
 
     /* Player name text — 12px matching the previous fix */
     .lp-name-line{font-size:12px;font-weight:600;color:var(--text);
@@ -1009,12 +1008,13 @@ function _injectCSS() {
     .lp-name-sub{font-size:10px;color:var(--muted);margin-top:1px;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
+    /* Column headings: the same lettering for the name and the stats */
+    .lp-th,.lp-th-name{font-size:9px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;
+      color:var(--muted);white-space:nowrap;}
     /* Stat column headers — uniform 38px, text centered */
-    .lp-th{width:38px;min-width:38px;flex-shrink:0;text-align:center;padding:5px 2px;
-      font-size:9px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;
-      color:var(--muted);cursor:pointer;white-space:nowrap;}
+    .lp-th{width:38px;min-width:38px;flex-shrink:0;text-align:center;padding:5px 2px;cursor:pointer;}
     .lp-th:active{opacity:.7;}
-    .lp-th-active{color:var(--accent);}
+    .lp-th-active{color:var(--text);}
 
     /* Stat cells — match header widths exactly */
     .lp-td{width:38px;min-width:38px;flex-shrink:0;text-align:center;
@@ -1027,14 +1027,14 @@ function _injectCSS() {
     .lp-td-imp{width:44px;min-width:44px;}
     .lp-imp{font-size:10px;font-weight:800;padding:2px 4px;border-radius:4px;
       letter-spacing:.2px;white-space:nowrap;}
-    .lp-imp-pos{color:var(--accent2);background:rgba(52,201,122,.12);}
+    .lp-imp-pos{color:var(--text);background:rgba(52,201,122,.12);}
     .lp-imp-neg{color:var(--danger);background:rgba(240,82,82,.12);}
     .lp-imp-neu{color:var(--muted);background:transparent;}
 
     /* IMP badge */
     .lp-imp{font-size:10px;font-weight:800;padding:2px 4px;border-radius:4px;
       letter-spacing:.2px;white-space:nowrap;}
-    .lp-imp-pos{color:var(--accent2);background:rgba(52,201,122,.12);}
+    .lp-imp-pos{color:var(--text);background:rgba(52,201,122,.12);}
     .lp-imp-neg{color:var(--danger);background:rgba(240,82,82,.12);}
     .lp-imp-neu{color:var(--muted);background:transparent;}
 
@@ -1042,7 +1042,7 @@ function _injectCSS() {
     .lw-bar{display:flex;gap:6px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface);}
     .lw-chip{font-size:11px;font-weight:700;padding:5px 10px;border-radius:7px;border:1px solid var(--border);
       background:transparent;color:var(--muted);cursor:pointer;font-family:'DM Sans',sans-serif;}
-    .lw-chip.active{background:var(--chip-accent-bg);border-color:var(--accent);color:var(--accent);}
+    .lw-chip.active{background:var(--chip-accent-bg);border-color:var(--accent);color:var(--text);}
     .lw-day{padding:12px 16px 5px;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);}
     .lw-row{padding:9px 16px;border-top:1px solid var(--border);background:var(--surface);}
     .lw-row.lw-ours{background:var(--chip-accent-bg);}

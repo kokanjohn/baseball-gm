@@ -246,6 +246,7 @@ export function refresh() {
   _stopCountdown();
   container.innerHTML = _renderDashboard(state);
   _attachListeners(state);
+  _syncScrollRoom();
   if (feedScroll) { const f = document.getElementById('lgv-pbp-feed'); if (f) f.scrollTop = feedScroll; }
 
   // Start 1-second countdown if pre-game and gameTime is set
@@ -1213,7 +1214,22 @@ function _wireRecent() {
     const wrap = document.getElementById('recent-wrap');
     const st = StateManager.get();
     if (wrap && st) { wrap.outerHTML = _renderActivityFeed(st); _wireRecent(); }
+    _syncScrollRoom();
   });
+}
+
+/**
+ * §93 the dashboard only scrolls when it has to. With no game in progress
+ * and Recent collapsed, nothing trails the last card (no bottom padding or
+ * margin), so a dashboard that fits the screen doesn't scroll by those few
+ * pixels. A live game or an open Recent list gets its room back. (A screen
+ * too short for the cards still scrolls — nothing is ever cut off.)
+ */
+function _syncScrollRoom() {
+  const tab = document.getElementById('tab-dashboard');
+  if (!tab) return;
+  const live = !!document.querySelector('#dashboard-content .live-game-wrap');
+  tab.classList.toggle('dash-idle', !live && !_recentOpen);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1428,6 +1444,8 @@ function _injectCSS() {
     .fp-card.fp-warm .fp-time{color:#f97316;}
     .fp-card.fp-hot  .fp-time{color:var(--danger);}
     .fp-sub{font-size:10px;color:var(--muted);margin-top:2px;}
+    #tab-dashboard.dash-idle{padding-bottom:0;}
+    #tab-dashboard.dash-idle .recent-wrap{margin-bottom:0;}
     .recent-wrap{margin:8px 16px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface);overflow:hidden;}
     .recent-head{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;background:none;border:0;color:var(--text);font-family:inherit;text-align:left;cursor:pointer;}
     .recent-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);flex-shrink:0;}

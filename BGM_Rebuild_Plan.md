@@ -7272,3 +7272,18 @@ Offer cards (`lt_offer`) carry Pro Scouting's package (`scoutPackage`: the fewes
 **Found and fixed on the way:** the inline view showed one button for any card that goes through by default if unanswered (`autoResolve: 'yes'`), hiding its second choice. On "Pre-season inspection", "Targeted fixes only" was missing; 44 two-choice cards in the main pool alone were affected when short enough to expand inline. A card now shows one button only when it has one choice.
 
 Checked in the browser: the long card expands in place with both choices, and deciding it from the inline buttons resolves it. 8 seeds green; webpush and refs pass.
+
+## 93. Readable text in any team color; League table headings; a dashboard that doesn't scroll for nothing (r88, GM feedback)
+
+**Team colors never color text on the League, Team, Inbox and Schedule screens, or in the shared chrome.** A dark team color (navy, maroon) made team-colored text unreadable on the dark background. Every place those screens used `--accent` or `--accent2` as a text color now uses `--text` (white in the dark theme, near-black in the light one):
+- the screens' tabs and sub-tabs (Players / Teams / Standings / Moves, Players / Staff / Finances, To Do / Completed / Compose), chips and filters, the active sort heading, "YOU" / "Your Team", tags, roster group heads, rating and IMP values, results, schedule badges and dividers, the playoff views on the League screen;
+- shared chrome on every screen: the active bottom-nav label, the funds pill, the tier badge, toasts, the settings sheet;
+- the player card that opens from these screens.
+
+Team colors stay on non-text elements (borders, underlines, bars, button fills, whose labels already pick black or white by contrast). The Dashboard's own cards are unchanged for now (not in the request).
+
+**League Players table: headings sit over their columns, scrolled or not.** Two stylesheets styled the table. The older rules in `index.html` gave the header and rows different padding, laid the name cell out in a row, and made the table a flex column, which kept it from scrolling sideways on its own. The newer rules in `LeagueScreen.js` let the generic heading width (38px) override the "Player" heading, so it was 38px over a 120px column and every heading sat 82px left of its numbers. The old rules are gone; the name column has one rule shared by the heading and every row. Measured in the browser, every heading's left edge equals its column's, before and after scrolling sideways; the name column stays frozen. Our players' frozen name cells are now opaque (the tint sits over a solid fill), so stats no longer show through as they scroll under.
+
+**The dashboard scrolls only when it has to.** With no game in progress and Recent collapsed, the dashboard had 36px of trailing space (the tab's 20px bottom padding and Recent's 16px margin). On a phone where the cards fit with a few pixels to spare, that made it scroll a little for nothing (measured at 390×664: content 531px in a 536px view, scroll height 567). `DashboardScreen._syncScrollRoom` now marks the idle dashboard (`dash-idle`), which drops that trailing space; a live game or an open Recent list gets it back. Nothing is hidden: a screen genuinely too short for the cards (about 640px tall or less, before the hot/cold strip appears) still scrolls.
+
+8 seeds green; webpush and refs pass.

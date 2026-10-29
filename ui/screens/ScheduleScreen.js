@@ -563,7 +563,7 @@ function _openResultSheet(game, idx, state) {
         <div style="font-size:12px;color:var(--muted);font-weight:500;">${dateStr} · ${locStr}</div>
         <div style="font-size:13px;font-weight:600;color:var(--soft);margin-top:2px;">${_escape(game.isHome ? `vs ${opp}` : `@ ${opp}`)}</div>
         <div style="font-family:'Bebas Neue',sans-serif;font-size:48px;line-height:1;margin:8px 0 4px;
-          color:${won ? 'var(--accent2)' : 'var(--danger)'};">${us}–${them}</div>
+          color:${won ? 'var(--text)' : 'var(--danger)'};">${us}–${them}</div>
         <div class="game-result ${resCls}" style="display:inline-block;">${resLbl}</div>
       </div>
       <div style="overflow-y:auto;padding:12px 0 max(16px,env(safe-area-inset-bottom));">
@@ -603,7 +603,7 @@ function _openTeamModal(teamName, state) {
     <div class="tm-player-row" data-player-id="${p.id}" style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border);cursor:pointer;">
       <span style="flex:1;font-size:14px;font-weight:600;">${_escape(p.name)}</span>
       <span style="font-size:12px;color:var(--muted);">${p.pos}</span>
-      <span style="font-size:13px;font-weight:700;color:${p.ovr >= 75 ? 'var(--accent2)' : p.ovr >= 60 ? 'var(--text)' : 'var(--muted)'};">${p.ovr}</span>
+      <span style="font-size:13px;font-weight:700;color:${p.ovr >= 75 ? 'var(--text)' : p.ovr >= 60 ? 'var(--text)' : 'var(--muted)'};">${p.ovr}</span>
       <span style="font-size:12px;color:var(--muted);">›</span>
     </div>`).join('');
 
@@ -903,7 +903,7 @@ function _injectCSS() {
     .game-item.playoff-game { border-color: rgba(245,210,83,.25); }
     .gri-wrap { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0; }
     .game-bs-btn { font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
-      color:var(--accent);background:var(--chip-accent-bg);border:none;border-radius:6px;
+      color:var(--text);background:var(--chip-accent-bg);border:none;border-radius:6px;
       padding:3px 8px;cursor:pointer;font-family:'DM Sans',sans-serif; }
     .game-bs-btn:active { opacity:.7; }
     .month-game-count { font-size:11px; color:var(--muted); font-weight:500; }

@@ -599,7 +599,7 @@ function _renderILGroup(ilPlayers, state, gameIdx) {
           </div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:11px;font-weight:700;color:${player._pendingILReturn ? 'var(--accent2)' : 'var(--muted)'};">
+          <div style="font-size:11px;font-weight:700;color:${player._pendingILReturn ? 'var(--text)' : 'var(--muted)'};">
             ${statusText}
           </div>
         </div>
@@ -846,7 +846,7 @@ function _renderStaff(state) {
 
     const rel         = data.relationship ?? data.gmRelationship ?? 50;
     const relTag      = rel >= 70
-      ? '<span style="font-size:10px;color:var(--accent2);background:var(--chip-green-bg);padding:2px 6px;border-radius:4px;">Strong</span>'
+      ? '<span style="font-size:10px;color:var(--text);background:var(--chip-green-bg);padding:2px 6px;border-radius:4px;">Strong</span>'
       : rel <= 30
       ? '<span style="font-size:10px;color:var(--danger);background:var(--chip-red-bg);padding:2px 6px;border-radius:4px;">Strained</span>'
       : '';
@@ -1493,13 +1493,13 @@ function _injectCSS() {
     /* Keeper badge — shown during spring training */
     .keeper-badge{font-size:13px;cursor:pointer;margin-left:4px;line-height:1;
       transition:color .15s;}
-    .keeper-on{color:var(--accent2);}
+    .keeper-on{color:var(--text);}
     .keeper-off{color:var(--border);}
     .keeper-badge:active{opacity:.6;}
 
     /* Spring training invitee badge */
     .st-badge{font-size:9px;font-weight:800;letter-spacing:.5px;
-      color:var(--accent);background:var(--chip-accent-bg);
+      color:var(--text);background:var(--chip-accent-bg);
       border:1px solid var(--accent);border-radius:4px;
       padding:1px 4px;margin-left:5px;vertical-align:middle;}
 
@@ -1507,7 +1507,7 @@ function _injectCSS() {
     .fin-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;}
     .fin-hero{text-align:center;}
     .fin-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
-    .fin-big{font-family:'Bebas Neue',sans-serif;font-size:40px;line-height:1.1;color:var(--accent2);margin:2px 0;}
+    .fin-big{font-family:'Bebas Neue',sans-serif;font-size:40px;line-height:1.1;color:var(--text);margin:2px 0;}
     .fin-sub{font-size:12px;color:var(--muted);margin-top:4px;}
     .fin-row-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--text);font-weight:600;}
     .fin-stage{font-size:11px;font-weight:800;padding:2px 8px;border-radius:10px;border:1px solid var(--border);}
@@ -1540,9 +1540,9 @@ function _injectCSS() {
     .keeper-banner{display:flex;align-items:center;justify-content:space-between;
       padding:7px 14px;background:var(--chip-accent-bg);
       border-bottom:1px solid var(--accent);font-size:11px;font-weight:700;
-      letter-spacing:.5px;text-transform:uppercase;color:var(--accent);}
+      letter-spacing:.5px;text-transform:uppercase;color:var(--text);}
     .keeper-count{font-size:12px;font-weight:800;}
-    .keeper-count-full{color:var(--accent2);}
+    .keeper-count-full{color:var(--text);}
 
     /* Pitcher pos/hand subtitle */
     .pitcher-pos-hand{font-size:11px;font-weight:700;color:var(--soft);}
@@ -1566,8 +1566,8 @@ function _injectCSS() {
     .vacancy-deadline{font-size:11px;color:var(--muted);}
     .vacancy-row.arriving{border-color:var(--accent);opacity:.85;cursor:default;}
     .vacancy-row[data-need]{cursor:pointer;}
-    .vacancy-plus{font-size:18px;font-weight:700;color:var(--accent);padding-right:6px;}
-    .pending-tag{font-size:10px;font-weight:700;color:var(--accent);padding:5px 0 5px 8px;}
+    .vacancy-plus{font-size:18px;font-weight:700;color:var(--text);padding-right:6px;}
+    .pending-tag{font-size:10px;font-weight:700;color:var(--text);padding:5px 0 5px 8px;}
     .pending-tag.out{color:var(--muted);}
     .oop-note{color:var(--danger);}
     .contract-note{color:var(--warning, #f5a524);font-weight:600;}
@@ -1586,11 +1586,11 @@ function _injectCSS() {
     .sm-row{display:flex;align-items:center;gap:10px;padding:12px 20px;
       border-bottom:1px solid var(--border);cursor:pointer;}
     .sm-row:active{background:var(--surface2);}
-    .sm-slot-label{font-size:14px;font-weight:800;color:var(--accent);
+    .sm-slot-label{font-size:14px;font-weight:800;color:var(--text);
       width:36px;flex-shrink:0;text-align:center;}
     .sm-slot-sub{flex:1;font-size:12px;}
     .sm-current{color:var(--text);font-weight:600;}
-    .sm-empty{color:var(--accent2);font-weight:600;}
+    .sm-empty{color:var(--text);font-weight:600;}
     .sm-pick-info{flex:1;min-width:0;}
     .sm-pick-name{font-size:13px;font-weight:600;color:var(--text);display:block;}
     .sm-pick-sub{font-size:11px;color:var(--muted);}
