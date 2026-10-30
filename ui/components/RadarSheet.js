@@ -220,13 +220,14 @@ export function openRadarSheet({ state, focusId = 'user', nowMs = null, onClose 
   };
   _open = api;
 
-  // Size the canvas to its box, then start.
-  requestAnimationFrame(() => {
+  // Slide in first; draw the map on the frame after (it's the heavy part), so
+  // the tap answers at once.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
     _setView();
     _load();
     ro?.observe($('.rs-map'));
     _play(true);
-  });
+  }));
   return api;
 }
 

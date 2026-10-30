@@ -86,11 +86,14 @@ export function regionMap(region) {
     return { kind: f.kind, name: f.name || null, closed, pts, bbox: _bbox(pts) };
   });
   const map = { region: key, seed: src.seed, half: MAP_HALF_KM, parks: src.parks, features, roads: [], urban: [], towns: [], local: [] };
+  // The raster first: the rest of the build asks "is this water?" thousands of
+  // times, and the raster answers in constant time (polygon tests made the
+  // build take seconds on a phone).
+  map.grid = _buildGrid(map);
   map.roads = _buildRoads(map, src.seed);
   map.urban = _buildUrban(map, src.seed);
   map.towns = _buildTowns(map, src.seed);
   map.local = _buildLocalRoads(map, src.seed);
-  map.grid = _buildGrid(map);
   _cache.set(key, map);
   return map;
 }
@@ -153,7 +156,7 @@ function _crossesWater(map, a, b) {
   const n = Math.ceil(len / 2.5);
   for (let i = 1; i < n; i++) {
     const t = i / n;
-    if (isWater(map, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)) return true;
+    if (maskAt(map, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t) & MASK_WATER) return true;
   }
   return false;
 }
@@ -215,6 +218,7 @@ function _buildUrban(map, seed) {
 }
 
 const TOWN_CELL_KM = 26;
+const TOWN_SHORE_KM = 4;   // two raster cells from water: on land by the exact outline too
 
 /** Small towns: one candidate per grid cell, kept on land away from the parks. */
 function _buildTowns(map, seed) {
@@ -244,7 +248,7 @@ function _buildTowns(map, seed) {
       const y = (gy + 0.15 + 0.7 * hash01(seed, 7203, gx, gy)) * TOWN_CELL_KM;
       if (Math.abs(x) > H || Math.abs(y) > H) continue;
       if (parks.some(p => Math.hypot(p.x - x, p.y - y) < 22)) continue;
-      if (isWater(map, x, y)) continue;
+      if (waterKmAt(map, x, y) < TOWN_SHORE_KM) continue;
       // Bigger towns near highways and parks, smaller in the back country.
       const near = Math.min(...parks.map(p => Math.hypot(p.x - x, p.y - y)));
       const sz = hash01(seed, 7204, gx, gy) + (near < 70 ? 0.25 : 0);
@@ -266,7 +270,7 @@ function _buildTowns(map, seed) {
       const a = ((i + hash01(seed, 7221, k, i) * 0.6) / n) * Math.PI * 2;
       const r = 13 + hash01(seed, 7222, k, i) * 16;
       const x = p.x + Math.cos(a) * r, y = p.y + Math.sin(a) * r;
-      if (isWater(map, x, y) || towns.some(t => Math.hypot(t.x - x, t.y - y) < 8)) continue;
+      if (waterKmAt(map, x, y) < TOWN_SHORE_KM || towns.some(t => Math.hypot(t.x - x, t.y - y) < 8)) continue;
       let name = null;
       for (let t = 0; t < 12 && !name; t++) {
         const cand = nameFor(9000 + k, i, t);

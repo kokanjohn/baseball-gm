@@ -27,7 +27,7 @@ const NOW_STEP_MIN = 10;   // the latest radar picture is at the last 10-minute 
 /** Zoom levels: the width of the view in km (same as the base map's). */
 export const RADAR_SPANS_KM = Object.freeze([720, 240, 64]);
 export const CELLS_ACROSS = 200;   // the frame's grid: about 200 cells across the view at any zoom
-const GRID_ASPECT = 0.7;           // frames always cover at least this tall a view (width ÷ height)
+const GRID_ASPECT = 0.55;          // frames always cover at least this tall a view (width ÷ height): a tall phone's full radar
 
 /**
  * frameTimes(nowMs, loopKey) — the frames of a loop, oldest first:

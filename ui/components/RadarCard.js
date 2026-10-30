@@ -42,6 +42,7 @@ export function createRadarCard({ onOpen = () => {}, nowMs = null } = {}) {
     <div class="rc-foot"><span>Past 2 hrs</span><span class="rc-open">Tap for the full radar</span></div>`;
   const canvas = root.querySelector('canvas');
   const renderer = createRadarRenderer(canvas);
+  let draws = 0;
   const S = { folded: false, state: null, ctx: null, focusId: null, frames: [], keys: [], index: 0, loaded: new Set(), timer: null, paused: false, visible: true, started: false, w: 0, h: 0 };
 
   const src = createFrameSource({
@@ -74,6 +75,7 @@ export function createRadarCard({ onOpen = () => {}, nowMs = null } = {}) {
     const fr = S.frames[S.index];
     if (!fr || !S.ctx) return;
     renderer.draw(src.get(S.keys[S.index]));
+    draws++;
     root.querySelector('.rc-time').textContent = formatFrameTime(fr.t, S.ctx.tzMin, clock());
     const tag = root.querySelector('.rc-tag');
     tag.textContent = fr.isNow ? 'NOW' : 'PAST';
@@ -116,23 +118,32 @@ export function createRadarCard({ onOpen = () => {}, nowMs = null } = {}) {
   const onKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
   root.addEventListener('keydown', onKey);
 
-  return {
+  const api = {
     root,
     /** After a dashboard redraw (the root has been put back in its slot). */
     update({ state, focusId }) {
-      const ctx = weatherContext(state);
-      const changed = !S.ctx || focusId !== S.focusId || ctx.seed !== S.ctx.seed || ctx.region !== S.ctx.region || ctx.cal.length !== S.ctx.cal.length;
-      S.state = state; S.ctx = ctx; S.focusId = focusId;
-      src.setContext(state);
-      if (changed || !S.started) {
-        S.started = true;
-        // Wait a frame so the canvas has its size in the new slot.
-        requestAnimationFrame(() => { S.w = canvas.clientWidth; S.h = canvas.clientHeight; _view(); _load(); });
-      } else {
-        _view();   // (the theme may have changed)
-        _draw();
-        if (!S.timer && _running()) _schedule(FRAME_MS);
-      }
+      // The weather setup (the region's map) and the first drawing wait for an
+      // idle moment, so the dashboard paints first; the card keeps its space.
+      S.pending = { state, focusId };
+      if (S.idleQueued) return;
+      S.idleQueued = true;
+      _idle(() => {
+        S.idleQueued = false;
+        const { state: st, focusId: fid } = S.pending;
+        const ctx = weatherContext(st);
+        const changed = !S.ctx || fid !== S.focusId || ctx.seed !== S.ctx.seed || ctx.region !== S.ctx.region || ctx.cal.length !== S.ctx.cal.length;
+        S.state = st; S.ctx = ctx; S.focusId = fid;
+        src.setContext(st);
+        if (changed || !S.started) {
+          S.started = true;
+          S.w = canvas.clientWidth; S.h = canvas.clientHeight;
+          _view(); _load();
+        } else {
+          _view();   // (the theme may have changed)
+          _draw();
+          if (!S.timer && _running()) _schedule(FRAME_MS);
+        }
+      });
     },
     /**
      * The map's height (px) — the dashboard fits the card to the room it has.
@@ -151,7 +162,7 @@ export function createRadarCard({ onOpen = () => {}, nowMs = null } = {}) {
     },
     pause() { S.paused = true; clearTimeout(S.timer); S.timer = null; },
     resume() { S.paused = false; if (_running()) _schedule(FRAME_MS); },
-    get state() { return { folded: S.folded, focusId: S.focusId, frames: S.frames.length, loaded: S.loaded.size, index: S.index, running: _running(), usesWorker: src.usesWorker }; },
+    get state() { return { draws, folded: S.folded, focusId: S.focusId, frames: S.frames.length, loaded: S.loaded.size, index: S.index, running: _running(), usesWorker: src.usesWorker }; },
     dispose() {
       clearTimeout(S.timer); clearInterval(refresh);
       io?.disconnect(); ro?.disconnect();
@@ -161,6 +172,13 @@ export function createRadarCard({ onOpen = () => {}, nowMs = null } = {}) {
       root.remove();
     },
   };
+  Object.defineProperty(root, 'radarCard', { value: api });   // for tests: the card behind the element
+  return api;
+}
+
+function _idle(fn) {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 1200 });
+  else setTimeout(fn, 200);
 }
 
 function _css() {
@@ -170,14 +188,15 @@ function _css() {
   st.textContent = `
     .radar-card{margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;}
     .radar-card:active{opacity:.9;}
-    .radar-card .rc-head{display:flex;align-items:center;gap:8px;padding:9px 12px 8px;}
+    .radar-card .rc-head{display:flex;align-items:center;gap:8px;padding:0 12px;height:38px;box-sizing:border-box;}
     .radar-card .rc-title{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
     .radar-card .rc-place{font-size:14px;font-weight:700;color:var(--text);}
     .radar-card .rc-time{margin-left:auto;font-size:13px;font-weight:700;color:var(--text);}
+    .radar-card .rc-tag:empty{display:none;}
     .radar-card .rc-tag{font-size:9px;font-weight:800;letter-spacing:.08em;padding:2px 6px;border-radius:5px;background:var(--surface2);color:var(--soft);}
-    .radar-card .rc-map{position:relative;height:${MAP_H}px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
+    .radar-card .rc-map{position:relative;background:var(--surface2);height:${MAP_H}px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
     .radar-card .rc-map canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
-    .radar-card .rc-foot{display:flex;justify-content:space-between;padding:8px 12px;font-size:12px;font-weight:600;color:var(--muted);}
+    .radar-card .rc-foot{display:flex;align-items:center;justify-content:space-between;padding:0 12px;height:34px;box-sizing:border-box;font-size:12px;font-weight:600;color:var(--muted);}
     .radar-card .rc-open{color:var(--soft);}
 
   `;

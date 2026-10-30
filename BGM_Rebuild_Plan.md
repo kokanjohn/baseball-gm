@@ -7970,3 +7970,53 @@ Screenshots cover each loop and zoom, plus the light theme with snow.
 - at 932 / 844 / 760 / 700 / 640 px tall the radar adds no scrolling to the idle dashboard: map 180 px at 932, 110 px at 844, a Radar button at 760 and below, and the button opens the full radar.
 
 **Note (pre-existing, not the radar):** at 640 px tall the idle dashboard already overflows by 19 px without the radar.
+
+### 101.5 Step 2e done — radar performance and review; step 2 (the radar) is complete (r105)
+
+**Measured in the real app at CPU ×4 (`tools/harness/perf-radar.mjs`, 390×932, a new team):**
+
+| | Before | After |
+|---|---|---|
+| Dashboard with radar ready | 3.0 s | 1.35 s |
+| Longest long task while loading | 2.2 s | 0.43 s (a third of that is the app's own start-up) |
+| Total long tasks while loading | 2.6 s | 0.8 s |
+| First radar frame | — | 1.5 s after start |
+| Full radar slides in after a tap | 0.8 s | 0.1 s |
+| Full radar's loop ready | — | about 0.85 s |
+| Loop / zoom switch, fully loaded | — | median about 2.1 s (frames play as they arrive; the shown frame comes first) |
+| Small loop's CPU | — | about 4–6% of a core running, about 1% paused |
+| Draws while paused or hidden | — | 0 |
+| 10 open / close cycles of the full radar | — | heap 6 → 7 MB; workers 1 → 1 (each sheet's worker is terminated) |
+
+**What changed:**
+- **`WeatherMap.regionMap` builds the raster first.** The highway, local-road and town placement then ask the raster "is this water?" in constant time instead of polygon tests. The build fell from 140–430 ms to about 70–170 ms in Node (about 2.5 s → about 0.3 s at ×4).
+- **Towns and suburbs** now keep two raster cells (4 km) from any water, so they are on land by the exact outline too. Town positions and names shifted slightly; they remain fixed from here on.
+- **`RadarCard.update`** defers the weather setup (the region's map) and the first drawing to an idle moment. The card keeps its space (a placeholder background), so the dashboard paints first with no layout shift.
+- **The card's header and footer have fixed heights** (38 px / 34 px; an empty tag is hidden). Text arriving later no longer changes the card's height, which had caused a 4 px overflow the dashboard fit hadn't measured.
+- **`RadarSheet`** slides in, then draws the map on the next frame (the base map and labels at full resolution are the heavy part).
+- **`RadarFrames` `GRID_ASPECT` is 0.55** (from 0.7). The shared grid covers a tall phone's full radar (390×641 map at 932 px tall), so the card's frames serve it.
+- **`RadarCard` exposes its controller on `root.radarCard`** for tests, with a draw count.
+
+**Review — `tools/harness/radar-gallery.mjs`:** the full radar at every zoom × loop, in both themes, at a stormy moment (a northern squall line overnight). The storms sit consistently across zooms, and the forecast frames carry the line northeast past our park overnight, clear by morning.
+
+**Regression:** all pass, the dashboard tests four runs in a row:
+- `check-weather.mjs` 103/103;
+- `test-radar-frames.mjs` (×4);
+- `test-radar-render.mjs`;
+- `test-radar-sheet.mjs` (×4);
+- `test-dashboard-radar.mjs` (both themes, five heights);
+- the season harness.
+
+**Step 2 (the radar) is done.** Next in the §100 plan: **step 3 — forecast surfaces:**
+- the dashboard's next-game forecast;
+- a 10-day forecast view;
+- the schedule screen showing the actual weather on played games and the current run's forecast within 10 days.
+
+After that, **step 4 — game effects:**
+- watch / delay / postponement / suspension in the tick loop;
+- weather during a game in progress;
+- league-wide makeups;
+- sim modifiers;
+- weather cards.
+
+Step 4 will need a fresh team.
