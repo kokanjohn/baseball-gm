@@ -27,6 +27,7 @@ const NOW_STEP_MIN = 10;   // the latest radar picture is at the last 10-minute 
 /** Zoom levels: the width of the view in km (same as the base map's). */
 export const RADAR_SPANS_KM = Object.freeze([720, 240, 64]);
 export const CELLS_ACROSS = 200;   // the frame's grid: about 200 cells across the view at any zoom
+const GRID_ASPECT = 0.7;           // frames always cover at least this tall a view (width ÷ height)
 
 /**
  * frameTimes(nowMs, loopKey) — the frames of a loop, oldest first:
@@ -64,7 +65,10 @@ export function viewBox(map, focusId, zoomIdx = 1, aspect = 1) {
   const spanKm = RADAR_SPANS_KM[Math.max(0, Math.min(2, zoomIdx))];
   const spanYKm = spanKm / Math.max(0.3, aspect);
   const cellKm = Math.round((spanKm / CELLS_ACROSS) * 1000) / 1000;
-  const mx = spanKm * 0.53, my = spanYKm * 0.53;
+  // The grid covers at least a tall phone's view whatever the shape asked for,
+  // so the dashboard's card and the full-screen radar share the same frames.
+  const gridYKm = spanKm / Math.max(0.3, Math.min(aspect, GRID_ASPECT));
+  const mx = spanKm * 0.53, my = gridYKm * 0.53;
   const nx = Math.ceil((2 * mx) / cellKm), ny = Math.ceil((2 * my) / cellKm);
   const x0 = park.x - (nx * cellKm) / 2, y0 = park.y - (ny * cellKm) / 2;
   return { cx: park.x, cy: park.y, spanKm, spanYKm, grid: { x0, y0, x1: x0 + nx * cellKm, y1: y0 + ny * cellKm, cellKm, nx, ny } };

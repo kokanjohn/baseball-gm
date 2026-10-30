@@ -7938,3 +7938,35 @@ The field is painted per cell, then scaled up with smoothing.
 - no page errors.
 
 Screenshots cover each loop and zoom, plus the light theme with snow.
+
+### 101.4 Step 2d done — the radar on the dashboard (r104)
+
+**`ui/components/RadarCard.js`** — the small live radar under the next-game card and first-pitch countdown.
+- **What it shows:** the past 2 hours at Metro zoom, centred on the game's ballpark (`RadarSheet.venueOf`: the home club's park, so away games show the host's city).
+- **Header:** RADAR · the city · the frame time with a NOW / PAST tag.
+- **Footer:** "Past 2 hrs" · "Tap for the full radar". Tapping opens the full-screen radar on the same park.
+- **The loop:** 0.6 s a frame, holding 2.5 s on Now. It pauses when off screen (IntersectionObserver), when the app is hidden, and while the full radar is open. It picks up a newer radar picture each minute.
+- **API:** `createRadarCard({ onOpen })` → `root`, `update({ state, focusId })`, `setMapHeight(h)`, `pause()` / `resume()`, `dispose()`.
+
+**Shared frames:** `RadarFrames.viewBox` now always builds a grid covering at least a 0.7-aspect (tall phone) view, whatever shape asks. The card (wide) and the full radar (tall) request identical frames. The card's frames warm the shared cache, so opening the full radar's Past 2 hrs loop is ready in 2–60 ms.
+
+**`DashboardScreen`:**
+- **Mounting:** `_radarSlot(game)` adds an empty slot (`data-focus` = the venue) after the next-game card and countdown. After every redraw `_attachRadar` moves the same card element into the new slot, so redraws don't restart it.
+- **Fitting:**
+  - **The rule:** the idle dashboard still doesn't scroll (§88).
+  - **`_fitRadar`:** the map takes the room there is — 180 px when it fits, shorter on shorter screens.
+  - **Too little room:** under 90 px the card steps aside and a **Radar** button appears in the next-game card's right column, opening the full radar.
+  - **When it runs:** after each redraw, on resize, and when Recent opens or closes (from `_syncScrollRoom`).
+- **Cleanup:** on unmount the card is disposed (its worker, observers and timers) and the resize listener is removed.
+- **Old `RadarWidget.js` removed** (never rendered; read the old weather buffer).
+
+**Harness — `test-dashboard-radar.mjs`** (the real app: a new team, Chromium at phone sizes, both themes). All pass in both themes:
+- the next-game card has a radar on the game's ballpark (home and away);
+- it names the place and shows a time;
+- a dashboard redraw keeps the same radar;
+- tapping opens the full radar on the same park, its loop ready at once (2–60 ms);
+- Done closes it;
+- no page errors;
+- at 932 / 844 / 760 / 700 / 640 px tall the radar adds no scrolling to the idle dashboard: map 180 px at 932, 110 px at 844, a Radar button at 760 and below, and the button opens the full radar.
+
+**Note (pre-existing, not the radar):** at 640 px tall the idle dashboard already overflows by 19 px without the radar.

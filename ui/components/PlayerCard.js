@@ -7,7 +7,7 @@
  *
  * Shows:
  *   - Name, position, age, handedness, team
- *   - OVR with sub-ratings radar (placeholder until RadarWidget
+ *   - OVR with sub-ratings radar (placeholder until a radar chart
  *     sub-rating mode is built — Phase 13 radar pass)
  *   - Contract: salary, years remaining, expiry
  *   - Season stats (batting or pitching depending on position)

@@ -40,7 +40,8 @@ import {
   formatRecord, formatStreak, formatDate, metricBarColor, computeRosterOvr,
   formatPhaseLabel, formatMoney, formatOVR, formatGameLabel,
 } from '../formatters.js';
-import { renderRadarWidget } from '../components/RadarWidget.js';
+import { createRadarCard, MAP_H as RADAR_MAP_H } from '../components/RadarCard.js';
+import { openRadarSheet, venueOf } from '../components/RadarSheet.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -55,6 +56,7 @@ let _firstPitchSounded  = false;
 let _countdownInterval  = null; // 1-second interval for fp countdown display
 let _visibilityHandler  = null; // document visibilitychange handler
 let _asgMode            = null; // §75: 'pre' | 'live' | 'final' while the All-Star Game owns the game area
+let _radar              = null; // §100 the next-game card's radar — one element, moved into each redraw's slot
 
 // ─────────────────────────────────────────────────────────────
 // MOUNT / UNMOUNT
@@ -103,6 +105,7 @@ export function mount() {
     }
   };
   document.addEventListener('visibilitychange', _visibilityHandler);
+  window.addEventListener('resize', _fitRadar);
 
   refresh();
 }
@@ -117,6 +120,9 @@ export function unmount() {
     document.removeEventListener('visibilitychange', _visibilityHandler);
     _visibilityHandler = null;
   }
+  window.removeEventListener('resize', _fitRadar);
+  _radar?.dispose();
+  _radar = null;
   _mounted = false;
 }
 
@@ -246,6 +252,7 @@ export function refresh() {
   _stopCountdown();
   container.innerHTML = _renderDashboard(state);
   _attachListeners(state);
+  _attachRadar(state);
   _syncScrollRoom();
   if (feedScroll) { const f = document.getElementById('lgv-pbp-feed'); if (f) f.scrollTop = feedScroll; }
 
@@ -634,10 +641,43 @@ function _renderGameArea(game, state) {
     const nextIdx  = state.currentGameIndex || 0;
     const nextGame = state.schedule?.[nextIdx] || null;
     if (!nextGame) return _renderSeasonDoneCard(state);
-    return _renderNextGameCard(nextGame, state) + _renderFirstPitchCountdown(nextGame);
+    return _renderNextGameCard(nextGame, state) + _renderFirstPitchCountdown(nextGame) + _radarSlot(nextGame);
   }
 
-  return _renderNextGameCard(game, state) + _renderFirstPitchCountdown(game);
+  return _renderNextGameCard(game, state) + _renderFirstPitchCountdown(game) + _radarSlot(game);
+}
+
+// ─────────────────────────────────────────────────────────────
+// RADAR (§100) — the next game's ballpark, live; tap for the full radar
+// ─────────────────────────────────────────────────────────────
+
+function _radarSlot(game) {
+  return `<div id="dash-radar-slot" data-focus="${_escape(venueOf(game))}"></div>`;
+}
+
+/** Put the radar card into this redraw's slot (creating it the first time). */
+function _attachRadar(state) {
+  const slot = document.getElementById('dash-radar-slot');
+  if (!slot) { _radar?.pause(); return; }
+  if (!_radar) {
+    _radar = createRadarCard({
+      onOpen: (focusId) => {
+        App.playClick();
+        _radar?.pause();
+        openRadarSheet({ state: StateManager.get(), focusId, onClose: () => _radar?.resume() });
+      },
+    });
+  }
+  slot.appendChild(_radar.root);
+  _radar.update({ state, focusId: slot.dataset.focus || 'user' });
+  _radar.resume();
+  // The short-screen Radar button opens the same full radar (a new button each redraw).
+  document.querySelectorAll('#dashboard-content .ngc-radar').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    App.playClick();
+    openRadarSheet({ state: StateManager.get(), focusId: slot.dataset.focus || 'user' });
+  }));
+  _fitRadar();
 }
 
 /** The All-Star Game in the game area: pre-game, live, or final (§75). */
@@ -1051,7 +1091,7 @@ function _renderNextGameCard(game, state) {
         <div class="ngc-loc">${springBadge}${game.isHome ? 'Home' : 'Away'}${gameTimeStr}</div>
         ${lastBadge}
       </div>
-      <div class="ngc-right"></div>
+      <div class="ngc-right"><button type="button" class="ngc-radar" hidden>Radar</button></div>
     </div>`;
 }
 
@@ -1230,6 +1270,23 @@ function _syncScrollRoom() {
   if (!tab) return;
   const live = !!document.querySelector('#dashboard-content .live-game-wrap');
   tab.classList.toggle('dash-idle', !live && !_recentOpen);
+  _fitRadar();
+}
+
+/**
+ * §100 The radar takes the room the idle dashboard has (it doesn't scroll):
+ * full height when it fits, shorter on shorter screens; with too little room
+ * the card steps aside and the next-game card shows a Radar button instead.
+ */
+function _fitRadar() {
+  const tab = document.getElementById('tab-dashboard');
+  if (!_radar || !tab || !_radar.root.isConnected) return;
+  let hidden = _radar.setMapHeight(RADAR_MAP_H);
+  if (tab.classList.contains('dash-idle')) {
+    const over = tab.scrollHeight - tab.clientHeight;
+    if (over > 0) hidden = _radar.setMapHeight(RADAR_MAP_H - over);
+  }
+  document.querySelectorAll('#dashboard-content .ngc-radar').forEach(b => { b.hidden = !hidden; });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1451,6 +1508,8 @@ function _injectCSS() {
     .fp-card.fp-hot  .fp-time{color:var(--danger);}
     .fp-sub{font-size:10px;color:var(--muted);margin-top:2px;}
     #tab-dashboard.dash-idle{padding-bottom:0;}
+    .ngc-radar{font:inherit;font-size:13px;font-weight:700;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:7px 12px;cursor:pointer;}
+    .ngc-radar[hidden]{display:none;}
     #tab-dashboard.dash-idle .recent-wrap{margin-bottom:0;}
     .recent-wrap{margin:8px 16px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface);overflow:hidden;}
     .recent-head{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;background:none;border:0;color:var(--text);font-family:inherit;text-align:left;cursor:pointer;}
