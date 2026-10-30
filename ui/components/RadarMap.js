@@ -60,7 +60,8 @@ function _path(ctx, pts, P, closed) {
 /**
  * drawBaseMap — the whole base map for one view.
  * opts: theme 'dark'|'light', userCity, focusId (the park the view centres
- * on — marked like ours), labels (default true).
+ * on — marked like ours), labels (default true), reserve ([{x,y,w,h}] kept
+ * clear of labels).
  */
 export function drawBaseMap(ctx, map, view, opts = {}) {
   const C = MAP_PALETTES[opts.theme === 'light' ? 'light' : 'dark'];
@@ -147,7 +148,7 @@ export function drawBaseMap(ctx, map, view, opts = {}) {
 }
 
 function _labels(ctx, map, view, P, C, zoomIdx, opts) {
-  const placed = [];
+  const placed = [...(opts.reserve || [])];   // areas kept clear (e.g. the scale bar)
   const hits = (r) => placed.some(q => r.x < q.x + q.w && r.x + r.w > q.x && r.y < q.y + q.h && r.y + r.h > q.y);
   const halo = (text, x, y) => {
     ctx.lineWidth = 3; ctx.strokeStyle = C.labelHalo; ctx.strokeText(text, x, y);

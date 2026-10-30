@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Radar render preview</title>
+<style>
+:root{--bg:#0F1117;--surface:#181B24;--surface2:#20232E;--border:#2C3040;--text:#E8ECF4;--muted:#7C849A;--soft:#A0A8BE}
+body.light{--bg:#F0F2F6;--surface:#FFFFFF;--surface2:#E8EBF2;--border:#D4D8E4;--text:#1A1D24;--muted:#606880;--soft:#454C60}
+body{margin:0;background:var(--bg);color:var(--text);font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:flex;flex-wrap:wrap;gap:14px;padding:12px}
+.card{width:390px;background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.top{display:flex;align-items:center;gap:8px;padding:10px 12px;font-weight:700}
+.tag{font-size:10px;font-weight:800;letter-spacing:.08em;padding:3px 7px;border-radius:6px;background:var(--surface2);color:var(--soft)}
+.tag.fc{background:#3b2f0b;color:#f5c542} body.light .tag.fc{background:#fff2c7;color:#8a6200}
+.zoom{margin-left:auto;font-size:12px;color:var(--muted);font-weight:600}
+canvas{display:block;width:390px;height:500px}
+.bottom{padding:10px 12px}
+.ms{font-size:11px;color:var(--muted);margin-top:6px}
+</style></head><body><script type="module">
+import { createRadarRenderer, radarLegendHTML, radarLegendCSS, formatFrameTime } from '../../ui/components/RadarRenderer.js';
+import { buildFrame, frameTimes } from '../../engine/RadarFrames.js';
+import { RADAR_ZOOMS } from '../../ui/components/RadarMap.js';
+import { regionMap } from '../../engine/WeatherMap.js';
+import { localDayStart, MS_DAY, MS_HOUR } from '../../engine/WeatherClimate.js';
+const q = new URLSearchParams(location.search);
+const theme = q.get('theme') || 'dark';
+if (theme === 'light') document.body.classList.add('light');
+const st = document.createElement('style'); st.textContent = radarLegendCSS; document.head.append(st);
+const region = q.get('region') || 'north', seed = q.get('seed') || 'wx-a', focus = q.get('focus') || 'user';
+const tz = -240, START = localDayStart(Date.UTC(2026, 9, 30, 12), tz);
+const base = { seed, region, tzMin: tz, map: regionMap(region), cal: [{ kind: 'season', season: 1, realStartMs: START, dispIso: '2027-03-14' }] };
+const now = START + (+(q.get('day') || 101)) * MS_DAY + (+(q.get('hour') || 23)) * MS_HOUR + 7 * 60_000;
+// panels: zoom:loop:frameIndex
+const panels = (q.get('panels') || '0:past2h:12,1:past2h:12,2:past2h:12').split(',').map(s => s.split(':'));
+for (const [z, loop, idx] of panels) {
+  const frames = frameTimes(now, loop);
+  const fr = frames[Math.min(frames.length - 1, +idx)];
+  const card = document.createElement('div'); card.className = 'card';
+  card.innerHTML = `<div class="top"><span>${formatFrameTime(fr.t, tz, now)}</span>${fr.forecast ? '<span class="tag fc">FORECAST</span>' : fr.isNow ? '<span class="tag">NOW</span>' : '<span class="tag">PAST</span>'}<span class="zoom">${RADAR_ZOOMS[+z].label}</span></div><canvas></canvas><div class="bottom">${radarLegendHTML()}<div class="ms"></div></div>`;
+  document.body.append(card);
+  const canvas = card.querySelector('canvas');
+  const r = createRadarRenderer(canvas);
+  r.setView({ map: base.map, focusId: focus, zoomIdx: +z, theme, userCity: 'Springfield' });
+  const f = buildFrame(base, fr, r.grid);
+  const first = r.draw(f), again = r.draw(f);
+  card.querySelector('.ms').textContent = `draw: first ${first.toFixed(0)} ms, cached ${again.toFixed(1)} ms · grid ${f.nx}×${f.ny}`;
+}
+document.body.dataset.done = '1';
+</script></body></html>

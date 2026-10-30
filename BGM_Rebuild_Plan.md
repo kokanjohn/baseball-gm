@@ -7880,3 +7880,25 @@ The field is painted per cell, then scaled up with smoothing.
   | Worker | Metro, Next 6 hrs (25 frames) | 0.5 s | 3.8 s | 51 ms | yes |
   | Worker | Region, Past 2 hrs (13 frames) | 1.1 s (worker start-up and map build) | 3.3 s | 64 ms | yes |
   | Fallback (no worker) | Ballpark, Next 24 hrs | 0.1 s | 3.9 s | about 1.1 s once, at start-up | yes |
+
+### 101.2 Step 2b done — the radar renderer (r102)
+
+**`ui/components/RadarRenderer.js`:**
+- **API:** `createRadarRenderer(canvas)` → `setView({ map, focusId, zoomIdx, theme, userCity })`, `draw(frame | null)`, `prepare(frame)`, `resize()`, `grid` (the frame grid to request), `pictureOf(frame)` (for tests), `dispose()`.
+- **Layers:**
+  - The base map (no labels) and the label layer are drawn once per view, at device pixel ratio up to 2.
+  - The label layer holds the place names and a scale bar in miles (1 / 2 / 5 / 10 / 20 / 25 / 50 / 100 / 200, about 80 px long). Labels go over the precipitation, as radar apps do. The scale bar's corner is kept clear of labels (`RadarMap.drawBaseMap(..., { reserve })`).
+- **Precipitation:**
+  - **Blending before colouring:** each frame's reflectivity is blended between grid points (an empty point counts as 6 dBZ, so edges fade out between points) before it is coloured through a per-kind lookup at every half-dBZ. Edges come out smooth, with crisp colour bands.
+  - **Rain / mix / snow:** taken from the strongest of the four surrounding points.
+  - **Faint echoes:** they fade in (12–16 dBZ); snow fades less, because pale blue at low strength read as grey fog on the dark map.
+  - **Resolution and caching:** drawn at up to 1.25× CSS size; each frame's picture is cached (30 per renderer). The frame is unpacked once into a padded grid, so the per-pixel loop has no bounds checks.
+- **Colours (`RadarPrecip.js`):** the lightest snow is now a true light blue (`#8cc8f5`, `#6fb4f0`, `#4d97e6`, …).
+- **`radarLegendHTML()` + `radarLegendCSS`:** Rain / Mix / Snow colour bars, Light → Heavy.
+- **`formatFrameTime(t, tzMin, now)`:** "2:30 PM", "Tomorrow 1:00 AM", "Sat 4:00 PM", on the save's clock.
+
+**Speed (Chromium at CPU ×4, roughly a phone):** a new frame's picture takes 70–140 ms; drawing a cached frame takes about 1 ms. Desktop: 16–50 ms.
+
+**Harness:**
+- **`test-radar-render.mjs` + `radar-consistency-test.html`:** the radar's colour over every ballpark agrees with that park's report. Dry means no colour; rain / mix / snow means that colour family. Covers 186 park views across four regions, three zooms, now and forecast frames.
+- **`radar-render-preview.html` + `render-radar2.mjs`:** phone-sized cards with a time bar (NOW / PAST / FORECAST tag), the radar and the legend, in either theme, optionally CPU-throttled.

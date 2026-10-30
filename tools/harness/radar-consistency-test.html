@@ -1,0 +1,48 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Radar consistency</title></head><body><script type="module">
+// §100 (2b) What the radar shows over each ballpark agrees with that park's report: dry ⇔ no colour; rain / mix / snow ⇔ that colour family.
+import { createRadarRenderer } from '../../ui/components/RadarRenderer.js';
+import { buildFrame, frameTimes } from '../../engine/RadarFrames.js';
+import { RAIN_SCALE, MIX_SCALE, SNOW_SCALE } from '../../ui/components/RadarPrecip.js';
+import { regionMap } from '../../engine/WeatherMap.js';
+import { forecastContext } from '../../engine/WeatherSystems.js';
+import { conditionsAt } from '../../engine/WeatherConditions.js';
+import { localDayStart, MS_DAY, MS_HOUR } from '../../engine/WeatherClimate.js';
+const tz = -240, START = localDayStart(Date.UTC(2026, 9, 30, 12), tz);
+const fam = (rgb) => {
+  const near = (scale) => Math.min(...scale.map(([, h]) => { const c = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); return Math.hypot(c[0] - rgb[0], c[1] - rgb[1], c[2] - rgb[2]); }));
+  const d = { rain: near(RAIN_SCALE), mix: near(MIX_SCALE), snow: near(SNOW_SCALE) };
+  return Object.entries(d).sort((a, b) => a[1] - b[1])[0][0];
+};
+let checked = 0, wet = 0, bad = [];
+for (const [region, day, hour] of [['north', 14, 6], ['north', 101, 23], ['north', 102, 0], ['south', 115, 17], ['east', 30, 12], ['west', 150, 16], ['north', 20, 9]]) {
+  const base = { seed: 'wx-a', region, tzMin: tz, map: regionMap(region), cal: [{ kind: 'season', season: 1, realStartMs: START, dispIso: '2027-03-14' }] };
+  const now = START + day * MS_DAY + hour * MS_HOUR + 7 * 60_000;
+  const c = document.createElement('canvas'); c.style.cssText = 'width:390px;height:500px'; document.body.append(c);
+  const r = createRadarRenderer(c);
+  for (const z of [0, 1, 2]) {
+    r.setView({ map: base.map, focusId: 'user', zoomIdx: z, theme: 'dark', userCity: 'X' });
+    for (const fr of [frameTimes(now, 'past2h').at(-1), frameTimes(now, 'next6h')[8]]) {
+      const f = buildFrame(base, fr, r.grid);
+      const pic = r.pictureOf(f);
+      const g = pic.canvas.getContext('2d');
+      for (const [id, p] of Object.entries(base.map.parks)) {
+        const X = Math.round(pic.px(p.x)), Y = Math.round(pic.py(p.y));
+        if (X < 2 || Y < 2 || X >= pic.canvas.width - 2 || Y >= pic.canvas.height - 2) continue;
+        const rep = conditionsAt(fr.forecast ? forecastContext(base, fr.issueMs) : base, p.x, p.y, fr.t);
+        const d = g.getImageData(X, Y, 1, 1).data;
+        checked++;
+        const shown = d[3] > 0;
+        // Close to the threshold, interpolation can tip either way; judge clear cases.
+        if (rep.precip.dbz != null && rep.precip.dbz < 15) continue;
+        if (!rep.precip.kind && shown) { const near = [-3, 3].some(dx => [-3, 3].some(dy => g.getImageData(X + dx, Y + dy, 1, 1).data[3] === 0)); if (!near) bad.push(`${region} ${id} z${z}: radar shows colour, report dry`); continue; }
+        if (rep.precip.kind) {
+          wet++;
+          if (!shown) bad.push(`${region} ${id} z${z}: report ${rep.precip.kind} ${rep.precip.dbz}, radar clear`);
+          else if (fam([d[0], d[1], d[2]]) !== rep.precip.kind) bad.push(`${region} ${id} z${z}: report ${rep.precip.kind}, radar shows ${fam([d[0], d[1], d[2]])}`);
+        }
+      }
+    }
+  }
+}
+document.body.dataset.result = JSON.stringify({ checked, wet, bad: bad.slice(0, 8), badCount: bad.length });
+</script></body></html>

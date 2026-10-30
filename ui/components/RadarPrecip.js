@@ -21,7 +21,7 @@ export const MIX_SCALE = Object.freeze([
   [12, '#f7c4df'], [20, '#f09ac8'], [27, '#e46cb0'], [34, '#d0408f'], [41, '#ad1f6f'],
 ]);
 export const SNOW_SCALE = Object.freeze([
-  [12, '#bfe3ff'], [17, '#94cdf8'], [22, '#66adef'], [27, '#3b86de'], [32, '#1f60c4'], [37, '#103a94'],
+  [12, '#8cc8f5'], [17, '#6fb4f0'], [22, '#4d97e6'], [27, '#3b86de'], [32, '#1f60c4'], [37, '#103a94'],
 ]);
 
 const _rgb = (hex) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
