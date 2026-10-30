@@ -8486,3 +8486,17 @@ Passes in dark, and in light at 4× CPU throttle.
 - the park switch.
 
 All pass (dark; light at 4× throttle). The outlook fills in about 0.6–0.8 s after opening.
+
+### 103.3 3c — forecasts on the schedule (r114)
+
+- Every upcoming game within ten days (not started) shows its forecast line under its notes. It's the same line as the dashboard (`forecastLine(forecastForGame(...))`): "52° · Slight chance of showers 10%".
+- It's drawn at once when this hour's forecast is already worked out (`peekGameForecast`), otherwise "Forecast…" and filled in by the forecast worker after the schedule draws.
+- Tapping a line opens the forecast sheet for that game (its hours, the 10-day at its park).
+- Played games keep the weather they were played in (4d); a suspended or postponed game shows its notes.
+
+**Harness** (`test-forecast-ui`), now also checks:
+- the schedule shows each upcoming game's forecast in the open month, each the engine's line for that game (6 of 6 within ten days; filled in about 10 ms when the dashboard has already worked them out);
+- the next game reads the same on the schedule as on the dashboard;
+- tapping opens that game's forecast.
+
+12 / 12 pass.

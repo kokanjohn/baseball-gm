@@ -30,6 +30,8 @@ import { accumulateBox } from '../../engine/SimEngine.js';
 import { leagueGameState, wireLeagueGameTaps } from '../components/LiveGame.js';
 import { clubFor } from '../../engine/AllStarEngine.js';
 import { wxState, weatherLine, gameNotes, calledInnings, postponedOn, dayLabel } from '../components/WeatherStatus.js';
+import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
+import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
 import {
   formatDate, formatRecord, formatTeamRecord, formatGameLabel,
   formatGameStatus, formatPhaseLabel,
@@ -310,10 +312,35 @@ function _renderGameRow(game, idx, currentIdx, state, isPlayoff) {
           ${wxPlayed ? ` · <span class="game-weather">${_escape(wxPlayed)}</span>` : ''}
         </div>
         ${notes.length ? `<div class="game-wx-notes">${notes.map(n => _escape(n)).join(' · ')}</div>` : ''}
+        ${_forecastButton(game, idx, state)}
       </div>
       ${_renderResult(game, isCurrentGame, isCommitted, idx, hasBoxScore)}
     </div>
   `;
+}
+
+/**
+ * §102.7 (3c) an upcoming game within ten days: its forecast, the one line
+ * the dashboard and the forecast sheet show (filled in by the forecast worker
+ * after the schedule draws). Tap for the forecast sheet.
+ */
+const _FC_DAYS_MS = 10 * 86_400_000;
+function _forecastButton(game, idx, state) {
+  const now = Date.now();
+  if (game._committed || game.status !== GAME_STATUS.SCHEDULED || !(game.gameTime > now) || game.gameTime - now > _FC_DAYS_MS) return '';
+  const f = peekGameForecast(state, game, now);
+  return `<button type="button" class="game-fc" data-fc-idx="${idx}">${f ? _escape(forecastLine(f)) : 'Forecast…'}</button>`;
+}
+
+function _fillForecasts(state) {
+  const now = Date.now();
+  document.querySelectorAll('#schedule-content [data-fc-idx]').forEach(el => {
+    const game = state.schedule?.[Number(el.dataset.fcIdx)];
+    if (!game) return;
+    el.addEventListener('click', (e) => { e.stopPropagation(); App.playClick(); openForecastSheet({ state: StateManager.get(), game }); });
+    gameForecastFor(state, game, now).then(f => { if (el.isConnected) el.textContent = forecastLine(f); })
+      .catch(err => console.warn('[forecast]', err));
+  });
 }
 
 function _gameLabel(game, state) {
@@ -459,6 +486,8 @@ function _scheduledTime(game) {
 // ─────────────────────────────────────────────────────────────
 
 function _attachListeners(state) {
+  _fillForecasts(state);   // §102.7
+
   // Scores button
   document.getElementById('sched-scores-btn')?.addEventListener('click', () => {
     App.playClick();
@@ -949,6 +978,7 @@ function _injectCSS() {
     .sg-ppd-note { font-size:10px;color:var(--muted);white-space:nowrap; }
     .sg-row-ppd { opacity:.8; }
     .game-weather { font-weight:500;color:var(--muted); }
+    .game-fc { display:block;margin-top:2px;padding:0;border:0;background:none;font:inherit;font-size:10px;font-weight:700;color:#3b82f6;text-align:left;cursor:pointer; }
     .game-wx-notes { font-size:10px;font-weight:600;color:#f97316;margin-top:2px;line-height:1.3; }
     .sg-final-pill { font-size:9px;font-weight:700;color:var(--muted); }
     .sg-mo-btn { background:none;border:none;font-size:11px;font-weight:700;color:var(--muted);cursor:pointer;padding:2px 0;font-family:'DM Sans',sans-serif; }

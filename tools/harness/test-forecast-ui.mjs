@@ -96,6 +96,31 @@ if (await page.$('#fc-sheet .fc-park:not(.on)')) {
   await page.waitForFunction(() => document.querySelectorAll('#fc-sheet .fc-d-main').length === 10, null, { timeout: 60000 });
   check(`switching to ${other} shows that park's outlook`, (await page.textContent('#fc-city')).length > 0 && !!(await page.$('#fc-sheet .fc-park.on')));
 }
+// 3c: the schedule — upcoming games within ten days, each with the engine's line for that game.
+await page.click('#fc-close');
+await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('schedule'); });
+await page.waitForSelector('#schedule-content .game-fc', { timeout: 20000 });
+const t2 = Date.now();
+await page.waitForFunction(() => [...document.querySelectorAll('#schedule-content .game-fc')].every(b => b.textContent !== 'Forecast…'), null, { timeout: 60000 });
+const schedMs = Date.now() - t2;
+const rows = await page.$$eval('#schedule-content .game-fc', bs => bs.map(b => ({ idx: +b.dataset.fcIdx, text: b.textContent })));
+const want = await page.evaluate(async (idxs) => {
+  const SM = await import('/baseball-gm/store/StateManager.js');
+  const { weatherContext } = await import('/baseball-gm/engine/WeatherClimate.js');
+  const { forecastForGame } = await import('/baseball-gm/engine/GameWeather.js');
+  const { forecastLine } = await import('/baseball-gm/ui/components/ForecastSheet.js');
+  const s = SM.get(), ctx = weatherContext(s), now = Date.now();
+  const within = s.schedule.filter(g => !g._committed && g.gameTime > now && g.gameTime - now <= 10 * 86_400_000).length;
+  return { lines: idxs.map(i => forecastLine(forecastForGame(ctx, now, s.schedule[i]))), within };
+}, rows.map(r => r.idx));
+const bad = rows.filter((r, k) => r.text !== want.lines[k]).map(r => `#${r.idx} “${r.text}”`);
+check(`the schedule shows each upcoming game's forecast (${rows.length} games within ten days in the open month, of ${want.within}; ${schedMs} ms), the engine's line for each`,
+      rows.length >= 1 && bad.length === 0, bad.join(' | '));
+check('the next game reads the same on the schedule as on the dashboard', rows[0]?.text === line);
+await page.screenshot({ path: `${out}/fc-schedule-${theme}.png` });
+await page.click('#schedule-content .game-fc');
+await page.waitForSelector('#fc-sheet .fc-game .fc-g-temp', { timeout: 20000 });
+check('tapping it opens that game\'s forecast', (await page.textContent('#fc-sheet .fc-g-temp')) === `${direct.f.tempF}°`);
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 console.log(ok ? 'ALL PASS' : 'SOME FAILED');
