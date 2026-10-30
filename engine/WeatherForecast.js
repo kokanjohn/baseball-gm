@@ -182,7 +182,8 @@ export function dailyForecastDay(ctx, nowMs, x, y, d) {
   const wind = mid.wind;
   const { label, summary, icon } = _words(c, mid);
   const out = { dayStartMs: t0, dateIso: baseballDateIso(ctx.cal, t0 + 12 * MS_HOUR), hiF, loF, chance: c.chance, kind: c.chance >= 10 ? c.kind : null,
-                label, summary, icon, windMph: wind.mph, windFromDeg: wind.fromDeg, partial: from > t0 };
+                label, summary, icon, windMph: wind.mph, windFromDeg: wind.fromDeg, partial: from > t0,
+                _words: { kind: c.kind, timing: c.timing, sky: mid.sky, skyIcon: mid.icon } };
   _cap();
   _cache.set(key, out);
   return out;
@@ -191,6 +192,19 @@ export function dailyForecastDay(ctx, nowMs, x, y, d) {
 /** How much of the run's own temperature to keep at a lead (the rest is the normal). */
 export function tempTrust(leadH) {
   return Math.max(0.35, Math.min(1, 1 - 0.0035 * Math.max(0, leadH - 24)));
+}
+
+/**
+ * withinDay(day, windows) — §102.7 a day can't be less likely to rain than a
+ * window inside it: shown beside games that day (each { chance, kind }), the
+ * day's chance is at least theirs, and its words follow.
+ */
+export function withinDay(day, windows = []) {
+  const top = windows.reduce((a, w) => (w && w.chance > (a?.chance ?? -1) ? w : a), null);
+  if (!top || top.chance <= day.chance || !day._words) return day;
+  const c = { chance: top.chance, kind: top.kind, timing: day._words.timing };
+  const { label, summary, icon } = _words(c, { sky: day._words.sky, icon: day._words.skyIcon });
+  return { ...day, chance: top.chance, kind: top.kind, label, summary, icon, raisedBy: 'game' };
 }
 
 const _when = (timing) => {
@@ -274,22 +288,24 @@ export function gameForecast(ctx, nowMs, x, y, gameTime, bearing = 45) {
   const hours = [];
   if (leadH <= 48) {
     // The game's own hours (first pitch, then each hour after it): the first is the headline.
-    for (let t = gameTime; t < gameTime + 3.5 * MS_HOUR; t += MS_HOUR) {
+    for (let t = gameTime; t < gameTime + 3 * MS_HOUR; t += MS_HOUR) {
       if (t + MS_HOUR <= nowMs) continue;
       const hc = conditionsAt(main, x, y, t);
       const ch = chanceOfPrecip(ctx, nowMs, x, y, t, t + MS_HOUR);
       hours.push({ t, tempF: Math.round(keep * hc.tempF + (1 - keep) * normalAtHour), chance: ch.chance, label: hc.label, icon: hc.icon });
     }
   }
+  // The game's three hours can't be less likely to rain than any hour inside them.
+  const chance = Math.max(c.chance, ...hours.map(h => h.chance));
   const wet = { storms: 'storms', rain: 'showers', snow: 'snow', mix: 'rain and snow' }[c.kind];
   const Wet = { storms: 'Storms', rain: 'Rain', snow: 'Snow', mix: 'Rain and snow' }[c.kind];
   const sky = at.precip?.kind ? at.sky : at.label.replace(/, (Windy|Hot)$/, '');
-  const label = c.chance >= 60 ? `${Wet} likely` : c.chance >= 30 ? `Chance of ${wet}` : c.chance >= 10 ? `Slight chance of ${wet}` : sky;
+  const label = chance >= 60 ? `${Wet} likely` : chance >= 30 ? `Chance of ${wet}` : chance >= 10 ? `Slight chance of ${wet}` : sky;
   const whenHour = hours.find(h => h.chance >= 30)?.t ?? null;
   const w = windAtPark(at.wind, bearing);
-  const icon = c.chance >= 60 ? { storms: 'storm', rain: 'rain', snow: 'snow', mix: 'mix' }[c.kind]
-    : c.chance >= 30 ? { storms: 'storm-chance', rain: 'rain-chance', snow: 'snow-chance', mix: 'mix' }[c.kind] : at.icon;
-  const out = { issueMs: issue, gameTime, leadH: Math.round(leadH), chance: c.chance, kind: c.kind, label, whenHour,
+  const icon = chance >= 60 ? { storms: 'storm', rain: 'rain', snow: 'snow', mix: 'mix' }[c.kind]
+    : chance >= 30 ? { storms: 'storm-chance', rain: 'rain-chance', snow: 'snow-chance', mix: 'mix' }[c.kind] : at.icon;
+  const out = { issueMs: issue, gameTime, leadH: Math.round(leadH), chance, kind: c.kind, label, whenHour,
                 tempF, windMph: at.wind.mph, windText: w.text, icon, hours };
   _cap();
   _cache.set(key, out);

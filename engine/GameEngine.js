@@ -81,7 +81,6 @@ import { computeAllIMP, appendGameLog } from './IMPEngine.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
 import * as AllStar from './AllStarEngine.js';
 import { recordOutings, starterRested, bullpenRoles } from './PitchingEngine.js';
-import { chanceOfPrecip } from './WeatherForecast.js';
 import { cityOf } from './WeatherMap.js';
 import * as Finance from './FinanceEngine.js';
 import { formatK } from './CardTokens.js';
@@ -91,7 +90,7 @@ import * as LeagueTrades from './LeagueTrades.js';
 import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso, weatherContext } from './WeatherClimate.js';
-import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, PLAN_OUTCOME } from './GameWeather.js';
+import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME } from './GameWeather.js';
 import { findMakeupSlot, seriesShift, gameTeams } from './WeatherSchedule.js';
 
 import {
@@ -1913,8 +1912,8 @@ function _wxUserCards(clockMs) {
     if (g.wx?.outcome === PLAN_OUTCOME.POSTPONED && g.wx.decidedAt <= at) continue;          // called off before anyone asks
     const ctx = weatherContext(st);
     const venueId = gameTeams(g, true).venueId;
-    const park = ctx.map.parks[venueId] || ctx.map.parks.user;
-    const ch = chanceOfPrecip(ctx, at, park.x, park.y, g.gameTime, g.gameTime + 3 * 3_600_000);
+    // (The game's forecast as every screen shows it at that hour — §102.7.)
+    const ch = forecastForGame(ctx, at, g);
     if (!(ch.chance >= GAME_WEATHER.START_CARD_CHANCE)) continue;
     const starterId = rotationStarter(st.userTeam, st.players, g.gameTime);
     const order = st.userTeam.rotation?.order || [];

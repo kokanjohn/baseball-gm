@@ -8465,3 +8465,24 @@ Costs on a desktop: a game about 25–100 ms; the 10-day about 0.85 s. A phone i
 - no page errors.
 
 Passes in dark, and in light at 4× CPU throttle.
+
+### 103.2 3b — the 10-day outlook (r113)
+
+**In the forecast sheet**, under the game:
+- the 10-day forecast at the game's park, with a switch between our park and the game's when they differ;
+- one row a day: "Today" / "Tomorrow" (with the date) / the baseball calendar's date — no weekday names, which would come from the real calendar; the words; the chance (blue at 30%+); the high and low;
+- rows fill in day by day as the worker finishes each;
+- under each day, our games at that park with their forecast line (the dashboard's exact line); our games at another park that day link to that park's outlook.
+
+**Nested windows never contradict each other** (found in the first screenshot: "Mostly Sunny, 20%" on a day whose afternoon game said "Chance of showers 40%"). Each window's chance is calibrated against the climate of a window that long. A short window that's wetter than normal is sharpened more than the whole day around it, so nested windows can come out in the wrong order. Where nested windows are shown together, the larger is never lower:
+- `gameForecast`: the game's three hours are at least each hour's chance. The hour strip is exactly the game's three hours, from first pitch.
+- `WeatherForecast.withinDay(day, windows)`: a day shown beside our games there is at least as likely to rain as each of them, and its words follow (the day keeps `_words` — kind, timing, sky — for this).
+- The manager's starter question now reads `forecastForGame` too, the same number the dashboard and the schedule show at that hour.
+
+**Harness** (`test-forecast-ui`), now also checks:
+- the 10-day fills in with the engine's numbers, day for day;
+- no shown day is less likely than a game in it, and no game less likely than an hour of it;
+- our game sits under its day with the dashboard's line;
+- the park switch.
+
+All pass (dark; light at 4× throttle). The outlook fills in about 0.6–0.8 s after opening.

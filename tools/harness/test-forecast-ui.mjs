@@ -58,7 +58,44 @@ check(`the forecast sheet shows the same game forecast (${direct.f.tempF}°, ${d
       sheet.includes(`${direct.f.tempF}°`) && sheet.includes(direct.f.label) && sheet.includes(`${direct.f.chance}% chance`));
 check(`…hour by hour through the game (${direct.f.hours.length} hours), the first at first pitch with the headline's temperature`,
       (await page.$$('#fc-sheet .fc-hour')).length === direct.f.hours.length && direct.f.hours[0]?.tempF === direct.f.tempF);
+// 3b: the 10-day outlook — every day filled in, the engine's numbers, our game under its day with the same line.
+const t1 = Date.now();
+await page.waitForFunction(() => document.querySelectorAll('#fc-sheet .fc-d-main').length === 10, null, { timeout: 60000 });
+const outlookMs = Date.now() - t1;
+const shown = await page.$$eval('#fc-sheet .fc-day', rows => rows.map(r => ({ label: r.querySelector('.fc-d-label')?.textContent, temp: r.querySelector('.fc-d-temp')?.textContent.replace(/\s+/g, ''), pct: r.querySelector('.fc-d-pct')?.textContent })));
+const eng = await page.evaluate(async () => {
+  const SM = await import('/baseball-gm/store/StateManager.js');
+  const { weatherContext } = await import('/baseball-gm/engine/WeatherClimate.js');
+  const { dailyForecast, withinDay } = await import('/baseball-gm/engine/WeatherForecast.js');
+  const { forecastForGame } = await import('/baseball-gm/engine/GameWeather.js');
+  const { venueOf } = await import('/baseball-gm/ui/components/RadarSheet.js');
+  const s = SM.get(), g = s.schedule[s.currentGameIndex], ctx = weatherContext(s), v = venueOf(g), p = ctx.map.parks[v], now = Date.now();
+  // A day shown beside our games there can't be less likely to rain than any of them.
+  return dailyForecast(ctx, now, p.x, p.y, 10).map(d0 => {
+    const games = s.schedule.filter(x => !x._committed && x.gameTime > now && x.date === d0.dateIso && venueOf(x) === v).map(x => forecastForGame(ctx, now, x));
+    const d = withinDay(d0, games);
+    const bad = games.some(f => f.chance > d.chance || f.hours.some(h => h.chance > f.chance));
+    return { label: d.label, temp: `${d.hiF ?? '—'}°/${d.loF ?? '—'}°`, pct: d.chance >= 10 ? `${d.chance}%` : '', bad };
+  });
+});
+await page.waitForTimeout(1500);   // (a day beside our games settles once their forecasts are in)
+const shown2 = await page.$$eval('#fc-sheet .fc-day', rows => rows.map(r => ({ label: r.querySelector('.fc-d-label')?.textContent, temp: r.querySelector('.fc-d-temp')?.textContent.replace(/\s+/g, ''), pct: r.querySelector('.fc-d-pct')?.textContent })));
+const off = shown2.map((d, i) => JSON.stringify(d) === JSON.stringify({ label: eng[i].label, temp: eng[i].temp, pct: eng[i].pct }) ? null : `day ${i}: ${JSON.stringify(d)} vs ${JSON.stringify(eng[i])}`).filter(Boolean);
+check('no day is less likely to rain than a game in it, no game less likely than an hour of it', eng.every(d => !d.bad));
+check(`the 10-day outlook fills in (${outlookMs} ms) with the engine's numbers, day for day`, off.length === 0, off.slice(0, 2).join(' | '));
+await page.waitForFunction(() => [...document.querySelectorAll('#fc-sheet .fc-d-gfc')].every(e => e.textContent !== '…'), null, { timeout: 30000 });
+const gameRow = await page.$eval('#fc-sheet .fc-d-gfc', e => e.textContent).catch(() => null);
+check(`our game is under its day with the dashboard's line (“${gameRow}”)`, gameRow === `· ${line}`);
+await page.$eval('#fc-sheet .fc-day-list', el => el.scrollIntoView());
+await page.waitForTimeout(300);
 await page.screenshot({ path: `${out}/fc-sheet-${theme}.png` });
+// Our park and the game's, when they differ.
+if (await page.$('#fc-sheet .fc-park:not(.on)')) {
+  const other = await page.$eval('#fc-sheet .fc-park:not(.on)', b => b.textContent);
+  await page.click('#fc-sheet .fc-park:not(.on)');
+  await page.waitForFunction(() => document.querySelectorAll('#fc-sheet .fc-d-main').length === 10, null, { timeout: 60000 });
+  check(`switching to ${other} shows that park's outlook`, (await page.textContent('#fc-city')).length > 0 && !!(await page.$('#fc-sheet .fc-park.on')));
+}
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 console.log(ok ? 'ALL PASS' : 'SOME FAILED');
