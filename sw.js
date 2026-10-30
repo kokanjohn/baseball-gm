@@ -16,7 +16,7 @@
  *   - If both cache and network fail, serve the offline fallback
  */
 
-const CACHE_VERSION  = 'tfo-v2-r105';
+const CACHE_VERSION  = 'tfo-v2-r106';
 const CACHE_NAME     = `the-front-office-${CACHE_VERSION}`;
 const OFFLINE_URL    = '/baseball-gm/index.html';
 
@@ -64,6 +64,7 @@ const PRECACHE_ASSETS = [
   '/baseball-gm/engine/WeatherSystems.js',
   '/baseball-gm/engine/WeatherConditions.js',
   '/baseball-gm/engine/WeatherForecast.js',
+  '/baseball-gm/engine/GameWeather.js',
   '/baseball-gm/engine/RadarFrames.js',
   '/baseball-gm/engine/InjuryEngine.js',
   '/baseball-gm/engine/TradeEngine.js',

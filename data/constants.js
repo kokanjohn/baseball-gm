@@ -538,6 +538,34 @@ export const WEATHER_TEMP_HEAT_F             = 95;    // above this → heat mod
 export const WEATHER_SUSPEND_INTENSITY       = 0.80;  // intensity at or above this during live game
 export const WEATHER_OFFICIAL_INNINGS        = 5;     // innings completed → game is official
 
+// §102 (step 4a) How weather plays out at a ballpark (engine/GameWeather.js).
+// Read off the same weather the radar and the park reports show.
+export const GAME_WEATHER = Object.freeze({
+  STEP_MIN:            5,     // the venue is checked every 5 minutes
+  PLAY_MIN:            180,   // a game's playing time (SimEngine spreads its plays over 3 hours)
+  OFFICIAL_PLAY_MIN:   100,   // ≈ 5 innings of playing time (the sim decides by the actual innings)
+  STOP_RATE_MMH:       7.5,   // rain this hard (≈ 0.3 in/hr) brings the tarp out at once
+  SOAK_RATE_MMH:       2.5,   // steady rain this hard…
+  SOAK_MIN:            20,    // …for this long does too
+  SNOW_DBZ:            18,    // snow or sleet this heavy stops play
+  LIGHTNING_CLEAR_MIN: 30,    // play waits until 30 minutes after the last lightning within 10 miles
+  DRY_RATE_MMH:        1.0,   // no more than a sprinkle…
+  DRY_MIN:             15,    // …for 15 minutes before the tarp comes off
+  PREP_MIN:            15,    // then the grounds crew needs 15 minutes…
+  PREP_PER_MM:         1.0,   // …plus a minute a millimetre that fell during the delay
+  PREP_MAX_MIN:        40,
+  MAX_START_WAIT_MIN:  180,   // no first pitch within 3 hours of the scheduled time → postponed
+  MAX_DELAY_MIN:       150,   // a delay this long once under way → the game is called
+  CURFEW_LOCAL_H:      1,     // play doesn't start or resume after 1 AM local
+  CREW_CHECK_MIN:      30,    // during a delay, every 30 minutes the crew reads the forecast and may call it
+  PREGAME_CALLS_MIN:   Object.freeze([180, 90]),   // the club reads the forecast this long before first pitch…
+  PREGAME_CALL_CHANCE: Object.freeze([80, 70]),    // …and postpones only if it shows no game AND the chance of rain (as the GM sees it) is at least this
+  SOGGY_IN:            1.5,   // this much rain in the 6 hours before first pitch → field work first
+  SOGGY_WORK_MIN:      30,
+  WASHOUT_IN:          3.0,   // this much → the field is unplayable: postponed
+  SNOW_COVER_MM:       4,     // this much snow (melted) in the 12 hours before → postponed
+});
+
 // ─────────────────────────────────────────────────────────────
 // GEOGRAPHIC REGIONS (Section 8.13 — Phase 13.5 — LOCKED)
 // ─────────────────────────────────────────────────────────────

@@ -644,5 +644,107 @@ const RF = await import('../../engine/RadarFrames.js');
   check(`a frame builds in ${ms[0].toFixed(0)} / ${ms[1].toFixed(0)} / ${ms[2].toFixed(0)} ms (region / metro / ballpark)`, Math.max(ms[0], ms[1], ms[2]) < 400);
 }
 
+
+// ── 4a: each game's weather ─────────────────────────────────────────────────
+console.log('\nGame weather');
+{
+  const GWm = await import('../../engine/GameWeather.js');
+  const { GAME_WEATHER: GW } = await import('../../data/constants.js');
+  const { venueSample, stormNear } = WS;
+  // One look at the systems gives exactly what the separate reads do.
+  {
+    const c = ctxFor('south', 'wx-b');
+    let off = 0;
+    for (let i = 0; i < 400; i++) {
+      const t = START + (60 + i * 0.29) * MS_DAY;
+      const x = -150 + (i * 37) % 300, y = -150 + (i * 53) % 300;
+      const cc = i % 3 ? c : forecastContext(c, t - (i % 7) * MS_HOUR);
+      const v = venueSample(cc, x, y, t, 16), p = precipAt(cc, x, y, t), sn = stormNear(cc, x, y, t, 16);
+      if (v.dbz !== p.dbz || v.kind !== p.kind || v.rateMmH !== p.rateMmH || v.stormDbz !== sn) off++;
+    }
+    check('a ballpark read in one look matches the radar and the storm check exactly', off === 0, `${off} off`);
+  }
+  const rates = {}, ms = [];
+  let structBad = 0, reportBad = 0, resumeBad = 0, callBad = 0, fieldBad = 0, nForecastCalls = 0, checkedSteps = 0;
+  const someGames = [];
+  for (const region of REGION_KEYS) {
+    const c = ctxFor(region, 'wx-a');
+    const parks = Object.keys(c.map.parks);
+    const r = rates[region] = { n: 0, ppd: 0, called: 0, delayed: 0 };
+    for (let d = 0; d < 186; d += 2) for (let k = 0; k < 4; k++) {
+      const home = parks[(d * 3 + k * 2) % parks.length], pk = c.map.parks[home];
+      const g = { homeId: home, gameTime: START + d * MS_DAY + Math.round((d % 7 === 3 ? 13.08 : 19.08) * MS_HOUR) };
+      const t0 = performance.now(); const p = GWm.gameWeatherPlan(c, g); ms.push(performance.now() - t0);
+      if (someGames.length < 24 && (p.delays.length || p.outcome !== 'played' || d % 40 === 0)) someGames.push([region, g, p]);
+      r.n++;
+      if (p.outcome === 'postponed') r.ppd++;
+      else { if (p.outcome === 'called') r.called++; if (p.delays.length) r.delayed++; }
+      // The plan hangs together.
+      let last = g.gameTime, lastMin = 0;
+      for (const dl of p.delays) {
+        if (dl.startT < last || dl.endT <= dl.startT || dl.atPlayMin < lastMin) structBad++;
+        last = dl.endT; lastMin = dl.atPlayMin;
+      }
+      if (p.outcome === 'played' && (p.startAt < g.gameTime || p.endT !== GWm.playClock(p, GW.PLAY_MIN))) structBad++;
+      if (p.outcome === 'called' && !(p.stopAtPlayMin < GW.PLAY_MIN && p.decidedAt === p.endT)) structBad++;
+      if (p.outcome === 'postponed' && (p.startAt !== null || p.endT !== null || !(p.decidedAt > 0))) structBad++;
+      // A postponement made off the forecast is one the GM's forecast showed coming.
+      if (p.outcome === 'postponed' && p.calledBy === 'forecast' && p.decidedAt < g.gameTime) {
+        nForecastCalls++;
+        const i = GW.PREGAME_CALLS_MIN.indexOf((g.gameTime - p.decidedAt) / 60_000);
+        if (WF.chanceOfPrecip(c, p.decidedAt, pk.x, pk.y, g.gameTime, g.gameTime + GW.PLAY_MIN * 60_000).chance < GW.PREGAME_CALL_CHANCE[i]) callBad++;
+      }
+      // A field call is for rain or snow that already fell.
+      if (p.outcome === 'postponed' && p.calledBy === 'field') {
+        const fell = rainTotal(c, pk.x, pk.y, g.gameTime - 12 * MS_HOUR, g.gameTime, 20);
+        if (!(fell > 0.1)) fieldBad++;
+      }
+      // Play never resumes within 30 minutes of lightning.
+      for (const dl of p.delays) {
+        if (p.outcome === 'postponed' || (dl.endT === p.endT && p.outcome !== 'played')) continue;   // ended by the call, not a restart
+        for (let t = dl.endT - GW.LIGHTNING_CLEAR_MIN * 60_000 + 5 * 60_000; t <= dl.endT; t += 5 * 60_000) {
+          if (venueSample(c, pk.x, pk.y, t, 16).stormDbz >= 43) { resumeBad++; break; }
+        }
+      }
+    }
+  }
+  check('every plan hangs together (delays in order, clock adds up, outcomes complete)', structBad === 0, `${structBad} bad`);
+  // The park report agrees with the plan, five minutes at a time, through games with weather.
+  for (const [region, g, p] of someGames) {
+    const c = ctxFor(region, 'wx-a');
+    const pk = c.map.parks[p.venueId];
+    if (p.outcome === 'postponed') continue;
+    for (const dl of p.delays) {
+      const rep = conditionsAt(c, pk.x, pk.y, dl.startT);
+      const ok = dl.reason === 'lightning' ? rep.lightning : dl.reason === 'wet field' ? true : rep.precip.kind !== null;
+      if (!ok) reportBad++;
+    }
+    for (let t = p.startAt; t < p.endT; t += 5 * 60_000) {
+      if (GWm.delayAt(p, t)) continue;
+      checkedSteps++;
+      const rep = conditionsAt(c, pk.x, pk.y, t);
+      if (rep.lightning || rep.precip.inPerHr * 25.4 >= GW.STOP_RATE_MMH + 0.06 || (rep.precip.kind && rep.precip.kind !== 'rain' && rep.precip.dbz >= GW.SNOW_DBZ)) reportBad++;
+    }
+  }
+  check(`the park report agrees with the plan (${someGames.length} games, ${checkedSteps} playing moments)`, reportBad === 0, `${reportBad} off`);
+  check('play never resumes within 30 minutes of lightning in the area', resumeBad === 0, `${resumeBad}`);
+  check(`clubs postpone ahead only when the GM's forecast shows a high chance (${nForecastCalls} calls)`, callBad === 0 && nForecastCalls > 0, `${callBad} low`);
+  check('field postponements follow rain or snow that already fell', fieldBad === 0, `${fieldBad}`);
+  const pct = (a, n) => (100 * a / n);
+  for (const region of REGION_KEYS) {
+    const r = rates[region];
+    const ppd = pct(r.ppd, r.n), called = pct(r.called, r.n), delayed = pct(r.delayed, r.n);
+    check(`${region}: postponed ${ppd.toFixed(1)}%, delayed ${delayed.toFixed(1)}%, called ${called.toFixed(1)}% of ${r.n} games`,
+          ppd >= 0.1 && ppd <= 3.5 && delayed >= 1 && delayed <= 14 && called <= 2);
+  }
+  check('the west is the driest for baseball', REGION_KEYS.every(k => k === 'west' || rates[k].delayed + rates[k].ppd > rates.west.delayed + rates.west.ppd));
+  // The same plan every time, from a separate copy of the code.
+  const GW2 = await import('../../engine/GameWeather.js?fresh=1');
+  const same = someGames.slice(0, 10).every(([region, g, p]) => JSON.stringify(GW2.gameWeatherPlan(ctxFor(region, 'wx-a'), g)) === JSON.stringify(p));
+  check('a game\'s weather is the same every time it\'s worked out', same);
+  const avg = ms.reduce((a, b) => a + b, 0) / ms.length;
+  check(`a game's weather takes ${avg.toFixed(1)} ms on average`, avg < 40);
+}
+
 console.log(`\n${pass}/${pass + fail} checks passed`);
 process.exit(fail ? 1 : 0);

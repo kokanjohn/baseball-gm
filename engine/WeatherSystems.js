@@ -638,8 +638,11 @@ export function surfaceTemp(ctx, x, y, t) {
  * the area" (a game stops when it's within about 10 miles).
  */
 export function stormNear(ctx, x, y, t, km = 16) {
+  return _stormFrom(activeSystems(ctx, t, { x0: x - km, y0: y - km, x1: x + km, y1: y + km }).filter(a => a.s.conv > 0.5), x, y, t, km);
+}
+
+function _stormFrom(act, x, y, t, km) {
   let best = -Infinity;
-  const act = activeSystems(ctx, t, { x0: x - km, y0: y - km, x1: x + km, y1: y + km }).filter(a => a.s.conv > 0.5);
   if (!act.length) return best;
   const pts = [[0, 0]];
   for (let r = km / 2; r <= km; r += km / 2) for (let i = 0; i < 8; i++) pts.push([Math.cos(i * Math.PI / 4) * r, Math.sin(i * Math.PI / 4) * r]);
@@ -685,7 +688,22 @@ export function precipTemp(ctx, x, y, t) {
  * { dbz, kind, rateMmH, convective } (dbz −Infinity / rate 0 when dry).
  */
 export function precipAt(ctx, x, y, t, opts = null) {
-  const act = activeSystems(ctx, t, { x0: x, y0: y, x1: x, y1: y });
+  return _precipFrom(ctx, activeSystems(ctx, t, { x0: x, y0: y, x1: x, y1: y }), x, y, t, opts);
+}
+
+/**
+ * venueSample(ctx, x, y, t, km) — what's falling at a point and the strongest
+ * thunderstorm within `km`, from one look at the systems: exactly
+ * precipAt(…) and stormNear(…, km) together, for checking a ballpark every
+ * few minutes through a game (GameWeather).
+ */
+export function venueSample(ctx, x, y, t, km = 16) {
+  const act = activeSystems(ctx, t, { x0: x - km, y0: y - km, x1: x + km, y1: y + km });
+  const p = _precipFrom(ctx, act, x, y, t, null);
+  return { ...p, stormDbz: _stormFrom(act.filter(a => a.s.conv > 0.5), x, y, t, km) };
+}
+
+function _precipFrom(ctx, act, x, y, t, opts) {
   let conv = 0;
   const parts = act.map(a => {
     const d = _systemDbz(a, x, y, t);

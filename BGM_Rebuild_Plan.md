@@ -8020,3 +8020,90 @@ After that, **step 4 — game effects:**
 - weather cards.
 
 Step 4 will need a fresh team.
+
+---
+
+## 102. Step 4 — game effects (sub-steps)
+
+GM asked for step 4 before step 3 (forecast surfaces), broken into sub-steps. Step 3 is still outstanding.
+
+| Sub-step | What |
+|---|---|
+| **4a** | Each game's weather plan — a pure engine (r106) |
+| 4b | The sim plays through the weather: wind / temperature / wet-field modifiers, delays as gaps in play timestamps, starters not returning after long delays, called and suspended games |
+| 4c | The schedule reacts in the tick loop: statuses, league-wide postponements with makeups (off day or doubleheader), suspended games resuming, actual weather recorded on every game (replacing the hardcoded `'Clear'`) |
+| 4d | On screen: the live delay view (tarp, radar), PPD / SUSP labels on the dashboard and schedule, weather inbox cards that are real decisions |
+| 4e | Season checks and tuning: rates per region, no lost or doubled games, standings add up. **Needs a fresh team.** |
+
+### 102.1 4a — each game's weather plan (r106)
+
+`engine/GameWeather.js` — `gameWeatherPlan(ctx, game)`. Pure and deterministic: the save's weather context and a game in, a plan out. It works the same for our games and the rest of the league, and it can be computed at any time (it never changes), so 4c can work plans out ahead of time a few per tick and cache them on the games.
+
+**One source of truth.** The ballpark is read every 5 minutes with `WeatherSystems.venueSample`. That is one look at the systems giving exactly `precipAt` plus `stormNear(16 km)`, so:
+- the plan's "lightning" is the park report's `lightning` (`LIGHTNING_DBZ` 43, now exported);
+- its rain is the radar's rain over the park.
+
+**Rules** (`GAME_WEATHER` in constants):
+
+*Play stops* for any one of:
+- lightning within about 10 miles;
+- rain of 7.5 mm/h or more (about 0.3 in/hr);
+- steady rain of 2.5 mm/h or more for 20 minutes;
+- snow or sleet of 18 dBZ or more.
+
+*The tarp comes off* only when both hold:
+- 30 minutes have passed since the last lightning;
+- it has been no more than a sprinkle (< 1 mm/h) for 15 minutes.
+
+Then the grounds crew needs 15 minutes plus 1 minute per millimetre that fell during the delay (at most 40). Rain during that prep resets it.
+
+*Before first pitch*:
+- 3 hours and 90 minutes out, the club reads the forecast run the GM sees at that hour. It postpones only when **both** hold:
+  - that run shows no game (no first pitch, or a game called before it's official);
+  - the GM-visible chance of rain for the game is high: 80% at 3 hours, 70% at 90 minutes. A club doesn't call off a 30% chance; the first trial had three of those, now none.
+- The field: 3 inches or more of rain in the 6 hours before, or 4 mm or more of melted snow in the 12 hours before, postpones it at 90 minutes ("field" calls). 1.5 inches or more means 30 minutes of field work before a late start.
+
+*During a delay*:
+- every 30 minutes the crew reads the current run and calls it if it shows no restart;
+- hard limits:
+  - no first pitch within 3 hours of the scheduled time → postponed;
+  - a 2½-hour delay once under way → called;
+  - no start or restart after 1 AM local.
+
+*Playing minutes.* The plan runs in playing minutes 0…180. SimEngine lays its plays over 3 hours, and `playClock(plan, min)` turns a playing minute into the clock time, delays included. Official at about 100 playing minutes is only a provisional marker. Whether a called game is **official or suspended** depends on the actual innings at the stop, which the sim decides in 4b.
+
+**Plan shape:**
+- `outcome`: played / postponed / called;
+- `decidedAt`;
+- `calledBy`: forecast / limit / curfew / field;
+- `reason`: lightning / rain / snow / wet field;
+- `startAt`;
+- `delays[{startT, endT, atPlayMin, reason, mm}]`: a delay at 0 before `startAt` is a delayed start;
+- `endT`;
+- `stopAtPlayMin`.
+
+Helpers are `playClock` and `delayAt`.
+
+**Trial** (one seed, 930 games per region; tuning comes in 4e):
+
+| Region | Postponed | Delayed | Called |
+|---|---|---|---|
+| North, South, East | about 1% | about 7% (average delay about 90 min) | 0.2–0.8% |
+| West | 0.4% | 2.7% | 0.5% |
+
+MLB is roughly 1–2% postponed.
+
+Every pre-game forecast postponement fell on a 90–100% chance on the GM's forecast, and rain did fall.
+
+**Cost:** about 12 ms per game in Node, most of it in the shared storm machinery. That is fine computed once per game, spread over ticks.
+
+**Harness:** `check-weather.mjs` "Game weather" checks:
+- one-look reads match the radar exactly;
+- plans hang together;
+- the park report agrees with the plan at every 5-minute playing moment, and at each delay start;
+- play never resumes within 30 minutes of lightning;
+- forecast calls match the GM-visible chance;
+- field calls follow real rainfall;
+- per-region rate bands, with the west the driest;
+- determinism from a separate copy of the code;
+- speed.

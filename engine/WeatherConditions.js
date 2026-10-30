@@ -22,7 +22,7 @@ import { waterKmAt, parkBearing, MASK_WATER, maskAt } from './WeatherMap.js';
 import { hash, fbm3 } from './WeatherNoise.js';
 
 export const LIGHTNING_KM = 16;            // ~10 miles: lightning this close stops play
-const LIGHTNING_DBZ = 43;                  // a thunderstorm strong enough to be making lightning
+export const LIGHTNING_DBZ = 43;                // a thunderstorm strong enough to be making lightning
 const KM_PER_MILE = 1.609;
 const RAIN_COOL_STEP_MS = 15 * 60_000, RAIN_COOL_LOOKBACK = 6;   // rain-cooled air lingers ~90 minutes
 
