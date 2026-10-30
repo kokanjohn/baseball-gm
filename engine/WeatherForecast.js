@@ -71,19 +71,21 @@ const _sigmoid = (z) => 1 / (1 + Math.exp(-z));
 /**
  * calibrateChance(raw, climate, leadH) — the ensemble's raw share turned into
  * a chance that verifies: start from the climate's chance and add the
- * ensemble's departure from it — sharpened (×1.65 when it leans wet, ×1.15
- * when it leans dry: the ensemble undersells rain it agrees on) out to about
- * 4½ days, then fading to the climate by
+ * ensemble's departure from it — sharpened when it leans wet (×1.6 up close
+ * growing to ×2.0 at 2½ days: the ensemble undersells rain it agrees on, more
+ * so further out) and softened to ×0.85 when it leans dry, out to about 3½
+ * days, then fading to the climate by about a week and
  * day 8–9 (where it knows little). Fitted against what happens over four
  * regions, a full season and windows of 3 hours to a day (harness: reliability).
  */
 export function calibrateChance(raw, climate, leadH) {
   const r = Math.min(0.98, Math.max(0.02, raw)), c = Math.min(0.98, Math.max(0.02, climate));
-  const f = Math.min(1, Math.max(0, (leadH - 110) / 100));
-  // Wetter than the climate: the ensemble undersells it — sharpen more. Drier: about right.
+  const ramp = (L0, L1) => Math.min(1, Math.max(0, (leadH - L0) / (L1 - L0)));
   const dep = _logit(r) - _logit(c);
-  const a = dep > 0 ? 1.65 - 1.45 * f : 1.15 - 0.95 * f;
-  const b = -0.1 + 0.3 * Math.min(1, Math.max(0, (leadH - 60) / 120));
+  // Wetter than the climate: the ensemble undersells it — sharpen. Drier: soften a little.
+  const fade = ramp(90, 170);
+  const a = dep > 0 ? (1.6 + 0.4 * ramp(12, 60)) * (1 - fade) + 0.25 * fade : 0.85 - 0.65 * ramp(60, 130);
+  const b = -0.4 + 0.6 * ramp(60, 190);
   return _sigmoid(_logit(c) + a * dep + b);
 }
 
