@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r107';
+export const APP_VERSION = 'tfo-v2-r108';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -805,7 +805,8 @@ async function _runTick({ quiet = false } = {}) {
     if (play) EventBus.emit('game:tick', { play, game: StateManager.get().schedule[gameIdx] });
 
     const freshGame = StateManager.get()?.schedule?.[gameIdx];
-    if (freshGame?.status === GAME_STATUS.FINAL && !freshGame._committed) {
+    // (A spring game the weather cancelled closes the same way — §102.3.)
+    if ((freshGame?.status === GAME_STATUS.FINAL || (freshGame?.status === GAME_STATUS.POSTPONED && freshGame.cancelled)) && !freshGame._committed) {
       try {
         const result = await commitGame(gameIdx);
         EventBus.emit('game:committed', { result, gameIndex: gameIdx });

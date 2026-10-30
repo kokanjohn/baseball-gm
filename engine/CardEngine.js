@@ -143,7 +143,6 @@ const POOL_MOMENT = Object.freeze({
  *   - IL return queue (generates Act 2 decision cards)
  *   - Injury events from InjuryEngine
  *   - Trade proposal events from TradeEngine
- *   - Weather transition events from WeatherEngine
  *
  * @param {Object} context — from GameEngine.buildCardContext()
  * @returns {void}

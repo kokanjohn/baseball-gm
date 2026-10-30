@@ -589,6 +589,14 @@ export const GAME_WEATHER = Object.freeze({
   SOGGY_WORK_MIN:      30,
   WASHOUT_IN:          3.0,   // this much → the field is unplayable: postponed
   SNOW_COVER_MM:       4,     // this much snow (melted) in the 12 hours before → postponed
+  // §102.3 (4c) the schedule
+  PLAN_AHEAD_MIN:      240,   // a game's plan is worked out this long before first pitch (the club's first look is at 3 hours)
+  MAKEUP_OFFDAY_DAYS:  14,    // a common off day this soon is used for a makeup…
+  DH_DAY_TIME:         '1:05 PM',   // …otherwise a doubleheader: the makeup in the afternoon before a night game,
+  DH_NIGHT_FROM_H:     17,
+  DH_GAP_MIN:          240,   // or, before a day game, that game moves this much later
+  SLOT_MIN_LEAD_MIN:   120,   // a makeup or resumption is never set sooner than this
+  DH_BREAK_MIN:        30,    // a doubleheader's second game starts no sooner than this after the first ends
 });
 
 // ─────────────────────────────────────────────────────────────

@@ -8180,3 +8180,81 @@ Result: in about 20% of games, out about 70% (parks face east-north-east, the pr
 - real plans across a season with no play during a delay, in lightning or in a downpour.
 
 All four regions pass. `check-weather` passes 116/116. `sim-season` passes on seeds 1, 2, 4, 5 and 7. Seed 3 had one CPU club at 31 wins, just under the band's floor of 33. The changed end-of-game times reshuffle the random path, and this was a tail outcome: other seeds' weakest clubs won 43–50, and no at-bat changes without a plan.
+
+### 102.3 4c — the schedule reacts to the weather (r108) — **fresh team required**
+
+Every game, ours and the league's, now goes through the weather the same way. Everything here is driven by each game's plan (`GameWeather`), so what happens is always what the radar and the forecasts showed.
+
+**Plans on the games.** `GameEngine._ensureWeatherPlans` gives every game starting within `PLAN_AHEAD_MIN` (4 h) of the clock its plan, `g.wx`. It runs on each step of the league clock.
+- A plan is worked out again only if the game moved (new time or park).
+- A suspended game due to pick up gets the plan for its resumption (`GameWeather.resumptionPlan`).
+- The All-Star Game uses the host's park.
+
+**At first pitch** (`_wxAtFirstPitch`): the plan, the park report through the game (`gameConditions`) and the record (`gameRecord`) go to the sim.
+- The game keeps `weather` (label, icon, °F, humidity, wind and how it plays at the park), replacing the old fixed "Clear".
+- It also keeps `fieldCondition` (infield softness and mound from the rain in the 12 hours before; feeds SimEngine's field modifier), `wx` (its plan) and `wxResult` (the sim's delays and ruling).
+
+**Postponements** (`_postponeGame`, at the plan's decision time):
+- *Spring:* cancelled, not made up (as in the majors). Ours closes through `commitGame`: result `'postponed'`; nobody's rotation turn or absence counts down. The league's is marked played.
+- *Regular season:* moved by `WeatherSchedule.findMakeupSlot`:
+  1. a doubleheader later in the same series;
+  2. a day both clubs are off within 14 days (a night game at the original park);
+  3. a doubleheader the next time they meet (at that day's park, `venueId`; the original home club stays home);
+  4. a day added after the regular season.
+- *Doubleheaders:* day–night (the makeup at 1:05 before a night game), or before a day game that game moves 4 h later. Game two always waits for game one to end plus 30 minutes, if a delay runs long (`_wxHoldForClubs`).
+- *Playoffs and the All-Star Game:* back a day, and the rest of the series with them.
+- *Record kept:* the game keeps `postponements[]` (original date and time, when decided, reason, by forecast or field) and `makeup.how`. The Recent list gets a line: "DET at TST postponed (rain) — makeup Jul 14 (doubleheader)".
+
+**When it's decided.** The league clock holds at our first pitch (§65), so:
+- our pre-game postponements run on the league clock (`_userWeatherEvents`);
+- a postponement called during a delayed start, a suspension (when its last play is revealed) and a suspended game's turn run in `tick()`.
+
+A start the weather is holding up shows status `DELAYED` until it starts or is called off.
+
+**Suspensions** (`_suspendGame`):
+- the game stands as it was (plays, score, `suspension` = where and why) and moves to a slot found like a makeup (playoffs: the next day);
+- at its turn (`_resumeGame`), its resumption has its own weather. If that rains out or would stop it again before the rest is played, it waits for another day;
+- otherwise `SimEngine.resumeTimeline` puts the rest on that day's clock ("The suspended game picks up where it stopped: top of the 7th, 2 out.", with that day's delays) and it's live again;
+- stats, records and arms count once, at the final.
+
+**Our schedule stays in playing order.** Unplayed games are kept sorted by first pitch (`_wxSortSchedule`). Indexes, `regularSeasonIndex`, deadline-window and stretch-run flags are renewed for unplayed games, so everything keyed on "the Nth game" follows the games actually played.
+
+**Retired:**
+- `WeatherEngine.js` (the old probability design; never wired);
+- `SeasonEngine.scheduleMakeupGame`;
+- `GameEngine.applyWeatherDelay` / `suspendGame` / `resumeSuspendedGame`;
+- `_tickOffset` (delays are on the plays' own clock now);
+- the hardcoded weather / field defaults in `_makeGameObject` (now null until first pitch).
+
+**Fixes found on the way:**
+- a pitcher brought in as his side took the field, just before a stoppage that ends the day, never threw a pitch, so the change is undone;
+- a pitcher who hasn't faced a batter isn't forced out by a long delay;
+- this removed "phantom" relief appearances.
+
+**Harness** (`sim-season.js`, now `REGION=…` for any region):
+- weather-aware per-game checks (an official called game can be shorter than nine and its reverted runs don't count);
+- the All-Star break check allows rainouts made up after the break;
+- cancelled spring games close like games;
+- a season block (`checkWeatherSeason`):
+  - every regular game played exactly once, rainouts made up;
+  - no club ever in two games at once;
+  - suspended games finished after they stopped;
+  - every game keeps its weather;
+  - believable rates.
+
+Seed 1 (north), full league season:
+- 660 regular games; 7 postponed (1.1%: 5 in the same series, 1 at the next meeting, 1 on an off day);
+- 4 spring games cancelled;
+- 30 delayed, 2 suspended and finished;
+- 8 doubleheaders;
+- 3,621 / 3,621 checks.
+
+Other seeds and regions, full league seasons (all checks pass):
+
+| Seed | Region | Postponed | Delayed | Called official | Suspended | Doubleheaders | Spring games cancelled | Checks |
+|---|---|---|---|---|---|---|---|---|
+| 2 | South | 9 (1.4%) | 69 | 4 | 5 | 9 | — | 3,619 |
+| 3 | East | 4 (0.6%) | 53 | 2 | 2 | 4 | 7 | 3,610 |
+| 4 | West | 6 (0.9%) | 30 | 2 | 1 | 5 | 0 | 3,619 |
+
+The dashboard UI test passes with no page errors. Showing these states on screen (delay view, PPD / SUSP labels, makeup rows, weather cards) is **4d**.

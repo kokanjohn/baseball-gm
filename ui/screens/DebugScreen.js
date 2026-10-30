@@ -411,7 +411,7 @@ function _wireActions(overlay, state) {
     if (g._committed) { alert('The current game is already final — advance to the next game first.'); return; }
     StateManager.mutate(st => {
       const gg = st.schedule[gi];
-      if (gg) { gg.gameTime = Date.now(); gg._tickOffset = 0; }
+      if (gg) gg.gameTime = Date.now();   // (its weather plan is worked out again for the new time)
     });
     alert('First pitch set to now — the game goes live within a few seconds. Set Live Speed to pick the pace.');
   });

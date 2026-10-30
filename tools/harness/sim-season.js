@@ -487,9 +487,11 @@ function playToFinal(idx) {
     const g = SM.get().schedule[idx];
     if (!g) return false;
     if (g.status === GAME_STATUS.FINAL) return true;
+    if (g.status === GAME_STATUS.POSTPONED && g.cancelled) return true;   // §102.3 a spring rainout: closed by commitGame
 
     // Advance the clock precisely to the next event, then tick once.
-    if (g.status === GAME_STATUS.SCHEDULED || g.status === GAME_STATUS.PRE_GAME_WATCH) {
+    if (g.status === GAME_STATUS.SCHEDULED || g.status === GAME_STATUS.PRE_GAME_WATCH
+        || (g.status === GAME_STATUS.SUSPENDED && g.gameTime > clock.get())) {   // (a suspended game waits for its turn like any game)
       // Live the day before first pitch (cards, decisions, deadlines).
       advanceClock(clock.get()); releaseDueCards(); gmActs();
       stepTo(g.gameTime || clock.get());
@@ -505,7 +507,8 @@ function playToFinal(idx) {
     tick();
     releaseDueCards();   // mirrors App's tick loop (§61)
   }
-  return SM.get().schedule[idx]?.status === GAME_STATUS.FINAL;
+  const last = SM.get().schedule[idx];
+  return last?.status === GAME_STATUS.FINAL || (last?.status === GAME_STATUS.POSTPONED && !!last.cancelled);
 }
 
 // ── §75: the All-Star Game, checked when the break arrives ───────
@@ -527,9 +530,14 @@ async function runAllStarChecks() {
     if (g.isSpring || g.isPlayoff || g.isAllStar) continue;
     for (const t of [g.homeId, g.awayId]) (times[t] = times[t] || []).push(g.gameTime);
   }
+  // (§102.3 a rainout from before the break made up after it is one game fewer before the break.)
+  const movedOver = {};
+  const crossed = (g) => (g.postponements || []).some(p => p.gameTime < asg.gameTime) && g.gameTime > asg.gameTime;
+  for (const g of st.schedule) if (!g.isSpring && !g.isPlayoff && crossed(g)) for (const t of ['user', g.opponentId]) movedOver[t] = (movedOver[t] || 0) + 1;
+  for (const g of Object.values(st.leagueSchedule.dayMap).flat()) if (!g.isSpring && !g.isPlayoff && !g.isAllStar && crossed(g)) for (const t of [g.homeId, g.awayId]) movedOver[t] = (movedOver[t] || 0) + 1;
   const k = ALL_STAR_BREAK_AFTER_GAME;
-  const off = Object.entries(times).filter(([, ts]) => { ts.sort((x, y) => x - y); return !(ts[k - 1] < asg.gameTime && ts[k] > asg.gameTime); });
-  check('all-star: played in the break (after every club\'s 66th game, before its 67th)', off.length === 0, off.map(([t]) => t).join(','));
+  const off = Object.entries(times).filter(([t, ts]) => { ts.sort((x, y) => x - y); const kk = k - (movedOver[t] || 0); return !(ts[kk - 1] < asg.gameTime && ts[kk] > asg.gameTime); });
+  check(`all-star: played in the break (after every club's 66th game, before its 67th; rainouts made up after it excepted: ${Object.entries(movedOver).map(([t, n]) => `${t} ${n}`).join(', ') || 'none'})`, off.length === 0, off.map(([t]) => t).join(','));
 
   // The host.
   const hostDiv = season.hostId === 'user' ? st.userTeam.divisionId || 'A' : st.leagueTeams.find(t => t.id === season.hostId)?.divisionId;
@@ -1157,6 +1165,57 @@ function checkWeatherCalendar(st, label, kinds) {
         off.length === 0, off.slice(0, 3).map(g => `${g.date} @ ${new Date(g.gameTime).toISOString()}`).join(' | '));
 }
 
+/**
+ * §102.3 the weather on the season's schedule: every game played once and
+ * where the weather says; rainouts made up (or, in spring, cancelled);
+ * suspended games finished; no club in two places at once; every game's
+ * weather kept.
+ */
+function checkWeatherSeason(st) {
+  const all = [];
+  for (const g of st.schedule) {
+    const homeId = g.isHome ? 'user' : g.opponentId, awayId = g.isHome ? g.opponentId : 'user';
+    all.push({ g, user: true, homeId, awayId, played: !!g._committed && g.result !== 'postponed', cancelled: !!g.cancelled });
+  }
+  for (const g of Object.values(st.leagueSchedule.dayMap).flat()) {
+    if (g.isAllStar) continue;
+    all.push({ g, user: false, homeId: g.homeId, awayId: g.awayId, played: !!g.played && !g.cancelled, cancelled: !!g.cancelled });
+  }
+  const reg = all.filter(x => !x.g.isSpring && !x.g.isPlayoff);
+  const ppd = all.filter(x => x.g.postponements?.length);
+  const how = {};
+  for (const x of ppd) if (x.g.makeup?.how) how[x.g.makeup.how] = (how[x.g.makeup.how] || 0) + 1;
+  const springCancelled = all.filter(x => x.g.isSpring && x.cancelled).length;
+  const regCancelled = reg.filter(x => x.cancelled);
+  check(`weather: rainouts made up (${ppd.length} postponed — ${Object.entries(how).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}; ${springCancelled} spring games cancelled)`,
+        regCancelled.length === 0 && reg.every(x => x.played), regCancelled.map(x => x.g.date).join(','));
+  // No club plays two games at once: within a club's games, each starts after the last ended.
+  const byClub = {};
+  for (const x of all.filter(x => x.played)) for (const t of [x.homeId, x.awayId]) (byClub[t] = byClub[t] || []).push(x.g);
+  const clash = [];
+  for (const [t, gs] of Object.entries(byClub)) {
+    gs.sort((a, b) => a.gameTime - b.gameTime);
+    for (let i = 1; i < gs.length; i++) {
+      const prevEnd = gs[i - 1].endedAt ?? (gs[i - 1].gameTime + 3 * 3_600_000);
+      if (gs[i].gameTime < prevEnd && gs[i].date === gs[i - 1].date) clash.push(`${t} ${gs[i].date}`);
+    }
+  }
+  const dh = Object.values(byClub).flatMap(gs => gs.filter((g, i) => i && g.date === gs[i - 1].date)).length;
+  check(`weather: no club plays two games at once (${dh} doubleheader games)`, clash.length === 0, clash.slice(0, 4).join(' | '));
+  const susp = all.filter(x => x.g.suspension);
+  check(`weather: suspended games picked up where they stopped and were finished (${susp.length})`,
+        susp.every(x => x.played && x.g.resumedAt > x.g.suspension.atMs));
+  const noWx = all.filter(x => x.played && !x.g.weather?.label);
+  check(`weather: every game played keeps its weather at first pitch (${all.filter(x => x.played).length} games)`, noWx.length === 0,
+        noWx.slice(0, 3).map(x => `${x.g.date} ${x.homeId}`).join(', '));
+  const delayed = all.filter(x => x.played && x.g.wxResult?.delays?.length).length;
+  const called = all.filter(x => x.played && x.g.wxResult?.ruling?.outcome === 'final').length;
+  const n = reg.length;
+  console.log(`  weather season: ${n} regular games — ${ppd.filter(x => !x.g.isSpring).length} postponed (${(100 * ppd.filter(x => !x.g.isSpring).length / n).toFixed(1)}%), ${delayed} delayed, ${called} called official, ${susp.length} suspended; ${dh / 2} doubleheaders`);
+  check(`weather: rates in a believable range (${(100 * ppd.length / n).toFixed(1)}% postponed, ${(100 * delayed / n).toFixed(1)}% delayed)`,
+        ppd.length / n <= 0.05 && delayed / n >= 0.01 && delayed / n <= 0.2);
+}
+
 /** §91 CPU clubs' offers to us: calls from the trade desk, asking prices, counters. */
 function checkOffersToUs(st) {
   const s1 = gm.offers.filter(o => o.season === 1);
@@ -1196,7 +1255,7 @@ async function main() {
   await startNewGame({
     archetypeId: 'contender',
     gmName: 'Test GM', city: 'Testville', nickname: 'Testers',
-    abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: 'north',
+    abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: process.env.REGION || 'north',
   });
   {
     // §78: the books open — a market, opening funds, the owner's target.
@@ -1349,17 +1408,21 @@ async function main() {
 
       // §60 real-baseball structure (pre-commit, plays still present)
       const ps      = pre.plays;
-      const runs    = ps.reduce((s, p) => s + playRuns(p), 0);
+      // (§102.3 an official game the weather called: shorter than nine, and an
+      //  unfinished inning's runs may not count — the score went back.)
+      const called  = !!ps[ps.length - 1]?._called;
+      if (called) gm.calledGames = (gm.calledGames || 0) + 1;
+      const runs    = ps.filter(p => !p._reverted).reduce((s, p) => s + playRuns(p), 0);
       const maxInn  = Math.max(...ps.map(p => (p.type === 'game_end' ? 0 : (p.inning || 0))));
       const halves  = new Set(ps.filter(p => p.half === 'TOP' || p.half === 'BOT').map(p => `${p.half}${p.inning}`));
       const homeR   = pre.isHome ? pre.ourScore : pre.theirScore;
       const awayR   = pre.isHome ? pre.theirScore : pre.ourScore;
       check(`game ${idx}: runs in plays == final score`, runs === pre.ourScore + pre.theirScore,
             `plays ${runs} vs score ${pre.ourScore + pre.theirScore}`);
-      check(`game ${idx}: at least 9 innings played`, maxInn >= 9, `last inning ${maxInn}`);
+      check(`game ${idx}: at least 9 innings played (or an official game called after 5)`, maxInn >= 9 || (called && maxInn >= 5), `last inning ${maxInn}`);
       // Bottom of the last inning is skipped only when the home team leads.
       check(`game ${idx}: bottom half skipped only when home leads`,
-            halves.has(`BOT${maxInn}`) || homeR > awayR, `home ${homeR} away ${awayR}`);
+            halves.has(`BOT${maxInn}`) || homeR > awayR || called, `home ${homeR} away ${awayR}`);
       if (!pre.isSpring) check(`game ${idx}: regular season never ties`, homeR !== awayR, `${homeR}-${awayR}`);
       // §69 live correctness at every reveal: the running score equals the runs
       // scored so far; the diamond never shows runners after a third out; every
@@ -1808,7 +1871,7 @@ async function main() {
     const lastUser = st.schedule[st.currentGameIndex - 1];
     const due = games.filter(g => g.gameTime < (lastUser?.gameTime || 0));
     check(`league: every CPU game before the user's last game was played (${due.filter(g => g.played).length}/${due.length})`,
-          due.every(g => g.played && g.boxScore));
+          due.every(g => g.played && (g.boxScore || g.cancelled)));   // (§102.3 a cancelled spring rainout has no box)
     const phantomCpu = games.filter(g => g.played && g.boxScore).flatMap(g => [...g.boxScore.away.pitchers, ...g.boxScore.home.pitchers])
       .filter(p => !(p.ipOuts || p.h || p.bb || p.er || p.k));
     check(`league: every pitcher in a CPU box score faced a batter`, phantomCpu.length === 0, `${phantomCpu.length} phantom appearances`);
@@ -2010,6 +2073,7 @@ async function main() {
       // .253 — 33 of 132); the ceiling the best (.716 — 94 of 132) with room.
       check('balance: CPU clubs inside a realistic band (≥ 33 and ≤ 100 wins of 132)',
             Math.min(...cpuW) >= 33 && Math.max(...cpuW) <= 100, cpuW.sort((x, y) => x - y).join(','));
+      checkWeatherSeason(st);
       const regBad = [st.userTeam, ...st.leagueTeams].filter(t => (t.wins || 0) + (t.losses || 0) !== REGULAR_SEASON_GAME_COUNT);
       check('postseason: playoff games never touch the regular-season record', regBad.length === 0,
             regBad.map(t => `${t.abbr} ${t.wins}-${t.losses}`).join(', '));

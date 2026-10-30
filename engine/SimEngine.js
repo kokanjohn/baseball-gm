@@ -374,6 +374,9 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     if (!gs.wxStop || gs.wxStop.handled) return false;
     const st = gs.wxStop;
     st.handled = true;
+    // A pitcher brought in as his side took the field, before the stop, never threw a pitch: the change didn't happen.
+    const iDelay = plays.length - 1;
+    if (plays[iDelay]?.type === 'weather_delay' && plays[iDelay - 1]?.type === 'pitching_change') plays.splice(iDelay - 1, 1);
     gs.ruling = _calledRuling(gs, plays, { isTop, userBatsBottom, exhibition: !!(isSpring || exhibition), playoff: !!game?.isPlayoff });
     if (gs.ruling.outcome === 'final') return true;
     // Suspended. Nobody pitches on through a suspension: both clubs start the
@@ -1963,7 +1966,8 @@ function _weatherCheck(gs, players, plays, inning, half, outs, bases, fieldSide)
     if (ev.call) return 'stop';
     plays.push(_weatherPlay('weather_resume', ev, at));
     if (ev.endT - ev.startT >= GAME_WEATHER.ARM_COOL_MIN * 60_000) {
-      for (const side of ['user', 'opp']) { gs[`${side}Fatigued`] = true; gs[`${side}MustGo`] = true; }
+      // (A pitcher who came in and hasn't faced a batter yet stays: he's the one who warms up again.)
+      for (const side of ['user', 'opp']) if (gs[`${side}PitchCount`] > 0) { gs[`${side}Fatigued`] = true; gs[`${side}MustGo`] = true; }
       if (_midHalfChange(gs, players, fieldSide, plays, inning, half, outs, bases)) {
         arm = true;
         const pc = plays[plays.length - 1];
@@ -2035,6 +2039,44 @@ function _calledRuling(gs, plays, o) {
   return final(hP, aP, I - 1, changed
     ? `Final — called (${word}) in the ${_ordinal(I)}; the score goes back to the end of the ${_ordinal(I - 1)}`
     : `Final — called (${word}) after ${I - 1}${H === 'BOT' ? '½' : ''} innings`, changed ? prevIdx : null);
+}
+
+/**
+ * resumeTimeline(resumePlays, plan, suspendedPlay) — a suspended game picked
+ * up (§102.3): the rest of its plays on the resumption day's clock. First the
+ * resumption's own delayed start, if any; then "the suspended game resumes";
+ * then the plays, each at the resumption's first pitch plus its playing
+ * minutes, with that day's delays (from the resumption's weather plan) on
+ * the clock between them. (A long delay in a resumption doesn't change
+ * pitchers — the rest of the game was played out at the suspension.)
+ */
+export function resumeTimeline(resumePlays, plan, suspendedPlay) {
+  const sp = suspendedPlay?._suspended || { inning: 1, half: 'TOP', outs: 0, bases: null };
+  const at = { inning: sp.inning, half: sp.half, outs: sp.outs, bases: sp.bases };
+  const startAt = plan.startAt;
+  const out = [];
+  for (const d of plan.delays.filter(x => x.startT < startAt)) out.push({ ..._weatherPlay('weather_delay', d, { ...at, pre: true }), cumOurScore: suspendedPlay?.cumOurScore ?? 0, cumTheirScore: suspendedPlay?.cumTheirScore ?? 0, _timestamp: d.startT });
+  const where = `${sp.half === 'TOP' ? 'top' : 'bottom'} of the ${_ordinal(sp.inning)}, ${sp.outs} out`;
+  out.push({
+    playIndex: 0, _halfInning: `${sp.half}_${sp.inning}`, inning: sp.inning, half: sp.half, batterId: null, pitcherId: null,
+    type: 'game_resumed', description: `The suspended game picks up where it stopped: ${where}.`,
+    rbi: 0, isScoring: false, isBigPlay: false, outsAfter: sp.outs, _basesAfter: sp.bases ? { ...sp.bases } : { first: null, second: null, third: null },
+    cumOurScore: suspendedPlay?.cumOurScore ?? 0, cumTheirScore: suspendedPlay?.cumTheirScore ?? 0, _timestamp: startAt, _statDeltas: {},
+  });
+  const mid = plan.delays.filter(x => x.startT >= startAt);
+  let k = 0, add = 0;
+  for (const p of resumePlays) {
+    const m = p._resumeMin ?? 0;
+    while (k < mid.length && mid[k].atPlayMin <= m) {
+      const d = mid[k++], prev = out[out.length - 1];
+      const here = { inning: prev.inning, half: prev.half, outs: prev.outsAfter ?? 0, bases: prev._basesAfter };
+      out.push({ ..._weatherPlay('weather_delay', d, here), cumOurScore: prev.cumOurScore, cumTheirScore: prev.cumTheirScore, _timestamp: d.startT });
+      out.push({ ..._weatherPlay('weather_resume', d, here), cumOurScore: prev.cumOurScore, cumTheirScore: prev.cumTheirScore, _timestamp: d.endT });
+      add += d.endT - d.startT;
+    }
+    out.push({ ...p, _timestamp: Math.round(startAt + m * 60_000 + add) });
+  }
+  return out;
 }
 
 /** The moment a game is suspended: where it stands, and that it will be finished another day. */

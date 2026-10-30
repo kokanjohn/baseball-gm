@@ -431,7 +431,7 @@ function _reconcile(draft, teamId, atMs) {
 export function clubBusyUntil(state, teamId, atMs) {
   const endOf = (g) => {
     const last = g?.plays?.[g.plays.length - 1];
-    return last && Number.isFinite(last._timestamp) ? last._timestamp + (g._tickOffset || 0) : (g.gameTime || 0) + _GAME_FALLBACK_MS;
+    return last && Number.isFinite(last._timestamp) ? last._timestamp : (g.gameTime || 0) + _GAME_FALLBACK_MS;
   };
   let end = 0;
   for (const games of Object.values(state.leagueSchedule?.dayMap || {})) {

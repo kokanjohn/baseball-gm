@@ -30,7 +30,7 @@
  */
 
 import { precipAt, venueSample, forecastContext, PRECIP_RAIN, DBZ_MIN } from './WeatherSystems.js';
-import { LIGHTNING_KM, LIGHTNING_DBZ, conditionsAt, windAtPark } from './WeatherConditions.js';
+import { LIGHTNING_KM, LIGHTNING_DBZ, conditionsAt, windAtPark, rainTotal } from './WeatherConditions.js';
 import { localHour } from './WeatherClimate.js';
 import { chanceOfPrecip } from './WeatherForecast.js';
 import { venueOf, parkBearing } from './WeatherMap.js';
@@ -277,4 +277,40 @@ export function gameConditions(ctx, plan) {
                rateMmH: c.precip.rateMmH, kind: c.precip.kind, label: c.label, icon: c.icon });
   }
   return out;
+}
+
+/**
+ * gameRecord(ctx, plan, conditions) — what's kept on a game (§102.3): the
+ * weather at first pitch (the park report) and the field after the rain
+ * before it. Replaces the old fixed "Clear":
+ *   weather:        { label, icon, tempF, humidity, windMph, windOutMph, windText, scoringMod }
+ *   fieldCondition: { infieldSoftness 0..1, moundFirmness, trackCondition, temperature, rainBeforeIn }
+ */
+export function gameRecord(ctx, plan, conditions) {
+  const c = conditions[0];
+  const park = ctx.map.parks[plan.venueId] || ctx.map.parks.user;
+  const first = plan.startAt ?? plan.gameTime;
+  const rainIn = rainTotal(ctx, park.x, park.y, first - 12 * 60 * MIN, first, 20);
+  const soft = Math.min(1, rainIn / 1.0);
+  return {
+    weather: c ? { label: c.label, icon: c.icon, tempF: Math.round(c.tempF), humidity: c.humidity, windMph: c.windMph,
+                   windOutMph: c.windOutMph, windText: c.windText, scoringMod: 1.0 } : null,
+    fieldCondition: { infieldSoftness: Math.round(soft * 100) / 100, moundFirmness: Math.round((1 - 0.4 * soft) * 100) / 100,
+                      trackCondition: Math.round((1 - 0.3 * soft) * 100) / 100, temperature: c ? Math.round(c.tempF) : 72,
+                      rainBeforeIn: rainIn },
+  };
+}
+
+/**
+ * resumptionPlan(ctx, game, resumeAt, remainingMin) — the weather for picking
+ * up a suspended game: the plan for a "game" at the resumption's time, read
+ * only as far as the rest of the game lasts. A plan that would call it again
+ * before the rest is played, or postpone it, means it waits for another day:
+ * { ok: false, plan } — otherwise { ok: true, plan }.
+ */
+export function resumptionPlan(ctx, game, resumeAt, remainingMin) {
+  const plan = gameWeatherPlan(ctx, { ...game, gameTime: resumeAt });
+  if (plan.outcome === PLAN_OUTCOME.POSTPONED) return { ok: false, plan };
+  if (plan.outcome === PLAN_OUTCOME.CALLED && plan.stopAtPlayMin <= remainingMin) return { ok: false, plan };
+  return { ok: true, plan };
 }

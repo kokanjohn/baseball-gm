@@ -21,8 +21,8 @@
  *   - GameEngine applies those mutations via StateManager.mutate().
  *   - GameEngine does NOT generate cards. CardEngine (Phase 9) does that.
  *     GameEngine assembles the context object CardEngine needs.
- *   - Weather status transitions are evaluated here; WeatherEngine (Phase 7)
- *     owns the weather data generation.
+ *   - The weather's effect on the schedule is applied here (§102.3): every
+ *     game's plan (GameWeather), postponements, suspensions and resumptions.
  */
 
 import * as StateManager from '../store/StateManager.js';
@@ -35,7 +35,6 @@ import {
 import {
   generateLeagueCalendar,
   getNextPhase,
-  scheduleMakeupGame,
   buildActivityFeedEntry,
   pruneActivityFeed,
   _isoDate,
@@ -60,7 +59,7 @@ import {
   teamRating, recordRating,
 } from './RosterEngine.js';
 
-import { rosterClock, applyDue, hasDue, callUp, cpuSalaryMove } from './TransactionEngine.js';
+import { rosterClock, applyDue, hasDue, callUp, cpuSalaryMove, clubBusyUntil } from './TransactionEngine.js';
 import {
   seedDivision, buildBracket, prepareRound, recordGame, roundComplete, roundSeries,
   roundForPhase, nextRound, seriesGames, ROUND_PHASE, ROUND_LABEL,
@@ -74,6 +73,7 @@ import {
   accumulateStats,
   computeWinProbability,
   leagueNorms,
+  resumeTimeline,
 } from './SimEngine.js';
 import * as CardEngine from './CardEngine.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
@@ -87,7 +87,9 @@ import * as FreeAgency from './FreeAgency.js';
 import * as LeagueTrades from './LeagueTrades.js';
 import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
-import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso } from './WeatherClimate.js';
+import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso, weatherContext } from './WeatherClimate.js';
+import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, PLAN_OUTCOME } from './GameWeather.js';
+import { findMakeupSlot, seriesShift, gameTeams } from './WeatherSchedule.js';
 
 import {
   PHASE,
@@ -135,6 +137,7 @@ import {
   NEW_TEAM_SEED_CARDS,
   ADVANCE_SCOUT,
   LEAGUE_TRADES,
+  GAME_WEATHER,
 } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -589,7 +592,9 @@ export async function startNewGame(config) {
  *
  * Respects:
  *   - game.status — pauses on DELAYED, SUSPENDED, POSTPONED
- *   - game._tickOffset — timestamp drift correction after weather delays
+ *   - the weather (§102.3): a start held up and then called off; a suspended
+ *     game's turn to pick up; a suspension when its last play is revealed
+ *     (delays inside a game are already on its plays' clock)
  *   - game.plays — null until SimEngine populates them (Phase 6)
  *
  * Returns the updated game object if a play was revealed, null otherwise.
@@ -610,6 +615,26 @@ export function tick() {
 
   if (!game) return null;
 
+  // §102.3 the weather's say about our game. (The league clock holds at our
+  // first pitch, so what happens at or after it is decided here.)
+  {
+    const now = Date.now();
+    const ref = { user: true, i: game.index };
+    // A start the weather is holding up — then calls off.
+    if (_WX_OPEN.has(game.status) && game.wx?.outcome === PLAN_OUTCOME.POSTPONED && !game.wx.resumption) {
+      if (now >= game.wx.decidedAt) { _postponeGame(ref, game.wx.decidedAt); return null; }
+      if (now >= game.gameTime && game.status !== GAME_STATUS.DELAYED) {
+        StateManager.mutate(s => { const g = s.schedule[game.index]; if (g) g.status = GAME_STATUS.DELAYED; });
+      }
+      return null;
+    }
+    // A suspended game's turn to pick up.
+    if (game.status === GAME_STATUS.SUSPENDED && now >= game.gameTime) {
+      _resumeGame(ref, game.gameTime);
+      return StateManager.get().schedule[game.index]?.status === GAME_STATUS.LIVE ? tick() : null;
+    }
+  }
+
   // Paused states — do not advance
   if ([GAME_STATUS.DELAYED, GAME_STATUS.SUSPENDED, GAME_STATUS.POSTPONED].includes(game.status)) {
     return null;
@@ -619,6 +644,7 @@ export function tick() {
   if (game.status === GAME_STATUS.SCHEDULED || game.status === GAME_STATUS.PRE_GAME_WATCH) {
     const now = Date.now();
     if (game.gameTime && now >= game.gameTime) {
+      if (_wxHoldForClubs({ user: true, i: game.index }, game.gameTime)) return null;   // §102.3 game two waits for game one
       _activateGame(game);
       // Re-read game from state — _activateGame just mutated it
       // Without this, game.plays is still null on the local variable
@@ -636,7 +662,6 @@ export function tick() {
   if (!game.plays || game.plays.length === 0) return null;
 
   const now          = Date.now();
-  const offset       = game._tickOffset || 0;
   const nextPlayIdx  = game.livePlayIndex || 0;
   const nextPlay     = game.plays[nextPlayIdx];
 
@@ -660,7 +685,7 @@ export function tick() {
   let last = null;
   while (idx < game.plays.length) {
     const p = game.plays[idx];
-    if (scaledNow < ((p._timestamp || 0) + offset)) break;
+    if (scaledNow < (p._timestamp || 0)) break;
     last = p;
     idx++;
   }
@@ -681,11 +706,15 @@ export function tick() {
       }
     }
 
-    // Mark complete once the last play is revealed.
-    if (idx >= game.plays.length) {
+    // Mark complete once the last play is revealed — unless the weather
+    // suspended it (§102.3): then it waits for another day.
+    if (idx >= game.plays.length && game.plays[game.plays.length - 1]?.type !== 'game_suspended') {
       g.status = GAME_STATUS.FINAL;
     }
   });
+  if (idx >= game.plays.length && game.plays[game.plays.length - 1]?.type === 'game_suspended') {
+    _suspendGame({ user: true, i: game.index }, game.plays[game.plays.length - 1]._timestamp);
+  }
 
   return last;
 }
@@ -742,14 +771,15 @@ function _activateGame(game) {
   );
 
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
+  const wx = _wxAtFirstPitch(state, game, true);   // §102.3
 
-  const { plays, boxScore, liveLineups } = generatePlays(
-    game,
+  const { plays, boxScore, liveLineups, resumePlays, weather } = generatePlays(
+    wx ? { ...game, ...wx.record } : game,
     userTeam,
     opponentTeam,
     players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
-      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players) }
+      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null }
   );
 
   // Write plays to state and transition to LIVE
@@ -759,6 +789,8 @@ function _activateGame(game) {
     g.plays         = plays;
     g.livePlayIndex = 0;
     g.status        = GAME_STATUS.LIVE;
+    if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = weather; }
+    if (resumePlays) g.resumePlays = resumePlays;
     // Pre-computed full-game box (promoted to g.boxScore at commit) + seed lineups.
     g._precomputedBoxScore = boxScore;
     g.liveLineups          = liveLineups;
@@ -800,11 +832,30 @@ function _silentlyCommitGame(game) {
   );
 
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
-  const { plays, boxScore, liveLineups } = generatePlays(
-    game, userTeam, opponentTeam, players,
+  const wx = _wxAtFirstPitch(state, game, true);   // §102.3
+  const { plays, boxScore, liveLineups, resumePlays, weather } = generatePlays(
+    wx ? { ...game, ...wx.record } : game, userTeam, opponentTeam, players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
-      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players) }
+      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null }
   );
+
+  // Suspended by the weather: it stands where it stopped, to be finished another day.
+  if (resumePlays) {
+    const sp = plays[plays.length - 1];
+    StateManager.mutate(s => {
+      const g = s.schedule[game.index];
+      if (!g) return;
+      Object.assign(g, wx.record);
+      g.wx = wx.plan; g.wxResult = weather;
+      g.plays = plays; g.resumePlays = resumePlays; g.livePlayIndex = plays.length;
+      g.ourScore = sp?.cumOurScore ?? 0; g.theirScore = sp?.cumTheirScore ?? 0;
+      g.status = GAME_STATUS.LIVE;
+      g._precomputedBoxScore = boxScore;
+      g.liveLineups = liveLineups;
+    });
+    _suspendGame({ user: true, i: game.index }, sp?._timestamp ?? Date.now());
+    return;
+  }
 
   // Extract final score from last play
   const lastPlay   = plays[plays.length - 1];
@@ -815,6 +866,7 @@ function _silentlyCommitGame(game) {
   StateManager.mutate(s => {
     const g = s.schedule[game.index];
     if (!g) return;
+    if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = weather; }
     g.plays              = plays;
     g.livePlayIndex      = plays.length; // all plays "revealed" — no live view
     g.ourScore           = ourScore;
@@ -888,10 +940,16 @@ export async function commitGame(gameIndex) {
     // Single source of truth (SimEngine.accumulateBox). Kept after commit;
     // plays are stripped in Phase 2 once all readers use g.boxScore.
     if (g._precomputedBoxScore) g.boxScore = g._precomputedBoxScore;
+    if (g.status !== GAME_STATUS.POSTPONED) g.endedAt = endMs;   // §102.3 (as the league's games keep it)
 
     // ── Step 1: Write final game result fields ─────────────
     // Skip if already written by _silentlyCommitGame.
-    if (!alreadyCommitted) {
+    if (g.status === GAME_STATUS.POSTPONED) {
+      // §102.3 a spring game the weather cancelled: closed, never played.
+      g._committed = true;
+      g.result     = 'postponed';
+      g.score      = null;
+    } else if (!alreadyCommitted) {
       const finalOurScore   = g.ourScore   ?? 0;
       const finalTheirScore = g.theirScore ?? 0;
 
@@ -901,6 +959,7 @@ export async function commitGame(gameIndex) {
                    : 'tie';
       g.score      = { us: finalOurScore, them: finalTheirScore };
     }
+    const wasPlayed = g.status !== GAME_STATUS.POSTPONED;
 
     // ── Step 1b: Win/loss record (user + opponent) ─────────
     // Gated on _recordApplied (not alreadyCommitted) so it runs exactly once for
@@ -979,7 +1038,7 @@ export async function commitGame(gameIndex) {
       // We need just the per-game delta, so collect it before merging above.
       const perGameDeltas = {}; // { [playerId]: { [stat]: delta } }
       for (const play of g.plays) {
-        if (!play._statDeltas || play.type === 'pinch_hit') continue;
+        if (!play._statDeltas || play._reverted || play.type === 'pinch_hit') continue;
         for (const [playerId, statList] of Object.entries(play._statDeltas)) {
           if (!perGameDeltas[playerId]) perGameDeltas[playerId] = {};
           for (const { stat, delta } of statList) {
@@ -1000,18 +1059,19 @@ export async function commitGame(gameIndex) {
 
     // ── Step 2b: Advance SP rotation ──────────────────────
     // Rotate to next SP so each game uses the correct starter in order.
-    if (s.userTeam.rotation?.order?.length > 0) {
+    // (A rained-out game was never played: nobody's turn passes, nobody's absence counts down.)
+    if (wasPlayed && s.userTeam.rotation?.order?.length > 0) {
       s.userTeam.rotation.currentIndex =
         (s.userTeam.rotation.currentIndex + 1) % s.userTeam.rotation.order.length;
     }
     // The opponent's rotation turns over too (it used to stand still, so the
     // user always faced the same starter).
-    _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent));
+    if (wasPlayed) _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent));
     // §71: players away (rest, illness, training, benched) and playing-hurt
     // conditions count down one game; whoever is back gets his spot back.
-    Development.countGame(s, 'user');
+    if (wasPlayed) Development.countGame(s, 'user');
     const oppTeam = s.leagueTeams.find(t => t.name === g.opponent);
-    if (oppTeam) Development.countGame(s, oppTeam.id);
+    if (oppTeam && wasPlayed) Development.countGame(s, oppTeam.id);
 
     // (Trades, arrivals and IL clearances are no longer tied to a commit —
     //  they run on the real-time roster clock: advanceClock(), §65.)
@@ -1121,84 +1181,10 @@ export async function commitGame(gameIndex) {
   CardEngine.processFollowupQueue();
   planCardsForNextGame();
 
-  // ── Handle postponed game ─────────────────────────────────
-  if (game.status === GAME_STATUS.POSTPONED) {
-    const makeup = scheduleMakeupGame(StateManager.get().schedule, gameIndex);
-    if (makeup) {
-      StateManager.mutate(s => {
-        const makeupGame = {
-          ...s.schedule[gameIndex],
-          status:   GAME_STATUS.MAKEUP,
-          isMakeup: true,
-          date:     makeup.makeupDate,
-          index:    makeup.makeupIndex,
-          _tickOffset: 0,
-        };
-        s.schedule.splice(makeup.insertAfterIndex + 1, 0, makeupGame);
-        // Re-index
-        s.schedule.forEach((g, i) => { g.index = i; });
-      });
-    }
-  }
+  // (Rainouts are made up when they're called — §102.3 _postponeGame.)
 
   await StateManager.save();
   return result;
-}
-
-// ─────────────────────────────────────────────────────────────
-// WEATHER PAUSE / RESUME
-// ─────────────────────────────────────────────────────────────
-
-/**
- * applyWeatherDelay(gameIndex, delayMs)
- * Called by WeatherEngine when a delay clears.
- * Sets _tickOffset so plays resume at correct cadence from the resume moment.
- *
- * @param {Number} gameIndex
- * @param {Number} delayMs    — how long the delay lasted in milliseconds
- */
-export function applyWeatherDelay(gameIndex, delayMs) {
-  StateManager.mutate(s => {
-    const g = s.schedule[gameIndex];
-    if (!g) return;
-    g._tickOffset  = (g._tickOffset || 0) + delayMs;
-    g.status       = GAME_STATUS.LIVE;
-  });
-}
-
-/**
- * suspendGame(gameIndex)
- * Suspends a game mid-play. Freezes livePlayIndex in place.
- * WeatherEngine calls this when conditions become unplayable.
- *
- * @param {Number} gameIndex
- */
-export function suspendGame(gameIndex) {
-  StateManager.mutate(s => {
-    const g = s.schedule[gameIndex];
-    if (!g) return;
-    g.status           = GAME_STATUS.SUSPENDED;
-    g.resumeFromInning = _currentInning(g);
-    g.resumeScore      = { our: g.ourScore, their: g.theirScore };
-  });
-}
-
-/**
- * resumeSuspendedGame(gameIndex, makeupTimestamp)
- * Resumes a suspended game from its frozen point.
- * Calculates the tick offset from the original game time to the makeup time.
- *
- * @param {Number} gameIndex
- * @param {Number} makeupTimestamp  — Unix ms of the makeup game start time
- */
-export function resumeSuspendedGame(gameIndex, makeupTimestamp) {
-  StateManager.mutate(s => {
-    const g = s.schedule[gameIndex];
-    if (!g) return;
-    const originalTime = g.gameTime || makeupTimestamp;
-    g._tickOffset      = makeupTimestamp - originalTime;
-    g.status           = GAME_STATUS.RESUMED;
-  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1838,8 +1824,278 @@ function _advanceRotation(team) {
 function _playsEndMs(game) {
   const last = game?.plays?.[game.plays.length - 1];
   return last && Number.isFinite(last._timestamp)
-    ? last._timestamp + (game._tickOffset || 0)
+    ? last._timestamp
     : (game.gameTime || 0) + GAME_DURATION_FALLBACK_MS;
+}
+
+// ─────────────────────────────────────────────────────────────
+// WEATHER ON THE SCHEDULE (§102.3) — every game's weather plan, and
+// what the schedule does when the weather stops a game
+// ─────────────────────────────────────────────────────────────
+
+const _WX_PLAN_AHEAD_MS = GAME_WEATHER.PLAN_AHEAD_MIN * 60_000;
+const _WX_OPEN = new Set([GAME_STATUS.SCHEDULED, GAME_STATUS.PRE_GAME_WATCH, GAME_STATUS.DELAYED]);
+
+/** A game ref: ours by schedule position, the league's by id. → { g, isUser, date, i } */
+function _wxResolve(s, ref) {
+  if (ref.user) return { g: s.schedule[ref.i], isUser: true, i: ref.i };
+  for (const [date, games] of Object.entries(s.leagueSchedule?.dayMap || {})) {
+    const i = games.findIndex(x => x.id === ref.id);
+    if (i >= 0) return { g: games[i], isUser: false, date, i };
+  }
+  return { g: null };
+}
+const _wxRefOf = (g, isUser) => (isUser ? { user: true, i: g.index } : { user: false, id: g.id });
+
+/** Where a game is played and when, for its weather (the All-Star Game: the host's park). */
+function _wxVenueGame(state, g, isUser) {
+  if (g.isAllStar) return { gameTime: g.gameTime, homeId: state.allStar?.season?.hostId || 'user' };
+  return { gameTime: g.gameTime, ...gameTeams(g, isUser) };
+}
+
+/**
+ * _ensureWeatherPlans(clockMs)
+ * Every game starting within PLAN_AHEAD of the clock gets its weather plan
+ * (GameWeather.gameWeatherPlan) — ours and the league's, the same way. A
+ * suspended game due to pick up gets the plan for its resumption. A plan is
+ * worked out again only if the game moved.
+ */
+function _ensureWeatherPlans(clockMs) {
+  const st = StateManager.get();
+  if (!st?.schedule) return;
+  const horizon = clockMs + _WX_PLAN_AHEAD_MS;
+  const todo = [];
+  const consider = (g, isUser) => {
+    if (!Number.isFinite(g.gameTime) || g.gameTime > horizon || g._committed || g.played || g.cancelled) return;
+    const susp = g.status === GAME_STATUS.SUSPENDED;
+    if (!susp && !_WX_OPEN.has(g.status)) return;
+    const vg = _wxVenueGame(st, g, isUser);
+    const venueId = vg.venueId ?? vg.homeId;
+    if (g.wx && g.wx.gameTime === g.gameTime && g.wx.venueId === venueId && !!g.wx.resumption === susp) return;
+    todo.push({ ref: _wxRefOf(g, isUser), vg, susp, g });
+  };
+  st.schedule.forEach(g => consider(g, true));
+  for (const games of Object.values(st.leagueSchedule?.dayMap || {})) for (const g of games) consider(g, false);
+  if (!todo.length) return;
+  const ctx = weatherContext(st);
+  const plans = todo.map(t => {
+    if (!t.susp) return gameWeatherPlan(ctx, t.vg);
+    const rest = t.g.resumePlays || [];
+    const r = resumptionPlan(ctx, t.vg, t.g.gameTime, rest.length ? rest[rest.length - 1]._resumeMin ?? 0 : 0);
+    return { ...r.plan, resumption: true, resumeOk: r.ok };
+  });
+  StateManager.mutate(s => {
+    todo.forEach((t, k) => { const { g } = _wxResolve(s, t.ref); if (g) g.wx = plans[k]; });
+  });
+}
+
+/** Our games the weather acts on now (a plan's postponement; a suspended game's turn). */
+function _userWeatherEvents(state, clockMs) {
+  const out = [];
+  (state.schedule || []).forEach((g, i) => {
+    if (g._committed || !g.wx) return;
+    if (_WX_OPEN.has(g.status) && g.wx.outcome === PLAN_OUTCOME.POSTPONED && g.wx.decidedAt <= clockMs) {
+      out.push({ kind: 'ppd', ref: { user: true, i }, at: g.wx.decidedAt });
+    }
+  });
+  return out;
+}
+
+/** Our schedule in playing order after a game moved: unplayed games by first pitch, indexes and regular-season numbers renewed. */
+function _wxSortSchedule(s) {
+  const split = Math.min(s.currentGameIndex || 0, s.schedule.length);
+  const head = s.schedule.slice(0, split);
+  const tail = s.schedule.slice(split).map((g, k) => ({ g, k })).sort((a, b) => (a.g.gameTime - b.g.gameTime) || (a.k - b.k)).map(x => x.g);
+  s.schedule = [...head, ...tail];
+  let ri = 0;
+  s.schedule.forEach((g, i) => {
+    g.index = i;
+    if (g.isSpring || g.isPlayoff) return;
+    if (!g._committed) {
+      g.regularSeasonIndex = ri;
+      g.isDeadlineWindow = ri >= TRADE_DEADLINE_OPEN && ri <= TRADE_DEADLINE_CLOSE;
+      g.isStretchRun = ri >= REGULAR_SEASON_GAME_COUNT - STRETCH_RUN_FINAL_GAMES;
+    }
+    ri++;
+  });
+}
+
+/** Move one game (ours or the league's) to a new date and first pitch. Its plan is worked out again. */
+function _wxMove(s, g, isUser, { date, gameTime, venueId }) {
+  const home = gameTeams(g, isUser).homeId;
+  if (!isUser && g.date !== date) {
+    const list = s.leagueSchedule.dayMap[g.date] || [];
+    const i = list.indexOf(g);
+    if (i >= 0) list.splice(i, 1);
+    if (!list.length) delete s.leagueSchedule.dayMap[g.date];
+    (s.leagueSchedule.dayMap[date] = s.leagueSchedule.dayMap[date] || []).push(g);
+  }
+  g.date = date;
+  g.gameTime = gameTime;
+  if (venueId && venueId !== home) g.venueId = venueId; else delete g.venueId;
+  g.wx = null;
+}
+
+const _wxReasonWord = (r) => (r === 'lightning' ? 'storms' : r === 'snow' ? 'snow' : r === 'wet field' ? 'a wet field' : 'rain');
+function _wxTeamAbbr(s, id) { return id === 'user' ? s.userTeam.abbr : (s.leagueTeams.find(t => t.id === id)?.abbr || id); }
+function _wxMatchup(s, g, isUser) { const t = gameTeams(g, isUser); return `${_wxTeamAbbr(s, t.awayId)} at ${_wxTeamAbbr(s, t.homeId)}`; }
+const _wxDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+
+/**
+ * _postponeGame(ref, atMs) — the weather called a game off before it started
+ * (its plan's decision, at the moment it was made). Spring: cancelled. Regular
+ * season: made up (WeatherSchedule.findMakeupSlot). Playoffs and the All-Star
+ * Game: back a day, with the rest of the series.
+ */
+function _postponeGame(ref, atMs) {
+  const st = StateManager.get();
+  const { g, isUser } = _wxResolve(st, ref);
+  if (!g || !g.wx) return;
+  const plan = g.wx;
+  const entry = { date: g.date, gameTime: g.gameTime, decidedAt: plan.decidedAt, reason: plan.reason, calledBy: plan.calledBy };
+  const why = _wxReasonWord(plan.reason);
+  if (g.isSpring) {
+    StateManager.mutate(s => {
+      const x = _wxResolve(s, ref).g;
+      x.postponements = [...(x.postponements || []), entry];
+      x.status = GAME_STATUS.POSTPONED;
+      x.cancelled = true;
+      x.wx = { ...plan };
+      if (!isUser) x.played = true;   // spring rainouts aren't made up
+      s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('weather', isUser ? s.userTeam.abbr : _wxTeamAbbr(s, x.homeId),
+        `Spring: ${_wxMatchup(s, x, isUser)} rained out (${why}) — not made up`, atMs)]);
+    });
+    return;
+  }
+  const moves = g.isPlayoff || g.isAllStar ? seriesShift(st, g, isUser).map(m => ({ ...m, venueId: null })) : null;
+  const slot = moves ? null : findMakeupSlot(st, g, isUser, atMs);
+  StateManager.mutate(s => {
+    const x = _wxResolve(s, ref).g;
+    x.postponements = [...(x.postponements || []), entry];
+    x.status = GAME_STATUS.SCHEDULED;
+    x.isMakeup = true;
+    if (moves) {
+      for (const m of moves) _wxMove(s, m.g, m.isUser, { date: m.date, gameTime: m.gameTime, venueId: m.g.venueId });
+    } else if (slot) {
+      if (slot.moveOther) _wxMove(s, slot.moveOther.g, slot.moveOther.isUser, { date: slot.date, gameTime: slot.moveOther.gameTime, venueId: slot.moveOther.g.venueId });
+      _wxMove(s, x, isUser, slot);
+      x.makeup = { how: slot.how };
+    } else {
+      // (No date at all — can't happen inside a season; the game is cancelled rather than lost.)
+      x.status = GAME_STATUS.POSTPONED; x.cancelled = true; if (!isUser) x.played = true;
+    }
+    const when = x.cancelled ? 'cancelled' : `${x.isAllStar ? 'moved to' : 'makeup'} ${_wxDay(x.date)}${slot?.how?.endsWith('dh') ? ' (doubleheader)' : ''}`;
+    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('weather', isUser ? s.userTeam.abbr : _wxTeamAbbr(s, gameTeams(x, isUser).homeId),
+      `${x.isPlayoff ? 'Playoffs: ' : ''}${x.isAllStar ? 'The All-Star Game' : _wxMatchup(s, x, isUser)} postponed (${why}) — ${when}`, atMs)]);
+    _wxSortSchedule(s);
+  });
+}
+
+/**
+ * _suspendGame(ref, atMs) — the weather stopped a game before it could be
+ * finished (SimEngine's ruling: suspended). It stays as it stands and picks
+ * up on another day — found like a makeup (playoffs: the next day) — at
+ * exactly the inning, outs and runners where it stopped.
+ */
+function _suspendGame(ref, atMs) {
+  const st = StateManager.get();
+  const { g, isUser } = _wxResolve(st, ref);
+  if (!g) return;
+  const moves = g.isPlayoff ? seriesShift(st, g, isUser) : null;
+  const slot = moves ? null : findMakeupSlot(st, g, isUser, atMs);
+  const sp = g.plays?.[g.plays.length - 1];
+  StateManager.mutate(s => {
+    const x = _wxResolve(s, ref).g;
+    x.status = GAME_STATUS.SUSPENDED;
+    x.suspension = { date: x.date, gameTime: x.gameTime, atMs, ...(sp?._suspended || {}),
+                     cumOurScore: sp?.cumOurScore ?? 0, cumTheirScore: sp?.cumTheirScore ?? 0, text: sp?.description || 'Suspended' };
+    if (moves) for (const m of moves) _wxMove(s, m.g, m.isUser, { date: m.date, gameTime: m.gameTime, venueId: m.g.venueId });
+    else if (slot) {
+      if (slot.moveOther) _wxMove(s, slot.moveOther.g, slot.moveOther.isUser, { date: slot.date, gameTime: slot.moveOther.gameTime, venueId: slot.moveOther.g.venueId });
+      _wxMove(s, x, isUser, slot);
+    }
+    x.resumeAt = x.gameTime;
+    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('weather', isUser ? s.userTeam.abbr : _wxTeamAbbr(s, gameTeams(x, isUser).homeId),
+      `${x.isPlayoff ? 'Playoffs: ' : ''}${_wxMatchup(s, x, isUser)} suspended (${_wxReasonWord(sp?._suspended?.reason)}) — resumes ${_wxDay(x.date)}`, atMs)]);
+    _wxSortSchedule(s);
+  });
+}
+
+/**
+ * _resumeGame(ref, atMs) — a suspended game's turn. Its resumption has its
+ * own weather: if that rains it out (or would stop it again), it waits for
+ * another day; otherwise the rest of the game goes on the clock
+ * (SimEngine.resumeTimeline) and it's live again.
+ */
+function _resumeGame(ref, atMs) {
+  _ensureWeatherPlans(atMs);
+  const st = StateManager.get();
+  const { g, isUser } = _wxResolve(st, ref);
+  if (!g || g.status !== GAME_STATUS.SUSPENDED) return;
+  const plan = g.wx;
+  if (!plan || !plan.resumeOk) {
+    const moves = g.isPlayoff ? seriesShift(st, g, isUser) : null;
+    const slot = moves ? null : findMakeupSlot(st, g, isUser, atMs);
+    StateManager.mutate(s => {
+      const x = _wxResolve(s, ref).g;
+      x.postponements = [...(x.postponements || []), { date: x.date, gameTime: x.gameTime, decidedAt: atMs, reason: plan?.reason || 'rain', calledBy: plan?.calledBy || 'forecast', resumption: true }];
+      if (moves) for (const m of moves) _wxMove(s, m.g, m.isUser, { date: m.date, gameTime: m.gameTime, venueId: m.g.venueId });
+      else if (slot) {
+        if (slot.moveOther) _wxMove(s, slot.moveOther.g, slot.moveOther.isUser, { date: slot.date, gameTime: slot.moveOther.gameTime, venueId: slot.moveOther.g.venueId });
+        _wxMove(s, x, isUser, slot);
+      }
+      x.resumeAt = x.gameTime;
+      _wxSortSchedule(s);
+    });
+    return;
+  }
+  const sp = g.plays[g.plays.length - 1];
+  const more = resumeTimeline(g.resumePlays || [], plan, sp);
+  StateManager.mutate(s => {
+    const x = _wxResolve(s, ref).g;
+    const base = x.plays.length;
+    x.plays = [...x.plays, ...more.map((p, k) => ({ ...p, playIndex: base + k }))];
+    delete x.resumePlays;
+    x.status = GAME_STATUS.LIVE;
+    x.resumedAt = plan.startAt;
+  });
+}
+
+/**
+ * _wxHoldForClubs(ref, atMs) — a doubleheader's second game waits for the
+ * first (§102.3): if either club is still playing at first pitch — a long
+ * delay in the opener — this game's first pitch moves to DH_BREAK_MIN after
+ * that game ends (its weather plan is worked out again). → true if it waits.
+ */
+function _wxHoldForClubs(ref, atMs) {
+  const st = StateManager.get();
+  const { g, isUser } = _wxResolve(st, ref);
+  if (!g) return false;
+  const t = gameTeams(g, isUser);
+  const end = Math.max(clubBusyUntil(st, t.homeId, atMs), clubBusyUntil(st, t.awayId, atMs));
+  if (!end) return false;
+  StateManager.mutate(s => {
+    const x = _wxResolve(s, ref).g;
+    x.gameTime = end + GAME_WEATHER.DH_BREAK_MIN * 60_000;
+    x.wx = null;
+    if (isUser) _wxSortSchedule(s);
+  });
+  return true;
+}
+
+/**
+ * _wxAtFirstPitch(state, g, isUser) — the weather a game is played in:
+ * its plan, the park report through it, and the record kept on the game
+ * (the weather at first pitch, the field after any rain before it).
+ * → { sim: { plan, conditions }, record } — null for a game without a plan.
+ */
+function _wxAtFirstPitch(state, g, isUser) {
+  const ctx = weatherContext(state);
+  const vg = _wxVenueGame(state, g, isUser);
+  const plan = g.wx && g.wx.gameTime === g.gameTime && !g.wx.resumption ? g.wx : gameWeatherPlan(ctx, vg);
+  if (plan.outcome === PLAN_OUTCOME.POSTPONED) return null;
+  const conditions = gameConditions(ctx, plan);
+  return { plan, sim: { plan, conditions }, record: gameRecord(ctx, plan, conditions) };
 }
 
 /**
@@ -1852,10 +2108,20 @@ function _leagueGameEvents(state, clockMs) {
   for (const [date, games] of Object.entries(state.leagueSchedule?.dayMap || {})) {
     games.forEach((cg, i) => {
       if (cg.played) return;
-      if (cg.status === GAME_STATUS.SCHEDULED && Number.isFinite(cg.gameTime) && cg.gameTime <= clockMs) {
-        out.push({ kind: 'start', date, i, at: cg.gameTime });
+      const ref = { user: false, id: cg.id };
+      // §102.3 the weather: a postponement at the moment it's decided; a start
+      // that waits on the weather; a suspension at the moment play stops; a
+      // suspended game's turn.
+      const ppd = cg.wx?.outcome === PLAN_OUTCOME.POSTPONED && !cg.wx.resumption;
+      if (_WX_OPEN.has(cg.status) && ppd && cg.wx.decidedAt <= clockMs) {
+        out.push({ kind: 'ppd', ref, at: cg.wx.decidedAt });
+      } else if (cg.status === GAME_STATUS.SCHEDULED && Number.isFinite(cg.gameTime) && cg.gameTime <= clockMs) {
+        out.push({ kind: ppd ? 'wait' : 'start', date, i, ref, at: cg.gameTime });
       } else if (cg.status === GAME_STATUS.LIVE && _playsEndMs(cg) <= clockMs) {
-        out.push({ kind: 'final', date, i, at: _playsEndMs(cg) });
+        const suspended = cg.plays?.[cg.plays.length - 1]?.type === 'game_suspended';
+        out.push({ kind: suspended ? 'suspend' : 'final', date, i, ref, at: _playsEndMs(cg) });
+      } else if (cg.status === GAME_STATUS.SUSPENDED && Number.isFinite(cg.gameTime) && cg.gameTime <= clockMs) {
+        out.push({ kind: 'resume', ref, at: cg.gameTime });
       }
     });
   }
@@ -1878,11 +2144,12 @@ function _startLeagueGame(date, i) {
     StateManager.mutate(s => { const g = s.leagueSchedule.dayMap[date][i]; g.status = GAME_STATUS.FINAL; g.played = true; g._void = true; });
     return;
   }
+  const wx = _wxAtFirstPitch(state, cg, false);   // §102.3 the same weather as everyone's
   const sim = generatePlays(
-    { ...cg, isHome: true, weather: null, fieldCondition: null, _tickOffset: 0 },
+    { ...cg, isHome: true, weather: null, fieldCondition: null, ...(wx?.record || {}) },
     home, away, state.players,
     { phase: state.phase, isSpring: !!cg.isSpring,
-      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players) }
+      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null }
   );
   StateManager.mutate(s => {
     const g = s.leagueSchedule.dayMap[date][i];
@@ -1890,6 +2157,8 @@ function _startLeagueGame(date, i) {
     g._precomputedBoxScore = sim.boxScore;
     g.liveLineups          = sim.liveLineups;
     g.status               = GAME_STATUS.LIVE;
+    if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = sim.weather; }
+    if (sim.resumePlays) g.resumePlays = sim.resumePlays;
   });
 }
 
@@ -1911,7 +2180,7 @@ function _finishLeagueGame(date, i) {
   const stats = accumulateStats(cg0.plays, null, null, st0.players, statKey);
   const perGame = {};
   for (const play of cg0.plays) {
-    if (!play._statDeltas || play.type === 'pinch_hit') continue;
+    if (!play._statDeltas || play._reverted || play.type === 'pinch_hit') continue;
     for (const [pid, list] of Object.entries(play._statDeltas)) {
       perGame[pid] = perGame[pid] || {};
       for (const { stat, delta } of list) perGame[pid][stat] = (perGame[pid][stat] || 0) + delta;
@@ -1952,6 +2221,7 @@ function _finishLeagueGame(date, i) {
     g.boxScore  = g._precomputedBoxScore;
     delete g.plays;
     delete g._precomputedBoxScore;
+    delete g.resumePlays;
     if (home && away) {
       const [w, l, ws, ls] = homeScore > awayScore ? [home, away, homeScore, awayScore] : [away, home, awayScore, homeScore];
       const tag = g.isPlayoff ? 'Playoffs: ' : g.isSpring ? 'Spring: ' : '';
@@ -2157,14 +2427,16 @@ function _startAllStarGame(date, i) {
   const cg    = state.leagueSchedule.dayMap[date][i];
   const home  = AllStar.clubFor(state, cg.homeId);
   const away  = AllStar.clubFor(state, cg.awayId);
+  const wx = _wxAtFirstPitch(state, cg, false);   // §102.3 the host park's weather
   const sim = generatePlays(
-    { ...cg, isHome: true, weather: null, fieldCondition: null, _tickOffset: 0 },
+    { ...cg, isHome: true, weather: null, fieldCondition: null, ...(wx?.record || {}) },
     home, away, state.players,
     { phase: state.phase, isSpring: false, exhibition: true,
-      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players) }
+      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null }
   );
   StateManager.mutate(s => {
     const g = s.leagueSchedule.dayMap[date][i];
+    if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = sim.weather; }
     g.plays                = sim.plays;
     g._precomputedBoxScore = sim.boxScore;
     g.liveLineups          = sim.liveLineups;
@@ -2462,8 +2734,9 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
   // §90 the league's trade desk: one moment a day when CPU clubs make deals.
   if (!state.tradeDesk?.nextAtMs) StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: LeagueTrades.nextDeskAt(clockMs) }; });
   for (let guard = 0; guard < 12000; guard++) {
+    _ensureWeatherPlans(clockMs);   // §102.3 every game's weather, a few hours ahead
     const st   = StateManager.get();
-    const game = _leagueGameEvents(st, clockMs)[0];
+    const game = [..._leagueGameEvents(st, clockMs), ..._userWeatherEvents(st, clockMs)].sort((a, b) => a.at - b.at)[0];
     const os   = Offseason.dueSteps(st, clockMs)[0];
     const fin  = clubIds.flatMap(id => Finance.dueSteps(st, clockMs, id)).sort((a, b) => a.at - b.at)[0];
     const desk = st.tradeDesk?.nextAtMs <= clockMs ? { kind: 'desk', at: st.tradeDesk.nextAtMs } : null;
@@ -2472,8 +2745,12 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
     if (!next) break;
     const step = _rosterStep(next.at, {});
     events.push(...step.events);
-    if (next.kind === 'start') _startLeagueGame(next.date, next.i);
+    if (next.kind === 'start') { if (!_wxHoldForClubs(next.ref, next.at)) _startLeagueGame(next.date, next.i); }
     else if (next.kind === 'final') events.push(..._finishLeagueGame(next.date, next.i));
+    else if (next.kind === 'ppd') _postponeGame(next.ref, next.at);
+    else if (next.kind === 'wait') StateManager.mutate(s => { const x = _wxResolve(s, next.ref).g; if (x) x.status = GAME_STATUS.DELAYED; });
+    else if (next.kind === 'suspend') _suspendGame(next.ref, next.at);
+    else if (next.kind === 'resume') _resumeGame(next.ref, next.at);
     else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, next.teamId); });
     else if (next.kind === 'fin:payday') events.push(...(next.teamId === 'user' ? _payday(next.i, next.at) : _cpuPayday(next.teamId, next.i, next.at)));
     else if (next.kind === 'desk') events.push(..._runTradeDesk(next.at));
@@ -2845,7 +3122,7 @@ export function debugInjure(playerId, nowMs = Date.now()) {
 /** When a game ended on the real clock: its last play, else first pitch + 3h. */
 function _gameEndMs(game) {
   const last = game?.plays?.[game.plays.length - 1];
-  if (last && Number.isFinite(last._timestamp)) return last._timestamp + (game._tickOffset || 0);
+  if (last && Number.isFinite(last._timestamp)) return last._timestamp;
   return (game?.gameTime || Date.now()) + GAME_DURATION_FALLBACK_MS;
 }
 
@@ -2894,12 +3171,6 @@ function _getUserPlayoffSeed(state) {
   const divUser = state.userTeam.divisionId === 'B' ? standings.divB : standings.divA;
   const entry   = (divUser || []).find(t => t.id === 'user');
   return entry?.seed || 3;
-}
-
-function _currentInning(game) {
-  if (!game.plays || game.livePlayIndex === 0) return 1;
-  const play = game.plays[game.livePlayIndex - 1];
-  return play?.inning || 1;
 }
 
 function _countPlayoffRoundsWon(state) {

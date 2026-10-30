@@ -128,10 +128,13 @@ export function parkOf(map, teamId) {
   return map.parks[teamId] || null;
 }
 
-/** The ballpark a game is played at: the home club's. */
+/**
+ * The ballpark a game is played at: the home club's — or, for a makeup played
+ * at the other club's park (§102.3), the park it was moved to (game.venueId).
+ */
 export function venueOf(map, game) {
   if (!game) return null;
-  const home = game.homeId ?? (game.isHome ? 'user' : game.opponentId);
+  const home = game.venueId ?? game.homeId ?? (game.isHome ? 'user' : game.opponentId);
   return { teamId: home, ...(map.parks[home] || map.parks.user) };
 }
 

@@ -37,7 +37,6 @@ import { LEAGUE_TEAMS } from './LeagueFactory.js';
 // ─────────────────────────────────────────────────────────────
 
 const DOW_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-const MS_PER_DAY = 86_400_000;
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_MINUTE = 60_000;
 
@@ -464,60 +463,6 @@ export function getNextPhase(currentPhase, scheduleIndex, standings, userInPlayo
 }
 
 // ─────────────────────────────────────────────────────────────
-// MAKEUP GAME SCHEDULING
-// ─────────────────────────────────────────────────────────────
-
-/**
- * scheduleMakeupGame(schedule, postponedGameIndex)
- * Finds the next available travel day within 10 games and inserts a makeup.
- * If no travel day exists, returns a doubleheader flag on the next home game.
- *
- * @param {Object[]} schedule
- * @param {Number}   postponedGameIndex
- * @returns {Object} { makeupIndex: Number, isDoubleheader: Boolean, insertAfterIndex: Number }
- */
-export function scheduleMakeupGame(schedule, postponedGameIndex) {
-  const postponed = schedule[postponedGameIndex];
-  if (!postponed) return null;
-
-  const searchEnd = Math.min(postponedGameIndex + 10, schedule.length);
-
-  // Look for a gap (travel day) — a day where no game is scheduled
-  for (let i = postponedGameIndex + 1; i < searchEnd; i++) {
-    const prev = schedule[i - 1];
-    const curr = schedule[i];
-    if (prev && curr) {
-      const prevDate = new Date(prev.date);
-      const currDate = new Date(curr.date);
-      const dayDiff  = Math.round((currDate - prevDate) / MS_PER_DAY);
-      if (dayDiff >= 2) {
-        // Travel day found — insert makeup here
-        return {
-          makeupIndex:      i,
-          isDoubleheader:   false,
-          insertAfterIndex: i - 1,
-          makeupDate:       _addDaysStr(prev.date, 1),
-        };
-      }
-    }
-  }
-
-  // No travel day — flag as doubleheader on next home game after postponement
-  for (let i = postponedGameIndex + 1; i < searchEnd; i++) {
-    if (schedule[i] && schedule[i].isHome) {
-      return {
-        makeupIndex:      i,
-        isDoubleheader:   true,
-        insertAfterIndex: i,
-        makeupDate:       schedule[i].date,
-      };
-    }
-  }
-
-  return null;
-}
-
-// ─────────────────────────────────────────────────────────────
 // ACTIVITY FEED
 // ─────────────────────────────────────────────────────────────
 
@@ -569,18 +514,10 @@ export function _makeGameObject(config) {
     isStretchRun:       config.isStretchRun       || false,
     isMakeup:           config.isMakeup           || false,
 
-    weather: {
-      label:      'Clear',
-      icon:       '☀️',
-      scoringMod: 1.0,
-    },
-
-    fieldCondition: {
-      infieldSoftness: 0.0,
-      moundFirmness:   1.0,
-      trackCondition:  1.0,
-      temperature:     72,
-    },
+    // §102.3 the weather at first pitch and the field after any rain before it —
+    // set from the park report when the game starts (GameWeather.gameRecord).
+    weather:        null,
+    fieldCondition: null,
 
     status:        GAME_STATUS.SCHEDULED,
     plays:         null,
@@ -591,15 +528,6 @@ export function _makeGameObject(config) {
     boxScore:      null,
     recap:         null,
 
-    // Weather delay / suspension timestamp offset
-    // Set by WeatherEngine when a delay clears or a suspended game resumes.
-    // tick() adds this value to play._timestamp comparisons so plays reveal
-    // at the correct cadence from the resume moment rather than all firing instantly.
-    _tickOffset: 0,
-
-    // Suspension resume state
-    resumeFromInning: null,
-    resumeScore:      null,
     resumePlays:      null,
   };
 }
@@ -631,10 +559,6 @@ function _addDays(date, days) {
   const result = new Date(date);
   result.setDate(result.getDate() + days);
   return result;
-}
-
-function _addDaysStr(dateStr, days) {
-  return _isoDate(_addDays(new Date(dateStr), days));
 }
 
 function _parseGameTime(timeStr, date) {
