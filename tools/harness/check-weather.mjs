@@ -404,5 +404,124 @@ const { conditionsAt, parkConditions, rainTotal, daylight, windAtPark } = WC;
   check(`a ballpark report takes ${per.toFixed(1)} ms`, per < 40);
 }
 
+// ── 1e: forecast runs ───────────────────────────────────────────────────────
+console.log('\nForecasts');
+const { forecastContext } = WS;
+const csi = (a, b, thr) => {
+  let h = 0, m = 0, f = 0;
+  for (let i = 0; i < a.dbz.length; i++) { const x = a.dbz[i] >= thr, y = b.dbz[i] >= thr; if (x && y) h++; else if (x) m++; else if (y) f++; }
+  return { csi: h / Math.max(1, h + m + f), obs: h + m, fc: h + f };
+};
+{
+  // At lead 0 a run is exactly what happens.
+  let diff = 0, cdiff = 0;
+  for (const [region, d] of [['east', 20.5], ['north', 101.9], ['south', 115.7]]) {
+    const c = ctxFor(region, 'wx-a');
+    const t = Math.floor((START + d * MS_DAY) / MS_HOUR) * MS_HOUR;
+    const f = forecastContext(c, t);
+    const a = radarField(c, t, BOX, 8), b = radarField(f, t, BOX, 8);
+    for (let i = 0; i < a.dbz.length; i++) if (a.dbz[i] !== b.dbz[i] || a.kind[i] !== b.kind[i]) diff++;
+    for (const id of Object.keys(c.map.parks)) if (JSON.stringify(parkConditions(c, id, t)) !== JSON.stringify(parkConditions(f, id, t))) cdiff++;
+  }
+  check(`a forecast at lead 0 is exactly what happens (${diff} radar cells, ${cdiff} ballpark reports differ)`, diff === 0 && cdiff === 0);
+  const WS2 = await import('../../engine/WeatherSystems.js?fresh=fc');
+  const c = ctxFor('south', 'wx-a'), t = START + 117.3 * MS_DAY;
+  const a = radarField(forecastContext(c, t - 50 * MS_HOUR), t, BOX, 12), b = WS2.radarField(WS2.forecastContext(c, t - 50 * MS_HOUR), t, BOX, 12);
+  check('the same run always gives the same forecast', a.dbz.every((v, i) => v === b.dbz[i] || (isNaN(v) && isNaN(b.dbz[i]))));
+}
+{
+  // Skill falls with lead; long-range forecasts are no wetter or drier than what happens.
+  const leads = [1, 6, 24, 72, 168];
+  const tot = Object.fromEntries(leads.map(L => [L, { h: 0, n: 0, obs: 0, fc: 0 }]));
+  for (const region of ['north', 'east', 'south']) {
+    const c = ctxFor(region, 'wx-b');
+    for (let d = 8; d < 190; d += 4.3) {
+      const t = START + d * MS_DAY;
+      const truth = radarField(c, t, BOX, 16);
+      for (const L of leads) {
+        const r = csi(truth, radarField(forecastContext(c, t - L * MS_HOUR), t, BOX, 16), 20);
+        tot[L].h += r.csi * (r.obs + r.fc); tot[L].n += r.obs + r.fc; tot[L].obs += r.obs; tot[L].fc += r.fc;
+      }
+    }
+  }
+  const sk = leads.map(L => tot[L].h / Math.max(1, tot[L].n));
+  check(`rain-forecast skill falls with lead (CSI ${leads.map((L, i) => `${L}h ${sk[i].toFixed(2)}`).join(', ')})`,
+        sk.every((v, i) => i === 0 || v < sk[i - 1]) && sk[0] > 0.5 && sk[4] < 0.25);
+  const bias = leads.map(L => tot[L].fc / Math.max(1, tot[L].obs));
+  check(`forecasts are no wetter or drier than what happens (rain area vs actual: ${leads.map((L, i) => `${L}h ×${bias[i].toFixed(2)}`).join(', ')})`,
+        bias.every(b => b > 0.6 && b < 1.6));
+}
+{
+  // Temperatures: about 2 °F off tomorrow, more a week out — like real forecasts.
+  const c = ctxFor('east', 'wx-c');
+  const mae = {};
+  for (const L of [6, 24, 72, 168]) {
+    let e = 0, n = 0;
+    for (let d = 10; d < 190; d += 2.3) { const t = START + d * MS_DAY + 15 * MS_HOUR; e += Math.abs(conditionsAt(c, 0, 0, t).tempF - conditionsAt(forecastContext(c, t - L * MS_HOUR), 0, 0, t).tempF); n++; }
+    mae[L] = e / n;
+  }
+  check(`temperature forecasts: off by ${Object.entries(mae).map(([L, v]) => `${v.toFixed(1)}° at ${L}h`).join(', ')}`,
+        mae[6] < mae[24] && mae[24] < mae[72] && mae[72] < mae[168] && mae[24] >= 1 && mae[24] <= 3.2 && mae[72] <= 5.5 && mae[168] >= 3.5 && mae[168] <= 8);
+}
+{
+  // Runs firm up: one hourly run to the next changes a forecast only a little.
+  const c = ctxFor('north', 'wx-a');
+  let dT = 0, n = 0, agree = 0, cnt = 0;
+  for (let d = 12; d < 180; d += 5.1) {
+    const t = START + d * MS_DAY + 17 * MS_HOUR;
+    for (const L of [48, 24]) {
+      const f1 = forecastContext(c, t - L * MS_HOUR), f2 = forecastContext(c, t - (L - 1) * MS_HOUR);
+      dT += Math.abs(conditionsAt(f1, 0, 0, t).tempF - conditionsAt(f2, 0, 0, t).tempF); n++;
+      const r = csi(radarField(f1, t, BOX, 16), radarField(f2, t, BOX, 16), 20);
+      if (r.obs + r.fc > 20) { agree += r.csi; cnt++; }
+    }
+  }
+  check(`one hourly run to the next changes a forecast only a little (${(dT / n).toFixed(2)} °F; rain areas overlap ${(agree / cnt).toFixed(2)})`, dT / n < 0.8 && agree / cnt > 0.65);
+}
+{
+  // A breakup is a surprise until a few hours before it happens.
+  const c = ctxFor('south', 'wx-a');
+  let checked = 0, early = 0, late = 0, formed = 0;
+  for (let d = 60; d < 190 && checked < 12; d += 0.25) {
+    for (const a of WS.activeSystems(c, START + d * MS_DAY, BOX)) {
+      const s0 = a.s;
+      if (s0.breakAt == null || s0.breakAt > s0.t1 - s0.decayMs - MS_HOUR || s0._seen) continue;
+      s0._seen = true; checked++;
+      const after = s0.breakAt + s0.breakDecayMs + 30 * 60_000;
+      const aliveIn = (issueMs) => WS.activeSystems(forecastContext(c, issueMs), after, { x0: -3000, y0: -3000, x1: 3000, y1: 3000 }).some(x => x.s.id === s0.id);
+      // (Only systems already formed 10 hours before their breakup can be in that run.)
+      if (s0.breakAt - 10 * MS_HOUR > s0.t0) { formed++; if (aliveIn(s0.breakAt - 10 * MS_HOUR)) early++; }
+      if (!aliveIn(s0.breakAt - 2 * MS_HOUR)) late++;
+    }
+  }
+  check(`a breakup is a surprise until a few hours out (${checked} breakups: still forecast 10 h before ${early}/${formed} already formed, seen 2 h before ${late}/${checked})`,
+        formed >= 5 && early === formed && late === checked);
+}
+{
+  // Pop-up storms: about the right number a day out, but not where they'll actually go up.
+  const c = ctxFor('south', 'wx-a');
+  let near = 0, far = 0, obs = 0, fcn = 0, k = 0;
+  for (let d = 110; d < 150; d += 1) {
+    const t = START + d * MS_DAY + 17 * MS_HOUR;
+    const truth = radarField(c, t, BOX, 8);
+    const a = csi(truth, radarField(forecastContext(c, t - 0.25 * MS_HOUR), t, BOX, 8), 40);
+    const b = csi(truth, radarField(forecastContext(c, t - 26 * MS_HOUR), t, BOX, 8), 40);
+    if (a.obs > 5) { near += a.csi; far += b.csi; obs += b.obs; fcn += b.fc; k++; }
+  }
+  check(`pop-up storms: tracked minutes ahead (overlap ${(near / k).toFixed(2)}); a day ahead about the right amount (×${(fcn / obs).toFixed(2)}) but not the right spots (overlap ${(far / k).toFixed(2)})`,
+        near / k > 0.5 && far / k < 0.25 && fcn / obs > 0.35 && fcn / obs < 2.5);
+}
+{
+  // Phantoms: runs a few days out show systems that never happen; up close, hardly any.
+  const c = ctxFor('east', 'wx-a');
+  let farPh = 0, nearPh = 0;
+  for (let d = 10; d < 190; d += 1.7) {
+    const t = START + d * MS_DAY;
+    farPh += WS.activeSystems(forecastContext(c, t - 120 * MS_HOUR), t, BOX).filter(a => a.s.phantom).length;
+    nearPh += WS.activeSystems(forecastContext(c, t - 2 * MS_HOUR), t, BOX).filter(a => a.s.phantom).length;
+  }
+  check(`forecasts a few days out show systems that never happen; up close they're gone (${farPh} at 5 days, ${nearPh} at 2 hours)`, farPh > 20 && nearPh <= farPh * 0.05);
+}
+
 console.log(`\n${pass}/${pass + fail} checks passed`);
 process.exit(fail ? 1 : 0);

@@ -27,7 +27,7 @@
  * 20 light rain, 30 moderate, 40 heavy, 50 very heavy, 60+ hail-producing.
  */
 
-import { stream, hash, fbm3, valueNoise3 } from './WeatherNoise.js';
+import { stream, hash, hash01, fbm3, valueNoise3 } from './WeatherNoise.js';
 import { normalsAt, steeringAt, stormPotential, airAt, localHour, diurnal, MS_HOUR } from './WeatherClimate.js';
 
 export const DBZ_MIN = 12;                 // below this nothing shows on radar or reaches the ground
@@ -146,20 +146,33 @@ function _make(ctx, kind, r, t0, warm, N, id) {
   return s;
 }
 
-/** Where a system's centre is at t (km). */
+/** Where a system's centre is at t (km) — in a forecast, where the run thinks it is. */
 function _centre(s, t) {
   const h = (t - s.t0) / MS_HOUR;
   const w = s.wobble * Math.sin(h / s.wobbleH + s.wobbleP);
-  return [s.x0 + s.vx * h - s.my * w, s.y0 + s.vy * h + s.mx * w];
+  let x = s.x0 + s.vx * h - s.my * w, y = s.y0 + s.vy * h + s.mx * w;
+  if (s.fc) {
+    const L = Math.max(0, (t - s.fc.issue) / MS_HOUR);
+    const da = s.fc.ea * (TRACK_ALONG_KM_H * L + TRACK_ALONG_KM_H2 * L * L);   // timing: early or late
+    const dc = s.fc.ec * (TRACK_ACROSS_KM_H * L + TRACK_ACROSS_KM_H2 * L * L); // track: north or south of where it goes
+    x += s.mx * da - s.my * dc; y += s.my * da + s.mx * dc;
+  }
+  return [x, y];
 }
 
-/** Pop-up storms born in one grid square in one 20-minute slot. */
-function _cellsAt(ctx, gx, gy, slot) {
-  const key = `${ctx.seed}|${ctx.region}|${gx}|${gy}|${slot}`;
+/**
+ * Pop-up storms born in one grid square in one 20-minute slot. `model`
+ * (forecasts only): the run's own storms — placed from its own seed, set
+ * off by the run's read of the day (the true trigger at short range,
+ * its own guess further out).
+ */
+function _cellsAt(ctx, gx, gy, slot, model = null) {
+  const key = `${ctx.seed}|${ctx.region}|${gx}|${gy}|${slot}${model ? `|${model.key}` : ''}`;
   const hit = _cellCache.get(key);
   if (hit) return hit;
   _cap(_cellCache, 60000);
-  const r = stream(ctx.seed, hash(ctx.region, 7), gx, gy, slot);
+  const placeSeed = model ? model.placeSeed : ctx.seed;
+  const r = stream(placeSeed, hash(ctx.region, 7), gx, gy, slot);
   const roll = r.next();
   let out = [];
   // Cheap pre-check: no chance at all in the small hours.
@@ -169,11 +182,19 @@ function _cellsAt(ctx, gx, gy, slot) {
     const x = (gx + r.next()) * CELL_GRID_KM, y = (gy + r.next()) * CELL_GRID_KM;
     // Some days the air is ripe but nothing sets it off; some days storms go up everywhere.
     // Zones a few hundred km across: quiet in some, storms going up together in others.
-    const z = 0.5 + 0.5 * valueNoise3(hash(ctx.seed, 31), x / 260, y / 260, tMid / (16 * MS_HOUR));
-    // …and a regime across the whole region: some days storms go up everywhere,
-    // some days hardly anywhere.
-    const regime = Math.max(0, Math.min(1, 0.5 + 0.9 * valueNoise3(hash(ctx.seed, 32), 0.5, 0.5, tMid / (30 * MS_HOUR))));
-    const trigger = Math.max(0, z - 0.38) * 3.6 * (0.15 + 1.25 * regime * regime);
+    const trig = (sd) => {
+      const z = 0.5 + 0.5 * valueNoise3(hash(sd, 31), x / 260, y / 260, tMid / (16 * MS_HOUR));
+      // …and a regime across the whole region: some days storms go up everywhere,
+      // some days hardly anywhere.
+      const regime = Math.max(0, Math.min(1, 0.5 + 0.9 * valueNoise3(hash(sd, 32), 0.5, 0.5, tMid / (30 * MS_HOUR))));
+      return Math.max(0, z - 0.38) * 3.6 * (0.15 + 1.25 * regime * regime);
+    };
+    let trigger = trig(ctx.seed);
+    if (model) {
+      // How well the run reads the day: the truth up close, its own guess a few days out.
+      const w = Math.min(1, Math.max(0, (tMid - model.issue) / MS_HOUR) / CELL_TRIGGER_LEAD_H);
+      trigger = trigger * (1 - w) + trig(model.placeSeed) * w;
+    }
     const p = stormPotential(ctx, x, y, tMid) * trigger * CELL_RATE;
     if (roll < p) {
       const flow = steeringAt(ctx, tMid);
@@ -183,7 +204,7 @@ function _cellsAt(ctx, gx, gy, slot) {
         const sk = r.range(0.35, 0.7);
         const vx = flow.u * sk, vy = flow.v * sk, sp = Math.hypot(vx, vy) || 1;
         out.push({
-          id: `c${gx}:${gy}:${slot}:${i}`, kind: 'cell', seed: hash(ctx.seed, gx, gy, slot, i),
+          id: `${model ? 'm' : 'c'}${gx}:${gy}:${slot}:${i}`, kind: 'cell', seed: hash(placeSeed, gx, gy, slot, i),
           t0, t1: t0 + r.range(45, 105) * 60_000, rampMs: r.range(12, 22) * 60_000, decayMs: r.range(18, 35) * 60_000,
           // Most storms are modest; a few are severe.
           peakDbz: 36 + 26 * r.next() ** 1.7, rad: 3 + 8 * r.next() ** 1.4, anvil: r.range(8, 26),
@@ -225,7 +246,7 @@ export function activeSystems(ctx, t, bounds, cellBounds = bounds) {
   const near = (s, cx, cy) => inBox(bounds, s, cx, cy);
   const nearCell = (s, cx, cy) => inBox(cellBounds, s, cx, cy);
   for (let slot = Math.floor((t - MAX_LIFE_MS) / SLOT_MS); slot <= Math.floor(t / SLOT_MS) + 1; slot++) {
-    for (const s of _slotSystems(ctx, slot)) {
+    for (const s of _viewSlot(ctx, slot)) {
       const life = _life(s, t);
       if (life <= 0) continue;
       const [cx, cy] = _centre(s, t);
@@ -236,8 +257,16 @@ export function activeSystems(ctx, t, bounds, cellBounds = bounds) {
   const gx0 = Math.floor((cb.x0 - pad) / CELL_GRID_KM), gx1 = Math.floor((cb.x1 + pad) / CELL_GRID_KM);
   const gy0 = Math.floor((cb.y0 - pad) / CELL_GRID_KM), gy1 = Math.floor((cb.y1 + pad) / CELL_GRID_KM);
   const sl0 = Math.floor((t - CELL_MAX_LIFE_MS - 3 * 35 * 60_000) / CELL_SLOT_MS), sl1 = Math.floor(t / CELL_SLOT_MS);
+  const run = ctx.run, model = run ? _modelOf(ctx) : null;
   for (let gx = gx0; gx <= gx1; gx++) for (let gy = gy0; gy <= gy1; gy++) for (let sl = sl0; sl <= sl1; sl++) {
-    for (const s of _cellsAt(ctx, gx, gy, sl)) {
+    // In a forecast: the storms already up when the run was made (nowcast),
+    // then the run's own storms after that.
+    const slotStart = sl * CELL_SLOT_MS;
+    const lists = !run ? [_cellsAt(ctx, gx, gy, sl)]
+      : slotStart + CELL_SLOT_MS <= run.issueMs + NOWCAST_MS ? [_cellsAt(ctx, gx, gy, sl).filter(c => c.t0 <= run.issueMs + NOWCAST_MS)]
+      : slotStart >= run.issueMs + NOWCAST_MS ? [_cellsAt(ctx, gx, gy, sl, model)]
+      : [_cellsAt(ctx, gx, gy, sl).filter(c => c.t0 <= run.issueMs + NOWCAST_MS), _cellsAt(ctx, gx, gy, sl, model).filter(c => c.t0 > run.issueMs + NOWCAST_MS)];
+    for (const list of lists) for (const s of list) {
       const life = _life(s, t);
       if (life <= 0) continue;
       const [cx, cy] = _centre(s, t);
@@ -245,6 +274,109 @@ export function activeSystems(ctx, t, bounds, cellBounds = bounds) {
     }
   }
   return out;
+}
+
+// ── Forecasts: the same weather, as a run made at one hour sees it ──────────
+//
+// A run (ctx.run = { issueMs, member }) knows every system that exists when
+// it's made. Its errors grow with lead time and change only a little from one
+// hourly run to the next, so forecasts firm up as the time approaches:
+//   - timing (early/late) and track (north/south) errors on every system;
+//   - strength errors; smoother, less detailed rain at long range;
+//   - an early breakup is only seen a few hours ahead — before that, the
+//     run shows the system arriving;
+//   - systems not yet born are foreseen with a chance that rises as they
+//     approach (fronts days ahead, squall lines only hours ahead), and runs
+//     also show "phantom" systems that never happen, which fade away as
+//     their time nears;
+//   - pop-up storms: the ones already up are tracked (nowcast); after that
+//     the run places its own, from the true trigger at short range and its
+//     own guess further out.
+// At lead 0 a run is exactly the truth.
+
+const TRACK_ALONG_KM_H = 1.5, TRACK_ALONG_KM_H2 = 0.008;     // timing error (s.d., km) ≈ 1.5·L + 0.008·L²
+const TRACK_ACROSS_KM_H = 1.0, TRACK_ACROSS_KM_H2 = 0.006;   // track error ≈ 1.0·L + 0.006·L²
+const PEAK_ERR_DBZ_H = 0.15, PEAK_ERR_MAX = 8;               // strength error grows to ±8 dBZ
+const BREAK_SEEN_MS = 4 * MS_HOUR;                           // breakups are seen this far ahead
+const NOWCAST_MS = 30 * 60_000;                              // storms up within this of the run are tracked
+const CELL_TRIGGER_LEAD_H = 60;                              // the run's read of where storms fire fades to a guess by here
+const RUN_DRIFT_H = 9;                                       // a run's errors change over about this many runs
+const MODEL_CELL_BUCKET_MS = 6 * MS_HOUR;                    // the run's own storm placement refreshes every 6 runs
+const FORESEE_TAU_H = { front: 130, shield: 72, squall: 14, showers: 36 };
+const PHANTOM_SHARE = 0.85;                                   // phantoms keep long-range forecasts as wet as the climate
+
+const _viewCache = new Map();
+
+/** A forecast context: the run made at the hour containing `nowMs` (member 0 = the forecast; others = ensemble). */
+export function forecastContext(ctx, nowMs, member = 0) {
+  return { ...ctx, run: { issueMs: Math.floor(nowMs / MS_HOUR) * MS_HOUR, member } };
+}
+
+function _runNoise(seed, k, member, issueMs) {
+  // ≈ unit spread, smooth from one hourly run to the next.
+  return 2.4 * valueNoise3(hash(seed, 950 + k, member), issueMs / MS_HOUR / RUN_DRIFT_H, 0.37, 0.71);
+}
+
+function _modelOf(ctx) {
+  const run = ctx.run;
+  const bucket = Math.floor(run.issueMs / MODEL_CELL_BUCKET_MS);
+  return { key: `m${run.member}|${bucket}|${run.issueMs}`, placeSeed: `${ctx.seed}~cells~${run.member}~${bucket}`, issue: run.issueMs };
+}
+
+/** The synoptic systems of one slot as the run sees them (truth when there's no run). */
+function _viewSlot(ctx, slot) {
+  const truth = _slotSystems(ctx, slot);
+  const run = ctx.run;
+  if (!run) return truth;
+  const key = `${ctx.seed}|${ctx.region}|${slot}|${run.issueMs}|${run.member}`;
+  const hit = _viewCache.get(key);
+  if (hit) return hit;
+  _cap(_viewCache, 20000);
+  const out = [];
+  for (const s of truth) {
+    if (s.t0 > run.issueMs) {
+      const lead = (s.t0 - run.issueMs) / MS_HOUR;
+      if (hash01(s.seed, 901, run.member) >= Math.exp(-lead / FORESEE_TAU_H[s.kind])) continue;   // not foreseen (yet)
+    }
+    out.push(_forecastCopy(s, run));
+  }
+  // Phantoms: systems the run shows that never happen.
+  for (const ph of _slotSystems({ ...ctx, seed: `${ctx.seed}~ph~${run.member}` }, slot)) {
+    if (ph.t0 <= run.issueMs) continue;
+    const lead = (ph.t0 - run.issueMs) / MS_HOUR;
+    if (hash01(ph.seed, 911) >= PHANTOM_SHARE * (1 - Math.exp(-lead / FORESEE_TAU_H[ph.kind]))) continue;
+    out.push(_forecastCopy({ ...ph, id: `ph:${ph.id}`, phantom: true }, run));
+  }
+  _viewCache.set(key, out);
+  return out;
+}
+
+function _forecastCopy(s, run) {
+  const c = { ...s, fc: {
+    issue: run.issueMs,
+    ea: _runNoise(s.seed, 0, run.member, run.issueMs),
+    ec: _runNoise(s.seed, 1, run.member, run.issueMs),
+    ep: _runNoise(s.seed, 2, run.member, run.issueMs),
+    el: _runNoise(s.seed, 3, run.member, run.issueMs),
+  } };
+  // An early breakup more than a few hours off isn't in the run.
+  if (s.breakAt != null && s.breakAt - run.issueMs > BREAK_SEEN_MS) { c.breakAt = undefined; c.breakFrac = undefined; }
+  // When it winds down is uncertain too (once that's still ahead).
+  if (s.t1 - s.decayMs > run.issueMs) c.t1 = s.t1 + c.fc.el * Math.min(6 * MS_HOUR, 0.06 * (s.t1 - run.issueMs));
+  return c;
+}
+
+/** A forecast's strength error at t (dBZ); 0 for the truth. */
+function _peakAdj(s, t) {
+  if (!s.fc) return 0;
+  const L = Math.max(0, (t - s.fc.issue) / MS_HOUR);
+  return Math.max(-PEAK_ERR_MAX, Math.min(PEAK_ERR_MAX, s.fc.ep * PEAK_ERR_DBZ_H * L));
+}
+
+/** How much fine detail a forecast keeps at t (1 = all, as the truth). */
+function _detail(s, t) {
+  if (!s.fc) return 1;
+  return Math.max(0.45, 1 - Math.max(0, (t - s.fc.issue) / MS_HOUR) / 30);
 }
 
 // ── Reflectivity from one system at a point ─────────────────────────────────
@@ -258,6 +390,7 @@ function _systemDbz(a, x, y, t) {
   const along = dx * s.mx + dy * s.my;        // + is ahead (downstream)
   const across = -dx * s.my + dy * s.mx;
   const ageH = (t - s.t0) / MS_HOUR;
+  const adj = _peakAdj(s, t), det = _detail(s, t);
   let v = 0;
   switch (s.kind) {
     case 'front':
@@ -276,7 +409,7 @@ function _systemDbz(a, x, y, t) {
       const isSq = s.kind === 'squall';
       // The leading edge: a line of storms in the warm months, a band of rain otherwise.
       const lead = Math.exp(-((n / s.wid) ** 2)) * (n > 0 ? 1 : Math.exp(-((n / (s.wid * 1.6)) ** 2)) ** 0.2);
-      const tex = fbm3(s.seed + 2, along / (isSq ? 10 : 18), across / (isSq ? 12 : 26), ageH / 1.2, 4);
+      const tex = det * fbm3(s.seed + 2, along / (isSq ? 10 : 18), across / (isSq ? 12 : 26), ageH / 1.2, 4);
       const cells = s.conv > 0.15 ? Math.max(0.05, 0.5 + s.conv * 1.3 * tex) : Math.max(0.1, 0.75 + 0.6 * tex);
       // Behind it, after a lighter gap: a wide area of steadier rain.
       const back = -n;
@@ -285,10 +418,10 @@ function _systemDbz(a, x, y, t) {
         const gap = isSq ? 0.35 + 0.65 * _sst(s.wid * 1.2, s.wid * 3.5, back) : _sst(0, s.wid * 1.5, back);
         // Rounded: the trailing rain is an arc behind the line, not a box.
         const rr = Math.hypot(Math.abs(u) * 1.05, back / s.trail) + endNoise;
-        trail = gap * _sst(1.1, 0.55, rr) * Math.max(0, 0.6 + 0.8 * fbm3(s.seed + 3, along / 45, across / 45, ageH / 4, 4));
+        trail = gap * _sst(1.1, 0.55, rr) * Math.max(0, 0.6 + 0.8 * det * fbm3(s.seed + 3, along / 45, across / 45, ageH / 4, 4));
       }
-      const leadDbz = _toDbz(s.peakDbz, lead * cells * ends * a.life);
-      const trailDbz = _toDbz(s.trailDbz, trail * a.life);
+      const leadDbz = _toDbz(s.peakDbz + adj, lead * cells * ends * a.life);
+      const trailDbz = _toDbz(s.trailDbz + adj, trail * a.life);
       return _sum([leadDbz, trailDbz]);
     }
     case 'shield': {
@@ -298,7 +431,7 @@ function _systemDbz(a, x, y, t) {
       if (rr > 1.3) return -Infinity;
       const body = _sst(1.08, 0.5, rr);
       const bands = 0.6 + 0.4 * Math.sin(across / 28 + 3 * fbm3(s.seed + 1, along / 80, across / 80, ageH / 5, 2));
-      const tex = fbm3(s.seed + 2, along / 35, across / 35, ageH / 3, 4);
+      const tex = det * fbm3(s.seed + 2, along / 35, across / 35, ageH / 3, 4);
       // Gaps and lighter patches inside the rain area.
       v = body * (0.55 + 0.45 * bands) * Math.max(0, 0.55 + 0.9 * tex);
       break;
@@ -328,7 +461,7 @@ function _systemDbz(a, x, y, t) {
       break;
     }
   }
-  return _toDbz(s.peakDbz, v * life);
+  return _toDbz(s.peakDbz + adj, v * life);
 }
 
 /** Shape strength (0..~1.2) → dBZ: full strength is the system's peak; each halving is about 7.5 dBZ less. */
@@ -359,6 +492,7 @@ const _power = (d) => (d > -Infinity ? 10 ** (d / 10) : 0);
 
 const FRONT_LINGER_MS = 18 * MS_HOUR;   // a front's air stays most of a day after its rain is gone
 const CLOUD_MEAN = 0.45;                // an average sky — temperatures are normal under it
+const TEMP_ERR_F_DAY = 1.6, TEMP_ERR_MAX_F = 3.6;   // a forecast's own temperature error: s.d. 1.6 °F at a day, growing with √lead to 3.6
 const CLOUD_PAD_KM = 220;               // a big system's cloud reaches this far beyond its rain
 const CELL_CLOUD_PAD_KM = 60;           // a thunderstorm's anvil, this far
 
@@ -382,7 +516,7 @@ export function frontAir(ctx, x, y, t) {
   let cold = 0, coldDew = 0, warm = 0, warmDew = 0, behind = 0, ahead = 0, outflow = 0, outT = 0, outDew = 0;
   const first = Math.floor((t - MAX_LIFE_MS - FRONT_LINGER_MS) / SLOT_MS), last = Math.floor(t / SLOT_MS);
   for (let slot = first; slot <= last; slot++) {
-    for (const s of _slotSystems(ctx, slot)) {
+    for (const s of _viewSlot(ctx, slot)) {
       if ((s.kind !== 'front' && s.kind !== 'squall') || t <= s.t0) continue;
       if (s.kind === 'front') {
         if (t >= s.t1 + FRONT_LINGER_MS) continue;
@@ -472,7 +606,13 @@ export function surfaceTemp(ctx, x, y, t) {
   const N = normalsAt(ctx, t);
   const range = N.hi - N.lo, dh = diurnal(localHour(t, ctx.tzMin));
   const f = frontAir(ctx, x, y, t);
-  const tempF = air.tempF + (CLOUD_MEAN - cloud) * range * (0.42 * dh - 0.22 * (1 - dh)) + f.dT;
+  let tempF = air.tempF + (CLOUD_MEAN - cloud) * range * (0.42 * dh - 0.22 * (1 - dh)) + f.dT;
+  // A forecast's own temperature error: small tomorrow, several degrees a week out.
+  if (ctx.run && t > ctx.run.issueMs) {
+    const L = (t - ctx.run.issueMs) / MS_HOUR;
+    const sd = Math.min(TEMP_ERR_MAX_F, TEMP_ERR_F_DAY * Math.sqrt(L / 24));
+    tempF += sd * 2.4 * valueNoise3(hash(ctx.seed, 960, ctx.run.member), x / 700, y / 700, t / (30 * MS_HOUR) + ctx.run.issueMs / MS_HOUR / 40);
+  }
   const dewF = Math.min(air.dewF + f.dDew, tempF - 0.5);
   return { tempF, dewF, cloud, front: f };
 }
@@ -502,7 +642,7 @@ const LAT_KM = 24, LAT_MS = 15 * 60_000;
 const _latCache = new Map();
 
 function _latNode(ctx, i, j, k) {
-  const key = `${ctx.seed}|${ctx.region}|${i}|${j}|${k}`;
+  const key = `${ctx.seed}|${ctx.region}|${i}|${j}|${k}${ctx.run ? `|${ctx.run.issueMs}|${ctx.run.member}` : ''}`;
   let v = _latCache.get(key);
   if (v === undefined) {
     _cap(_latCache, 200000);

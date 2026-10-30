@@ -4,7 +4,7 @@
 // §100 Radar frames over the base map, for review: ?region=&seed=&day=&hours=12,15,18&zoom=0
 import { regionMap } from '../../engine/WeatherMap.js';
 import { localDayStart, MS_DAY, MS_HOUR } from '../../engine/WeatherClimate.js';
-import { radarField } from '../../engine/WeatherSystems.js';
+import { radarField, forecastContext } from '../../engine/WeatherSystems.js';
 import { drawBaseMap, RADAR_ZOOMS } from '../../ui/components/RadarMap.js';
 import { drawPrecip } from '../../ui/components/RadarPrecip.js';
 const q = new URLSearchParams(location.search);
@@ -13,8 +13,9 @@ const tz = -240, START = localDayStart(Date.UTC(2026, 9, 30, 12), tz);
 const ctx = { seed, region, tzMin: tz, map: regionMap(region), cal: [{ kind: 'season', season: 1, realStartMs: START, dispIso: '2027-03-14' }] };
 const W = +(q.get('w') || 360), H = W;
 const zoom = RADAR_ZOOMS[+(q.get('zoom') || 0)];
+// frames: day:hour[:lead] — with a lead, the forecast made that many hours earlier.
 const frames = (q.get('frames') || '115:12,115:15,115:18').split(',').map(s => s.split(':').map(Number));
-for (const [day, hour] of frames) {
+for (const [day, hour, lead] of frames) {
   const t = START + day * MS_DAY + hour * MS_HOUR;
   const fig = document.createElement('figure');
   const c = document.createElement('canvas'); const dpr = 2;
@@ -24,12 +25,13 @@ for (const [day, hour] of frames) {
   drawBaseMap(g, ctx.map, view, { theme, userCity: 'Springfield', labels: false });
   const half = zoom.spanKm / 2, cell = zoom.spanKm / 180;
   const t0 = performance.now();
-  const f = radarField(ctx, t, { x0: -half, y0: -half, x1: half, y1: half }, cell);
+  const fctx = lead ? forecastContext(ctx, t - lead * MS_HOUR) : ctx;
+  const f = radarField(fctx, t, { x0: -half, y0: -half, x1: half, y1: half }, cell);
   const ms = performance.now() - t0;
   drawPrecip(g, f, view);
   drawBaseMap(g, ctx.map, view, { theme, userCity: 'Springfield', labelsOnly: true });
   const d = new Date(t + tz * 60000);
-  fig.innerHTML = `<figcaption>${region} day ${day} ${String(hour).padStart(2, '0')}:00 · ${ms.toFixed(0)} ms</figcaption>`;
+  fig.innerHTML = `<figcaption>${region} day ${day} ${String(hour).padStart(2, '0')}:00 · ${lead ? `forecast made ${lead} h before` : 'what happened'} · ${ms.toFixed(0)} ms</figcaption>`;
   fig.prepend(c); document.body.append(fig);
 }
 document.body.dataset.done = '1';

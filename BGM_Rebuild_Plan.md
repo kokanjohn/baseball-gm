@@ -7712,3 +7712,39 @@ The field is painted per cell, then scaled up with smoothing.
 - a report takes about 6 ms.
 
 **Left for 1g:** highs run 3–5 °F cool in some months; this is in the background climate, not the new layers.
+
+### 100.5 Step 1e done — forecast runs (r97)
+
+**A forecast is the same weather machinery seen through a run.** `forecastContext(ctx, nowMs, member = 0)` adds `run: { issueMs (the hour), member }`. Every weather function (`activeSystems`, `precipAt`, `radarField`, `cloudAt`, `frontAir`, `surfaceTemp`, `conditionsAt`, `parkConditions`) then answers as that run sees it. A new run comes out each hour. The radar's future frames, the dashboard and the schedule all read the same current run, so they can't disagree. **At lead 0 a run is exactly the truth.**
+
+**What a run knows, and how it's wrong (`engine/WeatherSystems.js`):**
+- **Every system that exists when it's made**, seen through a forecast copy:
+  - a timing error (early or late) with s.d. 1.5·L + 0.008·L² km along the track, L in hours of lead (about 40 km at a day, about 150 km at three);
+  - a track error (north or south) of 1.0·L + 0.006·L² km;
+  - a strength error growing at 0.15 dBZ per hour to ±8;
+  - an uncertain end time;
+  - less fine detail at long range.
+
+  Errors change smoothly from one hourly run to the next (they drift over about 9 runs), so forecasts firm up instead of flip-flopping.
+- **Early breakups** are seen only within 4 hours. Before that, the run shows the system arriving.
+- **Systems not yet born** are foreseen with chance e^(−lead/τ). τ is 130 h for fronts, 72 h for shields, 36 h for showers and 14 h for squall lines. Once foreseen, always foreseen as the time approaches.
+- **Phantoms:** each run also shows systems that never happen (`phantom: true`), with chance 0.85·(1 − e^(−lead/τ)). They fade away as their time nears, which keeps long-range forecasts as wet as the climate.
+- **Pop-up storms:**
+  - storms already up within 30 minutes of the run are tracked (nowcast);
+  - after that the run places its own, from its own seed (refreshed every 6 runs);
+  - they are set off by the true trigger at short range, blending to the run's own guess by 60 hours.
+- **Temperature:** the run adds its own error, s.d. 1.6 °F at a day growing with √lead to 3.6 °F, on top of what the system errors cause.
+- **Members:** `member` is for the ensemble (1f). Each member foresees, misses and errs differently.
+
+**Harness (`check-weather.mjs`, 87 checks; 9 new):**
+- a forecast at lead 0 is exactly what happens (radar cells and every ballpark report);
+- the same run always gives the same forecast;
+- rain-forecast skill falls with lead (CSI 0.82 at 1 h, 0.66 at 6 h, 0.30 at 24 h, 0.09 at 72 h, 0.02 at 168 h);
+- forecasts are no wetter or drier than what happens (rain area ×1.00 at 1 h, ×1.02 at 6 h, ×1.00 at 24 h, ×1.19 at 72 h, ×1.15 at 168 h);
+- temperature errors: 1.1 °F at 6 h, 1.7 °F at 24 h, 4.1 °F at 72 h, 6.1 °F at 168 h (east, afternoons — about real-world skill; north runs a little worse mid-range, south a little better);
+- one hourly run to the next changes a forecast only a little (0.25 °F; rain areas overlap 0.74);
+- a breakup is a surprise until a few hours out (still forecast 10 h before: 7 of 7 already formed; seen 2 h before: 12 of 12);
+- pop-up storms: tracked minutes ahead (overlap 0.54); a day ahead the right amount (×1.08) in the wrong spots (overlap 0.05);
+- phantoms: 53 at 5 days, 0 at 2 hours.
+
+`radar-preview.html` takes `day:hour:lead` frames to draw the forecast made `lead` hours earlier.
