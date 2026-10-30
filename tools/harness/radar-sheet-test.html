@@ -1,0 +1,17 @@
+<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Radar sheet test</title>
+<style>
+[data-theme="dark"]{--bg:#0F1117;--surface:#181B24;--surface2:#20232E;--border:#2C3040;--text:#E8ECF4;--muted:#7C849A;--soft:#A0A8BE}
+[data-theme="light"]{--bg:#F0F2F6;--surface:#FFFFFF;--surface2:#E8EBF2;--border:#D4D8E4;--text:#1A1D24;--muted:#606880;--soft:#454C60}
+body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+</style></head><body><script type="module">
+// §100 (2c) Opens the radar sheet on a test save; the test drives it through the page.
+import { openRadarSheet } from '../../ui/components/RadarSheet.js';
+import { localDayStart, MS_DAY, MS_HOUR } from '../../engine/WeatherClimate.js';
+const q = new URLSearchParams(location.search);
+if (q.get('theme') === 'light') document.documentElement.dataset.theme = 'light';
+const tz = -240, START = localDayStart(Date.UTC(2026, 9, 30, 12), tz);
+const state = { weatherSeed: q.get('seed') || 'wx-a', weatherTzMin: tz, settings: { region: q.get('region') || 'north' }, userTeam: { city: 'Springfield' },
+  weatherCalendar: [{ kind: 'season', season: 1, realStartMs: START, dispIso: '2027-03-14' }] };
+const now = START + (+(q.get('day') || 101)) * MS_DAY + (+(q.get('hour') || 23)) * MS_HOUR + 7 * 60_000;
+window.sheet = openRadarSheet({ state, focusId: q.get('focus') || 'user', nowMs: now, loop: q.get('loop') || 'past2h', zoomIdx: +(q.get('zoom') ?? 1) });
+</script></body></html>

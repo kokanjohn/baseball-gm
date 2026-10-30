@@ -72,9 +72,16 @@ export function createFrameSource({ onFrame = () => {}, onDone = () => {}, useWo
       const keys = frames.map(f => frameKey(base, f, grid));
       const order = frames.map((_, i) => i).sort((a, b) => Math.abs(a - first) - Math.abs(b - first));
       const todo = order.filter(i => !_cache.has(keys[i])).map(i => ({ key: keys[i], frame: frames[i], grid }));
-      // Already built ones are handed over straight away.
-      for (const i of order) if (_cache.has(keys[i])) onFrame(keys[i], _cache.get(keys[i]));
-      if (!todo.length) { onDone(); return keys; }
+      // Already built ones are handed over at once — just after this returns,
+      // so the caller knows the keys before any frame arrives.
+      const ready = order.filter(i => _cache.has(keys[i])).map(i => keys[i]);
+      const g0 = gen;
+      queueMicrotask(() => {
+        if (disposed || g0 !== gen) return;
+        for (const k of ready) if (_cache.has(k)) onFrame(k, _cache.get(k));
+        if (!todo.length) onDone();
+      });
+      if (!todo.length) return keys;
       pending = { gen, todo };
       if (worker) worker.postMessage({ type: 'frames', gen, items: todo });
       else _fallback(gen, todo);

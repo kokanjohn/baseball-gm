@@ -7902,3 +7902,39 @@ The field is painted per cell, then scaled up with smoothing.
 **Harness:**
 - **`test-radar-render.mjs` + `radar-consistency-test.html`:** the radar's colour over every ballpark agrees with that park's report. Dry means no colour; rain / mix / snow means that colour family. Covers 186 park views across four regions, three zooms, now and forecast frames.
 - **`radar-render-preview.html` + `render-radar2.mjs`:** phone-sized cards with a time bar (NOW / PAST / FORECAST tag), the radar and the legend, in either theme, optionally CPU-throttled.
+
+### 101.3 Step 2c done — the full-screen radar (r103)
+
+**`ui/components/RadarSheet.js`:**
+- **API:** `openRadarSheet({ state, focusId, nowMs?, onClose?, loop?, zoomIdx? })` and `venueOf(game)` (the home club's park). It takes the save and the park; it doesn't reach into the app, so it is testable on its own.
+- **Header:** "Radar", a **Center on** park picker (our city first, then the rest A–Z) and **Done**.
+- **Time bar:** the frame's time on the save's clock ("Tomorrow 2:00 AM"), a tag (NOW / PAST / FORECAST, in gold) and "Loading k/n" while frames build.
+- **The map:** fills the space between the time bar and the controls; the renderer from 2b.
+- **Controls (text labels):**
+  - **Play / Pause.**
+  - **A timeline:** a range input, with a tick per frame underneath. Ticks light up once built (gold for forecast frames), and the shown frame is marked. The start and end times sit at the ends, with **Now** under the now frame.
+  - **The loop:** Past 2 hrs / Next 6 hrs / Next 24 hrs.
+  - **The zoom:** Region / Metro / Ballpark.
+  - **The legend.**
+- **Playback:**
+  - 0.5 s a frame, holding 1.6 s on the last before starting over.
+  - It plays whatever frames are built while the rest arrive, and opens on Now.
+  - Scrubbing pauses. Zoom and park changes keep the time shown; a loop change starts it again.
+  - Escape closes; Space plays or pauses.
+- **Frames:** the frame source (worker) builds the shown frame first. Pictures for the rest are pre-drawn in idle time.
+- **Refresh:** a check every minute rebuilds the loop when a newer radar picture or forecast run arrives, keeping the time shown.
+- **Housekeeping:** the loop pauses while the app is hidden, and a ResizeObserver redraws on size change. Close tears everything down (listeners, the worker, timers, renderer).
+
+**`RadarFrameSource` fix:** frames already in the cache are handed over just after `request` returns. Before, they arrived before the caller knew the new loop's keys, so a frame carried over from the previous loop was never counted.
+
+**Harness — `test-radar-sheet.mjs` + `radar-sheet-test.html`** (Chromium at 390×844, ×3 pixels; at normal speed and at CPU ×4). Every check passes at both speeds:
+- past 2 hrs loads all 13 frames through the worker (about 2 s at ×4) and plays;
+- next 6 hrs loads its 25 (about 3.9 s);
+- Pause, and scrubbing to a FORECAST frame;
+- zooming out keeps the time shown;
+- centring on another park;
+- next 24 hrs at Ballpark;
+- Done removes it;
+- no page errors.
+
+Screenshots cover each loop and zoom, plus the light theme with snow.
