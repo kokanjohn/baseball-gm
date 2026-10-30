@@ -695,6 +695,30 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     order.push(pbSP.id);
     inOrder.add(pbSP.id);
   }
+  // A CPU manager starts the best five (§104.2), as it plays the best nine: a
+  // clearly better healthy starter on the pitcher bench — an ace back from
+  // the IL (who returns to the bench), a call-up, a claim — takes the weakest
+  // rotation turn, in that turn's place; the pitcher replaced goes to the bench.
+  // Without this the spot starter who covered an injury kept the job for good.
+  if (!isUserTeam) {
+    for (;;) {
+      const benchSP = rosterIds
+        .map(id => players[id])
+        .filter(p => p && p.pos === 'SP' && isHealthy(p.id)
+                  && groupOf(p.id) === PLAYER_GROUP.PITCHER_BENCH && !inOrder.has(p.id))
+        .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+      if (!benchSP || !order.length) break;
+      const weakIdx = order.reduce((w, id, i) =>
+        (players[id]?.ovr || 0) < (players[order[w]]?.ovr || 0) ? i : w, 0);
+      const weakId = order[weakIdx];
+      if ((benchSP.ovr || 0) < (players[weakId]?.ovr || 0) + CPU_ROTATION_UPGRADE_MARGIN) break;
+      setPatch(weakId, { group: PLAYER_GROUP.PITCHER_BENCH });
+      setPatch(benchSP.id, { group: PLAYER_GROUP.STARTING_PITCHERS });
+      order[weakIdx] = benchSP.id;
+      inOrder.delete(weakId);
+      inOrder.add(benchSP.id);
+    }
+  }
   const rotationShort = Math.max(0, REQUIRED_SP_COUNT - order.length);
   const currentIndex = order.length ? (oldRotation.currentIndex || 0) % order.length : 0;
 
@@ -798,6 +822,8 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
 // (9 starters + 5 bench) and 14 pitchers (5 SP + 5 RP + 4 bench).
 // A CPU manager benches a starter for a bat at least this much better (OVR).
 const CPU_LINEUP_UPGRADE_MARGIN = 3;
+// …and swaps a rotation turn for a starter at least this much better.
+const CPU_ROTATION_UPGRADE_MARGIN = 3;
 export const HITTER_TARGET  = ROSTER_LIMITS.STARTING_HITTERS + ROSTER_LIMITS.BENCH_HITTERS;
 export const PITCHER_TARGET = ROSTER_LIMITS.STARTING_PITCHERS + ROSTER_LIMITS.BULLPEN + ROSTER_LIMITS.PITCHER_BENCH;
 

@@ -867,8 +867,10 @@ function _tradeStillValid(state, card, atMs = Date.now()) {
 export function expireDueRosterCards(atMs) {
   const state = StateManager.get();
   const due = [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])]
-    // Roster cards, and pre-game cards (§74 — their question is moot at first pitch).
-    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL')
+    // Roster cards, pre-game cards (§74 — their question is moot at first pitch), and the
+    // weather's questions (§104.2 — answered by first pitch or not at all; on the game clock,
+    // not the wall clock, so an unanswered one never outlives its game).
+    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER')
                  && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   for (const c of due) expire(c.instanceId, c.expiresAtMs);

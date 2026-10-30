@@ -532,12 +532,13 @@ async function runAllStarChecks() {
   }
   // (§102.3 a rainout from before the break made up after it is one game fewer before the break.)
   const movedOver = {};
-  const crossed = (g) => (g.postponements || []).some(p => p.gameTime < asg.gameTime) && g.gameTime > asg.gameTime;
+  // (…and a game suspended before the break, finished after it.)
+  const crossed = (g) => ((g.postponements || []).some(p => p.gameTime < asg.gameTime) || g.suspension?.gameTime < asg.gameTime) && g.gameTime > asg.gameTime;
   for (const g of st.schedule) if (!g.isSpring && !g.isPlayoff && crossed(g)) for (const t of ['user', g.opponentId]) movedOver[t] = (movedOver[t] || 0) + 1;
   for (const g of Object.values(st.leagueSchedule.dayMap).flat()) if (!g.isSpring && !g.isPlayoff && !g.isAllStar && crossed(g)) for (const t of [g.homeId, g.awayId]) movedOver[t] = (movedOver[t] || 0) + 1;
   const k = ALL_STAR_BREAK_AFTER_GAME;
   const off = Object.entries(times).filter(([t, ts]) => { ts.sort((x, y) => x - y); const kk = k - (movedOver[t] || 0); return !(ts[kk - 1] < asg.gameTime && ts[kk] > asg.gameTime); });
-  check(`all-star: played in the break (after every club's 66th game, before its 67th; rainouts made up after it excepted: ${Object.entries(movedOver).map(([t, n]) => `${t} ${n}`).join(', ') || 'none'})`, off.length === 0, off.map(([t]) => t).join(','));
+  check(`all-star: played in the break (after every club's 66th game, before its 67th; rainouts and suspended games finished after it excepted: ${Object.entries(movedOver).map(([t, n]) => `${t} ${n}`).join(', ') || 'none'})`, off.length === 0, off.map(([t, ts]) => `${t} ${ts.filter(x => x < asg.gameTime).length} before`).join(','));
 
   // The host.
   const hostDiv = season.hostId === 'user' ? st.userTeam.divisionId || 'A' : st.leagueTeams.find(t => t.id === season.hostId)?.divisionId;
@@ -600,7 +601,8 @@ async function runAllStarChecks() {
   const rot  = JSON.stringify(pre.leagueTeams.map(t => t.rotation?.currentIndex));
   clock.set(asg.gameTime + 1000); advanceClock(clock.get());
   const liveG = Object.values(SM.get().leagueSchedule.dayMap).flat().find(g => g.isAllStar);
-  check('all-star: goes live at first pitch, with plays', liveG.status === GAME_STATUS.LIVE && liveG.plays?.length > 50);
+  check('all-star: goes live at first pitch, with plays', liveG.status === GAME_STATUS.LIVE && liveG.plays?.length > 50,
+        `${liveG.status} plays ${liveG.plays?.length} t ${liveG.gameTime - asg.gameTime} wx ${JSON.stringify(liveG.weatherPlan && { o: liveG.weatherPlan.outcome, d: liveG.weatherPlan.delays })} ppd ${JSON.stringify(liveG.postponements)}`);
   const plays = liveG.plays || [];
   const subs  = plays.filter(p => p.type === 'pinch_hit').length;
   clock.set((plays[plays.length - 1]?._timestamp || asg.gameTime) + 1000); advanceClock(clock.get());
@@ -1213,7 +1215,8 @@ function checkWeatherSeason(st) {
   const byId = (id) => wxCards.filter(c => c.cardId === id);
   const userDh = all.filter(x => x.user && !x.g.isSpring && x.g.makeup?.how?.endsWith('dh')).length;
   check(`weather cards: the manager asked about the starter ${byId('wx_rain_start').length} times; ${byId('wx_doubleheader').length} doubleheader questions (${userDh} of our makeups were doubleheaders); none left hanging`,
-        wxCards.every(c => c.resolved || (c.expiresAtMs ?? Infinity) > clock.get()));   // (how often is in the rates tool; a dry season can ask none)
+        wxCards.every(c => c.resolved || (c.expiresAtMs ?? Infinity) > clock.get()),
+        wxCards.filter(c => !(c.resolved || (c.expiresAtMs ?? Infinity) > clock.get())).map(c => `${c.cardId} ${c._rosterKey} exp ${new Date(c.expiresAtMs).toISOString()} deliver ${c.deliverAtMs ? new Date(c.deliverAtMs).toISOString() : '-'} inbox ${(st.inbox || []).includes(c)} withdrawn ${!!c.withdrawn}`).join(' | '));   // (how often is in the rates tool; a dry season can ask none)
   const delayed = all.filter(x => x.played && x.g.wxResult?.delays?.length).length;
   const called = all.filter(x => x.played && x.g.wxResult?.ruling?.outcome === 'final').length;
   const n = reg.length;
@@ -1398,7 +1401,11 @@ async function main() {
       SM.mutate(s => { s.prestigeTier = Math.max(2, s.prestigeTier || 1); s.allStar.hostingScore = Math.max(900, s.allStar.hostingScore);
                        s.userTeam.atmosphere = Math.max(90, s.userTeam.atmosphere || 50); });   // a margin: a bad day can cost several points before the league names the host
     }
-    if (!asgChecked && SM.get().schedule[idx]?.regularSeasonIndex === ALL_STAR_BREAK_AFTER_GAME) { asgChecked = true; await runAllStarChecks(); }
+    // At the break: the next game of ours comes after the All-Star Game (a rainout made up after the break
+    // can put an earlier-numbered game there, so the time decides, not the game's number).
+    const asgAhead = !asgChecked && SM.get().schedule[idx]?.regularSeasonIndex >= ALL_STAR_BREAK_AFTER_GAME - 3
+      && Object.values(SM.get().leagueSchedule?.dayMap || {}).flat().find(g => g.isAllStar && !g.played && g.gameTime < SM.get().schedule[idx].gameTime);
+    if (asgAhead) { asgChecked = true; await runAllStarChecks(); }
     if (!faChecked && SM.get().schedule[idx]?.regularSeasonIndex === 30) { faChecked = true; await checkFreeAgency(SM.get()); await checkRemindersAndWatches(); checkWeatherCalendar(SM.get(), 'season 1', ['season:1']); }
 
     const reachedFinal = playToFinal(idx);
@@ -1522,7 +1529,9 @@ async function main() {
         const swing = Object.values(as.squads).flatMap(q => q.sp).map(x => st.players[x.id])
           .filter(p => (p.stats?.ip || 0) < 0.4 * spIp && p.ovr < avgOvr);
         check(`all-star: no swingman named an All-Star starter (a regular starter has ${spIp.toFixed(0)} IP)`, swing.length === 0,
-              swing.map(p => `${p.name} ${p.stats?.ip?.toFixed(0)}IP ovr${p.ovr}`).join(','));
+              swing.map(p => { const q = Object.values(as.squads).find(q => q.sp.some(x => x.id === p.id));
+                const mates = Object.values(as.squads).flatMap(q => q.rosterIds).filter(id => st.players[id]?.teamId === p.teamId).length;
+                return `${p.name} (${p.teamId}, ${p.group}, the club's ${mates === 1 ? 'only' : mates} All-Star) ${p.stats?.ip?.toFixed(0)}IP ${p.stats?.gs || 0}GS ERA ${p.stats?.ip ? (9 * p.stats.er / p.stats.ip).toFixed(2) : '-'} ovr${p.ovr} vote ${q?.votes?.[p.id]}`; }).join(','));
       }
     }
     {

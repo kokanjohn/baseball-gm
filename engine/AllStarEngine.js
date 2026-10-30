@@ -57,6 +57,8 @@ const ACTIVE = new Set([PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTER
 // below which his case weakens: an All-Star half is a full half (a swingman's
 // 20 good innings, a part-timer's hot month, are not one).
 const REGULAR_SHARE = 0.6;
+// Innings of league-average pitching a pitcher's ERA is read against (small samples regress).
+const ERA_PRIOR_IP = 30;
 // A player with no playing time at all keeps this much of his case (a star back
 // from an early injury can still be voted in on reputation).
 const PLAYING_TIME_FLOOR = 0.5;
@@ -315,7 +317,9 @@ export function hitterVote(p, n) {
 export function pitcherVote(p, n) {
   const s = p.stats || {};
   const ip = s.ip || 0;
-  const era = ip ? ((s.er || 0) * 9) / ip : n.era;
+  // ERA read against the league's over ERA_PRIOR_IP innings (§104.2): a hot three-start stint
+  // (23 IP, 1.18) is a small sample, not an ace's half; over a regular starter's innings it barely moves.
+  const era = ((s.er || 0) * 9 + n.era * ERA_PRIOR_IP) / (ip + ERA_PRIOR_IP);
   const prevent = 100 * n.era / Math.max(1.5, era);
   const perf = p.pos === 'SP'
     ? prevent + 0.15 * (s.k || 0) + 1.5 * (s.w || 0)

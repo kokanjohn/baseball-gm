@@ -8556,3 +8556,25 @@ The other checks still pass:
 That saves about 48 px; the stack goes from 292 to 244 px.
 
 **Harness.** `test-dashboard-radar` now requires the idle dashboard not to scroll at all, radar and all, at every height. Result: 932 / 844 px with the radar; 760 / 700 / 640 px with the Radar button on the next-game card. Overflow is 0 px everywhere, with and without the radar, in dark and light.
+
+### 104.2 CPU clubs start their best five (r117)
+
+**The problem.** Now and then a CPU club finished with 31–32 wins of 132, below the realistic floor (33, the 2024 White Sox's pace). Its rotation had sunk to about 55 OVR against a league 63.
+
+**Root cause.** The club was generated as the weakest (str 0.45, as designed). What sank it further was in-season management:
+- When a CPU starter went on the IL, the best pitcher-bench starter was promoted to cover.
+- When the injured starter came back, they returned to the pitcher bench (`defaultActiveGroup`). Nothing ever moved them back.
+- So the stopgap kept the rotation turn for the rest of the season. A CPU manager already played its best nine hitters (§76) but had no matching rule for the rotation.
+
+**The fix.** It is in `RosterEngine.reconcileRoster`, for CPU clubs only; the user's rotation stays the GM's call.
+- A healthy pitcher-bench starter at least `CPU_ROTATION_UPGRADE_MARGIN` (3) OVR better than the weakest rotation member takes that member's turn, in place.
+- The replaced pitcher goes to the pitcher bench.
+- This covers an ace back from the IL, a call-up and a waiver claim.
+
+**Result.** Across 16 seasons (seeds 1–8, north and south), the worst CPU club's rotation now usually sits within 1–2 points of the league's; before, it was 3–9 points below. The worst records were 34–52 wins, and every season is inside the balance band.
+
+**Also found and fixed while verifying across more seeds** (all from the weather work):
+- **Unanswered weather questions.** A weather question (`wx_rain_start`, `wx_doubleheader`) left unanswered stayed in the inbox past its deadline. It expired only on the wall-clock sweep, which runs at game commit. Weather cards now expire on the roster clock (`expireDueRosterCards`), like pre-game cards, so they never outlive their game.
+- **Harness, All-Star checks.** These now run at the break itself: the first of our games after the All-Star Game. Before, they ran at our game numbered 66, and a rainout made up after the break could put that game after the All-Star Game.
+- **Harness, break count.** The count now also excepts a game suspended before the break and finished after it.
+- **All-Star votes, small samples.** With rotations now changing mid-season, a pitcher who made three good starts (23 IP, 1.18 ERA, OVR 53) was voted an All-Star starter. A pitcher's ERA in the vote is now read against the league's ERA over 30 extra innings (`ERA_PRIOR_IP` in `AllStarEngine.pitcherVote`). That three-start stint now reads 2.89. A regular starter's half (about 60 IP) barely moves.
