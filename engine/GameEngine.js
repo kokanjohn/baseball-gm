@@ -74,12 +74,15 @@ import {
   computeWinProbability,
   leagueNorms,
   resumeTimeline,
+  rotationStarter,
 } from './SimEngine.js';
 import * as CardEngine from './CardEngine.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
 import * as AllStar from './AllStarEngine.js';
-import { recordOutings } from './PitchingEngine.js';
+import { recordOutings, starterRested, bullpenRoles } from './PitchingEngine.js';
+import { chanceOfPrecip } from './WeatherForecast.js';
+import { cityOf } from './WeatherMap.js';
 import * as Finance from './FinanceEngine.js';
 import { formatK } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
@@ -1060,7 +1063,8 @@ export async function commitGame(gameIndex) {
     // ── Step 2b: Advance SP rotation ──────────────────────
     // Rotate to next SP so each game uses the correct starter in order.
     // (A rained-out game was never played: nobody's turn passes, nobody's absence counts down.)
-    if (wasPlayed && s.userTeam.rotation?.order?.length > 0) {
+    // (§102.5 a bullpen game the GM chose keeps the rotation on schedule.)
+    if (wasPlayed && !g.keepRotation && s.userTeam.rotation?.order?.length > 0) {
       s.userTeam.rotation.currentIndex =
         (s.userTeam.rotation.currentIndex + 1) % s.userTeam.rotation.order.length;
     }
@@ -1889,6 +1893,59 @@ function _ensureWeatherPlans(clockMs) {
   });
 }
 
+/**
+ * _wxUserCards(clockMs) — §102.5 the manager reads the forecast three hours
+ * before each of our games (the same forecast the GM sees then). If rain is
+ * likely during the game, he asks about the starter: the man in turn as
+ * planned, or hold him a day and start the next man who's rested.
+ */
+function _wxUserCards(clockMs) {
+  const st = StateManager.get();
+  const sched = st.schedule || [];
+  const lead = GAME_WEATHER.START_CARD_LEAD_MIN * 60_000;
+  for (let i = st.currentGameIndex || 0; i < sched.length; i++) {
+    const g = sched[i];
+    if (!Number.isFinite(g.gameTime) || g.gameTime - lead > clockMs) break;
+    if (g._committed || g.isSpring || g.cancelled || g.wxStartAsked === g.gameTime || g.status !== GAME_STATUS.SCHEDULED || g.plays?.length) continue;
+    const at = g.gameTime - lead;
+    StateManager.mutate(s => { const x = s.schedule[i]; if (x) x.wxStartAsked = x.gameTime; });
+    if (clockMs > g.gameTime - 30 * 60_000) continue;                                       // too late to ask
+    if (g.wx?.outcome === PLAN_OUTCOME.POSTPONED && g.wx.decidedAt <= at) continue;          // called off before anyone asks
+    const ctx = weatherContext(st);
+    const venueId = gameTeams(g, true).venueId;
+    const park = ctx.map.parks[venueId] || ctx.map.parks.user;
+    const ch = chanceOfPrecip(ctx, at, park.x, park.y, g.gameTime, g.gameTime + 3 * 3_600_000);
+    if (!(ch.chance >= GAME_WEATHER.START_CARD_CHANCE)) continue;
+    const starterId = rotationStarter(st.userTeam, st.players, g.gameTime);
+    const order = st.userTeam.rotation?.order || [];
+    const k = order.indexOf(starterId);
+    if (k < 0) continue;
+    let altId = null;
+    for (let j = 1; j < order.length; j++) {
+      const id = order[(k + j) % order.length], p = st.players[id];
+      if (p && isAvailable(p) && starterRested(p, g.gameTime)) { altId = id; break; }
+    }
+    if (!altId) continue;
+    CardEngine.deliverRainStartCard({ key: `wx:start:${st.seasonNum || 1}:${g.gameTime}`, gameTime: g.gameTime, starterId, altId,
+                                      chance: ch.chance, kind: ch.kind, city: cityOf(ctx.map, venueId, st.userTeam.city) }, at);
+  }
+}
+
+/** §102.5 a makeup made our day a doubleheader: who starts game two? */
+function _wxDoubleheaderCard(date, makeupOf, atMs) {
+  const st = StateManager.get();
+  const games = (st.schedule || []).filter(g => g.date === date && !g.cancelled).sort((a, b) => a.gameTime - b.gameTime);
+  if (games.length !== 2 || games.some(g => g._committed || g.status === GAME_STATUS.SUSPENDED || g.plays?.length || g.isSpring)) return;
+  const g2 = games[1];
+  const before = (st.schedule || []).filter(g => !g._committed && g.gameTime < g2.gameTime).length;
+  const order = st.userTeam.rotation?.order || [];
+  const nextId = order.length ? order[((st.userTeam.rotation.currentIndex || 0) + before) % order.length] : null;
+  const longId = bullpenRoles(st.userTeam, st.players).long[0] || null;
+  if (!longId) return;
+  CardEngine.deliverDoubleheaderCard({ key: `wx:dh:${st.seasonNum || 1}:${date}`, date, firstPitch: games[0].gameTime,
+                                       nextId, longId, opp: g2.opponent || '', makeupOf: _wxDay(makeupOf) }, atMs);
+}
+
 /** Our games the weather acts on now (a plan's postponement; a suspended game's turn). */
 function _userWeatherEvents(state, clockMs) {
   const out = [];
@@ -1954,6 +2011,7 @@ function _postponeGame(ref, atMs) {
   const plan = g.wx;
   const entry = { date: g.date, gameTime: g.gameTime, decidedAt: plan.decidedAt, reason: plan.reason, calledBy: plan.calledBy };
   const why = _wxReasonWord(plan.reason);
+  let dhFor = null;
   if (g.isSpring) {
     StateManager.mutate(s => {
       const x = _wxResolve(s, ref).g;
@@ -1969,6 +2027,8 @@ function _postponeGame(ref, atMs) {
   }
   const moves = g.isPlayoff || g.isAllStar ? seriesShift(st, g, isUser).map(m => ({ ...m, venueId: null })) : null;
   const slot = moves ? null : findMakeupSlot(st, g, isUser, atMs);
+  // §102.5 a question about this game's start is moot now (and any doubleheader that date is undone).
+  if (isUser) { CardEngine.withdrawWeatherCards(`wx:start:${st.seasonNum || 1}:${g.gameTime}`); CardEngine.withdrawWeatherCards(`wx:dh:${st.seasonNum || 1}:${g.date}`); }
   StateManager.mutate(s => {
     const x = _wxResolve(s, ref).g;
     x.postponements = [...(x.postponements || []), entry];
@@ -1985,10 +2045,12 @@ function _postponeGame(ref, atMs) {
       x.status = GAME_STATUS.POSTPONED; x.cancelled = true; if (!isUser) x.played = true;
     }
     const when = x.cancelled ? 'cancelled' : `${x.isAllStar ? 'moved to' : 'makeup'} ${_wxDay(x.date)}${slot?.how?.endsWith('dh') ? ' (doubleheader)' : ''}`;
+    if (isUser && slot?.how?.endsWith('dh')) dhFor = x.date;
     s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('weather', isUser ? s.userTeam.abbr : _wxTeamAbbr(s, gameTeams(x, isUser).homeId),
       `${x.isPlayoff ? 'Playoffs: ' : ''}${x.isAllStar ? 'The All-Star Game' : _wxMatchup(s, x, isUser)} postponed (${why}) — ${when}`, atMs)]);
     _wxSortSchedule(s);
   });
+  if (dhFor) _wxDoubleheaderCard(dhFor, entry.date, atMs);
 }
 
 /**
@@ -2735,6 +2797,7 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
   if (!state.tradeDesk?.nextAtMs) StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: LeagueTrades.nextDeskAt(clockMs) }; });
   for (let guard = 0; guard < 12000; guard++) {
     _ensureWeatherPlans(clockMs);   // §102.3 every game's weather, a few hours ahead
+    _wxUserCards(clockMs);          // §102.5 the manager's question when rain threatens our game
     const st   = StateManager.get();
     const game = [..._leagueGameEvents(st, clockMs), ..._userWeatherEvents(st, clockMs)].sort((a, b) => a.at - b.at)[0];
     const os   = Offseason.dueSteps(st, clockMs)[0];

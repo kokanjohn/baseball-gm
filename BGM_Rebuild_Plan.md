@@ -8314,3 +8314,35 @@ The dashboard UI test passes with no page errors. Showing these states on screen
 - a called game (the ruling, the schedule's innings and note).
 
 14 / 14 pass in dark and light, with no page errors. The existing dashboard radar test still passes.
+
+#### 102.5 4d-2 — weather decisions in the inbox (r110)
+
+Every weather card is a real decision about **who pitches**, made on the forecast the GM can see, with a real effect. The weather's other news (postponements, makeups, suspensions) goes on the Recent list, not the inbox.
+
+**"Rain likely tonight — start X?"** (`wx_rain_start`)
+- *When:* three hours before each of our regular-season and postseason games (`START_CARD_LEAD_MIN`), the manager reads the GM's own forecast (`chanceOfPrecip` for the game window, run made then). He asks if the chance is at least `START_CARD_CHANCE` (60%) and there's a rested alternative in the rotation.
+- *The card says:* the chance, the first pitch, and the rule — a delay of 45 minutes or more (`ARM_COOL_MIN`) ends the night of the pitcher on the mound, spending his turn.
+- *Hold X, start Y:* tonight's rotation spot goes to Y and the next to X; everyone else keeps their order (`wx_hold_starter`).
+- *Start X:* nothing changes.
+- *Timing:* expires 30 minutes before first pitch, defaulting to "Start X". It's withdrawn if the game is called off first, and isn't asked at all if the club calls it off at the 3-hour look.
+
+**"Doubleheader — who starts game two?"** (`wx_doubleheader`)
+- *When:* a rainout makes one of our days a doubleheader (a makeup slot of either doubleheader kind).
+- *Bullpen game:* the long man opens (`bullpenRoles(...).long[0]`) and the pen covers. Game two carries `userStarterId` (SimEngine starts him) and `keepRotation` (the commit doesn't turn the rotation), so the rotation stays on schedule (`wx_bullpen_game`).
+- *Next man in turn:* every starter's turn comes a day sooner.
+- *Timing:* expires an hour before game one, defaulting to the next man. Withdrawn if the doubleheader is undone.
+
+**Engine:**
+- `SimEngine.rotationStarter` (exported: the sim's own choice) and `game.userStarterId`;
+- `commitGame` respects `keepRotation`;
+- `GameEngine._wxUserCards` (on the clock), `_wxDoubleheaderCard`;
+- `CardEngine.deliverRainStartCard` / `deliverDoubleheaderCard` / `withdrawWeatherCards`, and `wx_` actions.
+
+**Harness:**
+- `tools/harness/check-weather-cards.mjs`, 11 checks in a real league:
+  - holding the starter puts the alternate on the mound tonight and the held man next game;
+  - "start him" changes nothing;
+  - the bullpen game's long man starts game two and the rotation doesn't turn;
+  - the asking rate (4 of 60 games at 60%+);
+- `sim-season`: the weather cards are asked and none are left hanging.
+- North, seed 2: asked twice; 3,620 / 3,620 checks.

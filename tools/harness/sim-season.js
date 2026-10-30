@@ -1208,6 +1208,12 @@ function checkWeatherSeason(st) {
   const noWx = all.filter(x => x.played && !x.g.weather?.label);
   check(`weather: every game played keeps its weather at first pitch (${all.filter(x => x.played).length} games)`, noWx.length === 0,
         noWx.slice(0, 3).map(x => `${x.g.date} ${x.homeId}`).join(', '));
+  // §102.5 the weather's decisions: the manager asked about starters when rain was likely; doubleheaders asked about game two.
+  const wxCards = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c.tag === 'WEATHER');
+  const byId = (id) => wxCards.filter(c => c.cardId === id);
+  const userDh = all.filter(x => x.user && !x.g.isSpring && x.g.makeup?.how?.endsWith('dh')).length;
+  check(`weather cards: the manager asked about the starter ${byId('wx_rain_start').length} times; ${byId('wx_doubleheader').length} doubleheader questions (${userDh} of our makeups were doubleheaders); none left hanging`,
+        byId('wx_rain_start').length >= 1 && wxCards.every(c => c.resolved || (c.expiresAtMs ?? Infinity) > clock.get()));
   const delayed = all.filter(x => x.played && x.g.wxResult?.delays?.length).length;
   const called = all.filter(x => x.played && x.g.wxResult?.ruling?.outcome === 'final').length;
   const n = reg.length;

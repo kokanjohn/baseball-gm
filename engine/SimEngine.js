@@ -188,7 +188,9 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   // Select starting pitchers from rotation
   // §76: the starter in turn, if he's had his rest (else the next who has).
   const atMs    = game.gameTime || 0;
-  const userSP  = _getRotationSP(userTeam, players, atMs);
+  // §102.5 the GM can name this game's starter (a bullpen game in a doubleheader).
+  const named   = game.userStarterId && players[game.userStarterId] && isAvailable(players[game.userStarterId]) ? { id: game.userStarterId } : null;
+  const userSP  = named || _getRotationSP(userTeam, players, atMs);
   const oppSP   = _getRotationSP(effectiveOppTeam, players, atMs) || _findHealthySP(effectiveOppTeam.rosterIds || [], players);
 
   // Field condition modifiers
@@ -2298,6 +2300,15 @@ function _getRotationSP(team, players, atMs = null) {
   const spId = rotation.order[rotation.currentIndex % n];
   if (players[spId] && isAvailable(players[spId])) return { id: spId };
   return _findHealthySP(team.rosterIds || [], players);
+}
+
+/**
+ * rotationStarter(team, players, atMs) — who starts for a club at a moment by
+ * its rotation (the man in turn, or the next who has had his rest): the same
+ * choice the sim makes at first pitch.
+ */
+export function rotationStarter(team, players, atMs) {
+  return _getRotationSP(team, players, atMs)?.id || null;
 }
 
 function _getCPUSP(team, players) {

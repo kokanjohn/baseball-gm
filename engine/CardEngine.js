@@ -50,6 +50,7 @@ import {
   LEAGUE_TRADES,
   GAME_REMINDER,
   CARD_MONEY_BASE_TARGET_K,
+  GAME_WEATHER,
 } from '../data/constants.js';
 
 import {
@@ -82,6 +83,7 @@ import * as LeagueTrades from './LeagueTrades.js';
 import { buildActivityFeedEntry, pruneActivityFeed } from './SeasonEngine.js';
 const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
+import { starterRested } from './PitchingEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -2410,6 +2412,108 @@ const _voice = (state, stage) => {
 };
 
 /** What's worrying the owner, in words (payroll over target, red ink, cost per win). */
+// ─────────────────────────────────────────────────────────────
+// WEATHER DECISIONS (§102.5) — who pitches when the weather gets a say
+// ─────────────────────────────────────────────────────────────
+
+const _wxPct = (n) => `${n}%`;
+
+/**
+ * Rain or storms likely during tonight's game (the GM's own forecast, read
+ * three hours before first pitch): start the man in turn as planned, or hold
+ * him a day and start the next man. A delay of ARM_COOL_MIN or more ends the
+ * night of whoever is on the mound — a start cut short spends a turn.
+ * Yes: the two swap places in the rotation (the held man pitches next time).
+ */
+export function deliverRainStartCard(info, atMs) {
+  const state = StateManager.get();
+  const sp = state.players[info.starterId], alt = state.players[info.altId];
+  if (!sp || !alt) return null;
+  const what = info.kind === 'storms' ? 'storms' : info.kind === 'snow' ? 'snow' : 'rain';
+  const at = info.city ? ` in ${info.city}` : '';
+  return _deliverAt(_rosterCard(state, {
+    cardId: 'wx_rain_start', tag: 'WEATHER', sender: _managerName(state), avatar: '🌧', type: 'urgent',
+    _rosterKey: info.key, _wxGameTime: info.gameTime,
+    subject: `${what[0].toUpperCase()}${what.slice(1)} likely tonight — start ${sp.name}?`,
+    preview: `${_wxPct(info.chance)} chance of ${what} during the game${at}. Hold ${sp.name} a day and start ${alt.name}?`,
+    body: `The forecast for tonight${at} gives a ${_wxPct(info.chance)} chance of ${what} during the game (first pitch ${_clock(info.gameTime)}). `
+        + `If play stops for ${GAME_WEATHER.ARM_COOL_MIN} minutes or more, the pitcher on the mound doesn't go back out — a start cut short is a turn of the rotation spent. `
+        + `We can hold ${_who(sp)} a day and give the ball to ${_who(alt)} tonight; ${sp.name} would start the next game, on an extra day's rest. `
+        + `Or start ${sp.name} as planned and take our chances with the weather.`,
+    yesLabel: `Hold ${sp.name}, start ${alt.name}`, noLabel: `Start ${sp.name}`,
+    autoResolve: 'no', expiresAtMs: info.gameTime - 30 * 60_000,
+    _raw: { onYes: 'wx_hold_starter', onNo: null, starterId: info.starterId, altId: info.altId },
+  }), atMs);
+}
+
+/**
+ * A doubleheader is on our schedule (a makeup): two starts in one day. Game
+ * two goes to the next man in the rotation (everyone's turn comes a day
+ * early), or it's a bullpen game — the long man opens, the pen covers the
+ * rest, and the rotation stays on schedule.
+ */
+export function deliverDoubleheaderCard(info, atMs) {
+  const state = StateManager.get();
+  const lr = state.players[info.longId], nx = state.players[info.nextId];
+  if (!lr) return null;
+  const day = _day(info.firstPitch);
+  return _deliverAt(_rosterCard(state, {
+    cardId: 'wx_doubleheader', tag: 'WEATHER', sender: _managerName(state), avatar: '⚾', type: 'normal',
+    _rosterKey: info.key, _wxDate: info.date,
+    subject: `Doubleheader ${day} — who starts game two?`,
+    preview: `The makeup of ${info.makeupOf} makes it two games ${day}. ${nx ? `${nx.name} in turn, or a bullpen game?` : 'A bullpen game?'}`,
+    body: `${info.makeupOf ? `The rainout of ${info.makeupOf} is being made up ` : 'We play two '}${day} (${info.opp}) — two starts in one day. `
+        + `${nx ? `Game two can go to the next man in the rotation, ${_who(nx)}: every starter's turn comes a day sooner after that. ` : 'Game two can go to the next man in the rotation: every starter\'s turn comes a day sooner after that. '}`
+        + `Or we make it a bullpen game: ${_who(lr)} opens and the pen covers the rest — the rotation stays on schedule, and the relievers carry the load for a day.`,
+    yesLabel: `Bullpen game — ${lr.name} opens`, noLabel: nx ? `${nx.name} starts game two` : 'Next starter goes',
+    autoResolve: 'no', expiresAtMs: info.firstPitch - 60 * 60_000,
+    _raw: { onYes: 'wx_bullpen_game', onNo: null, longId: info.longId },
+  }), atMs);
+}
+
+/** Withdraw unresolved weather cards whose key starts with `prefix` (the game moved or was called off). */
+export function withdrawWeatherCards(prefix) {
+  return _withdraw(c => c.tag === 'WEATHER' && String(c._rosterKey || '').startsWith(prefix));
+}
+
+/** The weather decisions (inside _applyRosterAction). */
+function _applyWeatherAction(action, instance, atMs) {
+  const raw = instance._raw || {};
+  if (action === 'wx_hold_starter') {
+    // Still tonight's game, not started, both men able: they swap places in the rotation.
+    const st = StateManager.get();
+    const g = st.schedule?.[st.currentGameIndex || 0];
+    const rot = st.userTeam.rotation;
+    if (!g || g._committed || g.gameTime !== instance._wxGameTime || (g.plays && g.plays.length) || !rot?.order?.length) return;
+    const a = rot.order.indexOf(raw.starterId), b = rot.order.indexOf(raw.altId);
+    const alt = st.players[raw.altId];
+    if (a < 0 || b < 0 || !alt || !isAvailable(alt) || !starterRested(alt, g.gameTime)) return;
+    // Tonight's spot goes to the alternate, the next to the man held; everyone else keeps their order.
+    StateManager.mutate(s => {
+      const r = s.userTeam.rotation, n = r.order.length, c = r.currentIndex % n;
+      const before = [raw.starterId, raw.altId].filter(id => r.order.indexOf(id) < c).length;
+      const o = r.order.filter(id => id !== raw.starterId && id !== raw.altId);
+      const pos = Math.max(0, c - before);
+      o.splice(pos, 0, raw.altId, raw.starterId);
+      r.order = o;
+      r.currentIndex = pos;
+    });
+    return;
+  }
+  if (action === 'wx_bullpen_game') {
+    // Game two of that day's doubleheader, if it's still a doubleheader and game two hasn't started.
+    const st = StateManager.get();
+    const games = (st.schedule || []).filter(g => g.date === instance._wxDate && !g.cancelled).sort((x, y) => x.gameTime - y.gameTime);
+    const g2 = games[1];
+    const lr = st.players[raw.longId];
+    if (games.length < 2 || !g2 || g2._committed || (g2.plays && g2.plays.length) || !lr || !isAvailable(lr) || lr.teamId !== 'user') return;
+    StateManager.mutate(s => {
+      const x = s.schedule[g2.index];
+      if (x) { x.userStarterId = raw.longId; x.keepRotation = true; }
+    });
+  }
+}
+
 function _strainWords(strain) {
   const parts = [];
   if (strain.over > 0.5) parts.push(`payroll is ${formatK(strain.payroll)}, ${Math.round(strain.over)}% over the ${formatK(strain.target)} target`);
@@ -3328,6 +3432,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
   if (action.startsWith('fin_')) { _applyFinanceAction(action, instance, atMs); return; }
   if (action.startsWith('talk_')) { _applyTalkAction(action, instance, atMs); return; }
   if (action.startsWith('lt_')) { _applyLeagueTradeAction(action, instance, atMs); return; }
+  if (action.startsWith('wx_')) { _applyWeatherAction(action, instance, atMs); return; }
   if (CARD_ACTIONS[action]) { _applyCardAction(action, { ...instance, choice }, atMs, feasible); return; }
 
   const playerId = instance._targetPlayerId || null;

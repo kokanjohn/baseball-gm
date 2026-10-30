@@ -597,6 +597,9 @@ export const GAME_WEATHER = Object.freeze({
   DH_GAP_MIN:          240,   // or, before a day game, that game moves this much later
   SLOT_MIN_LEAD_MIN:   120,   // a makeup or resumption is never set sooner than this
   DH_BREAK_MIN:        30,    // a doubleheader's second game starts no sooner than this after the first ends
+  // §102.5 the weather's decisions for the GM
+  START_CARD_LEAD_MIN: 180,   // three hours before first pitch, the manager reads the forecast…
+  START_CARD_CHANCE:   60,    // …and asks about the starter if rain is this likely during the game
 });
 
 // ─────────────────────────────────────────────────────────────
