@@ -7748,3 +7748,49 @@ The field is painted per cell, then scaled up with smoothing.
 - phantoms: 53 at 5 days, 0 at 2 hours.
 
 `radar-preview.html` takes `day:hour:lead` frames to draw the forecast made `lead` hours earlier.
+
+### 100.6 Step 1f done — chances of rain and the 10-day forecast (r98)
+
+**`engine/WeatherForecast.js`** (pure; cached per hourly run).
+
+**`chanceOfPrecip(ctx, nowMs, x, y, t0, t1)`** — the chance of measurable precipitation (0.01") at a point over any window.
+- **The ensemble:** the main run (member 0 — what the radar's future frames show; it counts as 2 members) plus 12 members. Each member is a run made at the same hour with its own errors, foresees and misses its own systems, and places its own pop-up storms. Members are sampled every 30 minutes out to 3 days, hourly after that. The rain-vs-snow work is skipped when the normal low is above 40 °F.
+- **Raw share:** (wet + 0.25) / (14 + 0.5).
+- **`calibrateChance(raw, climate, lead)`** = σ(logit c + a·(logit r − logit c) + b).
+  - c is the climate's chance for the window (`climateChance`: the wet-day normal scaled as 1 − (1 − p_day)^((h/24)^0.7)).
+  - a = 1.65 when the ensemble leans wet and 1.15 when it leans dry. It is held to about 4½ days, then fades to 0.2 by about 8½ days, where the forecast is essentially the climate.
+  - b drifts from −0.1 to +0.2.
+  - This was fitted on four regions × four seeds × a season, for windows of 3 hours and a day, then checked on seeds it wasn't fitted on. Within a day: 7% → 7%, 27% → 30%, 48% → 50%, 66% → 67%, 96% → 95%. At day 4: 9% → 16%, 24% → 20%, 44% → 44%, 63% → 70%, 88% → 96%.
+- **Never contradicts the radar:** within 24 hours, rain the radar shows at the park is never below 30%, and a dry radar is never above 80%.
+- **Returns:** { chance (0, then steps of 10), raw, climate, kind (rain / storms / snow / mix), timing (share overnight / morning / afternoon / evening), mainWet }.
+
+**`dailyForecast(ctx, nowMs, x, y, 10)`** — one entry per local day from today:
+- the baseball-calendar date (`WeatherClimate.baseballDateIso`; null in the offseason);
+- the day's high and tonight's low, from the main run, drawn toward normals further out (`tempTrust`: full trust to a day, about 35% at day 10);
+- the chance for the rest of the day;
+- kind;
+- a label, a summary and an icon:
+  - **60% and up:** "Thunderstorms in the afternoon. Chance 70%."
+  - **30–59%:** "Partly cloudy, with a chance of storms in the evening. Chance 40%."
+  - **10–29%:** "Mostly sunny. A slight chance of showers."
+  - **Under 10%:** the sky alone.
+- the afternoon wind.
+
+**`hourlyForecast(ctx, nowMs, x, y, hours)`** — hour by hour for a game window: temperature, the chance for that hour, label, icon and wind.
+
+**Speed:** a 10-day forecast takes about 0.8 s in Node and is computed once per hour. To get there:
+- the pop-up storm cache now uses numeric keys per world, looked up once per query;
+- the normals are memoised per 10 minutes;
+- calendar dates are memoised.
+
+**Harness (`check-weather.mjs`, 97 checks; 10 new):**
+- chances verify on held-out seeds (bins with 30 or more cases within 12 points; days 1 and 4);
+- no wet or dry lean (forecast 35% vs 36% of days wet);
+- skill over the climate: 0.68 at day 1, 0.35 at day 4, 0.03 at day 10;
+- within a day the chance never contradicts the radar (0 of 240);
+- 10 days on the baseball calendar;
+- the words match the chances;
+- highs above tonight's lows;
+- forecast highs are off by 0.9° today, 4.9° at day 7 and 3.9° at day 10 (the run alone: 5.7°);
+- 10-day speed;
+- the hourly window.

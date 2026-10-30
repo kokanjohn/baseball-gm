@@ -56,9 +56,15 @@ export function localDayStart(t, tzMin) {
   return Math.floor((t + off) / MS_DAY) * MS_DAY - off;
 }
 
+const _doyMemo = new Map();
 const _doyOfIso = (iso) => {
-  const [y, m, d] = String(iso).split('-').map(Number);
-  return (Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / MS_DAY;
+  let v = _doyMemo.get(iso);
+  if (v === undefined) {
+    const [y, m, d] = String(iso).split('-').map(Number);
+    v = (Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / MS_DAY;
+    _doyMemo.set(iso, v);
+  }
+  return v;
 };
 
 /**
@@ -127,6 +133,21 @@ export function calendarDay(cal, t) {
   return { doy: endDoy, blendDoy: _doyOfIso(seg.nextDispIso), w };
 }
 
+/**
+ * baseballDateIso(cal, t) — the date on the baseball calendar for moment t
+ * ('YYYY-MM-DD'), or null in an offseason (no games, no dates) or with no
+ * calendar. A season's days run one-for-one from its first day.
+ */
+export function baseballDateIso(cal, t) {
+  let seg = null;
+  for (const a of cal || []) { const start = a.kind === 'season' ? a.realStartMs : a.fromMs; if (start <= t) seg = a; }
+  if (!seg || seg.kind !== 'season') return null;
+  const days = Math.floor((t - seg.realStartMs) / MS_DAY);
+  const [y, m, d] = seg.dispIso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+}
+
 // ── Normals ─────────────────────────────────────────────────────────────────
 
 const MONTH_MID_DOY = [15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349];
@@ -146,8 +167,19 @@ export function normalsOnDay(region, doy) {
   return out;
 }
 
-/** The normals in force at moment t (offseason-blended). */
+/** The normals in force at moment t (offseason-blended). Memoised per 10 minutes (they change slowly). */
+const _normMemo = new Map();
 export function normalsAt(ctx, t) {
+  const bucket = Math.floor(t / 600_000);
+  let byCal = _normMemo.get(ctx.cal);
+  if (!byCal) { if (_normMemo.size > 20) _normMemo.clear(); byCal = new Map(); _normMemo.set(ctx.cal, byCal); }
+  const key = bucket * 4 + ['north', 'south', 'east', 'west'].indexOf(ctx.region);
+  let v = byCal.get(key);
+  if (!v) { if (byCal.size > 50000) byCal.clear(); v = _normalsAt(ctx, bucket * 600_000 + 300_000); byCal.set(key, v); }
+  return v;
+}
+
+function _normalsAt(ctx, t) {
   const day = calendarDay(ctx.cal, t);
   const a = normalsOnDay(ctx.region, day.doy);
   if (day.blendDoy == null) return a;

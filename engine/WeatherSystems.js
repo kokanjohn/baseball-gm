@@ -166,11 +166,19 @@ function _centre(s, t) {
  * off by the run's read of the day (the true trigger at short range,
  * its own guess further out).
  */
-function _cellsAt(ctx, gx, gy, slot, model = null) {
-  const key = `${ctx.seed}|${ctx.region}|${gx}|${gy}|${slot}${model ? `|${model.key}` : ''}`;
-  const hit = _cellCache.get(key);
+function _cellWorld(ctx, model) {
+  const wk = `${ctx.seed}|${ctx.region}${model ? `|${model.key}` : ''}`;
+  let world = _cellCache.get(wk);
+  if (!world) { _cap(_cellCache, 400); world = new Map(); _cellCache.set(wk, world); }
+  return world;
+}
+
+function _cellsAt(ctx, gx, gy, slot, model = null, world = _cellWorld(ctx, model)) {
+  // Numeric keys inside a map per world (truth, or a run's own storms): this is the hot path.
+  const key = (slot * 256 + (gx + 128)) * 256 + (gy + 128);
+  const hit = world.get(key);
   if (hit) return hit;
-  _cap(_cellCache, 60000);
+  if (world.size > 200000) world.clear();
   const placeSeed = model ? model.placeSeed : ctx.seed;
   const r = stream(placeSeed, hash(ctx.region, 7), gx, gy, slot);
   const roll = r.next();
@@ -216,7 +224,7 @@ function _cellsAt(ctx, gx, gy, slot, model = null) {
       }
     }
   }
-  _cellCache.set(key, out);
+  world.set(key, out);
   return out;
 }
 
@@ -258,14 +266,15 @@ export function activeSystems(ctx, t, bounds, cellBounds = bounds) {
   const gy0 = Math.floor((cb.y0 - pad) / CELL_GRID_KM), gy1 = Math.floor((cb.y1 + pad) / CELL_GRID_KM);
   const sl0 = Math.floor((t - CELL_MAX_LIFE_MS - 3 * 35 * 60_000) / CELL_SLOT_MS), sl1 = Math.floor(t / CELL_SLOT_MS);
   const run = ctx.run, model = run ? _modelOf(ctx) : null;
+  const wT = _cellWorld(ctx, null), wM = model ? _cellWorld(ctx, model) : null;
   for (let gx = gx0; gx <= gx1; gx++) for (let gy = gy0; gy <= gy1; gy++) for (let sl = sl0; sl <= sl1; sl++) {
     // In a forecast: the storms already up when the run was made (nowcast),
     // then the run's own storms after that.
     const slotStart = sl * CELL_SLOT_MS;
-    const lists = !run ? [_cellsAt(ctx, gx, gy, sl)]
-      : slotStart + CELL_SLOT_MS <= run.issueMs + NOWCAST_MS ? [_cellsAt(ctx, gx, gy, sl).filter(c => c.t0 <= run.issueMs + NOWCAST_MS)]
-      : slotStart >= run.issueMs + NOWCAST_MS ? [_cellsAt(ctx, gx, gy, sl, model)]
-      : [_cellsAt(ctx, gx, gy, sl).filter(c => c.t0 <= run.issueMs + NOWCAST_MS), _cellsAt(ctx, gx, gy, sl, model).filter(c => c.t0 > run.issueMs + NOWCAST_MS)];
+    const lists = !run ? [_cellsAt(ctx, gx, gy, sl, null, wT)]
+      : slotStart + CELL_SLOT_MS <= run.issueMs + NOWCAST_MS ? [_cellsAt(ctx, gx, gy, sl, null, wT).filter(c => c.t0 <= run.issueMs + NOWCAST_MS)]
+      : slotStart >= run.issueMs + NOWCAST_MS ? [_cellsAt(ctx, gx, gy, sl, model, wM)]
+      : [_cellsAt(ctx, gx, gy, sl, null, wT).filter(c => c.t0 <= run.issueMs + NOWCAST_MS), _cellsAt(ctx, gx, gy, sl, model, wM).filter(c => c.t0 > run.issueMs + NOWCAST_MS)];
     for (const list of lists) for (const s of list) {
       const life = _life(s, t);
       if (life <= 0) continue;
@@ -319,8 +328,10 @@ function _runNoise(seed, k, member, issueMs) {
 
 function _modelOf(ctx) {
   const run = ctx.run;
+  if (run._model) return run._model;
   const bucket = Math.floor(run.issueMs / MODEL_CELL_BUCKET_MS);
-  return { key: `m${run.member}|${bucket}|${run.issueMs}`, placeSeed: `${ctx.seed}~cells~${run.member}~${bucket}`, issue: run.issueMs };
+  run._model = { key: `m${run.member}|${bucket}|${run.issueMs}`, placeSeed: `${ctx.seed}~cells~${run.member}~${bucket}`, issue: run.issueMs };
+  return run._model;
 }
 
 /** The synoptic systems of one slot as the run sees them (truth when there's no run). */
@@ -669,7 +680,7 @@ export function precipTemp(ctx, x, y, t) {
  * precipAt(ctx, x, y, t) — what's falling at a point:
  * { dbz, kind, rateMmH, convective } (dbz −Infinity / rate 0 when dry).
  */
-export function precipAt(ctx, x, y, t) {
+export function precipAt(ctx, x, y, t, opts = null) {
   const act = activeSystems(ctx, t, { x0: x, y0: y, x1: x, y1: y });
   let conv = 0;
   const parts = act.map(a => {
@@ -679,7 +690,8 @@ export function precipAt(ctx, x, y, t) {
   });
   const dbz = _sum(parts);
   if (!(dbz > DBZ_MIN)) return { dbz: -Infinity, kind: PRECIP_RAIN, rateMmH: 0, convective: false };
-  const kind = precipKind(precipTemp(ctx, x, y, t), dbz);
+  // (opts.kind === false: the caller knows it can't be snow — skip the temperature.)
+  const kind = opts && opts.kind === false ? PRECIP_RAIN : precipKind(precipTemp(ctx, x, y, t), dbz);
   return { dbz, kind, rateMmH: rainRate(dbz), convective: !!conv };
 }
 

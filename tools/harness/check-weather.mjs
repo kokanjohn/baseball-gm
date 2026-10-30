@@ -523,5 +523,80 @@ const csi = (a, b, thr) => {
   check(`forecasts a few days out show systems that never happen; up close they're gone (${farPh} at 5 days, ${nearPh} at 2 hours)`, farPh > 20 && nearPh <= farPh * 0.05);
 }
 
+// ── 1f: chances and the 10-day forecast ─────────────────────────────────────
+console.log('\nChances and the 10-day forecast');
+const WF = await import('../../engine/WeatherForecast.js');
+{
+  // Calibration, on seeds the calibration wasn't fitted on: "40%" rains about 40% of the time.
+  const leads = [12, 84, 228];
+  const res = Object.fromEntries(leads.map(L => [L, []]));
+  let radarBad = 0, radarN = 0;
+  for (const region of ['north', 'south', 'east', 'west']) for (const seed of ['wx-g', 'wx-h']) {
+    const c = ctxFor(region, seed);
+    for (let d = 15; d < 195; d += 6) {
+      const t0 = START + d * MS_DAY, t1 = t0 + MS_DAY;
+      const obs = rainTotal(c, 0, 0, t0, t1, 10) >= 0.01 ? 1 : 0;
+      for (const L of leads) {
+        const ch = WF.chanceOfPrecip(c, t0 - L * MS_HOUR, 0, 0, t0, t1);
+        res[L].push([ch.chance / 100, ch.climate / 100, obs]);
+        if (L <= 24) { radarN++; if (ch.mainWet ? ch.chance < 30 : ch.chance > 80) radarBad++; }
+      }
+    }
+  }
+  const bss = (r) => 1 - r.reduce((a, [p, , o]) => a + (p - o) ** 2, 0) / r.reduce((a, [, c, o]) => a + (c - o) ** 2, 0);
+  const pooled = [...res[12], ...res[84]];
+  const bins = [[0, 0.15], [0.15, 0.35], [0.35, 0.55], [0.55, 0.8], [0.8, 1.01]].map(([lo, hi]) => {
+    const b = pooled.filter(x => x[0] >= lo && x[0] < hi);
+    return { n: b.length, fc: b.reduce((a, x) => a + x[0], 0) / Math.max(1, b.length), obs: b.reduce((a, x) => a + x[2], 0) / Math.max(1, b.length) };
+  });
+  const worst = bins.filter(b => b.n >= 30).reduce((m, b) => Math.max(m, Math.abs(b.fc - b.obs)), 0);
+  check(`chances verify: ${bins.filter(b => b.n).map(b => `${Math.round(100 * b.fc)}%→${Math.round(100 * b.obs)}% (${b.n})`).join(', ')} (days 1 and 4, held-out seeds)`, worst <= 0.12);
+  const meanFc = pooled.reduce((a, x) => a + x[0], 0) / pooled.length, meanObs = pooled.reduce((a, x) => a + x[2], 0) / pooled.length;
+  check(`no wet or dry lean (forecast ${(100 * meanFc).toFixed(0)}% vs ${(100 * meanObs).toFixed(0)}% of days wet)`, Math.abs(meanFc - meanObs) <= 0.06);
+  const s1 = bss(res[12]), s4 = bss(res[84]), s10 = bss(res[228]);
+  check(`chances beat the climate where they should (skill day 1 ${s1.toFixed(2)}, day 4 ${s4.toFixed(2)}, day 10 ${s10.toFixed(2)})`, s1 >= 0.4 && s4 > 0.1 && s10 > -0.05);
+  check(`within a day the chance never contradicts the radar (${radarBad} of ${radarN})`, radarBad === 0);
+}
+{
+  // The 10-day forecast: dates, words that match the numbers, highs near what happens.
+  const c = ctxFor('east', 'wx-g');
+  let datesOk = true, wordsBad = [], hiLo = 0, n = 0;
+  const err = { 1: [], 7: [], 10: [], raw10: [] };
+  for (let d = 20; d < 180; d += 9) {
+    const now = START + d * MS_DAY + 8 * MS_HOUR;
+    const f = WF.dailyForecast(c, now, 0, 0, 10);
+    if (f.length !== 10) datesOk = false;
+    f.forEach((e, i) => {
+      if (i && e.dateIso && f[i - 1].dateIso && (Date.parse(e.dateIso) - Date.parse(f[i - 1].dateIso)) !== MS_DAY) datesOk = false;
+      if (e.chance >= 60 && !/Thunderstorms|Rain|Snow|Storms/.test(e.label)) wordsBad.push(`${e.chance}% ${e.label}`);
+      if (e.chance < 10 && /Rain|Storm|Snow|showers/.test(e.label + e.summary)) wordsBad.push(`${e.chance}% ${e.summary}`);
+      if (e.chance >= 10 && !e.summary.includes('chance') && !e.summary.includes('Chance')) wordsBad.push(`${e.chance}% "${e.summary}"`);
+      n++; if (e.hiF >= e.loF - 2) hiLo++;
+    });
+    // Highs against what happened.
+    for (const k of [1, 7, 10]) {
+      const e = f[k - 1], t0 = e.dayStartMs;
+      const actual = Math.max(...[13, 14.5, 16, 17.5].map(h => conditionsAt(c, 0, 0, t0 + h * MS_HOUR).tempF));
+      if (k > 1 || e.hiF != null) err[k].push(Math.abs(e.hiF - actual));
+      if (k === 10) {
+        const run = WS.forecastContext(c, now, 0);
+        err.raw10.push(Math.abs(Math.max(...[13, 14.5, 16, 17.5].map(h => conditionsAt(run, 0, 0, t0 + h * MS_HOUR).tempF)) - actual));
+      }
+    }
+  }
+  const mae = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  check('the 10-day forecast runs ten days on the baseball calendar', datesOk);
+  check(`its words match its chances (${wordsBad.length} mismatches)`, wordsBad.length === 0, wordsBad.slice(0, 3).join(' | '));
+  check(`highs above tonight's lows (${hiLo}/${n})`, hiLo / n >= 0.95);
+  check(`forecast highs: off by ${mae(err[1]).toFixed(1)}° today, ${mae(err[7]).toFixed(1)}° at day 7, ${mae(err[10]).toFixed(1)}° at day 10 (the run alone: ${mae(err.raw10).toFixed(1)}°)`,
+        mae(err[1]) <= 3.5 && mae(err[7]) <= 7 && mae(err[10]) <= mae(err.raw10) + 0.3);
+  const t0 = performance.now();
+  WF.dailyForecast(c, START + 150.4 * MS_DAY, 0, 0, 10);
+  const ms = performance.now() - t0;
+  check(`a 10-day forecast takes ${ms.toFixed(0)} ms (computed once an hour)`, ms < 3000);
+  const hr = WF.hourlyForecast(c, START + 150.4 * MS_DAY, 0, 0, 6);
+  check(`an hourly forecast for a game window (${hr.map(h => `${h.tempF}° ${h.chance}%`).join(', ')})`, hr.length === 6 && hr.every((h, i) => !i || h.t - hr[i - 1].t === MS_HOUR));
+}
+
 console.log(`\n${pass}/${pass + fail} checks passed`);
 process.exit(fail ? 1 : 0);
