@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Radar frames test</title></head><body><script type="module">
+// §100 (2a) Builds a loop through the radar worker; compares with the main thread; measures the main thread staying free.
+import { createFrameSource, clearFrameCache } from '../../ui/components/RadarFrameSource.js';
+import { frameTimes, viewBox, buildFrame } from '../../engine/RadarFrames.js';
+import { regionMap } from '../../engine/WeatherMap.js';
+import { localDayStart, MS_DAY, MS_HOUR } from '../../engine/WeatherClimate.js';
+const q = new URLSearchParams(location.search);
+const tz = -240, START = localDayStart(Date.UTC(2026, 9, 30, 12), tz);
+const state = { weatherSeed: 'wx-a', weatherTzMin: tz, settings: { region: q.get('region') || 'north' },
+  weatherCalendar: [{ kind: 'season', season: 1, realStartMs: START, dispIso: '2027-03-14' }] };
+const now = START + 101 * MS_DAY + 21.6 * MS_HOUR;
+const frames = frameTimes(now, q.get('loop') || 'next6h');
+const grid = viewBox(regionMap(state.settings.region), 'user', +(q.get('zoom') ?? 1), 390 / 500).grid;
+const got = new Map(); let firstMs = null, longest = 0, last = performance.now();
+const beat = setInterval(() => { const n = performance.now(); longest = Math.max(longest, n - last - 50); last = n; }, 50);
+const t0 = performance.now();
+const src = createFrameSource({
+  useWorker: q.get('worker') !== '0',
+  onFrame: (key, f) => { got.set(key, f); if (firstMs == null) firstMs = performance.now() - t0; },
+  onDone: () => {
+    clearInterval(beat);
+    const total = performance.now() - t0;
+    // Compare three frames with ones built here.
+    const base = { seed: 'wx-a', region: state.settings.region, cal: state.weatherCalendar, tzMin: tz, map: regionMap(state.settings.region) };
+    let same = 0;
+    for (const i of [0, 7, frames.length - 1]) {
+      const a = got.get(keys[i]), b = buildFrame(base, frames[i], grid);
+      if (a && a.data.length === b.data.length && a.data.every((v, j) => v === b.data[j])) same++;
+    }
+    document.body.dataset.result = JSON.stringify({ worker: src.usesWorker, frames: frames.length, got: got.size, totalMs: Math.round(total),
+      firstMs: Math.round(firstMs), perFrameMs: Math.round(total / frames.length), mainThreadLongestStallMs: Math.round(longest), same, grid: `${grid.nx}x${grid.ny}` });
+  },
+});
+src.setContext(state);
+const keys = src.request(frames, grid, { first: 0 });
+</script></body></html>

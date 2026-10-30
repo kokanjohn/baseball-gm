@@ -7835,3 +7835,48 @@ The field is painted per cell, then scaled up with smoothing.
 **Harness:** `check-weather.mjs` 97/97. All 8 season seeds pass.
 
 **Step 1 (the weather model) is done** — `WeatherNoise`, `WeatherMap`, `WeatherClimate`, `WeatherSystems`, `WeatherConditions`, `WeatherForecast`, plus the data files. Nothing is on screen yet. **Next: step 2, the radar component.**
+
+## 101. Step 2 — the radar (sub-steps)
+
+- **2a** The frame engine.
+- **2b** The renderer.
+- **2c** The full-screen radar sheet.
+- **2d** The compact radar on the dashboard's next-game card.
+- **2e** Performance and review.
+
+### 101.1 Step 2a done — radar frames (r101)
+
+**`engine/RadarFrames.js`** (pure):
+- **`LOOP_WINDOWS`:**
+  - Past 2 hrs: 13 frames, 10 minutes apart, ending at the latest 10-minute picture.
+  - Next 6 hrs: now, then 24 frames 15 minutes apart.
+  - Next 24 hrs: now, then 24 hourly frames.
+- **`frameTimes(now, loop)`:** the past and now are what happened. The future is the forecast run made in now's hour, the same run the dashboard and schedule read.
+- **`viewBox(map, focusId, zoom, aspect)`:** the view is centred on a ballpark (Region 720 km / Metro 240 km / Ballpark 64 km wide). The grid covers it with a 6% margin at about 200 cells across, so it's 212×272 at a phone's shape at any zoom.
+- **Packed frames, one byte a cell:**
+  - 0 means nothing is falling.
+  - Otherwise rain / mix / snow sits in the top two bits, and the dBZ is level + 11.5, to the nearest half-dBZ either way, so a faint echo never reads as dry.
+  - About 58 KB a frame.
+- **`buildFrame(base, frame, grid)`** and **`frameKey`.**
+
+**`ui/components/radar-worker.js`** (module worker) builds frames off the main thread, one at a time, yielding between them. A newer request (a zoom or loop change) cancels the rest of an older one.
+
+**`ui/components/RadarFrameSource.js`:**
+- **`createFrameSource({ onFrame, onDone })`** with `setContext(state)` / `request(frames, grid, { first })` / `get(key)` / `dispose()`.
+- The frame being shown is built first, then outward.
+- **Shared cache:** a 12 MB byte-budgeted cache, so frames already built come back at once.
+- **Fallback:** without workers (or if the worker dies mid-request), the remaining frames are built on the main thread in slices.
+
+**Harness:**
+- **`check-weather.mjs` (103 checks; 6 new):**
+  - loop timings for all three windows;
+  - the view centres on the park and the grid covers it;
+  - packed frames match the radar field exactly (40,293 wet cells, 0 off; truth and forecast);
+  - a frame builds in about 90–105 ms in Node at every zoom.
+- **`test-radar-frames.mjs` + `radar-frames-test.html`** (Chromium, CPU ×4 to approximate a phone):
+
+  | Path | Loop | First frame | Full loop | Longest main-thread stall | Matches main thread |
+  |---|---|---|---|---|---|
+  | Worker | Metro, Next 6 hrs (25 frames) | 0.5 s | 3.8 s | 51 ms | yes |
+  | Worker | Region, Past 2 hrs (13 frames) | 1.1 s (worker start-up and map build) | 3.3 s | 64 ms | yes |
+  | Fallback (no worker) | Ballpark, Next 24 hrs | 0.1 s | 3.9 s | about 1.1 s once, at start-up | yes |

@@ -598,5 +598,51 @@ const WF = await import('../../engine/WeatherForecast.js');
   check(`an hourly forecast for a game window (${hr.map(h => `${h.tempF}° ${h.chance}%`).join(', ')})`, hr.length === 6 && hr.every((h, i) => !i || h.t - hr[i - 1].t === MS_HOUR));
 }
 
+// ── 2a: radar frames ────────────────────────────────────────────────────────
+console.log('\nRadar frames');
+const RF = await import('../../engine/RadarFrames.js');
+{
+  const now = START + 100 * MS_DAY + 14 * MS_HOUR + 37 * 60_000;   // 2:37 PM
+  const past = RF.frameTimes(now, 'past2h'), n6 = RF.frameTimes(now, 'next6h'), n24 = RF.frameTimes(now, 'next24h');
+  const steps = (a) => a.slice(1).map((f, i) => (f.t - a[i].t) / 60_000);
+  check(`past 2 hrs: ${past.length} frames, 10 minutes apart, ending at the latest picture (${new Date(past.at(-1).t - 240 * 60_000).toISOString().slice(11, 16)} local)`,
+        past.length === 13 && steps(past).every(s => s === 10) && past.every(f => !f.forecast) && past.at(-1).isNow && now - past.at(-1).t < 10 * 60_000);
+  check(`next 6 hrs: now, then ${n6.length - 1} forecast frames 15 minutes apart from this hour's run`,
+        n6.length === 25 && n6[0].isNow && !n6[0].forecast && n6.slice(1).every(f => f.forecast && f.issueMs === Math.floor(now / MS_HOUR) * MS_HOUR)
+        && steps(n6.slice(1)).every(s => s === 15) && n6.at(-1).t <= now + 6 * MS_HOUR);
+  check(`next 24 hrs: now, then ${n24.length - 1} hourly forecast frames`, n24.length === 25 && n24[0].isNow && steps(n24.slice(1)).every(s => s === 60));
+}
+{
+  const c = ctxFor('north', 'wx-a');
+  const v = RF.viewBox(c.map, 'NHV', 1, 390 / 500);
+  const g = v.grid, pk = c.map.parks.NHV;
+  check(`the view centres on the park and the grid covers it (${g.nx}×${g.ny} cells of ${g.cellKm} km)`,
+        v.cx === pk.x && v.cy === pk.y && g.x0 <= pk.x - v.spanKm / 2 && g.x1 >= pk.x + v.spanKm / 2 && g.y0 <= pk.y - v.spanYKm / 2 && g.y1 >= pk.y + v.spanYKm / 2 && g.nx <= 220);
+  // A packed frame is what the radar field says, to the nearest dBZ, kind for kind — truth and forecast.
+  let bad = 0, wet = 0;
+  for (const [day, hour, zoom] of [[14, 6, 0], [101, 23, 1], [102, 0, 2]]) {
+    const t = START + day * MS_DAY + hour * MS_HOUR;
+    const vb = RF.viewBox(c.map, 'user', zoom, 0.8).grid;
+    for (const fr of [{ t, forecast: false }, { t: t + 3 * MS_HOUR, forecast: true, issueMs: Math.floor(t / MS_HOUR) * MS_HOUR }]) {
+      const pf = RF.buildFrame(c, fr, vb);
+      const ref = radarField(fr.forecast ? forecastContext(c, fr.issueMs) : c, fr.t, vb, vb.cellKm);
+      for (let i = 0; i < pf.data.length; i++) {
+        const d = RF.unpackDbz(pf.data[i]), r = ref.dbz[i];
+        if (r > DBZ_MIN) wet++;
+        if ((r > DBZ_MIN) !== (d > DBZ_MIN) || (d > DBZ_MIN && (Math.abs(d - Math.min(74.5, r)) > 0.51 + (r < 12.5 ? 0.5 : 0) || RF.unpackKind(pf.data[i]) !== ref.kind[i]))) bad++;
+      }
+    }
+  }
+  check(`packed frames match the radar field (${wet} wet cells, ${bad} off)`, bad === 0 && wet > 500);
+  const ms = {};
+  for (const z of [0, 1, 2]) {
+    const vb = RF.viewBox(c.map, 'user', z, 0.8).grid;
+    const t0 = performance.now();
+    for (let k = 0; k < 5; k++) RF.buildFrame(c, { t: START + (101 + k * 0.1) * MS_DAY + 22 * MS_HOUR, forecast: false }, vb);
+    ms[z] = (performance.now() - t0) / 5;
+  }
+  check(`a frame builds in ${ms[0].toFixed(0)} / ${ms[1].toFixed(0)} / ${ms[2].toFixed(0)} ms (region / metro / ballpark)`, Math.max(ms[0], ms[1], ms[2]) < 400);
+}
+
 console.log(`\n${pass}/${pass + fail} checks passed`);
 process.exit(fail ? 1 : 0);
