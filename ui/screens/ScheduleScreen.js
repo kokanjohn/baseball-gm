@@ -29,6 +29,7 @@ import { renderBoxScore } from '../components/BoxScore.js';
 import { accumulateBox } from '../../engine/SimEngine.js';
 import { leagueGameState, wireLeagueGameTaps } from '../components/LiveGame.js';
 import { clubFor } from '../../engine/AllStarEngine.js';
+import { wxState, weatherLine, gameNotes, calledInnings, postponedOn, dayLabel } from '../components/WeatherStatus.js';
 import {
   formatDate, formatRecord, formatTeamRecord, formatGameLabel,
   formatGameStatus, formatPhaseLabel,
@@ -283,10 +284,10 @@ function _renderGameRow(game, idx, currentIdx, state, isPlayoff) {
   const oppLabel    = _gameLabel(game, state);
   const locLabel    = game.isHome ? 'Home' : 'Away';
 
-  // Only show weather icon if weather has been specifically generated
-  const weatherIcon = game._weatherGenerated
-    ? _weatherIcon(game.weather?.label || game.weatherCondition)
-    : '';
+  // §102.4 the weather it was played in, and the weather's notes (makeup, doubleheader, suspension, delays).
+  const wxPlayed = isCommitted && game.weather ? weatherLine(game).split(' · ')[0] : '';
+  const siblings = (state.schedule || []).filter(g => g !== game && g.date === game.date && !g.cancelled);
+  const notes    = gameNotes(game, siblings);
   const badges      = _renderBadges(game, idx, currentIdx, state);
 
   return `
@@ -306,8 +307,9 @@ function _renderGameRow(game, idx, currentIdx, state, isPlayoff) {
         <div class="game-loc">
           ${locLabel}
           ${game.gameTime && !isCommitted ? ` · <span style="font-weight:600;color:var(--soft)">${_scheduledTime(game)}</span>` : ''}
-          ${weatherIcon ? `<span class="game-weather" style="margin-left:6px;">${weatherIcon}</span>` : ''}
+          ${wxPlayed ? ` · <span class="game-weather">${_escape(wxPlayed)}</span>` : ''}
         </div>
+        ${notes.length ? `<div class="game-wx-notes">${notes.map(n => _escape(n)).join(' · ')}</div>` : ''}
       </div>
       ${_renderResult(game, isCurrentGame, isCommitted, idx, hasBoxScore)}
     </div>
@@ -321,6 +323,9 @@ function _gameLabel(game, state) {
 }
 
 function _renderResult(game, isCurrentGame, isCommitted, idx, hasBoxScore) {
+  if (game.status === GAME_STATUS.SUSPENDED) {
+    return '<div class="game-result ppd">SUSP</div>';
+  }
   if (isCurrentGame && !isCommitted) {
     return '<div class="game-result next">NEXT</div>';
   }
@@ -339,8 +344,9 @@ function _renderResult(game, isCurrentGame, isCommitted, idx, hasBoxScore) {
   const cls   = game.result === 'win' ? 'win' : game.result === 'tie' ? 'tie' : 'loss';
   const label = game.result === 'win' ? 'W'   : game.result === 'tie' ? 'T'   : 'L';
 
+  const inn   = calledInnings(game);   // §102.4 an official game called short: W 4–2 (6)
   return `<div class="gri-wrap">
-    <div class="game-result ${cls}">${label}${score ? ' ' + score : ''}</div>
+    <div class="game-result ${cls}">${label}${score ? ' ' + score : ''}${inn ? ` (${inn})` : ''}</div>
     ${hasBoxScore ? `<button class="game-bs-btn" data-game-idx="${idx}">Stats</button>` : ''}
   </div>`;
 }
@@ -351,7 +357,7 @@ function _renderBadges(game, idx, currentIdx, state) {
   if (game.isSpring)         badges.push({ text: 'ST',       cls: 'dh'     });
   if (game.isPlayoff)        badges.push({ text: 'PLAYOFF',  cls: 'playoff' });
   if (game.isMakeup)       badges.push({ text: 'MAKEUP',  cls: 'makeup' });
-  if (game.isDoubleHeader) badges.push({ text: 'DH',      cls: 'dh' });
+  if ((state.schedule || []).some(g => g !== game && g.date === game.date && !g.cancelled)) badges.push({ text: 'DH', cls: 'dh' });
 
   // Series context badges
   const ctx = _seriesContext(game, idx, state);
@@ -446,17 +452,6 @@ function _scheduledTime(game) {
   const ampm  = hours >= 12 ? 'PM' : 'AM';
   hours       = hours % 12 || 12;
   return `${hours}:${mins} ${ampm}`;
-}
-
-function _weatherIcon(label) {
-  if (!label) return '';
-  const map = {
-    Clear: '☀️', Sunny: '☀️', 'Partly Cloudy': '⛅', Cloudy: '☁️',
-    Overcast: '☁️', 'Light Rain': '🌦️', Rain: '🌧️', 'Heavy Rain': '⛈️',
-    Thunderstorm: '⛈️', Fog: '🌫️', Wind: '💨', Snow: '❄️',
-    Hot: '🌡️', Cold: '🥶',
-  };
-  return map[label] || '';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -756,11 +751,13 @@ function _renderScoresModal(state) {
     });
   });
 
-  // Gather games for this date
-  const userGame = schedule.find(g => g.date === _scoresBrowseDate);
-  const cpuGames = dayMap[_scoresBrowseDate] || [];
+  // Gather games for this date (a doubleheader is two of ours; §102.4 games
+  // the weather moved off this date show here as postponed).
+  const userGames = schedule.filter(g => g.date === _scoresBrowseDate && !g.cancelled);
+  const cpuGames = (dayMap[_scoresBrowseDate] || []).filter(g => !g.cancelled);
+  const ppdHere  = postponedOn([...schedule, ...Object.values(dayMap).flat()], _scoresBrowseDate);
 
-  if (!userGame && !cpuGames.length) {
+  if (!userGames.length && !cpuGames.length && !ppdHere.length) {
     bodyEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px;">No games today.</div>';
     return;
   }
@@ -771,7 +768,7 @@ function _renderScoresModal(state) {
   let rows = '';
 
   // User's game — shown first with accent highlight
-  if (userGame) {
+  for (const userGame of userGames) {
     const isLive = userGame.plays?.length > 0 && !userGame._committed
       && userGame.status !== GAME_STATUS.SCHEDULED
       && userGame.status !== GAME_STATUS.PRE_GAME_WATCH;
@@ -801,8 +798,10 @@ function _renderScoresModal(state) {
       const awayScore = userGame.isHome ? theirScore : ourScore;
       const homeScore = userGame.isHome ? ourScore   : theirScore;
       const halfSym   = curHalf === 'TOP' ? '▲' : '▼';
+      const wx        = wxState(userGame, revealed);
       scorePart = `<span class="sg-away-score">${awayScore}</span><span class="sg-dash">–</span><span class="sg-home-score">${homeScore}</span>`;
-      metaPart  = `<span class="sg-live-pill">● ${halfSym}${curInning}${_sfx(curInning)}</span>`;
+      metaPart  = wx.kind ? `<span class="sg-wx-pill">${wx.kind === 'suspended' ? 'SUSP' : 'DELAY'}</span>`
+                          : `<span class="sg-live-pill">● ${halfSym}${curInning}${_sfx(curInning)}</span>`;
     } else if (userGame._committed) {
       const us   = userGame.score?.us   ?? 0;
       const them = userGame.score?.them ?? 0;
@@ -810,10 +809,10 @@ function _renderScoresModal(state) {
       const ho   = userGame.isHome ? us   : them;
       const won  = userGame.result === 'win';
       scorePart = `<span class="${won && !userGame.isHome || !won && userGame.isHome ? 'sg-score-winner':''}">${aw}</span><span class="sg-dash">–</span><span class="${won && userGame.isHome || !won && !userGame.isHome ? 'sg-score-winner':''}">${ho}</span>`;
-      metaPart  = `<span class="sg-final-pill">F</span>`;
+      metaPart  = `<span class="sg-final-pill">F${calledInnings(userGame) ? `/${calledInnings(userGame)}` : ''}</span>`;
     } else {
       scorePart = `<span class="sg-time">${_scheduledTime(userGame)}</span>`;
-      metaPart  = '';
+      metaPart  = userGame.status === GAME_STATUS.DELAYED ? '<span class="sg-wx-pill">DELAY</span>' : '';
     }
 
     rows += `<div class="sg-row sg-row-user">
@@ -837,17 +836,19 @@ function _renderScoresModal(state) {
       const hWin = g.homeScore > g.awayScore;
       scorePart = `<span class="${aWin?'sg-score-winner':''}">${g.awayScore}</span><span class="sg-dash">–</span><span class="${hWin?'sg-score-winner':''}">${g.homeScore}</span>`;
       metaPart  = `<span class="sg-final-pill">F</span>`;
-    } else if (started) {
+    } else if (started || g.status === GAME_STATUS.SUSPENDED) {
       const ls = leagueGameState(g, Date.now());
       scorePart = `<span class="sg-away-score">${ls.awayScore}</span><span class="sg-dash">–</span><span class="sg-home-score">${ls.homeScore}</span>`;
-      metaPart  = `<span class="sg-live-pill">● ${ls.half === 'TOP' ? '▲' : '▼'}${ls.inning}${_sfx(ls.inning)}</span>`;
+      metaPart  = ls.wx.kind ? `<span class="sg-wx-pill">${ls.wx.kind === 'suspended' ? 'SUSP' : 'DELAY'}</span>`
+                             : `<span class="sg-live-pill">● ${ls.half === 'TOP' ? '▲' : '▼'}${ls.inning}${_sfx(ls.inning)}</span>`;
     } else {
       const t = Number.isFinite(g.gameTime)
         ? new Date(g.gameTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
         : '';
       scorePart = `<span class="sg-time">${t}</span>`;
-      metaPart  = '';
+      metaPart  = g.status === GAME_STATUS.DELAYED ? '<span class="sg-wx-pill">DELAY</span>' : '';
     }
+    if (g.played && g.wxResult?.ruling?.outcome === 'final') metaPart = `<span class="sg-final-pill">F/${g.wxResult.ruling.innings}</span>`;
 
     if (g.isAllStar) rows += `<div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);padding:8px 0 2px;">★ All-Star Game</div>`;
     rows += `<div class="sg-row${started ? ' sg-row-tap' : ''}"${started ? ` data-lg-date="${_scoresBrowseDate}" data-lg-id="${g.id}"` : ''}>
@@ -855,6 +856,22 @@ function _renderScoresModal(state) {
       <span class="sg-score-wrap">${scorePart}</span>
       <span class="sg-abbr sg-abbr-home">${homeAbbr}</span>
       <span class="sg-status">${metaPart}</span>
+    </div>`;
+  }
+
+  // §102.4 games the weather moved off this date: where they went.
+  for (const { entry, game } of ppdHere) {
+    const isUser = schedule.includes(game);
+    const homeId = isUser ? (game.isHome ? 'user' : game.opponentId) : game.homeId;
+    const awayId = isUser ? (game.isHome ? game.opponentId : 'user') : game.awayId;
+    const ab = (id) => (id === 'user' ? (state.userTeam?.abbr || 'YOU') : _abbr(id)).toUpperCase();
+    const why = entry.reason === 'lightning' ? 'storms' : entry.reason === 'snow' ? 'snow' : entry.reason === 'wet field' ? 'wet field' : 'rain';
+    const where = game.cancelled ? 'not made up' : entry.resumption ? `resumes ${dayLabel(game.date)}` : `made up ${dayLabel(game.date)}`;
+    rows += `<div class="sg-row sg-row-ppd${isUser ? ' sg-row-user' : ''}">
+      <span class="sg-abbr sg-abbr-away">${ab(awayId)}</span>
+      <span class="sg-score-wrap"><span class="sg-ppd-note">${_escape(`${why} · ${where}`)}</span></span>
+      <span class="sg-abbr sg-abbr-home">${ab(homeId)}</span>
+      <span class="sg-status"><span class="sg-wx-pill">PPD</span></span>
     </div>`;
   }
 
@@ -928,6 +945,11 @@ function _injectCSS() {
     .sg-time { font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--muted); }
     .sg-status { text-align:right; }
     .sg-live-pill { font-size:9px;font-weight:800;letter-spacing:.5px;color:var(--danger);white-space:nowrap; }
+    .sg-wx-pill { font-size:9px;font-weight:800;letter-spacing:.5px;color:#f97316;white-space:nowrap; }
+    .sg-ppd-note { font-size:10px;color:var(--muted);white-space:nowrap; }
+    .sg-row-ppd { opacity:.8; }
+    .game-weather { font-weight:500;color:var(--muted); }
+    .game-wx-notes { font-size:10px;font-weight:600;color:#f97316;margin-top:2px;line-height:1.3; }
     .sg-final-pill { font-size:9px;font-weight:700;color:var(--muted); }
     .sg-mo-btn { background:none;border:none;font-size:11px;font-weight:700;color:var(--muted);cursor:pointer;padding:2px 0;font-family:'DM Sans',sans-serif; }
     .sg-mo-btn:active { opacity:.7; }

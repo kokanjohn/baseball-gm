@@ -18,6 +18,7 @@ import { GAME_STATUS } from '../../data/constants.js';
 import { accumulateBox, liveSituation, playRuns } from '../../engine/SimEngine.js';
 import { renderBoxScore } from './BoxScore.js';
 import { clubFor } from '../../engine/AllStarEngine.js';
+import { wxState, elapsedLabel, weatherLine, gameNotes } from './WeatherStatus.js';
 
 // ─────────────────────────────────────────────────────────────
 // DERIVED LIVE STATE
@@ -62,7 +63,9 @@ export function leagueGameState(g, nowMs = Date.now()) {
       runs[p.inning][k] = (runs[p.inning][k] || 0) + playRuns(p);
     }
   }
-  return { final, revealed, homeScore, awayScore, inning, half, outs, bases, runs };
+  // §102.4 the weather's hold on it (a delay, a delayed start, a suspension).
+  const wx = wxState(g, revealed);
+  return { final, revealed, homeScore, awayScore, inning, half, outs, bases, runs, wx };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -83,7 +86,7 @@ export function renderLeagueLiveRow(state, nowMs = Date.now()) {
         <div class="lg-mini-row${lead(ls.awayScore, ls.homeScore)}"><span>${abbr(g.awayId)}</span><b>${ls.awayScore}</b></div>
         <div class="lg-mini-row${lead(ls.homeScore, ls.awayScore)}"><span>${abbr(g.homeId)}</span><b>${ls.homeScore}</b></div>
         <div class="lg-mini-foot">
-          <span class="lg-mini-inn">${ls.half === 'TOP' ? '▲' : '▼'}${ls.inning}</span>
+          <span class="lg-mini-inn">${ls.wx.kind ? '<span class="lg-mini-wx">DELAY</span>' : `${ls.half === 'TOP' ? '▲' : '▼'}${ls.inning}`}</span>
           ${_diamond(ls.bases, 18)}
         </div>
       </button>`;
@@ -157,10 +160,17 @@ export function openLeagueGame(date, id) {
 function _viewerHtml(state, g, now = Date.now()) {
   const ls  = leagueGameState(g, now);
   const away = _team(state, g.awayId), home = _team(state, g.homeId);
-  const notStarted = !ls.final && g.status !== GAME_STATUS.LIVE;
+  const notStarted = !ls.final && g.status !== GAME_STATUS.LIVE && g.status !== GAME_STATUS.SUSPENDED;
   const status = ls.final ? '<span class="lg-pill lg-final">Final</span>'
+    : ls.wx.kind ? `<span class="lg-pill lg-wx">${_esc(ls.wx.title)}</span>`
     : notStarted ? `<span class="lg-pill lg-final">${new Date(g.gameTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>`
     : '<span class="lg-pill lg-live">● Live</span>';
+  // §102.4 under the header: the weather's hold on the game, or what it was played in; the schedule's notes.
+  const wxText = ls.wx.kind
+    ? `${ls.wx.sub}${ls.wx.kind === 'delay' || ls.wx.kind === 'start-delay' ? ` (${elapsedLabel(now - ls.wx.sinceMs)} so far)` : ''}`
+    : weatherLine(g);
+  const notes = gameNotes(g);
+  const wxRow = wxText || notes.length ? `<div class="lg-wx">${_esc([wxText, ...notes].filter(Boolean).join(' · '))}</div>` : '';
 
   // Box: committed box when final, else accumulated from revealed plays.
   let box = g.boxScore;
@@ -174,7 +184,7 @@ function _viewerHtml(state, g, now = Date.now()) {
   const pbp = ls.revealed
     .filter(p => p.description && !['inning_end', 'game_end'].includes(p.type))
     .slice(-30).reverse()
-    .map(p => `<div class="lg-pbp${p.type === 'hr' ? ' hr' : ''}">
+    .map(p => `<div class="lg-pbp${p.type === 'hr' ? ' hr' : ''}${p._wx || p.type === 'game_suspended' || p.type === 'game_resumed' ? ' wx' : ''}">
         <span class="lg-pbp-inn">${p.half === 'TOP' ? '▲' : '▼'}${p.inning}</span>
         <span>${_esc(p.description)}</span></div>`).join('');
 
@@ -199,6 +209,7 @@ function _viewerHtml(state, g, now = Date.now()) {
       </div>
       <button class="modal-close" id="lg-close" aria-label="Close">×</button>
     </div>
+    ${wxRow}
     ${notStarted ? '<div class="lg-empty">First pitch hasn\'t been thrown yet.</div>' : `
     <div class="lg-ls"><table>
       <thead><tr><th></th>${inns.map(i => `<th>${i}</th>`).join('')}<th>R</th><th>H</th></tr></thead>
@@ -259,6 +270,10 @@ function _injectCSS() {
     .lg-side{display:flex;flex-direction:column;align-items:center;gap:4px;}
     .lg-pill{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;padding:3px 7px;border-radius:10px;border:1px solid var(--border);color:var(--muted);}
     .lg-pill.lg-live{color:var(--danger);border-color:var(--danger);}
+    .lg-pill.lg-wx{color:#f97316;border-color:rgba(249,115,22,.5);}
+    .lg-wx{margin:0 16px 8px;font-size:11px;color:var(--soft);line-height:1.35;}
+    .lg-pbp.wx span:last-child{color:#f97316;font-weight:600;}
+    .lg-mini-wx{color:#f97316;font-weight:800;font-size:9px;letter-spacing:.5px;}
     .lg-inn{font-size:12px;font-weight:700;color:var(--text);}
     .lg-outs{display:flex;gap:3px;}
     .lg-outs i{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--muted);}

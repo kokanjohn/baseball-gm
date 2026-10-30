@@ -34,6 +34,7 @@ const _esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<'
 /** The ballpark a game is played at (the home club's). */
 export function venueOf(game) {
   if (!game) return 'user';
+  if (game.venueId) return game.venueId;   // §102.3 a makeup played at the other club's park
   return game.isHome ? 'user' : (game.opponentId || 'user');
 }
 

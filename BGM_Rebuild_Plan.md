@@ -8258,3 +8258,59 @@ Other seeds and regions, full league seasons (all checks pass):
 | 4 | West | 6 (0.9%) | 30 | 2 | 1 | 5 | 0 | 3,619 |
 
 The dashboard UI test passes with no page errors. Showing these states on screen (delay view, PPD / SUSP labels, makeup rows, weather cards) is **4d**.
+
+### 102.4 4d — the weather on screen and in the inbox
+
+4d is split in two:
+- **4d-1** puts the weather on screen (r109);
+- **4d-2** adds weather inbox cards that are real decisions (next).
+
+#### 4d-1 — on screen (r109)
+
+**One source:** `ui/components/WeatherStatus.js` (read-only, text not icons). It is used by the dashboard, the league game viewer and the schedule.
+- `wxState(game, revealed)` gives the weather's hold on a game right now, read off the plays revealed so far:
+  - **delay**: its delay play is the last revealed;
+  - **start-delay**: the status says `DELAYED` before any plays, or a pre-start delay play is the last revealed;
+  - **suspended**: the last revealed play is `game_suspended`;
+  - **called**: an official game called short.
+
+  Each comes with a title, a sentence and a status pill.
+- `weatherLine(game)`: "72° Partly Cloudy · Wind 8 mph out to right".
+- `gameNotes(game, siblings)` gives the schedule's notes:
+  - "Makeup of Apr 12 (rain)"
+  - "Game 1 of 2"
+  - "Suspended Apr 12 in the top of the 7th — picks up Apr 14 1:05 PM" / "…, finished Apr 14"
+  - "Rain delay, 1 hr 05 min" / "2 delays, …" / "Delayed start, …"
+  - "Called after 6 innings (rain)"
+  - "Postponed (rain) — spring games aren't made up"
+- `calledInnings`, `postponedOn(games, date)`, plus labels.
+
+**Dashboard:**
+- **Live card:**
+  - the status pill reads RAIN DELAY / LIGHTNING DELAY / SNOW DELAY / START DELAYED / SUSPENDED;
+  - under the linescore, a banner gives the delay name with a running clock ("Rain delay · 30 min") and what happened ("The rain picks up — the tarp is coming out."), with the **radar on the ballpark** right under it while the weather holds the game;
+  - a called game shows why it ended;
+  - otherwise a quiet line with the weather it's played in.
+- **Play-by-play:** weather lines in orange.
+- **Next-game card:** notes for makeups, doubleheaders and a suspended game picking up.
+- **Countdown card:** for a start the weather is holding up, it becomes "START DELAYED · 25 min — Waiting on the weather".
+- **The 5-second pulse:** the dashboard's league-row timer also moves the delay clocks, and redraws when our next game's status, time or opponent changes without a play (a start held up, a postponement, a suspended game's turn).
+
+**League games** (`LiveGame.js`):
+- the mini cards show DELAY in place of the inning;
+- the viewer has a weather pill and a line (the hold, with how long so far; or the weather played in, plus the schedule's notes), and weather lines in its play-by-play.
+
+**Schedule:**
+- each row has the weather it was played in and the weather notes;
+- results: SUSP for a suspended game, "W 4–2 (6)" for an official game called short, PPD for cancelled spring games;
+- the DH badge comes from the dates;
+- **Scores:** both games of a doubleheader; DELAY / SUSP / F/6 pills; and, on the date a game was rained off, a PPD row saying where it went ("rain · made up Apr 14" / "not made up").
+
+**Radar:** `RadarSheet.venueOf` respects `venueId` (a makeup at the other club's park).
+
+**Harness:** `tools/harness/test-weather-ui.mjs outDir [theme]`, in the real app with a new team. Our next game is given a plan for each situation in turn:
+- a rain delay in progress (pill, banner and clock, radar, play-by-play, the clock running);
+- a start held up, then called off ("Start delayed", the dashboard moving on, the schedule's note, that date's scoreboard PPD row);
+- a called game (the ruling, the schedule's innings and note).
+
+14 / 14 pass in dark and light, with no page errors. The existing dashboard radar test still passes.
