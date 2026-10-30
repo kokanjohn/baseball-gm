@@ -8346,3 +8346,72 @@ Every weather card is a real decision about **who pitches**, made on the forecas
   - the asking rate (4 of 60 games at 60%+);
 - `sim-season`: the weather cards are asked and none are left hanging.
 - North, seed 2: asked twice; 3,620 / 3,620 checks.
+
+### 102.6 4e — season checks and tuning (r111)
+
+**Benchmarks** (real MLB home-park weather postponements, 2015 – mid-2025, about nine seasons; sources below):
+
+| Park | Postponements | Per season | Share of home games |
+|---|---|---|---|
+| Cleveland | 35 | about 3.9 | about 4.8% |
+| Detroit | 33 | | |
+| Washington | 30 | | |
+| Mets | 29 | | |
+| White Sox | 28 | | |
+| Baltimore | 26 | | |
+| Cubs / St. Louis | 21 each | | |
+| Atlanta | 18 | about 2 | about 2.5% |
+| Philadelphia | 18 | | |
+| Dodger Stadium | 0 | | |
+
+League-wide: about 22 by June in a typical season; 28 through April in the record 2018.
+
+Targets by region (each modelled on real cities; the West is high-desert Front Range, Denver-like with spring snow):
+
+| Region | Modelled on | Target postponed |
+|---|---|---|
+| North | Chicago | about 3% |
+| East | Philadelphia / Washington | 3–3.5% |
+| South | Atlanta / Gulf | about 2% |
+| West | Denver-like | 1–2% |
+
+**Tuning — a wet evening is called off ahead** (`GameWeather._steadyRain`). The club's 3-hour and 90-minute forecast looks now also postpone when the forecast run shows steady rain (`STEADY_RATE_MMH` 0.5 mm/h or more) through `STEADY_SHARE` (half) of the game's three hours — not only when it shows no game possible. Both still require the GM-visible chance `PREGAME_CALL_CHANCE` (70% at 3 h, 60% at 90 min, was 80 / 70). False alarms (called ahead, then the window stayed dry): 4 of 82 (5%), mostly southern pop-up-storm days; the median called-off game saw 0.2–0.3 in.
+
+**Rates** (`tools/harness/weather-season-rates.mjs`, plans only, 3 seeds × about 900 games a region):
+
+| Region | Before (postponed) | After (postponed) | Delayed | Called short |
+|---|---|---|---|---|
+| North | 0.9% | 3.0% (April 3%+, with snow) | 4.0% | 0.1% |
+| South | 1.3% | 2.7% | 8.0% | 0.9% |
+| East | 0.8% | 2.7% | 5.1% | 0.4% |
+| West | 0.5% | 1.3% | 2.5% | 0.0% |
+
+- Median delay 75–85 min, 90th percentile about 2 h.
+- The starter question comes up in 2–5% of our games.
+
+**Fixes found in the season runs:**
+- Doubleheader card wording used "next man / long man" (the neutral-text check caught it; now "next starter / long reliever"), and it named a weekday from the real calendar next to a baseball-calendar date (now the baseball date only).
+- Harness: cancelled spring games close without a score or box (per-game checks and the spring-record check now count them right); the "asked at least once" weather-card check removed (a dry season can ask none — the rate is in the rates tool).
+
+**Full league seasons after tuning** (all checks pass):
+
+| Seed | Region | Postponed | Doubleheaders | Weather questions (starter / doubleheader) | Checks |
+|---|---|---|---|---|---|
+| 9 | North | 2.9% | 12 | 4 / 2 | 3,620 |
+| 10 | South | 1.5% | 12 | 2 / 0 | 3,615 |
+| 11 | East | 3.5% | 19 | 1 / 2 | 3,587 |
+| 12 | West | 1.8% | 6 | 2 / 0 | 3,609 |
+
+- North had one makeup on a day added after the season; the All-Star break check excepted two clubs' rainouts made up after it.
+- Every rainout was made up; no club was ever in two games at once; every suspended game was finished.
+
+**Open (not weather):** in two of eleven post-weather seasons a CPU club finished at 31–32 wins, just under the harness floor of 33.
+- In south seed 5 (`BAL_DUMP`) the club's rotation averaged 55 OVR against a league 63: a CPU club not replacing weak starters (roster management, §90).
+- The weather hits every club alike; it reshuffles which seasons show the tail. Left as a follow-up.
+
+**Sources:** Matt Lanza, "Get a roof" (mattlanza.substack.com/p/get-a-roof); weather.com, "MLB postponements break April record" (2018-04-23).
+
+**Step 4 is complete.** Next in the §100 plan: **step 3 — forecast surfaces:**
+- the dashboard's next-game forecast;
+- the 10-day forecast view;
+- the schedule's forecasts.

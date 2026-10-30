@@ -2304,7 +2304,7 @@ function _getRotationSP(team, players, atMs = null) {
 
 /**
  * rotationStarter(team, players, atMs) — who starts for a club at a moment by
- * its rotation (the man in turn, or the next who has had his rest): the same
+ * its rotation (the one in turn, or the next who has had the rest): the same
  * choice the sim makes at first pitch.
  */
 export function rotationStarter(team, players, atMs) {

@@ -2420,10 +2420,10 @@ const _wxPct = (n) => `${n}%`;
 
 /**
  * Rain or storms likely during tonight's game (the GM's own forecast, read
- * three hours before first pitch): start the man in turn as planned, or hold
- * him a day and start the next man. A delay of ARM_COOL_MIN or more ends the
+ * three hours before first pitch): start the scheduled starter as planned, or
+ * hold that pitcher a day and start the next one in the rotation. A delay of ARM_COOL_MIN or more ends the
  * night of whoever is on the mound — a start cut short spends a turn.
- * Yes: the two swap places in the rotation (the held man pitches next time).
+ * Yes: the two swap places in the rotation (the one held pitches next time).
  */
 export function deliverRainStartCard(info, atMs) {
   const state = StateManager.get();
@@ -2448,23 +2448,23 @@ export function deliverRainStartCard(info, atMs) {
 
 /**
  * A doubleheader is on our schedule (a makeup): two starts in one day. Game
- * two goes to the next man in the rotation (everyone's turn comes a day
- * early), or it's a bullpen game — the long man opens, the pen covers the
- * rest, and the rotation stays on schedule.
+ * two goes to the next starter in the rotation (everyone's turn comes a day
+ * early), or it's a bullpen game — the long reliever opens, the bullpen covers
+ * the rest, and the rotation stays on schedule.
  */
 export function deliverDoubleheaderCard(info, atMs) {
   const state = StateManager.get();
   const lr = state.players[info.longId], nx = state.players[info.nextId];
   if (!lr) return null;
-  const day = _day(info.firstPitch);
+  const day = info.dayLabel;   // the baseball calendar's date, as the schedule shows it
   return _deliverAt(_rosterCard(state, {
     cardId: 'wx_doubleheader', tag: 'WEATHER', sender: _managerName(state), avatar: '⚾', type: 'normal',
     _rosterKey: info.key, _wxDate: info.date,
     subject: `Doubleheader ${day} — who starts game two?`,
-    preview: `The makeup of ${info.makeupOf} makes it two games ${day}. ${nx ? `${nx.name} in turn, or a bullpen game?` : 'A bullpen game?'}`,
-    body: `${info.makeupOf ? `The rainout of ${info.makeupOf} is being made up ` : 'We play two '}${day} (${info.opp}) — two starts in one day. `
-        + `${nx ? `Game two can go to the next man in the rotation, ${_who(nx)}: every starter's turn comes a day sooner after that. ` : 'Game two can go to the next man in the rotation: every starter\'s turn comes a day sooner after that. '}`
-        + `Or we make it a bullpen game: ${_who(lr)} opens and the pen covers the rest — the rotation stays on schedule, and the relievers carry the load for a day.`,
+    preview: `${info.makeupOf ? `The makeup of ${info.makeupOf} makes it two games ${day}. ` : `Two games ${day}. `}${nx ? `${nx.name} in turn, or a bullpen game?` : 'The next starter, or a bullpen game?'}`,
+    body: `${info.makeupOf ? `The rainout of ${info.makeupOf} is being made up ${day}` : `We play two ${day}`} against the ${info.opp} — two starts in one day. `
+        + `Game two can go to the next starter in the rotation${nx ? `, ${_who(nx)}` : ''}: every starter's turn comes a day sooner after that. `
+        + `Or we make it a bullpen game: ${_who(lr)}, our long reliever, opens and the bullpen covers the rest — the rotation stays on schedule, and the relievers carry the load for a day.`,
     yesLabel: `Bullpen game — ${lr.name} opens`, noLabel: nx ? `${nx.name} starts game two` : 'Next starter goes',
     autoResolve: 'no', expiresAtMs: info.firstPitch - 60 * 60_000,
     _raw: { onYes: 'wx_bullpen_game', onNo: null, longId: info.longId },
@@ -2488,7 +2488,7 @@ function _applyWeatherAction(action, instance, atMs) {
     const a = rot.order.indexOf(raw.starterId), b = rot.order.indexOf(raw.altId);
     const alt = st.players[raw.altId];
     if (a < 0 || b < 0 || !alt || !isAvailable(alt) || !starterRested(alt, g.gameTime)) return;
-    // Tonight's spot goes to the alternate, the next to the man held; everyone else keeps their order.
+    // Tonight's spot goes to the alternate, the next to the one held; everyone else keeps their order.
     StateManager.mutate(s => {
       const r = s.userTeam.rotation, n = r.order.length, c = r.currentIndex % n;
       const before = [raw.starterId, raw.altId].filter(id => r.order.indexOf(id) < c).length;

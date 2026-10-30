@@ -1896,8 +1896,8 @@ function _ensureWeatherPlans(clockMs) {
 /**
  * _wxUserCards(clockMs) — §102.5 the manager reads the forecast three hours
  * before each of our games (the same forecast the GM sees then). If rain is
- * likely during the game, he asks about the starter: the man in turn as
- * planned, or hold him a day and start the next man who's rested.
+ * likely during the game, the manager asks about the starter: the one in turn
+ * as planned, or hold that pitcher a day and start the next one who's rested.
  */
 function _wxUserCards(clockMs) {
   const st = StateManager.get();
@@ -1943,6 +1943,7 @@ function _wxDoubleheaderCard(date, makeupOf, atMs) {
   const longId = bullpenRoles(st.userTeam, st.players).long[0] || null;
   if (!longId) return;
   CardEngine.deliverDoubleheaderCard({ key: `wx:dh:${st.seasonNum || 1}:${date}`, date, firstPitch: games[0].gameTime,
+                                       dayLabel: _wxDay(date),
                                        nextId, longId, opp: g2.opponent || '', makeupOf: _wxDay(makeupOf) }, atMs);
 }
 

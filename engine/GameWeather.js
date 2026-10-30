@@ -160,6 +160,21 @@ function _forecastSaysNo(ctx, venue, gameTime, state, issueT = state.t) {
   return r.outcome !== PLAN_OUTCOME.PLAYED ? r : null;
 }
 
+/**
+ * A wet evening in the forecast run: steady rain (STEADY_RATE_MMH or more)
+ * through STEADY_SHARE of the game's three hours — the kind of night a club
+ * calls off ahead of time even though play could go on between showers.
+ * → 'rain' / 'snow', or null.
+ */
+function _steadyRain(fctx, venue, gameTime) {
+  let wet = 0, snow = 0, n = 0;
+  for (let t = gameTime + 7.5 * MIN; t < gameTime + GW.PLAY_MIN * MIN; t += 15 * MIN, n++) {
+    const p = precipAt(fctx, venue.x, venue.y, t);
+    if (p.rateMmH >= GW.STEADY_RATE_MMH) { wet++; if (p.kind !== PRECIP_RAIN) snow++; }
+  }
+  return wet >= GW.STEADY_SHARE * n ? (snow * 2 > wet ? STOP_REASON.SNOW : STOP_REASON.RAIN) : null;
+}
+
 /** Rain (inches) over the 6 hours and snow (mm, melted) over the 12 hours before first pitch. */
 function _before(ctx, venue, gameTime) {
   let rainMm = 0, snowMm = 0;
@@ -209,8 +224,9 @@ export function gameWeatherPlan(ctx, game) {
   for (let i = 0; i < GW.PREGAME_CALLS_MIN.length; i++) {
     const t = gameTime - GW.PREGAME_CALLS_MIN[i] * MIN;
     const no = _forecastSaysNo(ctx, venue, gameTime, { t: gameTime, phase: 'play', played: 0, startAt: null, delay: null }, t);
-    if (no && chanceOfPrecip(ctx, t, venue.x, venue.y, gameTime, gameTime + GW.PLAY_MIN * MIN).chance >= GW.PREGAME_CALL_CHANCE[i]) {
-      return postpone(t, 'forecast', no.reason ?? STOP_REASON.RAIN);
+    const wet = no ? null : _steadyRain(forecastContext(ctx, t), venue, gameTime);
+    if ((no || wet) && chanceOfPrecip(ctx, t, venue.x, venue.y, gameTime, gameTime + GW.PLAY_MIN * MIN).chance >= GW.PREGAME_CALL_CHANCE[i]) {
+      return postpone(t, 'forecast', no ? (no.reason ?? STOP_REASON.RAIN) : wet);
     }
   }
 

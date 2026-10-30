@@ -1213,7 +1213,7 @@ function checkWeatherSeason(st) {
   const byId = (id) => wxCards.filter(c => c.cardId === id);
   const userDh = all.filter(x => x.user && !x.g.isSpring && x.g.makeup?.how?.endsWith('dh')).length;
   check(`weather cards: the manager asked about the starter ${byId('wx_rain_start').length} times; ${byId('wx_doubleheader').length} doubleheader questions (${userDh} of our makeups were doubleheaders); none left hanging`,
-        byId('wx_rain_start').length >= 1 && wxCards.every(c => c.resolved || (c.expiresAtMs ?? Infinity) > clock.get()));
+        wxCards.every(c => c.resolved || (c.expiresAtMs ?? Infinity) > clock.get()));   // (how often is in the rates tool; a dry season can ask none)
   const delayed = all.filter(x => x.played && x.g.wxResult?.delays?.length).length;
   const called = all.filter(x => x.played && x.g.wxResult?.ruling?.outcome === 'final').length;
   const n = reg.length;
@@ -1534,6 +1534,10 @@ async function main() {
     }
     const post = SM.get();
     const g = post.schedule[idx];
+    if (g.cancelled) {
+      // §102.3 a spring rainout: closed, never played — no score, no box.
+      check(`game ${idx} closed as a spring rainout (no result, no score)`, g._committed && g.result === 'postponed' && g.score === null && !g.boxScore);
+    } else
     check(`game ${idx} committed (result+score)`,
           g._committed && g.result && g.score && Number.isFinite(g.score.us) && Number.isFinite(g.score.them));
 
@@ -1550,8 +1554,10 @@ async function main() {
 
     // ── Box score (Phase 1: shared accumulator) ──
     const box = g.boxScore;
+    if (!g.cancelled) {
     check(`game ${idx}: boxScore written (away+home)`, !!(box && box.away && box.home));
     check(`game ${idx}: plays stripped after commit`, g.plays === undefined, g.plays ? `still ${g.plays.length}` : 'stripped');
+    }
     if (box && box.away && box.home) {
       const userRuns = box.userIsHome ? box.home.runs : box.away.runs;
       const oppRuns  = box.userIsHome ? box.away.runs : box.home.runs;
@@ -1648,7 +1654,7 @@ async function main() {
       const ut = post.userTeam;
       check('spring: results kept out of the regular-season record (user)',
             (ut.wins || 0) + (ut.losses || 0) === 0
-            && (ut.springWins || 0) + (ut.springLosses || 0) + (ut.springTies || 0) === SPRING_TRAINING_GAME_COUNT,
+            && (ut.springWins || 0) + (ut.springLosses || 0) + (ut.springTies || 0) === SPRING_TRAINING_GAME_COUNT - post.schedule.filter(x => x.isSpring && x.cancelled).length,
             `W-L ${ut.wins}-${ut.losses}, spring ${ut.springWins}-${ut.springLosses}-${ut.springTies || 0}`);
       check('spring: no CPU club has a regular-season record yet',
             post.leagueTeams.every(t => (t.wins || 0) + (t.losses || 0) === 0));

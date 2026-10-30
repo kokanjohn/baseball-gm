@@ -584,7 +584,9 @@ export const GAME_WEATHER = Object.freeze({
   CURFEW_LOCAL_H:      1,     // play doesn't start or resume after 1 AM local
   CREW_CHECK_MIN:      30,    // during a delay, every 30 minutes the crew reads the forecast and may call it
   PREGAME_CALLS_MIN:   Object.freeze([180, 90]),   // the club reads the forecast this long before first pitch…
-  PREGAME_CALL_CHANCE: Object.freeze([80, 70]),    // …and postpones only if it shows no game AND the chance of rain (as the GM sees it) is at least this
+  PREGAME_CALL_CHANCE: Object.freeze([70, 60]),    // …and postpones only if the chance of rain the GM sees is at least this AND the forecast shows no game —
+  STEADY_RATE_MMH:     0.5,   // …or steady rain (at least this hard)…
+  STEADY_SHARE:        0.5,   // …through this much of the game's three hours (a wet evening; §102.6)
   SOGGY_IN:            1.5,   // this much rain in the 6 hours before first pitch → field work first
   SOGGY_WORK_MIN:      30,
   WASHOUT_IN:          3.0,   // this much → the field is unplayable: postponed
