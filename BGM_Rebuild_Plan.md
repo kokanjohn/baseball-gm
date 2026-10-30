@@ -8500,3 +8500,42 @@ All pass (dark; light at 4× throttle). The outlook fills in about 0.6–0.8 s a
 - tapping opens that game's forecast.
 
 12 / 12 pass.
+
+### 103.4 3d — consistency and accuracy of the forecasts (r115)
+
+`tools/harness/check-forecasts.mjs [seeds]`: game forecasts as every screen shows them, 4 regions × a season × leads of 3 h, 24 h and 72 h (about 6,500 games at 3 seeds). It checks:
+- a game is never less likely to rain than an hour of it;
+- a day shown beside a game is never less likely than the game;
+- the words match the number;
+- the shown chance verifies (each 10-point bin within about two standard errors, at least 10 points);
+- forecasts firm up toward the game (Brier score 0.035 at 3 h, 0.043 at 24 h, 0.066 at 72 h).
+
+**What it found, and the fixes:**
+1. **Short windows verified too high.** The chance calibration was fitted on day-long windows. An hour or a game's three hours wetter than their small climate chance came out sharpened too far: at 24 h, a game's "30%" rained 11% of the time and "70%" 52%. **Fix:** `SHORT_WINDOW_TABLE` / `shortWindowChance` in `chanceOfPrecip`. For each window length (1 h, 3 h), how often each chance actually verifies:
+   - fitted on two seeds of every region and checked on a held-out third (`tools/harness/fit-chance.mjs collect | table`);
+   - monotone (pool-adjacent-violators), with a light prior toward no change;
+   - blended on the log of the length up to a day (no change).
+
+   Held out, 3 h windows: "10%" → 10%, "20%" → 16%, "30%" → 26% (were 7%, 13%, 13%). Day windows are unchanged. (A parametric window term was tried first; log-loss barely moved it, being dominated by thousands of clear dry windows.)
+2. **The radar floor overstated rain a day out.** Within 24 h, a window the radar's run shows wet at the park was never shown below 30% — but one run's rain at a point a day out verifies about one time in ten. **Fix:** `radarFloor(lead)`:
+   - 30% in the next ~1.5 h (what's on the radar now);
+   - 20% to 6 h;
+   - 10% beyond (a slight chance).
+
+   The radar never shows rain over a park whose forecast says none; the number stays honest. `check-weather`'s radar-consistency check reads the same floor.
+3. **The nesting rule ran high.** Raising a game's chance to its highest hour favoured whichever estimate ran highest. **Fix:** the game's chance is its own (calibrated) three-hour chance, and each hour is capped at it. An hour can't be more likely than the three hours that contain it, and the headline — the number the dashboard, schedule and manager's question use — stays calibrated. Days beside games are still raised to the game (rare, and the game is the calibrated number).
+
+**After the fixes** (3 seeds): every bin verifies at every lead:
+- 3 h: 20% → 15%;
+- 24 h: 30% → 18% of 38;
+- 72 h: 30% → 32%, 60% → 63%.
+
+The other checks still pass:
+- `check-weather` 116 / 116 (its chances verify on held-out seeds: 8 → 8%, 24 → 25%, 45 → 51%, 66 → 82%, 94 → 96%; within a day the chance never contradicts the radar);
+- the cards 11 / 11;
+- the forecast and weather screen tests;
+- references.
+
+**Speed** (measured): the dashboard's forecast line fills in about 0.3–0.4 s after the card draws (4× throttled main thread included); the 10-day 0.6–0.8 s after the sheet opens; the schedule's lines about 10 ms when the dashboard already worked them out. All work is in the forecast worker, cached per hourly run.
+
+**Step 3 is complete; with it, the §100 weather plan.**

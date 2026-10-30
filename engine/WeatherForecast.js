@@ -116,11 +116,13 @@ export function chanceOfPrecip(ctx, nowMs, x, y, t0, t1) {
   const wetW = members.filter(w => w.wet).length + (main.wet ? MAIN_WEIGHT : 0);
   const raw = (wetW + 0.25) / (ENSEMBLE_SIZE + MAIN_WEIGHT + 0.5);
   const climate = climateChance(ctx, t0, t1);
-  let p = calibrateChance(raw, climate, lead);
+  let p = shortWindowChance(calibrateChance(raw, climate, lead), (t1 - t0) / MS_HOUR);
   // Within a day the chance never contradicts the radar: rain the radar shows
-  // at the park is never a long shot (≥ 30%), and a dry radar is never a sure
-  // thing (≤ 80%).
-  if (lead <= RADAR_HOURS) p = main.wet ? Math.max(p, 0.3) : Math.min(p, 0.8);
+  // at the park is never ruled out, and a dry radar is never a sure thing
+  // (≤ 80%). How far "never ruled out" goes follows how far one run can be
+  // trusted at a point (§102.7, measured): in the next hour (what's on the
+  // radar now) at least 30%; to 6 hours at least 20%; beyond, a slight chance (10%).
+  if (lead <= RADAR_HOURS) p = main.wet ? Math.max(p, radarFloor(lead)) : Math.min(p, 0.8);
   const conv = wet.length ? wet.reduce((a, b) => a + b.convective, 0) / wet.length : 0;
   const snow = wet.length ? wet.reduce((a, b) => a + b.snow, 0) / wet.length : 0;
   const mix = wet.length ? wet.reduce((a, b) => a + b.mix, 0) / wet.length : 0;
@@ -134,6 +136,33 @@ export function chanceOfPrecip(ctx, nowMs, x, y, t0, t1) {
   };
   _cache.set(key, out);
   return out;
+}
+
+/**
+ * §102.7 (3d) Short windows verified too high: the calibration above was
+ * fitted on day-long windows, and an hour or a game's three hours wetter than
+ * their (small) climate chance came out sharpened too far ("30%" rained about
+ * 13% of the time, three hours out to a day). This table — how often each
+ * chance actually verifies, by window length, fitted on two seeds of every
+ * region and checked on a third (tools/harness/fit-chance.mjs table), made
+ * monotone — maps them back; between an hour, three hours and a day it's
+ * blended on the log of the length (a day: no change).
+ */
+const SHORT_WINDOW_TABLE = Object.freeze({
+  1: [2, 5, 8, 13, 15, 24, 40, 61, 72, 83, 100],
+  3: [2, 6, 12, 19, 28, 28, 50, 61, 67, 98, 100],
+});
+export function shortWindowChance(p, hours) {
+  if (hours >= 24) return p;
+  const look = (t, q) => { const x = Math.min(10, Math.max(0, q * 10)), i = Math.min(9, Math.floor(x)); return (t[i] + (t[i + 1] - t[i]) * (x - i)) / 100; };
+  const m1 = look(SHORT_WINDOW_TABLE[1], p), m3 = look(SHORT_WINDOW_TABLE[3], p);
+  const u = Math.log2(Math.max(1, hours)), u3 = Math.log2(3), u24 = Math.log2(24);
+  return u <= u3 ? m1 + (m3 - m1) * (u / u3) : m3 + (p - m3) * ((u - u3) / (u24 - u3));
+}
+
+/** The least chance shown when the radar's run has rain at the park, by lead (hours). */
+export function radarFloor(leadH) {
+  return leadH <= 1.5 ? 0.3 : leadH <= 6 ? 0.2 : 0.1;
 }
 
 /** Chances are shown the way forecasters give them: 0, then steps of 10 (a 5 rounds up only from 5). */
@@ -295,8 +324,12 @@ export function gameForecast(ctx, nowMs, x, y, gameTime, bearing = 45) {
       hours.push({ t, tempF: Math.round(keep * hc.tempF + (1 - keep) * normalAtHour), chance: ch.chance, label: hc.label, icon: hc.icon });
     }
   }
-  // The game's three hours can't be less likely to rain than any hour inside them.
-  const chance = Math.max(c.chance, ...hours.map(h => h.chance));
+  // An hour of the game can't be more likely to rain than the game's three
+  // hours: the hours are capped at the game's chance — the calibrated number
+  // every screen and the manager's question use (taking the most of them
+  // instead would favour whichever estimate ran highest, and run high).
+  const chance = c.chance;
+  for (const h of hours) if (h.chance > chance) h.chance = chance;
   const wet = { storms: 'storms', rain: 'showers', snow: 'snow', mix: 'rain and snow' }[c.kind];
   const Wet = { storms: 'Storms', rain: 'Rain', snow: 'Snow', mix: 'Rain and snow' }[c.kind];
   const sky = at.precip?.kind ? at.sky : at.label.replace(/, (Windy|Hot)$/, '');

@@ -539,7 +539,7 @@ const WF = await import('../../engine/WeatherForecast.js');
       for (const L of leads) {
         const ch = WF.chanceOfPrecip(c, t0 - L * MS_HOUR, 0, 0, t0, t1);
         res[L].push([ch.chance / 100, ch.climate / 100, obs]);
-        if (L <= 24) { radarN++; if (ch.mainWet ? ch.chance < 30 : ch.chance > 80) radarBad++; }
+        if (L <= 24) { radarN++; if (ch.mainWet ? ch.chance < 100 * WF.radarFloor(L + 12) : ch.chance > 80) radarBad++; }
       }
     }
   }
