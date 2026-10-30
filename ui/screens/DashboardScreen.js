@@ -1629,6 +1629,21 @@ function _injectCSS() {
     .ngc-radar{font:inherit;font-size:13px;font-weight:700;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:7px 12px;cursor:pointer;}
     .ngc-radar[hidden]{display:none;}
     #tab-dashboard.dash-idle .recent-wrap{margin-bottom:0;}
+    /* Short phones: the idle dashboard tightens instead of scrolling (it never scrolls when idle). */
+    @media (max-height: 740px) {
+      #tab-dashboard.dash-idle .week-banner{padding:6px 12px;margin-bottom:6px;}
+      #tab-dashboard.dash-idle .week-text{font-size:20px;}
+      #tab-dashboard.dash-idle .div-pos-value{font-size:24px;}
+      #tab-dashboard.dash-idle .stat-grid{margin-bottom:6px;}
+      #tab-dashboard.dash-idle .stat-card{padding:6px 10px;}
+      #tab-dashboard.dash-idle .stat-value{font-size:30px;}
+      #tab-dashboard.dash-idle .morale-section{margin-bottom:4px;}
+      #tab-dashboard.dash-idle .morale-row{margin-bottom:2px;}
+      #tab-dashboard.dash-idle .progress-bar{height:5px;}
+      #tab-dashboard.dash-idle .next-game-card{min-height:0;padding:10px 14px;margin-bottom:6px;}
+      #tab-dashboard.dash-idle .fp-card{padding:6px 14px;margin-top:6px;}
+      #tab-dashboard.dash-idle .fp-time{font-size:30px;}
+    }
     .recent-wrap{margin:8px 16px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface);overflow:hidden;}
     .recent-head{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;background:none;border:0;color:var(--text);font-family:inherit;text-align:left;cursor:pointer;}
     .recent-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);flex-shrink:0;}

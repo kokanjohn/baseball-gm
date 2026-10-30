@@ -78,8 +78,8 @@ for (const h of [932, 844, 760, 700, 640]) {
     slot.style.display = ''; btn.hidden = bh;
     return { over, base, idle: t.classList.contains('dash-idle'), folded: card.style.display === 'none', button: btn && !btn.hidden, map: Math.round(card.querySelector('.rc-map').getBoundingClientRect().height) };
   });
-  check(`${h}px tall: the radar adds no scrolling to the idle dashboard (overflow ${r.over}px, ${r.base}px without it; ${r.folded ? 'a Radar button on the next-game card' : `radar map ${r.map}px`})`,
-        r.idle && r.over <= Math.max(1, r.base) && r.folded === r.button);
+  check(`${h}px tall: the idle dashboard doesn't scroll, radar and all (overflow ${r.over}px, ${r.base}px without the radar; ${r.folded ? 'a Radar button on the next-game card' : `radar map ${r.map}px`})`,
+        r.idle && r.over <= 0 && r.base <= 0 && r.folded === r.button);
   if (r.folded) {
     await p2.click('.ngc-radar');
     await p2.waitForSelector('#radar-sheet.open', { timeout: 5000 });

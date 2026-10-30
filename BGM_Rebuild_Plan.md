@@ -8539,3 +8539,20 @@ The other checks still pass:
 **Speed** (measured): the dashboard's forecast line fills in about 0.3–0.4 s after the card draws (4× throttled main thread included); the 10-day 0.6–0.8 s after the sheet opens; the schedule's lines about 10 ms when the dashboard already worked them out. All work is in the forecast worker, cached per hourly run.
 
 **Step 3 is complete; with it, the §100 weather plan.**
+
+## 104. Two open items (GM: "continue with the two open items")
+
+### 104.1 The idle dashboard fits short phones (r116)
+
+**The problem.** At 640 px tall the idle dashboard scrolled 19 px (since before the weather work). The next-game forecast line made it 28 px; at 667 px it scrolled 1 px. The rule is that the idle dashboard never scrolls. The old test only checked that the radar added no scrolling *relative to the page without it*, so the overflow underneath passed.
+
+**The fix.** On screens 740 px tall or less, the idle dashboard (only — a live game scrolls) tightens:
+- the season banner (padding, 20 px title, 24 px division place);
+- the stat cards (padding, 30 px numbers);
+- the gaps between the morale bars (5 px bars);
+- the next-game card (no minimum height);
+- the first-pitch card (padding, 30 px countdown).
+
+That saves about 48 px; the stack goes from 292 to 244 px.
+
+**Harness.** `test-dashboard-radar` now requires the idle dashboard not to scroll at all, radar and all, at every height. Result: 932 / 844 px with the radar; 760 / 700 / 640 px with the Radar button on the next-game card. Overflow is 0 px everywhere, with and without the radar, in dark and light.
