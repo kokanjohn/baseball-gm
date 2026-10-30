@@ -28,7 +28,7 @@
  */
 
 import { stream, hash, hash01, fbm3, valueNoise3 } from './WeatherNoise.js';
-import { normalsAt, steeringAt, stormPotential, airAt, localHour, diurnal, MS_HOUR } from './WeatherClimate.js';
+import { normalsAt, steeringAt, stormPotential, airAt, localHour, diurnal, tempBiasAt, MS_HOUR } from './WeatherClimate.js';
 
 export const DBZ_MIN = 12;                 // below this nothing shows on radar or reaches the ground
 const SLOT_MS = 6 * MS_HOUR;               // synoptic systems are born in 6-hour slots
@@ -69,9 +69,9 @@ function _slotSystems(ctx, slot) {
   const wetK = N.wet / 0.33;
   // Expected systems born per slot, by kind (tuned against each region's wet days, step 1g).
   const rate = {
-    front:   0.19 * wetK * (1 - 0.35 * warm),
+    front:   0.19 * wetK * (1 - 0.35 * warm) * (1.15 - 0.5 * N.storms),
     shield:  0.15 * wetK * (1 - 0.6 * warm) * (1 - 0.5 * N.storms),
-    squall:  0.11 * wetK * N.storms * warm,
+    squall:  0.22 * wetK * N.storms * warm,
     showers: 0.06 * wetK * (1 - warm) * (0.5 + N.storms),
   };
   const out = [];
@@ -102,13 +102,16 @@ function _make(ctx, kind, r, t0, warm, N, id) {
   switch (kind) {
     case 'front':
       speedK = r.range(0.95, 1.3); life = r.range(26, 48); ramp = r.range(4, 9); decay = r.range(6, 12);
-      peak = 34 + 8 * warm + r.range(0, 8) + 8 * warm * N.storms;
-      Object.assign(s, { len: r.range(600, 1100), wid: r.range(18, 40) * (1 - 0.3 * warm), trail: r.range(40, 140) * (1 - 0.5 * warm),
-                         trailDbz: r.range(22, 31) + 3 * (1 - warm), tilt: r.range(-0.45, 0.05), curve: r.range(-60, 90), conv: warm * N.storms });
+      // Cool-season fronts: wide, steady rain. Summer fronts: weak, narrow, often just a line of storms.
+      peak = 36 + 2 * warm + r.range(0, 8);
+      Object.assign(s, { len: r.range(600, 1100), wid: r.range(18, 40) * (1 - 0.4 * warm), trail: r.range(40, 140) * (1 - 0.6 * warm),
+                         trailDbz: r.range(24, 32) - 4 * warm, tilt: r.range(-0.45, 0.05), curve: r.range(-60, 90), conv: 0.1 });
+      // Some fronts come through with a line of thunderstorms — more often in the stormy months.
+      if (r.chance(Math.min(0.9, 1.2 * N.storms))) { s.conv = 0.6 + 0.4 * warm; peak += 7; }
       break;
     case 'shield':
       speedK = r.range(0.65, 0.95); life = r.range(14, 32); ramp = r.range(3, 7); decay = r.range(4, 9);
-      peak = r.range(27, 38) + 4 * warm;
+      peak = r.range(29, 39) + 2 * warm;
       Object.assign(s, { len: r.range(200, 420), wid: r.range(120, 260), conv: 0.15 * N.storms });
       break;
     case 'squall':
@@ -307,7 +310,7 @@ const TRACK_ALONG_KM_H = 1.5, TRACK_ALONG_KM_H2 = 0.008;     // timing error (s.
 const TRACK_ACROSS_KM_H = 1.0, TRACK_ACROSS_KM_H2 = 0.006;   // track error ≈ 1.0·L + 0.006·L²
 const PEAK_ERR_DBZ_H = 0.15, PEAK_ERR_MAX = 8;               // strength error grows to ±8 dBZ
 const BREAK_SEEN_MS = 4 * MS_HOUR;                           // breakups are seen this far ahead
-const NOWCAST_MS = 30 * 60_000;                              // storms up within this of the run are tracked
+const NOWCAST_MS = 60 * 60_000;                              // storms up within this of the run are tracked (stands in for minute-by-minute nowcast updates between hourly runs)
 const CELL_TRIGGER_LEAD_H = 60;                              // the run's read of where storms fire fades to a guess by here
 const RUN_DRIFT_H = 9;                                       // a run's errors change over about this many runs
 const MODEL_CELL_BUCKET_MS = 6 * MS_HOUR;                    // the run's own storm placement refreshes every 6 runs
@@ -617,7 +620,8 @@ export function surfaceTemp(ctx, x, y, t) {
   const N = normalsAt(ctx, t);
   const range = N.hi - N.lo, dh = diurnal(localHour(t, ctx.tzMin));
   const f = frontAir(ctx, x, y, t);
-  let tempF = air.tempF + (CLOUD_MEAN - cloud) * range * (0.42 * dh - 0.22 * (1 - dh)) + f.dT;
+  // (Less the calibration: clouds, fronts and rain-cooled air average out to the normals.)
+  let tempF = air.tempF + (CLOUD_MEAN - cloud) * range * (0.42 * dh - 0.22 * (1 - dh)) + f.dT - tempBiasAt(N, localHour(t, ctx.tzMin));
   // A forecast's own temperature error: small tomorrow, several degrees a week out.
   if (ctx.run && t > ctx.run.issueMs) {
     const L = (t - ctx.run.issueMs) / MS_HOUR;
@@ -692,13 +696,21 @@ export function precipAt(ctx, x, y, t, opts = null) {
   if (!(dbz > DBZ_MIN)) return { dbz: -Infinity, kind: PRECIP_RAIN, rateMmH: 0, convective: false };
   // (opts.kind === false: the caller knows it can't be snow — skip the temperature.)
   const kind = opts && opts.kind === false ? PRECIP_RAIN : precipKind(precipTemp(ctx, x, y, t), dbz);
-  return { dbz, kind, rateMmH: rainRate(dbz), convective: !!conv };
+  // How much rain the echo delivers: the radar's rule, times the climate's calibration.
+  const out = { dbz, kind, rateMmH: rainRate(dbz) * normalsAt(ctx, t).rainK, convective: !!conv };
+  // (opts.parts: which systems it came from — for the tuning tool.)
+  if (opts && opts.parts) out.parts = act.map((a, i) => ({ kind: a.s.kind, dbz: parts[i] })).filter(p => p.dbz > -Infinity);
+  return out;
 }
 
-/** Marshall–Palmer: rain rate (mm/h) from reflectivity. */
+/**
+ * Marshall–Palmer: rain rate (mm/h) from reflectivity, capped at 53 dBZ as
+ * radar rainfall estimates are (stronger echoes are hail, not more rain).
+ */
+export const RAIN_DBZ_CAP = 53;
 export function rainRate(dbz) {
   if (!(dbz > DBZ_MIN)) return 0;
-  return ((10 ** (dbz / 10)) / 200) ** (1 / 1.6);
+  return ((10 ** (Math.min(dbz, RAIN_DBZ_CAP) / 10)) / 200) ** (1 / 1.6);
 }
 
 /**

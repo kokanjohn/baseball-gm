@@ -14,6 +14,7 @@
 
 import { REGION_CLIMATE, CLIMATE_FIRST_MONTH } from '../data/region-climate.js';
 import { SPRING_START_MONTH, SPRING_START_DAY } from '../data/constants.js';
+import { WEATHER_CALIBRATION } from '../data/weather-calibration.js';
 import { regionMap, maskAt, waterKmAt, MASK_RELIEF } from './WeatherMap.js';
 import { hash, fbm2, fbm3, valueNoise2 } from './WeatherNoise.js';
 
@@ -151,11 +152,39 @@ export function baseballDateIso(cal, t) {
 // ── Normals ─────────────────────────────────────────────────────────────────
 
 const MONTH_MID_DOY = [15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349];
-const FIELDS = ['hi', 'lo', 'dew', 'wet', 'storms', 'steer', 'wind'];
+const FIELDS = ['hi', 'lo', 'dew', 'wet', 'storms', 'steer', 'wind', 'inches', 'rainK', 'tb0', 'tb1', 'tb2', 'tb3', 'tb4', 'tb5'];
+
+// The calibration (data/weather-calibration.js) rides along with the normals,
+// so it is interpolated by day and blended through the offseason the same way.
+let _calibrated = true;
+/** The calibration tool turns the corrections off while it measures. */
+export function useCalibration(on) { _calibrated = !!on; _normMemo.clear(); _monthsMemo.clear(); }
+const _monthsMemo = new Map();
+function _months(region) {
+  const key = `${region}|${_calibrated}`;
+  let m = _monthsMemo.get(key);
+  if (!m) {
+    const base = (REGION_CLIMATE[region] || REGION_CLIMATE.north).months;
+    const cal = _calibrated ? WEATHER_CALIBRATION[region] || WEATHER_CALIBRATION.north : null;
+    m = base.map((mo, i) => {
+      const tb = cal ? cal.tempBias[i] : [0, 0, 0, 0, 0, 0];
+      return { ...mo, rainK: cal ? cal.rainK[i] : 1, tb0: tb[0], tb1: tb[1], tb2: tb[2], tb3: tb[3], tb4: tb[4], tb5: tb[5] };
+    });
+    _monthsMemo.set(key, m);
+  }
+  return m;
+}
+
+/** The surface weather's average departure from the background at this hour (°F), from the calibration. */
+export function tempBiasAt(N, hour) {
+  const h = ((hour % 24) + 24) % 24, i = Math.floor(h / 4), f = (h - 4 * i) / 4;
+  const a = N[`tb${i}`] ?? 0, b = N[`tb${(i + 1) % 6}`] ?? 0;
+  return a + (b - a) * f;
+}
 
 /** A region's normals on a day of the year (interpolated between mid-months, held outside Mar–Nov). */
 export function normalsOnDay(region, doy) {
-  const months = (REGION_CLIMATE[region] || REGION_CLIMATE.north).months;
+  const months = _months(region);
   const mids = months.map((_, i) => MONTH_MID_DOY[CLIMATE_FIRST_MONTH + i]);
   if (doy <= mids[0]) return { ...months[0] };
   if (doy >= mids[mids.length - 1]) return { ...months[months.length - 1] };
