@@ -22,9 +22,9 @@
  * radar all read the same numbers.
  */
 
-import { MS_HOUR, MS_DAY, localDayStart, localHour, normalsAt, baseballDateIso } from './WeatherClimate.js';
+import { MS_HOUR, MS_DAY, localDayStart, localHour, normalsAt, baseballDateIso, diurnal } from './WeatherClimate.js';
 import { forecastContext, precipAt, DBZ_MIN, PRECIP_SNOW, PRECIP_MIX } from './WeatherSystems.js';
-import { conditionsAt } from './WeatherConditions.js';
+import { conditionsAt, windAtPark } from './WeatherConditions.js';
 
 export const ENSEMBLE_SIZE = 12;
 const MAIN_WEIGHT = 2;
@@ -149,36 +149,40 @@ export function roundChance(pct) {
  *   chance, kind, label, summary, icon, windMph, windFromDeg }.
  */
 export function dailyForecast(ctx, nowMs, x, y, days = 10) {
+  const out = [];
+  for (let d = 0; d < days; d++) out.push(dailyForecastDay(ctx, nowMs, x, y, d));
+  return out;
+}
+
+/** One day of dailyForecast (day 0 = today): computed and cached on its own, so a screen can show the outlook as it fills in. */
+export function dailyForecastDay(ctx, nowMs, x, y, d) {
   const issue = Math.floor(nowMs / MS_HOUR) * MS_HOUR;
-  const key = `daily|${ctx.seed}|${ctx.region}|${issue}|${x.toFixed(1)}|${y.toFixed(1)}|${days}`;
+  const key = `day|${ctx.seed}|${ctx.region}|${issue}|${x.toFixed(1)}|${y.toFixed(1)}|${d}`;
   const hit = _cache.get(key);
   if (hit) return hit;
   const main = forecastContext(ctx, issue, 0);
-  const out = [];
   const today = localDayStart(nowMs, ctx.tzMin);
-  for (let d = 0; d < days; d++) {
-    const t0 = today + d * MS_DAY, t1 = t0 + MS_DAY;
-    const from = Math.max(t0, nowMs);
-    const N = normalsAt(ctx, t0 + 15 * MS_HOUR);
-    // Highs and lows from the run, drawn toward the normals further out.
-    const hiSamples = [13, 14.5, 16, 17.5].map(h => t0 + h * MS_HOUR).filter(t => t >= nowMs);
-    // The low is tonight's (into tomorrow morning), as forecasts give it.
-    const loSamples = [22, 25, 28, 30].map(h => t0 + h * MS_HOUR).filter(t => t >= nowMs);
-    const lead = Math.max(0, (t0 + 15 * MS_HOUR - issue) / MS_HOUR);
-    const keep = tempTrust(lead);
-    const runHi = hiSamples.length ? Math.max(...hiSamples.map(t => conditionsAt(main, x, y, t).tempF)) : null;
-    const runLo = loSamples.length ? Math.min(...loSamples.map(t => conditionsAt(main, x, y, t).tempF)) : null;
-    const hiF = runHi == null ? null : Math.round(keep * runHi + (1 - keep) * N.hi);
-    const Nn = normalsAt(ctx, t0 + 29 * MS_HOUR);
-    const loF = runLo == null ? null : Math.round(keep * runLo + (1 - keep) * Nn.lo);
-    const c = chanceOfPrecip(ctx, nowMs, x, y, from, t1);
-    // Sky by day, from the run's afternoon.
-    const mid = conditionsAt(main, x, y, Math.max(nowMs, t0 + 14 * MS_HOUR));
-    const wind = mid.wind;
-    const { label, summary, icon } = _words(c, mid);
-    out.push({ dayStartMs: t0, dateIso: baseballDateIso(ctx.cal, t0 + 12 * MS_HOUR), hiF, loF, chance: c.chance, kind: c.chance >= 10 ? c.kind : null,
-               label, summary, icon, windMph: wind.mph, windFromDeg: wind.fromDeg, partial: from > t0 });
-  }
+  const t0 = today + d * MS_DAY, t1 = t0 + MS_DAY;
+  const from = Math.max(t0, nowMs);
+  const N = normalsAt(ctx, t0 + 15 * MS_HOUR);
+  // Highs and lows from the run, drawn toward the normals further out.
+  const hiSamples = [13, 14.5, 16, 17.5].map(h => t0 + h * MS_HOUR).filter(t => t >= nowMs);
+  // The low is tonight's (into tomorrow morning), as forecasts give it.
+  const loSamples = [22, 25, 28, 30].map(h => t0 + h * MS_HOUR).filter(t => t >= nowMs);
+  const lead = Math.max(0, (t0 + 15 * MS_HOUR - issue) / MS_HOUR);
+  const keep = tempTrust(lead);
+  const runHi = hiSamples.length ? Math.max(...hiSamples.map(t => conditionsAt(main, x, y, t).tempF)) : null;
+  const runLo = loSamples.length ? Math.min(...loSamples.map(t => conditionsAt(main, x, y, t).tempF)) : null;
+  const hiF = runHi == null ? null : Math.round(keep * runHi + (1 - keep) * N.hi);
+  const Nn = normalsAt(ctx, t0 + 29 * MS_HOUR);
+  const loF = runLo == null ? null : Math.round(keep * runLo + (1 - keep) * Nn.lo);
+  const c = chanceOfPrecip(ctx, nowMs, x, y, from, t1);
+  // Sky by day, from the run's afternoon.
+  const mid = conditionsAt(main, x, y, Math.max(nowMs, t0 + 14 * MS_HOUR));
+  const wind = mid.wind;
+  const { label, summary, icon } = _words(c, mid);
+  const out = { dayStartMs: t0, dateIso: baseballDateIso(ctx.cal, t0 + 12 * MS_HOUR), hiF, loF, chance: c.chance, kind: c.chance >= 10 ? c.kind : null,
+                label, summary, icon, windMph: wind.mph, windFromDeg: wind.fromDeg, partial: from > t0 };
   _cap();
   _cache.set(key, out);
   return out;
@@ -234,6 +238,59 @@ export function hourlyForecast(ctx, nowMs, x, y, hours = 24) {
     const ch = chanceOfPrecip(ctx, nowMs, x, y, t, t + MS_HOUR);
     out.push({ t, tempF: Math.round(c.tempF), chance: ch.chance, label: c.label, icon: c.icon, windMph: c.wind.mph, windFromDeg: c.wind.fromDeg });
   }
+  _cap();
+  _cache.set(key, out);
+  return out;
+}
+
+/**
+ * gameForecast(ctx, nowMs, x, y, gameTime, bearing) — §102.7 (step 3a) the
+ * forecast for one game, as every screen shows it (the dashboard, the
+ * schedule, the forecast sheet — and the manager's starter question reads the
+ * same window): from the run made in nowMs's hour,
+ * {
+ *   issueMs, gameTime, leadH,
+ *   chance, kind,           // measurable rain in the game's three hours (chanceOfPrecip)
+ *   label,                  // 'Storms likely' · 'Chance of showers' · 'Slight chance of storms' · the sky ('Mostly Sunny', 'Clear'…)
+ *   whenHour,               // the first game hour with a real chance (≥ 30%), for "after 8 PM" (null if none)
+ *   tempF, windMph, windText, icon,   // at first pitch (the temperature drawn toward the normal past a day, as the outlook does)
+ *   hours: [{ t, tempF, chance, label, icon }],   // the game's hours from first pitch (each hour's own chance), within two days
+ * }
+ */
+export function gameForecast(ctx, nowMs, x, y, gameTime, bearing = 45) {
+  const issue = Math.floor(nowMs / MS_HOUR) * MS_HOUR;
+  const key = `game|${ctx.seed}|${ctx.region}|${issue}|${x.toFixed(1)}|${y.toFixed(1)}|${gameTime}|${bearing}`;
+  const hit = _cache.get(key);
+  if (hit) return hit;
+  const main = forecastContext(ctx, issue, 0);
+  const leadH = Math.max(0, (gameTime - issue) / MS_HOUR);
+  const c = chanceOfPrecip(ctx, nowMs, x, y, gameTime, gameTime + 3 * MS_HOUR);
+  const at = conditionsAt(main, x, y, gameTime);
+  // Past a day out the run's temperature is drawn toward the normal at that hour, as the outlook's highs and lows are.
+  const N = normalsAt(ctx, gameTime);
+  const normalAtHour = N.lo + (N.hi - N.lo) * diurnal(localHour(gameTime, ctx.tzMin));
+  const keep = tempTrust(leadH);
+  const tempF = Math.round(keep * at.tempF + (1 - keep) * normalAtHour);
+  const hours = [];
+  if (leadH <= 48) {
+    // The game's own hours (first pitch, then each hour after it): the first is the headline.
+    for (let t = gameTime; t < gameTime + 3.5 * MS_HOUR; t += MS_HOUR) {
+      if (t + MS_HOUR <= nowMs) continue;
+      const hc = conditionsAt(main, x, y, t);
+      const ch = chanceOfPrecip(ctx, nowMs, x, y, t, t + MS_HOUR);
+      hours.push({ t, tempF: Math.round(keep * hc.tempF + (1 - keep) * normalAtHour), chance: ch.chance, label: hc.label, icon: hc.icon });
+    }
+  }
+  const wet = { storms: 'storms', rain: 'showers', snow: 'snow', mix: 'rain and snow' }[c.kind];
+  const Wet = { storms: 'Storms', rain: 'Rain', snow: 'Snow', mix: 'Rain and snow' }[c.kind];
+  const sky = at.precip?.kind ? at.sky : at.label.replace(/, (Windy|Hot)$/, '');
+  const label = c.chance >= 60 ? `${Wet} likely` : c.chance >= 30 ? `Chance of ${wet}` : c.chance >= 10 ? `Slight chance of ${wet}` : sky;
+  const whenHour = hours.find(h => h.chance >= 30)?.t ?? null;
+  const w = windAtPark(at.wind, bearing);
+  const icon = c.chance >= 60 ? { storms: 'storm', rain: 'rain', snow: 'snow', mix: 'mix' }[c.kind]
+    : c.chance >= 30 ? { storms: 'storm-chance', rain: 'rain-chance', snow: 'snow-chance', mix: 'mix' }[c.kind] : at.icon;
+  const out = { issueMs: issue, gameTime, leadH: Math.round(leadH), chance: c.chance, kind: c.kind, label, whenHour,
+                tempF, windMph: at.wind.mph, windText: w.text, icon, hours };
   _cap();
   _cache.set(key, out);
   return out;

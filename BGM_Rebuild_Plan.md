@@ -8415,3 +8415,53 @@ Targets by region (each modelled on real cities; the West is high-desert Front R
 - the dashboard's next-game forecast;
 - the 10-day forecast view;
 - the schedule's forecasts.
+
+## 103. Step 3 — forecast surfaces (sub-steps)
+
+GM asked to continue after step 4. Step 3 sub-steps:
+
+| Sub-step | What |
+|---|---|
+| **3a** | The next game's forecast on the dashboard, and the forecast sheet (r112) |
+| 3b | The 10-day outlook in the forecast sheet |
+| 3c | Forecasts on the schedule (upcoming games within 10 days) |
+| 3d | Consistency and speed checks across every forecast surface |
+
+### 103.1 3a — the next game's forecast (r112)
+
+**One forecast per game.** `WeatherForecast.gameForecast(ctx, now, x, y, gameTime, bearing)`, wrapped by `GameWeather.forecastForGame(ctx, now, game)` (the game's park — a makeup moved to the other park is forecast there). Every screen shows this:
+- the chance of measurable rain in the game's three hours (`chanceOfPrecip`, the same window the manager's starter question reads);
+- the kind;
+- a label: "Storms likely" / "Chance of showers" / "Slight chance of storms" / the sky;
+- the first game hour with a real chance (≥ 30%), for "after 8 PM";
+- the temperature, wind and how it plays at the park at first pitch (the temperature drawn toward the normal at that hour past a day out, as the outlook's highs are);
+- the game's own hours from first pitch, each with its own chance, within two days (the first hour is the headline).
+
+All from the hourly run made in now's hour, cached per run.
+
+`dailyForecast` is now built from `dailyForecastDay(…, d)` (one day at a time, each cached), so screens can fill the outlook in as it comes. The numbers are unchanged; `check-weather` passes 116 / 116.
+
+**Off the main thread.** `ui/components/forecast-worker.js` (a module worker; the same pure functions) and `ForecastSource.js`:
+- `gameForecastFor`, `outlookFor` (day by day), `hourlyFor`, `peekGameForecast`;
+- answers cached per forecast hour and shared by every screen;
+- a main-thread fallback in slices.
+
+Costs on a desktop: a game about 25–100 ms; the 10-day about 0.85 s. A phone is about 4× that, hence the worker.
+
+**Dashboard.**
+- The next-game card has one forecast line under the time: "40° · Chance of showers 40%" / "74° · Storms likely 70% · after 8 PM". It's tappable; blue text; only for a game not yet started.
+- It's drawn at once if this hour's forecast is already worked out, otherwise "Forecast…" and filled in about 0.3–0.4 s later (phone speed included).
+- It's redrawn when the next hourly forecast comes out (the 5-second pulse).
+- The radar card gives up the room, so the idle dashboard still doesn't scroll.
+
+**Forecast sheet** (`ForecastSheet.js`):
+- the game: matchup, date and time, the headline temperature and label, "N% chance of rain during the game", the wind at first pitch, and the game's hours (temperature and chance; wet hours highlighted);
+- a note on when the forecast was made and that it's updated hourly.
+
+**Harness:** `tools/harness/test-forecast-ui.mjs outDir [theme] [throttle]`, in the real app with a new team:
+- the line fills in and is exactly the engine's forecast for that game, worked out directly on the page;
+- the idle dashboard doesn't scroll;
+- the sheet shows the same numbers, its first hour the headline;
+- no page errors.
+
+Passes in dark, and in light at 4× CPU throttle.

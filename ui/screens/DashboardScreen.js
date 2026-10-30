@@ -43,6 +43,8 @@ import {
 import { createRadarCard, MAP_H as RADAR_MAP_H } from '../components/RadarCard.js';
 import { openRadarSheet, venueOf } from '../components/RadarSheet.js';
 import { wxState, weatherLine, gameNotes, elapsedLabel } from '../components/WeatherStatus.js';
+import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
+import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -60,6 +62,7 @@ let _asgMode            = null; // §75: 'pre' | 'live' | 'final' while the All-
 let _radar              = null; // §100 the next-game card's radar — one element, moved into each redraw's slot
 let _wxKindShown        = null; // §102.4 the weather's hold on the live card as last drawn (a change redraws it)
 let _wxSig              = null; // §102.4 our next game's status / time / weather, as last drawn
+let _fcHour             = null; // §102.7 the forecast hour the next-game forecast line was drawn from
 
 // ─────────────────────────────────────────────────────────────
 // MOUNT / UNMOUNT
@@ -256,6 +259,7 @@ export function refresh() {
   container.innerHTML = _renderDashboard(state);
   _attachListeners(state);
   _attachRadar(state);
+  _fillForecast(state);
   _syncScrollRoom();
   if (feedScroll) { const f = document.getElementById('lgv-pbp-feed'); if (f) f.scrollTop = feedScroll; }
 
@@ -1127,10 +1131,38 @@ function _renderNextGameCard(game, state) {
         <div class="ngc-opp">${game.isHome ? 'vs' : '@'} ${_escape(game.opponent || '')}</div>
         <div class="ngc-loc">${springBadge}${game.isHome ? 'Home' : 'Away'}${gameTimeStr}</div>
         ${_ngcNotes(game, state)}
+        ${_ngcForecast(game, state)}
         ${lastBadge}
       </div>
       <div class="ngc-right"><button type="button" class="ngc-radar" hidden>Radar</button></div>
     </div>`;
+}
+
+/**
+ * §102.7 the next game's forecast, one line (the same numbers the forecast
+ * sheet and the schedule show): drawn from what's already worked out for this
+ * forecast hour, or filled in by the forecast worker a moment later. Tap for
+ * the forecast sheet. Only for a game that hasn't started.
+ */
+function _ngcForecast(game, state) {
+  if (!game || game._committed || game.status !== GAME_STATUS.SCHEDULED || !(game.gameTime > Date.now())) return '';
+  const f = peekGameForecast(state, game);
+  return `<button type="button" class="ngc-fc" id="ngc-fc">${f ? _escape(forecastLine(f)) : 'Forecast…'}</button>`;
+}
+
+/** Fill in the forecast line (and remember the forecast hour it's from). */
+function _fillForecast(state) {
+  const el = document.getElementById('ngc-fc');
+  if (!el) return;
+  const game = _getNextGame(state);
+  if (!game) return;
+  const now = Date.now();
+  _fcHour = Math.floor(now / 3_600_000);
+  el.onclick = (e) => { e.stopPropagation(); App.playClick(); openForecastSheet({ state: StateManager.get(), game }); };
+  gameForecastFor(state, game, now).then(f => {
+    const cur = document.getElementById('ngc-fc');
+    if (cur && _getNextGame(StateManager.get()) === game) { cur.textContent = forecastLine(f); _fitRadar(); }
+  }).catch(err => console.warn('[forecast]', err));
 }
 
 /** §102.4 a makeup, a doubleheader game, a suspended game picking up. */
@@ -1417,6 +1449,8 @@ function _wxPulse() {
   const sig = g ? `${g.index}|${g.date}|${g.gameTime}|${g.status}|${g.opponent}` : 'none';
   if (_wxSig !== null && sig !== _wxSig && !_asgMode) { _wxSig = sig; refresh(); return; }
   _wxSig = sig;
+  // §102.7 a new hourly forecast: the next game's line is worked out again.
+  if (_fcHour !== null && Math.floor(now / 3_600_000) !== _fcHour && document.getElementById('ngc-fc')) _fillForecast(st);
 }
 
 function _refreshLeagueRow() {
@@ -1537,6 +1571,7 @@ function _injectCSS() {
     .lgv-wx-called .lgv-wx-title{color:var(--text);}
     .lgv-wx-sub{font-size:11px;color:var(--soft);margin-top:2px;line-height:1.35;}
     #lgv-wx #dash-radar-slot{margin:6px 12px 2px;}
+    .ngc-fc{display:block;margin-top:3px;padding:0;border:0;background:none;font:inherit;font-size:11px;font-weight:700;color:#3b82f6;text-align:left;cursor:pointer;}
     .ngc-notes{font-size:10px;font-weight:600;color:#f97316;margin-top:2px;}
     .fp-card.fp-delay .fp-label{color:#f97316;}
     .lgv-linescore-wrap{overflow-x:auto;padding:8px 16px;border-bottom:1px solid var(--border);}

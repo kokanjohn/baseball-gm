@@ -32,7 +32,7 @@
 import { precipAt, venueSample, forecastContext, PRECIP_RAIN, DBZ_MIN } from './WeatherSystems.js';
 import { LIGHTNING_KM, LIGHTNING_DBZ, conditionsAt, windAtPark, rainTotal } from './WeatherConditions.js';
 import { localHour } from './WeatherClimate.js';
-import { chanceOfPrecip } from './WeatherForecast.js';
+import { chanceOfPrecip, gameForecast } from './WeatherForecast.js';
 import { venueOf, parkBearing } from './WeatherMap.js';
 import { GAME_WEATHER as GW } from '../data/constants.js';
 
@@ -329,4 +329,14 @@ export function resumptionPlan(ctx, game, resumeAt, remainingMin) {
   if (plan.outcome === PLAN_OUTCOME.POSTPONED) return { ok: false, plan };
   if (plan.outcome === PLAN_OUTCOME.CALLED && plan.stopAtPlayMin <= remainingMin) return { ok: false, plan };
   return { ok: true, plan };
+}
+
+/**
+ * forecastForGame(ctx, nowMs, game) — §102.7 the forecast for a game at its
+ * ballpark (a makeup moved to the other park: that park), as every screen
+ * shows it. See WeatherForecast.gameForecast. The venue is added: { venueId }.
+ */
+export function forecastForGame(ctx, nowMs, game) {
+  const venue = venueOf(ctx.map, game);
+  return { venueId: venue.teamId, ...gameForecast(ctx, nowMs, venue.x, venue.y, game.gameTime, parkBearing(ctx.map, venue.teamId)) };
 }
