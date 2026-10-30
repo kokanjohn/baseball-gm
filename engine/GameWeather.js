@@ -17,20 +17,23 @@
  *     it shows no restart; there are also hard limits (a three-hour wait to
  *     start, a two-and-a-half-hour delay once under way, a 1 AM curfew).
  *
- * The plan is in real time plus "playing minutes" (0…PLAY_MIN): SimEngine
- * lays its plays over playing time, and the plan turns that into the clock.
- * Whether a called game is official or suspended depends on the innings
- * played at that point, which the sim knows (4b).
+ * The plan is in real time plus "playing minutes": SimEngine paces a game at
+ * ten playing minutes a half-inning (nine innings = PLAY_MIN), and the plan
+ * turns playing minutes into the clock. A plan covers PLAN_MAX_MIN of play
+ * (13½ innings) — a game uses as much of it as it lasts, so a delay or call
+ * the plan has after the game is over simply never happens. Whether a called
+ * game is official or suspended depends on the innings and score at that
+ * point, which the sim knows (SimEngine, §102.2).
  *
  * Pure and deterministic: a weather context and a game in, a plan out —
  * identical for our games and the rest of the league.
  */
 
 import { precipAt, venueSample, forecastContext, PRECIP_RAIN, DBZ_MIN } from './WeatherSystems.js';
-import { LIGHTNING_KM, LIGHTNING_DBZ } from './WeatherConditions.js';
+import { LIGHTNING_KM, LIGHTNING_DBZ, conditionsAt, windAtPark } from './WeatherConditions.js';
 import { localHour } from './WeatherClimate.js';
 import { chanceOfPrecip } from './WeatherForecast.js';
-import { venueOf } from './WeatherMap.js';
+import { venueOf, parkBearing } from './WeatherMap.js';
 import { GAME_WEATHER as GW } from '../data/constants.js';
 
 const MIN = 60_000;
@@ -82,7 +85,7 @@ function _run(ctx, sample, gameTime, state, opts = {}) {
   let delay = state.delay ? { ...state.delay } : null;
   let startAt = state.startAt ?? null;
   const delays = (state.delays || []).map(d => ({ ...d }));
-  const until = opts.until ?? GW.PLAY_MIN;
+  const until = opts.until ?? GW.PLAN_MAX_MIN;
   const hardEnd = gameTime + 18 * 60 * MIN;
 
   const finish = (outcome, extra = {}) => {
@@ -153,7 +156,7 @@ function _forecastSaysNo(ctx, venue, gameTime, state, issueT = state.t) {
   const fctx = forecastContext(ctx, issueT);
   const sample = _sampler(fctx, venue.x, venue.y);
   const notStarted = state.startAt == null;
-  const r = _run(fctx, sample, gameTime, state, { until: notStarted ? GW.OFFICIAL_PLAY_MIN : Math.min(GW.PLAY_MIN, state.played + GW.STEP_MIN) });
+  const r = _run(fctx, sample, gameTime, state, { until: notStarted ? GW.OFFICIAL_PLAY_MIN : Math.min(GW.PLAN_MAX_MIN, state.played + GW.STEP_MIN) });
   return r.outcome !== PLAN_OUTCOME.PLAYED ? r : null;
 }
 
@@ -179,9 +182,9 @@ function _before(ctx, venue, gameTime) {
  *   reason,          // why it was postponed / called: 'rain' | 'lightning' | 'snow' | 'wet field'
  *   startAt,         // actual first pitch (null when postponed)
  *   delays: [{ startT, endT, atPlayMin, reason, mm }],   // a delay at 0 playing minutes before startAt is a delayed start
- *   endT,            // the last pitch (played / called)
- *   stopAtPlayMin,   // called: playing minutes completed
- *   playMin,         // PLAY_MIN
+ *   endT,            // called: the call; played: the end of the plan's span (the game itself ends when the sim says)
+ *   stopAtPlayMin,   // called: playing minutes completed when it's called
+ *   playMin,         // PLAY_MIN (nine innings)
  * }
  * `ctx` is the save's weather context (WeatherClimate.weatherContext).
  */
@@ -250,3 +253,28 @@ export function delayAt(plan, t) {
   return plan.delays.find(d => t >= d.startT && t < d.endT) || null;
 }
 
+
+/**
+ * gameConditions(ctx, plan) — the park report through a game, an inning at a
+ * time (every 20 playing minutes from first pitch across the plan's span), on
+ * the clock the plan gives: [{ playMin, t, tempF, humidity, windMph,
+ * windOutMph, windCrossMph, windText, rateMmH, kind, label, icon }]. What
+ * SimEngine plays in: the wind and the temperature move the ball, rain while
+ * they play through it makes the ball slick. Empty for a postponed game.
+ */
+export function gameConditions(ctx, plan) {
+  if (plan.startAt == null) return [];
+  const park = ctx.map.parks[plan.venueId] || ctx.map.parks.user;
+  const bearing = parkBearing(ctx.map, plan.venueId);
+  const out = [];
+  for (let m = 0; m <= GW.PLAN_MAX_MIN; m += 2 * GW.HALF_MIN) {
+    if (plan.stopAtPlayMin != null && m > plan.stopAtPlayMin) break;
+    const t = playClock(plan, m);
+    const c = conditionsAt(ctx, park.x, park.y, t);
+    const w = windAtPark(c.wind, bearing);
+    out.push({ playMin: m, t, tempF: c.tempF, humidity: c.humidity, windMph: c.wind.mph,
+               windOutMph: Math.round(w.outMph * 10) / 10, windCrossMph: Math.round(w.crossMph * 10) / 10, windText: w.text,
+               rateMmH: c.precip.rateMmH, kind: c.precip.kind, label: c.label, icon: c.icon });
+  }
+  return out;
+}

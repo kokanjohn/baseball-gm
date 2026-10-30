@@ -67,6 +67,7 @@ import {
   PLAYOFF_VARIANCE_MULTIPLIER,
   REGIONS,
   REGION_DEFAULT,
+  SIM_WEATHER_ENV, GAME_WEATHER,
 } from '../data/constants.js';
 
 import { computeOVR, isAvailable } from './PlayerFactory.js';
@@ -164,6 +165,9 @@ export function computeWinProbability(userRoster, opponentTeam, players, context
  */
 export function generatePlays(game, userTeam, opponentTeam, players, context) {
   const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false, scout = null } = context;
+  // §102.2 the weather this game is played in: its plan (GameWeather.gameWeatherPlan)
+  // and the park report through it (GameWeather.gameConditions). Optional.
+  const wx = _weatherSetup(context.weather, game);
 
   // When opponentTeam is null (lookup failed), build a synthetic CPU opponent
   // from any available league team so the game can still produce scoring plays.
@@ -188,17 +192,19 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   const oppSP   = _getRotationSP(effectiveOppTeam, players, atMs) || _findHealthySP(effectiveOppTeam.rosterIds || [], players);
 
   // Field condition modifiers
-  // Offense environment = field condition × weather scoring modifier. Both act
-  // inside every at-bat (hit probability / HR share), never on the final score.
-  const scoringMod = game.weather?.scoringMod ?? 1.0;
-  const fieldMod   = _clamp(_fieldConditionMod(game.fieldCondition) * scoringMod, 0.85, 1.15);
+  // Offense environment = field condition × the weather. Both act inside every
+  // at-bat (hit probability / HR share), never on the final score. With the
+  // weather plan, the temperature, wind and rain come an inning at a time from
+  // the park report (§102.2); without it, the legacy single scoring modifier.
+  const scoringMod = wx ? 1.0 : (game.weather?.scoringMod ?? 1.0);
+  const fieldMod   = _clamp(_fieldConditionMod(game.fieldCondition, !!wx) * scoringMod, 0.85, 1.15);
 
   // Run the full game simulation
   const gameState = _simulateFullGame(
     userLineup, oppLineup,
     userSP, oppSP,
     players,
-    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs, scout,
+    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs, scout, wx,
       // §75 All-Star Game: both starters work ALLSTAR_STARTER_INNINGS, every
       // other arm one inning; the reserves come in on the squads' plan.
       exhibition: exhibition ? { starterIds: new Set([userSP?.id, oppSP?.id].filter(Boolean)) } : null }
@@ -217,7 +223,8 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   // this is correctly the opponent's starter.
   const moundSP    = homeSPPlayer;
   const moundName  = moundSP?.name || 'SP';
-  const announcement = `${moundName} takes the mound.`;
+  const preMins     = wx?.pre.length ? Math.round((wx.startAt - wx.pre[0].startT) / 60_000) : 0;
+  const announcement = preMins ? `After a ${_delayLength(preMins)} delay, ${moundName} takes the mound.` : `${moundName} takes the mound.`;
 
   const announcementPlay = {
     playIndex:     0,
@@ -239,32 +246,52 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     _statDeltas:   {},
   };
 
-  // Assign real-world timestamps to each play
-  const plays = _assignTimestamps(
-    [announcementPlay, ...gameState.plays],
-    game.gameTime, game._tickOffset || 0
-  );
+  // A delayed start: the delay is the first thing shown, first pitch follows it.
+  if (wx) announcementPlay._timestamp = wx.startAt;
+  const prePlays = wx ? wx.pre.map(d => _weatherPlay('weather_delay', d, { inning: 1, half: 'TOP', outs: 0, bases: null, pitcherId: null, pre: true })) : [];
+
+  // Assign real-world timestamps to each play: paced by the game's progress,
+  // with the weather's delays on the clock (§102.2).
+  const allPlays = _assignTimestamps([...prePlays, announcementPlay, ...gameState.plays], game, wx, gameState);
 
   // Post-process: assign W/L/SV/HD decisions to user team pitchers
   // These are game-outcome stats that can't be determined mid-play.
+  // (A called game's innings that don't count are left out; in a game of five
+  // innings a starter needs four for the win — official scoring 9.17(b).)
   const decisionDeltas = _assignPitcherDecisions(
-    plays, gameState.userScore, gameState.oppScore, game.isHome
+    allPlays.filter(p => !p._reverted), gameState.userScore, gameState.oppScore, game.isHome,
+    gameState.ruling?.outcome === 'final' && gameState.ruling.innings <= 5 ? 12 : 15
   );
   // Attach decision deltas to the game_end play so accumulateStats picks them up
-  const gameEndPlay = plays.find(p => p.type === 'game_end');
+  const gameEndPlay = allPlays.find(p => p.type === 'game_end');
   if (gameEndPlay && Object.keys(decisionDeltas).length > 0) {
     gameEndPlay._statDeltas = decisionDeltas;
   }
+  // A suspended game: what's played today, and the rest — played when it
+  // resumes (its clock is set then; GameEngine).
+  const split = allPlays.findIndex(p => p.type === 'game_suspended');
+  const plays       = split >= 0 ? allPlays.slice(0, split + 1) : allPlays;
+  const resumePlays = split >= 0 ? allPlays.slice(split + 1) : null;
 
   // Build box score via the shared accumulator (single source of truth).
   // Home roster ids: who is on which side, independent of who the user is.
   const homeTeamObj = _userIsHome ? userTeam : effectiveOppTeam;
   const homeIds     = [...new Set([...(homeTeamObj.rosterIds || []),
                                    ...(_userIsHome ? userLineup : oppLineup).slots.map(s => s.id)])];
-  const boxScore    = accumulateBox(plays, players, { awayOrder: _awayOrder, homeOrder: _homeOrder, userIsHome: _userIsHome, homeIds });
+  const boxScore    = accumulateBox(allPlays, players, { awayOrder: _awayOrder, homeOrder: _homeOrder, userIsHome: _userIsHome, homeIds });
   const liveLineups = { away: _awayOrder, home: _homeOrder, homeIds };
 
-  return { plays, boxScore, liveLineups };
+  // What the weather did (§102.2): the delays that happened, and how a called
+  // game came out ('final' — official; 'suspended' — finished another day).
+  const weather = wx ? {
+    startAt: wx.startAt,
+    delays: [...wx.pre, ...wx.log].map(d => ({ startT: d.startT, endT: d.endT, reason: d.reason, atPlayMin: d.atPlayMin,
+                                                 inning: d.inning ?? null, half: d.half ?? null, outs: d.outs ?? null })),
+    ruling: gameState.ruling || null,
+    conditions: wx.env,
+  } : null;
+
+  return { plays, boxScore, liveLineups, resumePlays, weather };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -272,7 +299,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
 // ─────────────────────────────────────────────────────────────
 
 function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
-  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null, atMs = 0, scout = null } = ctx;
+  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null, atMs = 0, scout = null, wx = null } = ctx;
 
   const plays = [];
 
@@ -311,34 +338,63 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     userRuns: 0, oppRuns: 0,
   };
 
+  gs.wx       = wx || null;           // §102.2 the weather's plan for this game (null: none)
+  gs.halfIdx  = 0;                    // half-innings begun − 1: the clock's playing minutes run 10 a half
+  gs.env      = null;
+  gs.bullpens = { user: userLineup.bullpen, opp: oppLineup.bullpen };
+
   // User team bats in bottom (home) or top (away)
   const userBatsBottom = isHome;
   const homeScore = () => (userBatsBottom ? gs.userScore : gs.oppScore);
   const awayScore = () => (userBatsBottom ? gs.oppScore  : gs.userScore);
+
+  // One half-inning: the batting side's lineup against the fielding side's
+  // pitcher, in this inning's weather. `resume` continues a half stopped by
+  // the weather (a suspended game).
+  const runHalf = (isTop, walkoffRuns = Infinity, resume = null) => {
+    const userBats = isTop ? !userBatsBottom : userBatsBottom;
+    gs.halfIdx = (gs.inning - 1) * 2 + (isTop ? 0 : 1);
+    gs.env = _envFor(gs.wx, gs.halfIdx);
+    const hp = _simulateHalfInning(
+      userBats ? userLineup.slots : oppLineup.slots, userBats ? userLineup.bench : oppLineup.bench,
+      userBats ? gs.oppPitcher : gs.userPitcher, gs, players, fieldMod * gs.env.hitMod,
+      userBats, isSpring, `${isTop ? 'TOP' : 'BOT'}_${gs.inning}`, userBats ? 'userLineupIdx' : 'oppLineupIdx',
+      gs.inning, walkoffRuns, resume);
+    plays.push(...hp);
+    _stampRunningScore(hp, gs.userScore, gs.oppScore, userBats);
+    const runs = hp.reduce((sum, p) => sum + playRuns(p), 0);
+    if (userBats) gs.userScore += runs; else gs.oppScore += runs;
+    gs[userBats ? 'oppRuns' : 'userRuns'] += runs;   // off the fielding side's pitcher
+  };
+
+  // The weather stopped play for good: the ruling (official → the game is
+  // over; otherwise suspended → the rest of it is played now, for the day it
+  // resumes). Returns true when the game is over.
+  const afterStop = (isTop, walkoffRuns) => {
+    if (!gs.wxStop || gs.wxStop.handled) return false;
+    const st = gs.wxStop;
+    st.handled = true;
+    gs.ruling = _calledRuling(gs, plays, { isTop, userBatsBottom, exhibition: !!(isSpring || exhibition), playoff: !!game?.isPlayoff });
+    if (gs.ruling.outcome === 'final') return true;
+    // Suspended. Nobody pitches on through a suspension: both clubs start the
+    // resumption with fresh arms. It picks up exactly where it stopped.
+    plays.push(_suspendedPlay(st, gs, plays));
+    gs.wx = null;
+    for (const side of ['user', 'opp']) { gs[`${side}Fatigued`] = true; gs[`${side}MustGo`] = true; }
+    const userBats = isTop ? !userBatsBottom : userBatsBottom;
+    const fieldSide = userBats ? 'opp' : 'user';
+    _midHalfChange(gs, players, fieldSide, plays, gs.inning, isTop ? 'TOP' : 'BOT', st.outs, st.bases);
+    runHalf(isTop, walkoffRuns, { outs: st.outs, bases: st.bases, halfRuns: st.halfRuns });
+    return false;
+  };
 
   while (!_gameOver(gs)) {
     // Top of inning — away team bats. The home side takes the field: a tired
     // pitcher is replaced now, as he walks out (never at the end of his last
     // inning — the game may be over before he'd have pitched again).
     _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning, 'TOP');
-    const topSlots   = userBatsBottom ? oppLineup.slots  : userLineup.slots;
-    const topBench   = userBatsBottom ? oppLineup.bench  : userLineup.bench;
-    const topIsUser  = !userBatsBottom;
-    const topPitcher = userBatsBottom ? gs.userPitcher : gs.oppPitcher;
-    const topBatIdx  = userBatsBottom ? 'oppLineupIdx' : 'userLineupIdx';
-
-    const topPlays = _simulateHalfInning(
-      topSlots, topBench, topPitcher, gs, players, fieldMod,
-      topIsUser, isSpring, `TOP_${gs.inning}`, topBatIdx,
-      gs.inning
-    );
-    plays.push(...topPlays);
-
-    _stampRunningScore(topPlays, gs.userScore, gs.oppScore, topIsUser);
-    const topRuns = topPlays.reduce((s, p) => s + playRuns(p), 0);
-    if (userBatsBottom) gs.oppScore += topRuns;
-    else                gs.userScore += topRuns;
-    gs[userBatsBottom ? 'userRuns' : 'oppRuns'] += topRuns;   // off the home side's pitcher
+    runHalf(true);
+    if (afterStop(true, Infinity)) break;
 
     _accrueInningAndFatigue(gs, players, userBatsBottom ? 'user' : 'opp');
 
@@ -348,28 +404,12 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
 
     // Bottom of inning — home team bats; the away side takes the field.
     _checkPitcherChange(gs, players, userBatsBottom ? 'opp' : 'user', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning, 'BOT');
-    const botSlots   = userBatsBottom ? userLineup.slots  : oppLineup.slots;
-    const botBench   = userBatsBottom ? userLineup.bench  : oppLineup.bench;
-    const botIsUser  = userBatsBottom;
-    const botPitcher = userBatsBottom ? gs.oppPitcher : gs.userPitcher;
-    const botBatIdx  = userBatsBottom ? 'userLineupIdx' : 'oppLineupIdx';
 
     // 9th inning or later: the bottom half ends the moment the home team takes
     // the lead (walk-off). Pass the number of runs that wins it.
     const walkoffRuns = gs.inning >= 9 ? (awayScore() - homeScore() + 1) : Infinity;
-
-    const botPlays = _simulateHalfInning(
-      botSlots, botBench, botPitcher, gs, players, fieldMod,
-      botIsUser, isSpring, `BOT_${gs.inning}`, botBatIdx,
-      gs.inning, walkoffRuns
-    );
-    plays.push(...botPlays);
-
-    _stampRunningScore(botPlays, gs.userScore, gs.oppScore, botIsUser);
-    const botRuns = botPlays.reduce((s, p) => s + playRuns(p), 0);
-    if (userBatsBottom) gs.userScore += botRuns;
-    else                gs.oppScore  += botRuns;
-    gs[userBatsBottom ? 'oppRuns' : 'userRuns'] += botRuns;   // off the away side's pitcher
+    runHalf(false, walkoffRuns);
+    if (afterStop(false, walkoffRuns)) break;
 
     // Walk-off: home team leads after its half of the 9th or later — game over.
     if (gs.inning >= 9 && homeScore() > awayScore()) break;
@@ -394,11 +434,18 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     }
   }
 
+  // A game called and official: the plays that don't count (a score that
+  // reverts to the last complete inning) stay in the record of what happened
+  // but carry nothing into the box score or the stats.
+  const ruled = gs.ruling?.outcome === 'final' ? gs.ruling : null;
+  if (ruled && ruled.revertIdx != null) for (let k = ruled.revertIdx; k < plays.length; k++) plays[k]._reverted = true;
+  if (ruled) { gs.userScore = ruled.userScore; gs.oppScore = ruled.oppScore; }
+
   // Record the true last inning played. The loop increments gs.inning before the
   // end check, so on a non-walk-off finish gs.inning is one ahead; derive the
   // real final inning from the plays so game_end never claims a phantom 10th.
   const lastPlayedInning = plays.reduce(
-    (m, p) => (p.type !== 'game_end' && (p.inning || 0) > m ? p.inning : m), 1);
+    (m, p) => (p.type !== 'game_end' && !p._reverted && (p.inning || 0) > m ? p.inning : m), 1);
 
   plays.push({
     playIndex:    plays.length,
@@ -408,7 +455,8 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     batterId:     null,
     pitcherId:    null,
     type:         'game_end',
-    description:  'Final',
+    description:  ruled ? ruled.text : 'Final',
+    _called:      ruled ? { innings: ruled.innings, reason: ruled.reason, reverted: ruled.revertIdx != null } : undefined,
     rbi:          0,
     isScoring:    false,
     isBigPlay:    false,
@@ -420,7 +468,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     _statDeltas:  {},
   });
 
-  return { plays, userScore: gs.userScore, oppScore: gs.oppScore };
+  return { plays, userScore: gs.userScore, oppScore: gs.oppScore, ruling: gs.ruling || null };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -505,13 +553,17 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
 // HALF-INNING SIMULATION
 // ─────────────────────────────────────────────────────────────
 
-function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, isUserBatting, isSpring, halfKey, batIdxKey, inning, walkoffRuns = Infinity) {
+function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, isUserBatting, isSpring, halfKey, batIdxKey, inning, walkoffRuns = Infinity, resume = null) {
   const plays  = [];
-  let outs     = 0;
-  let halfRuns = 0;       // runs scored so far this half
+  // (resume: a half the weather stopped, picked up where it left off — §102.2)
+  let outs     = resume ? resume.outs : 0;
+  let halfRuns = resume ? resume.halfRuns : 0;       // runs scored so far this half
   let walkedOff = false;  // home team took the lead in the 9th+ — game ends now
-  let bases    = { first: null, second: null, third: null };
-  const pitcher = pitcherObj ? players[pitcherObj.id] : null;
+  let bases    = resume ? { ...resume.bases } : { first: null, second: null, third: null };
+  const fieldSide = isUserBatting ? 'opp' : 'user';
+  // The pitcher can change mid-half only when the weather sends him to the clubhouse.
+  let pitcher = resume ? players[gs[`${fieldSide}Pitcher`]?.id] || null : pitcherObj ? players[pitcherObj.id] : null;
+  const half  = halfKey.startsWith('TOP') ? 'TOP' : 'BOT';
 
   // Guard: empty lineup (all players injured, or no starters at all)
   // Produce a valid but empty half-inning rather than infinite loop or NaN
@@ -530,6 +582,13 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
   }
 
   while (outs < 3 && !walkedOff) {
+
+    // ── The weather (§102.2): a delay due at this point of the game ──
+    if (gs.wx) {
+      const w = _weatherCheck(gs, players, plays, inning, half, outs, bases, fieldSide);
+      if (w === 'stop') { gs.wxStop = { inning, half, outs, bases: { ...bases }, halfRuns, at: plays.length }; return plays; }
+      if (w === 'arm')  pitcher = players[gs[`${fieldSide}Pitcher`].id] || pitcher;
+    }
 
     // ── Stolen base attempt (between at-bats) ─────────────────
     if (outs < 2 && (bases.first || bases.second) && !isSpring) {
@@ -596,7 +655,8 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     const pitcherTired = gs[`${pSide}PitchCount`] >= gs[`${pSide}TireAt`];
     const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
       { inning, isSpring, norms: gs.norms, pitcherTired,
-        scoutHit: gs.scout ? (isUserBatting ? gs.scout.bat : gs.scout.pitch) : 1 });
+        scoutHit: gs.scout ? (isUserBatting ? gs.scout.bat : gs.scout.pitch) : 1,
+        hrMod: gs.env?.hrMod, hitEnv: gs.env?.hitMod, walkMod: gs.env?.walkMod });
     // Increment the THROWING pitcher's batters-faced count. When the user is
     // batting the opponent is pitching (and vice-versa) — this must match the
     // fatigue check below, which reads the same throwing-pitcher counter.
@@ -856,7 +916,8 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
 
   // 1. Walk — control below average → more walks
   const walkProb = _clamp(SIM_PA_WALK_BASE + (Act - control) * SIM_PA_WALK_PER_PT,
-                          SIM_PA_WALK_MIN, SIM_PA_WALK_MAX) * fatigueWalkMod * pitcherMod;
+                          SIM_PA_WALK_MIN, SIM_PA_WALK_MAX) * fatigueWalkMod * pitcherMod
+                 * (context.walkMod ?? 1);   // §102.2 a wet or cold ball
   if (r < walkProb) return { type: 'walk' };
 
   let pos = walkProb;
@@ -891,7 +952,8 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
 
   // 5. Hit type: HR / triple / double / single — power sets the extra-base share
   const hrShare  = _clamp(SIM_HIT_HR_SHARE_BASE + (power - Ap) * SIM_HIT_HR_SHARE_PER_PT,
-                          SIM_HIT_HR_SHARE_MIN, SIM_HIT_HR_SHARE_MAX) * envMod;
+                          SIM_HIT_HR_SHARE_MIN, SIM_HIT_HR_SHARE_MAX)
+                   * (context.hrMod != null ? context.hrMod * (envMod / (context.hitEnv ?? envMod)) : envMod);   // §102.2 temperature and wind carry the ball
   const xbhShare = _clamp(SIM_HIT_XBH_SHARE_BASE + (power - Ap) * SIM_HIT_XBH_SHARE_PER_PT,
                           SIM_HIT_XBH_SHARE_MIN, SIM_HIT_XBH_SHARE_MAX);
   const tripleShare = SIM_HIT_TRIPLE_SHARE * _clamp(speed / As, 0.5, 1.8);
@@ -1200,7 +1262,8 @@ export function accumulateStats(plays, userTeam, opponentTeam, players, isSpring
   const deltas  = {}; // { [playerId]: { [statField]: delta } }
 
   for (const play of plays) {
-    if (!play._statDeltas || play.type === 'pinch_hit' || play.type === 'game_start') continue;
+    // (A called game's plays that don't count — the score reverted — carry nothing. §102.2)
+    if (!play._statDeltas || play._reverted || play.type === 'pinch_hit' || play.type === 'game_start') continue;
     // game_end plays carry W/L/SV/HD decision deltas — allow them through
     for (const [playerId, statList] of Object.entries(play._statDeltas)) {
       if (!deltas[playerId]) deltas[playerId] = {};
@@ -1215,7 +1278,7 @@ export function accumulateStats(plays, userTeam, opponentTeam, players, isSpring
   // 6+ innings with 3 or fewer earned runs.
   const starterBy = {};
   for (const play of plays) {
-    if (!play.pitcherId || !play._statDeltas?.[play.pitcherId] || (play.half !== 'TOP' && play.half !== 'BOT')) continue;
+    if (!play.pitcherId || play._reverted || !play._statDeltas?.[play.pitcherId] || (play.half !== 'TOP' && play.half !== 'BOT')) continue;
     if (!starterBy[play.half]) starterBy[play.half] = play.pitcherId;
     if (starterBy.TOP && starterBy.BOT) break;
   }
@@ -1286,7 +1349,11 @@ export function accumulateBox(plays, players, opts = {}) {
   const ensureHit = (side, id) => { if (!side.hit[id]) { side.hit[id] = HIT0(); side.hitSeen.push(id); } return side.hit[id]; };
   const ensurePit = (side, id) => { if (!side.pit[id]) { side.pit[id] = PIT0(); side.pitSeen.push(id); } return side.pit[id]; };
 
+  // §102.2 once a called game is over, the plays that don't count (its score
+  // reverted to the last complete inning) drop out — live, they showed as played.
+  const over = (plays || []).some(p => p.type === 'game_end');
   for (const play of (plays || [])) {
+    if (over && play._reverted) continue;
     // A pitching change carries the incoming pitcher but no stat deltas — register
     // them on their side immediately so they appear in the box the instant they
     // enter (previously they surfaced only when they faced their first batter).
@@ -1654,7 +1721,7 @@ function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, 
  * @param {Boolean}  isHome     — whether user team is home
  * @returns {Object} statDeltas map { [pitcherId]: [{stat, delta}] }
  */
-function _assignPitcherDecisions(plays, userScore, oppScore, isHome) {
+function _assignPitcherDecisions(plays, userScore, oppScore, isHome, starterOuts = 15) {
   // Decisions for BOTH teams (§66): W/L/SV/HLD by the scoring rules, so CPU
   // pitchers — and the user's opponents — carry real records too.
   // Side 'A' is the team generatePlays received as userTeam (cumOurScore).
@@ -1710,7 +1777,7 @@ function _assignPitcherDecisions(plays, userScore, oppScore, isHome) {
   // W: winner's pitcher of record at the go-ahead — a starter needs 15 outs,
   // otherwise the scorer gives it to the first reliever who followed him.
   let w = onMound(winner);
-  if (w === spans[winner][0] && w.outs < 15) w = spans[winner][1] || w;
+  if (w === spans[winner][0] && w.outs < starterOuts) w = spans[winner][1] || w;
   add(w.id, 'w');
   // L: loser's pitcher on the mound for the go-ahead run.
   add(onMound(loser).id, 'l');
@@ -1733,15 +1800,253 @@ function _assignPitcherDecisions(plays, userScore, oppScore, isHome) {
 // TIMESTAMP ASSIGNMENT
 // ─────────────────────────────────────────────────────────────
 
-function _assignTimestamps(plays, gameTime, tickOffset) {
-  const GAME_DURATION_MS = 10_800_000; // 3 hours
-  const total = plays.length;
+/**
+ * _assignTimestamps(plays, game, wx, gameState)
+ * The clock for every play (§102.2). A game is paced by its progress: ten
+ * playing minutes a half-inning, spread by outs (nine innings ≈ three hours;
+ * a walk-off ends early, extra innings run long). The weather's delays sit at
+ * exactly the moments its plan has them, and add their length to everything
+ * after. Each play also gets `_playMin` (playing minutes). A suspended game's
+ * plays after the suspension get no clock here (`_resumeMin` instead): it's
+ * set when the game resumes.
+ */
+function _assignTimestamps(plays, game, wx, gameState) {
+  const HALF = GAME_WEATHER.HALF_MIN, MIN = 60_000;
+  const startAt = wx ? wx.startAt : (game.gameTime || 0);
+  const n = plays.length;
+  const m = new Array(n).fill(null);
+  const isAnchor = (p) => !!(p._wx && !p._wx.pre);
 
-  return plays.map((play, i) => ({
-    ...play,
-    playIndex:  i,
-    _timestamp: gameTime + tickOffset + Math.round((i / total) * GAME_DURATION_MS) + _rng(-15000, 15000),
-  }));
+  // 1. Playing minutes from the half-inning and the outs.
+  const groups = new Map();
+  let curHalf = null, outsBefore = 0;
+  for (let i = 0; i < n; i++) {
+    const p = plays[i];
+    if (isAnchor(p)) { m[i] = p._wx.atPlayMin; continue; }
+    if (p.type === 'game_start' || p._wx?.pre) { m[i] = 0; continue; }
+    if (p.type === 'game_end' || p.type === 'game_suspended' || p.type === 'inning_end') continue;   // placed below
+    if (p.half !== 'TOP' && p.half !== 'BOT') continue;
+    const hk = `${p.half}_${p.inning}`;
+    if (hk !== curHalf) { curHalf = hk; outsBefore = 0; }
+    const hIdx = (p.inning - 1) * 2 + (p.half === 'TOP' ? 0 : 1);
+    const key = hIdx * 4 + Math.min(outsBefore, 2);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(i);
+    if (Number.isFinite(p.outsAfter)) outsBefore = Math.min(3, p.outsAfter);
+  }
+  for (const [key, idx] of groups) {
+    const base = Math.floor(key / 4) * HALF + (key % 4) * (HALF / 3), span = HALF / 3;
+    idx.forEach((i, k) => { m[i] = base + span * (k + 1) / (idx.length + 1); });
+  }
+  // 2. The markers: a half ends just after its last out; the game just after its last play.
+  const nextEvent = wx && wx.next < wx.events.length ? wx.events[wx.next].atPlayMin : Infinity;
+  for (let i = 0; i < n; i++) {
+    const p = plays[i], prev = i ? m[i - 1] : 0;
+    if (p.type === 'inning_end') m[i] = prev + 0.15;
+    else if (p.type === 'game_suspended') m[i] = prev;
+    else if (p.type === 'game_end') m[i] = Math.max(prev, Math.min(prev + 0.3, nextEvent - 0.01));   // never into a delay that never came
+    else if (m[i] == null) m[i] = prev;
+  }
+  // 3. Everything before a delay happens before it; then never backwards.
+  for (let a = 0; a < n; a++) {
+    if (!isAnchor(plays[a])) continue;
+    const A = m[a];
+    for (let j = a - 1, k = 1; j >= 0 && !isAnchor(plays[j]) && m[j] > A - 0.02 * k; j--, k++) m[j] = A - 0.02 * k;
+  }
+  for (let i = 1; i < n; i++) if (m[i] < m[i - 1]) m[i] = m[i - 1];
+
+  // 4. The clock.
+  const callT = gameState?.ruling ? (wx?.log[wx.log.length - 1]?.endT ?? null) : null;
+  let add = 0, split = false, mSplit = 0;
+  return plays.map((play, i) => {
+    const p = { ...play, playIndex: i, _playMin: Math.round(m[i] * 100) / 100 };
+    if (play._wx?.pre) { p._timestamp = play._wx.startT; return p; }
+    if (split) { p._timestamp = null; p._resumeMin = Math.round((m[i] - mSplit) * 100) / 100; return p; }
+    if (play.type === 'weather_resume') add += play._wx.endT - play._wx.startT;
+    let t = startAt + m[i] * MIN + add;
+    if (play.type === 'weather_delay') t = play._wx.startT;   // the plan's moment (the same, by construction)
+    if (play.type === 'game_suspended') { t = callT ?? t; split = true; mSplit = m[i]; }
+    if (play.type === 'game_end' && gameState?.ruling?.outcome === 'final' && callT != null) t = callT;
+    p._timestamp = Math.round(t);
+    return p;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// WEATHER (§102.2) — the plan's delays and calls, and how the
+// temperature, wind and rain play, inning by inning
+// ─────────────────────────────────────────────────────────────
+
+/** The plan, as the sim uses it (null when there's no plan or the game was postponed). */
+function _weatherSetup(weather, game) {
+  const plan = weather?.plan;
+  if (!plan || plan.startAt == null) return null;
+  const events = plan.delays.filter(d => d.startT >= plan.startAt).map(d => ({ ...d }));
+  if (plan.outcome === 'called' && events.length) Object.assign(events[events.length - 1], { call: true, calledBy: plan.calledBy });
+  return { startAt: plan.startAt, pre: plan.delays.filter(d => d.startT < plan.startAt), events, next: 0,
+           env: weather.conditions || [], log: [] };
+}
+
+/**
+ * weatherEnv(c) — how a park report plays (SIM_WEATHER_ENV): multipliers on
+ * the home run share, the hit rate and the walk rate.
+ */
+export function weatherEnv(c) {
+  if (!c) return { hitMod: 1, hrMod: null, walkMod: 1 };
+  const E = SIM_WEATHER_ENV;
+  const dT = (c.tempF ?? E.BASE_TEMP_F) - E.BASE_TEMP_F, out = (c.windOutMph ?? E.BASE_WIND_OUT) - E.BASE_WIND_OUT;
+  const rain = c.kind === 'rain' && c.rateMmH >= E.RAIN_MIN_MMH ? c.rateMmH : 0;
+  return {
+    hrMod:   _clamp((1 + E.HR_PER_DEG * dT) * (1 + E.HR_PER_MPH_OUT * out), E.HR_MIN, E.HR_MAX),
+    hitMod:  _clamp(1 + E.HIT_PER_DEG * dT + E.HIT_PER_MPH_OUT * out - E.HIT_PER_MMH_RAIN * rain, E.HIT_MIN, E.HIT_MAX),
+    walkMod: 1 + Math.min(E.WALK_RAIN_MAX, E.WALK_PER_MMH * rain) + ((c.tempF ?? 72) < E.COLD_F ? E.WALK_COLD : 0),
+  };
+}
+
+/** This half-inning's weather: the park report nearest its middle. */
+function _envFor(wx, halfIdx) {
+  if (!wx || !wx.env.length) return { hitMod: 1, hrMod: null, walkMod: 1, c: null };
+  const mid = (halfIdx + 0.5) * GAME_WEATHER.HALF_MIN;
+  let c = wx.env[0];
+  for (const e of wx.env) if (Math.abs(e.playMin - mid) < Math.abs(c.playMin - mid)) c = e;
+  return { ...weatherEnv(c), c };
+}
+
+const _WX_REASON_WORD = { lightning: 'lightning', rain: 'rain', snow: 'snow', 'wet field': 'a wet field' };
+function _delayLength(mins) {
+  if (mins < 60) return `${mins}-minute`;
+  const h = Math.floor(mins / 60), r = mins % 60;
+  return r ? `${h} hr ${r} min` : `${h}-hour`;
+}
+
+function _weatherText(type, d, mins, pre) {
+  const r = d.reason;
+  if (type === 'weather_resume') return `Play resumes after a ${_delayLength(mins)} ${r === 'snow' ? 'snow' : 'rain'} delay.`;
+  if (pre) {
+    return r === 'lightning' ? 'The start is delayed — lightning in the area.'
+         : r === 'snow' ? 'The start is delayed by snow.'
+         : r === 'wet field' ? 'The start is delayed — the grounds crew is working on a wet field.'
+         : 'The start is delayed by rain — the tarp is on the field.';
+  }
+  return r === 'lightning' ? 'Lightning in the area — the players head off the field.'
+       : r === 'snow' ? 'Snow is coming down — play is stopped.'
+       : 'The rain picks up — the tarp is coming out.';
+}
+
+function _weatherPlay(type, d, at) {
+  const mins = Math.round((d.endT - d.startT) / 60_000);
+  return {
+    playIndex: 0, _halfInning: `${at.half}_${at.inning}`, inning: at.inning, half: at.half,
+    batterId: null, pitcherId: null, type, description: _weatherText(type, d, mins, at.pre),
+    rbi: 0, isScoring: false, isBigPlay: false,
+    outsAfter: at.outs, _basesAfter: at.bases ? { ...at.bases } : { first: null, second: null, third: null },
+    cumOurScore: 0, cumTheirScore: 0, _timestamp: 0, _statDeltas: {},
+    _wx: { startT: d.startT, endT: d.endT, atPlayMin: d.atPlayMin, reason: d.reason, minutes: mins, pre: !!at.pre, call: !!d.call },
+  };
+}
+
+/**
+ * Before each plate appearance: the plan's next delay, if the game has
+ * reached it (by its progress — ten playing minutes a half, a third of that
+ * an out). A delay of ARM_COOL_MIN or more and neither pitcher goes back out.
+ * Returns 'stop' (play is over for the day), 'arm' (a new pitcher is in), or null.
+ */
+function _weatherCheck(gs, players, plays, inning, half, outs, bases, fieldSide) {
+  const wx = gs.wx;
+  const est = gs.halfIdx * GAME_WEATHER.HALF_MIN + outs * (GAME_WEATHER.HALF_MIN / 3);
+  let arm = false;
+  while (wx.next < wx.events.length && wx.events[wx.next].atPlayMin <= est) {
+    const ev = wx.events[wx.next++];
+    const at = { inning, half, outs, bases };
+    wx.log.push({ ...ev, inning, half, outs });
+    plays.push(_weatherPlay('weather_delay', ev, at));
+    if (ev.call) return 'stop';
+    plays.push(_weatherPlay('weather_resume', ev, at));
+    if (ev.endT - ev.startT >= GAME_WEATHER.ARM_COOL_MIN * 60_000) {
+      for (const side of ['user', 'opp']) { gs[`${side}Fatigued`] = true; gs[`${side}MustGo`] = true; }
+      if (_midHalfChange(gs, players, fieldSide, plays, inning, half, outs, bases)) {
+        arm = true;
+        const pc = plays[plays.length - 1];
+        pc.description = `After the delay: ${pc.description.replace(/^Pitching change: /, 'pitching change, ')}`;
+      }
+    }
+  }
+  return arm ? 'arm' : null;
+}
+
+/** A pitching change in the middle of a half (after a long delay): the situation carries on. */
+function _midHalfChange(gs, players, side, plays, inning, half, outs, bases) {
+  const before = plays.length;
+  _checkPitcherChange(gs, players, side, gs.bullpens?.user, gs.bullpens?.opp, plays, inning, half);
+  if (plays.length === before) return false;
+  const pc = plays[plays.length - 1];
+  pc.outsAfter = outs;
+  pc._basesAfter = { ...bases };
+  return true;
+}
+
+const _ordinal = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+
+/**
+ * A game the weather has stopped for good (MLB's rules, regular season):
+ *   - official after 5 innings, or 4½ with the home team ahead; before that
+ *     it's suspended, to be finished another day;
+ *   - an official game called in an unfinished inning: if the visitors tied
+ *     or went ahead in it and the home team hasn't answered, suspended;
+ *     if the home team went ahead in its half, the score stands; otherwise
+ *     it goes back to the end of the last complete inning (a tie there:
+ *     suspended);
+ *   - spring and the All-Star Game simply end; postseason games are never
+ *     shortened — always suspended.
+ * → { outcome: 'final'|'suspended', reason, inning, half, outs, innings (complete), text, userScore, oppScore, revertIdx }
+ */
+function _calledRuling(gs, plays, o) {
+  const st = gs.wxStop, I = st.inning, H = st.half;
+  const reason = gs.wx?.log[gs.wx.log.length - 1]?.reason || 'rain';
+  const word = _WX_REASON_WORD[reason] || reason;
+  const homeOf = (p) => (o.userBatsBottom ? p.cumOurScore : p.cumTheirScore) ?? 0;
+  const awayOf = (p) => (o.userBatsBottom ? p.cumTheirScore : p.cumOurScore) ?? 0;
+  const toUser = (h, a) => (o.userBatsBottom ? { userScore: h, oppScore: a } : { userScore: a, oppScore: h });
+  const hN = o.userBatsBottom ? gs.userScore : gs.oppScore, aN = o.userBatsBottom ? gs.oppScore : gs.userScore;
+  // The end of the last complete inning.
+  let prevIdx = 0, hP = 0, aP = 0, aTop = aN;
+  for (let k = plays.length - 1; k >= 0; k--) {
+    const p = plays[k];
+    if (H === 'BOT' && p.half === 'TOP' && p.inning === I && aTop === aN) aTop = awayOf(p);
+    if (p.type === 'inning_end' && p.half === 'BOT' && p.inning === I - 1) { prevIdx = k + 1; hP = homeOf(p); aP = awayOf(p); break; }
+  }
+  const where = `${H === 'TOP' ? 'top' : 'bottom'} of the ${_ordinal(I)}`;
+  const base = { reason, inning: I, half: H, outs: st.outs };
+  const final = (h, a, innings, text, revertIdx = null) => ({ ...base, outcome: 'final', innings, text, ...toUser(h, a), revertIdx });
+  const suspended = () => ({ ...base, outcome: 'suspended', innings: I - 1, ...toUser(hN, aN), revertIdx: null,
+                             text: `Suspended (${word}) in the ${where} — to be completed later` });
+
+  if (o.exhibition) return final(hN, aN, I - 1, `Final — called (${word}) in the ${where}`);
+  if (o.playoff) return suspended();
+  const official = I - 1 >= 5 || (H === 'BOT' && I >= 5 && hN > aN);
+  if (!official) return suspended();
+  // Visitors tied it or went ahead in this inning, and the home team hasn't answered.
+  if (aTop >= hP && aP < hP && hN <= aN) return suspended();
+  // The home team went ahead in its half: the score stands.
+  if (H === 'BOT' && hN > aN && hN > hP && hP <= aN) return final(hN, aN, I - 1, `Final — called (${word}) after ${I - 1}½ innings`);
+  // Back to the end of the last complete inning.
+  if (hP === aP) return suspended();
+  const changed = hP !== hN || aP !== aN;
+  return final(hP, aP, I - 1, changed
+    ? `Final — called (${word}) in the ${_ordinal(I)}; the score goes back to the end of the ${_ordinal(I - 1)}`
+    : `Final — called (${word}) after ${I - 1}${H === 'BOT' ? '½' : ''} innings`, changed ? prevIdx : null);
+}
+
+/** The moment a game is suspended: where it stands, and that it will be finished another day. */
+function _suspendedPlay(st, gs, plays) {
+  const prev = plays[plays.length - 1];
+  return {
+    playIndex: 0, _halfInning: `${st.half}_${st.inning}`, inning: st.inning, half: st.half,
+    batterId: null, pitcherId: null, type: 'game_suspended', description: gs.ruling.text,
+    rbi: 0, isScoring: false, isBigPlay: false, outsAfter: st.outs, _basesAfter: { ...st.bases },
+    cumOurScore: prev?.cumOurScore ?? 0, cumTheirScore: prev?.cumTheirScore ?? 0, _timestamp: 0, _statDeltas: {},
+    _suspended: { inning: st.inning, half: st.half, outs: st.outs, bases: { ...st.bases }, reason: gs.ruling.reason },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2151,9 +2456,11 @@ function _opponentOvr(team, players) {
 // FIELD CONDITION MODIFIER
 // ─────────────────────────────────────────────────────────────
 
-function _fieldConditionMod(fieldCondition) {
+function _fieldConditionMod(fieldCondition, weatherPlays = false) {
   if (!fieldCondition) return 1.0;
-  const { infieldSoftness = 0, moundFirmness = 1, temperature = 72 } = fieldCondition;
+  // (With the weather plan the temperature comes in through the park report, §102.2.)
+  const { infieldSoftness = 0, moundFirmness = 1 } = fieldCondition;
+  const temperature = weatherPlays ? 72 : (fieldCondition.temperature ?? 72);
   // Soft infield: slightly more groundout outs, less offense
   // Hot: more offense (ball carries)
   // Cold: less offense

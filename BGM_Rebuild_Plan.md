@@ -8107,3 +8107,76 @@ Every pre-game forecast postponement fell on a 90–100% chance on the GM's fore
 - per-region rate bands, with the west the driest;
 - determinism from a separate copy of the code;
 - speed.
+
+### 102.2 4b — the sim plays through the weather (r107)
+
+`SimEngine.generatePlays(game, …, { …, weather: { plan, conditions } })`. The plan comes from `GameWeather.gameWeatherPlan` and the park report through the game from `GameWeather.gameConditions`. Without `weather` the sim behaves as before, apart from the new pacing below. **4c passes it in for every game**, ours and the league's.
+
+**Pacing (all games).** A game's clock now follows its progress rather than spreading every play evenly over three hours:
+- ten playing minutes per half-inning, spread by outs;
+- nine innings take about three hours; a walk-off or a skipped bottom of the 9th ends sooner; extra innings run long;
+- a median game is about 170 minutes;
+- every play carries `_playMin`;
+- the old per-play jitter is gone, and so is the reliance on `_tickOffset` (4c removes the legacy delay helpers).
+
+**Delays happen in the game.** Before each plate appearance, the sim checks whether the game has reached the plan's next delay. Its estimate of playing minutes is ten per half plus a third of that per out. If it has, it inserts two plays:
+- `weather_delay` — "The rain picks up — the tarp is coming out." / "Lightning in the area — the players head off the field." / snow;
+- `weather_resume` — "Play resumes after a 1 hr 18 min rain delay."
+
+Both sit on the clock at exactly the plan's moments. Everything before a delay happens before it, and everything after is pushed back by its length.
+
+A delayed start shows its delay first, at the scheduled time; first pitch follows ("After a 47-minute delay, X takes the mound."). Delays the plan has after the game is already over never happen.
+
+**Long delays.** After a delay of 45 minutes or more (`ARM_COOL_MIN`), neither pitcher goes back out. The pitcher on the mound is replaced right there, mid-inning ("After the delay: pitching change, X enters"). The other club's pitcher is replaced when that club next takes the field. The manager's "one more inning from a taxed pen" exception doesn't apply.
+
+**Called games** (MLB rules; the game's `ruling`):
+- Official after 5 innings, or 4½ with the home team ahead. Before that it's **suspended**.
+- Official and called in an unfinished inning:
+  - visitors tied it or went ahead in that inning and the home team hasn't answered → suspended;
+  - home team went ahead in its own half → the score stands;
+  - otherwise the score goes back to the end of the last complete inning; a tie there → suspended.
+- Spring and All-Star games simply end. Postseason games are never shortened: always suspended.
+- A reverted inning's plays stay in the play-by-play, marked `_reverted`. Once the game is over they carry nothing into the box, the stats or the W/L decisions.
+- `game_end` reads "Final — called (rain) in the 6th; the score goes back to the end of the 5th" and sits at the moment of the call.
+- In a game of 5 innings or fewer, a starter needs 4 innings, not 5, for the win (official scoring 9.17(b)).
+
+**Suspended games.** The sim plays the rest of the game straight away, picking up at the exact inning, outs and runners. Both clubs start the resumption with fresh pitchers, and lineups are as they stood at the suspension.
+- `plays` ends with a `game_suspended` play at the call ("Suspended (rain) in the top of the 7th — to be completed later");
+- `resumePlays` holds the rest, with no clock yet (`_resumeMin` instead);
+- 4c sets the clock when the game resumes, and commits stats then.
+
+**Weather in every at-bat** (`SIM_WEATHER_ENV`). Per half-inning, from the park report nearest its middle:
+- home run share: +0.7% per °F above 72, +1.8% per mph of wind blowing out beyond 5 (minus when it blows in), clamped 0.6–1.5;
+- hit rate: slightly up in heat and wind blowing out, down 0.4% per mm/h while playing through rain;
+- walks: up to +20% in rain, +4% below 45 °F;
+- a typical night (72 °F, 5 mph out) changes nothing;
+- the legacy `scoringMod` and the field condition's temperature term are skipped when the park report drives the weather.
+
+Measured over 120 games each:
+
+| Conditions | HR a game | Runs a game |
+|---|---|---|
+| 92 °F, wind 16 mph out | 3.65 | 9.6 |
+| Typical night | 2.13 | 7.6 |
+| 46 °F, wind 12 mph in | 1.54 | 6.6 |
+
+**Wind fix (step 1).** While building this, the park wind turned out to blow out at about 90% of evening games: its direction barely varied, and evening speeds ran high (median 11–14 mph). `WeatherConditions.windAt` now has:
+- a wider day-to-day swing;
+- an easterly spell (a high passing to the north) settling in a day or two at a time;
+- evening speeds nearer real ballparks.
+
+Result: in about 20% of games, out about 70% (parks face east-north-east, the prevailing wind is from the south-west), medians 9–12 mph. The existing wind checks still pass: 73% from south round to north-west, north-west behind fronts.
+
+**Output:** `generatePlays` returns `{ plays, boxScore, liveLineups, resumePlays, weather }`, where `weather` is `{ startAt, delays [with inning / half / outs], ruling, conditions }`.
+
+**Harness:** `tools/harness/check-game-sim-weather.mjs [region]`, 18 checks:
+- pacing;
+- a mid-game delay on the exact clock, with nothing played during it;
+- long delays changing both pitchers (20 of 20);
+- a delayed start;
+- 160 called games ruled correctly, with the box equal to the final and suspended games resuming at the exact spot;
+- spring and postseason;
+- the ball in hot, cold and rain;
+- real plans across a season with no play during a delay, in lightning or in a downpour.
+
+All four regions pass. `check-weather` passes 116/116. `sim-season` passes on seeds 1, 2, 4, 5 and 7. Seed 3 had one CPU club at 31 wins, just under the band's floor of 33. The changed end-of-game times reshuffle the random path, and this was a tail outcome: other seeds' weakest clubs won 43–50, and no at-bat changes without a plan.

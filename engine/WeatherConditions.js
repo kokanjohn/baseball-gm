@@ -19,7 +19,7 @@
 import { localHour, normalsAt, steeringAt, calendarDay, MS_HOUR } from './WeatherClimate.js';
 import { precipAt, precipTemp, surfaceTemp, stormNear, rainRate, PRECIP_RAIN, PRECIP_MIX, PRECIP_SNOW, DBZ_MIN } from './WeatherSystems.js';
 import { waterKmAt, parkBearing, MASK_WATER, maskAt } from './WeatherMap.js';
-import { hash, fbm3 } from './WeatherNoise.js';
+import { hash, fbm3, valueNoise2 } from './WeatherNoise.js';
 
 export const LIGHTNING_KM = 16;            // ~10 miles: lightning this close stops play
 export const LIGHTNING_DBZ = 43;                // a thunderstorm strong enough to be making lightning
@@ -46,8 +46,18 @@ export function windAt(ctx, x, y, t, front, storm = -Infinity) {
   const h = t / MS_HOUR;
   const day = 0.5 - 0.5 * Math.cos((Math.PI * Math.max(0, Math.min(14, hour - 6))) / 14);   // 0 at night … 1 mid-afternoon
   const gusty = 0.5 + 0.5 * fbm3(hash(ctx.seed, 51), x / 300, y / 300, h / 10, 3);
-  let mph = N.wind * (0.7 + 0.6 * day) * (0.65 + 0.8 * gusty);
-  let from = _wrap(flow.headingDeg + 180 - 35 + 45 * fbm3(hash(ctx.seed, 52), x / 500, y / 500, h / 16, 2));
+  // Speed: the normal is the day's average; evenings at ballpark height run near it, nights lighter.
+  let mph = N.wind * (0.55 + 0.6 * day) * (0.6 + 0.8 * gusty);
+  // Direction: backed from the flow, swinging with the highs and lows that
+  // pass every few days — some days round to the east (blowing in at most
+  // parks), most days from the south-west quarter (§102.2: it used to vary too
+  // little, so the wind blew out at nine games in ten).
+  const swing = 95 * fbm3(hash(ctx.seed, 52), x / 500, y / 500, h / 16, 2);
+  let from = _wrap(flow.headingDeg + 180 - 35 + swing);
+  // An easterly spell — a high passing to the north — settles in for a day or two, about a sixth of the time.
+  const east = valueNoise2(hash(ctx.seed, 53), x / 900, h / 30);
+  const ew = Math.max(0, Math.min(1, (east - 0.22) / 0.25));
+  if (ew > 0) from = _blend(from, 80 + 45 * valueNoise2(hash(ctx.seed, 54), x / 600, h / 12), ew);
   // Fronts.
   if (front) {
     if (front.ahead > 0.05) { from = _blend(from, 195, front.ahead * 0.8); mph *= 1 + 0.35 * front.ahead; }

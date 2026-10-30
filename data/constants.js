@@ -477,6 +477,28 @@ export const SIM_WEATHER_ADJ = Object.freeze({
   Storm:    -0.05,
 });
 
+// §102.2 How the weather plays (SimEngine): inside every plate appearance, an
+// inning at a time, from the park report (GameWeather.gameConditions).
+//   home runs: warm air and wind blowing out carry the ball; cold air and wind blowing in knock it down
+//   hits:      a little more in warm air / wind out, a little less while it rains
+//   walks:     a wet ball is hard to grip; so is a cold one
+export const SIM_WEATHER_ENV = Object.freeze({
+  BASE_TEMP_F:      72,
+  BASE_WIND_OUT:    5,       // mph blowing out on a typical night: no effect
+  HR_PER_DEG:       0.007,   // +0.7% home runs per °F
+  HR_PER_MPH_OUT:   0.018,   // +1.8% per mph blowing out (−1.8% per mph in)
+  HR_MIN: 0.6, HR_MAX: 1.5,
+  HIT_PER_DEG:      0.0012,
+  HIT_PER_MPH_OUT:  0.0015,
+  HIT_PER_MMH_RAIN: 0.004,
+  HIT_MIN: 0.93, HIT_MAX: 1.07,
+  RAIN_MIN_MMH:     0.5,     // below this it's not wetting the ball
+  WALK_PER_MMH:     0.025,
+  WALK_RAIN_MAX:    0.2,
+  COLD_F:           45,
+  WALK_COLD:        0.04,
+});
+
 // Home field advantage (added to win prob for home games)
 export const SIM_HOME_FIELD_BONUS = 0.04;
 
@@ -542,8 +564,11 @@ export const WEATHER_OFFICIAL_INNINGS        = 5;     // innings completed → g
 // Read off the same weather the radar and the park reports show.
 export const GAME_WEATHER = Object.freeze({
   STEP_MIN:            5,     // the venue is checked every 5 minutes
-  PLAY_MIN:            180,   // a game's playing time (SimEngine spreads its plays over 3 hours)
+  PLAY_MIN:            180,   // nine innings of playing time: SimEngine paces each half-inning at 10 minutes
+  HALF_MIN:            10,
+  PLAN_MAX_MIN:        270,   // a plan covers up to 13½ innings of play (the game uses as much as it lasts)
   OFFICIAL_PLAY_MIN:   100,   // ≈ 5 innings of playing time (the sim decides by the actual innings)
+  ARM_COOL_MIN:        45,    // a pitcher doesn't go back out after a delay this long
   STOP_RATE_MMH:       7.5,   // rain this hard (≈ 0.3 in/hr) brings the tarp out at once
   SOAK_RATE_MMH:       2.5,   // steady rain this hard…
   SOAK_MIN:            20,    // …for this long does too

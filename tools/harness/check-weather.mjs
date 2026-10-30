@@ -685,8 +685,8 @@ console.log('\nGame weather');
         if (dl.startT < last || dl.endT <= dl.startT || dl.atPlayMin < lastMin) structBad++;
         last = dl.endT; lastMin = dl.atPlayMin;
       }
-      if (p.outcome === 'played' && (p.startAt < g.gameTime || p.endT !== GWm.playClock(p, GW.PLAY_MIN))) structBad++;
-      if (p.outcome === 'called' && !(p.stopAtPlayMin < GW.PLAY_MIN && p.decidedAt === p.endT)) structBad++;
+      if (p.outcome === 'played' && (p.startAt < g.gameTime || p.endT !== GWm.playClock(p, GW.PLAN_MAX_MIN))) structBad++;
+      if (p.outcome === 'called' && !(p.stopAtPlayMin < GW.PLAN_MAX_MIN && p.decidedAt === p.endT)) structBad++;
       if (p.outcome === 'postponed' && (p.startAt !== null || p.endT !== null || !(p.decidedAt > 0))) structBad++;
       // A postponement made off the forecast is one the GM's forecast showed coming.
       if (p.outcome === 'postponed' && p.calledBy === 'forecast' && p.decidedAt < g.gameTime) {
