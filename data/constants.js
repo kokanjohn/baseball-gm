@@ -1528,6 +1528,26 @@ export const CARD_DAY = Object.freeze({
   ingameLastMs:       150 * 60_000,   // no in-game card after the 7th-inning stretch or so
   ingameExpireMs:     210 * 60_000,   // in-game cards lapse when the game is over
 });
+// §105 Compose: how long each person takes to write back, in minutes [soonest, latest]
+// (most replies land early in the window). Field staff work the game: they answer after it.
+export const COMPOSE_REPLY = Object.freeze({
+  windows: Object.freeze({
+    groundskeeper:   [15, 90],
+    bullpen_coach:   [20, 120],
+    pitching_coach:  [25, 150],
+    hitting_coach:   [25, 150],
+    manager:         [30, 180],
+    bench_coach:     [30, 180],
+    facilities:      [45, 300],
+    media_relations: [45, 300],
+    ticket_office:   [60, 360],
+    community:       [90, 480],
+    scouting:        [90, 600],
+  }),
+  defaultWindow: Object.freeze([30, 240]),
+  gameWorkers: Object.freeze(['manager', 'pitching_coach', 'hitting_coach', 'bench_coach', 'bullpen_coach', 'groundskeeper']),
+  gameLengthMs: 3 * 60 * 60_000,   // a game not yet over is busy until about this long after first pitch
+});
 export const FA_UPGRADE_MIN          = 3;    // OVR over the man he'd replace
 
 // CPU re-sign odds by OVR relative to the league level (§69), then age.

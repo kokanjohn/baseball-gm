@@ -51,6 +51,7 @@ import {
   GAME_REMINDER,
   CARD_MONEY_BASE_TARGET_K,
   GAME_WEATHER,
+  COMPOSE_REPLY,
 } from '../data/constants.js';
 
 import {
@@ -74,7 +75,7 @@ import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
-import { planDeliveryTimes, pushTimeFor } from './CardScheduler.js';
+import { planDeliveryTimes, pushTimeFor, replyTime } from './CardScheduler.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
@@ -1591,66 +1592,90 @@ export function deliverCardById(cardId) {
  * @param {String} topicId    — e.g. 'gk_field', 'mgr_morale'
  * @param {String} channelId  — e.g. 'groundskeeper', 'manager'
  */
-export function deliverComposeCard(topicId, channelId) {
+export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs = Date.now() } = {}) {
   const state   = StateManager.get();
   const cardDef = COMPOSE_RESPONSE_POOL[topicId];
 
+  // §105 the reply comes back later, not at once: when this person would write back.
+  const [minMin, maxMin] = COMPOSE_REPLY.windows[channelId] || COMPOSE_REPLY.defaultWindow;
+  const deliverAtMs = replyTime({
+    nowMs, minMin, maxMin,
+    quietStart: state.push?.quietStart, quietEnd: state.push?.quietEnd,
+    busy: COMPOSE_REPLY.gameWorkers.includes(channelId) ? _userGameWindows(state, nowMs) : [],
+  });
+  const pending = { isCompose: true, _composeTopic: topicId, _composeChannel: channelId,
+                    _composeLabel: topicLabel, _sentAtMs: nowMs, deliverAtMs, deliveredAt: deliverAtMs };
+
+  let instance;
   if (!cardDef) {
     // Fallback — generic acknowledgement for topics not yet in the pool
-    StateManager.mutate(s => {
-      s.inbox = [...(s.inbox || []), {
-        arrivedAtMs:  Date.now(),
-        instanceId:   _uuid(),
-        cardId:       `compose_${topicId}`,
-        type:         'normal',
-        tag:          'OPERATIONS',
-        sender:       'Staff',
-        avatar:       '📋',
-        subject:      'Message received',
-        preview:      'Your message has been noted.',
-        body:         'Your message was received. The staff will follow up if there\'s anything that needs your attention.',
-        isCompose:    true,
-        autoResolved: true,
-        _resolved:    false,
-        deliveredAt:  Date.now(),
-        gameIdx:      state.currentGameIndex || 0,
-        yesLabel:     'Noted',
-      }];
-    });
-    return;
+    instance = {
+      instanceId:   _uuid(),
+      cardId:       `compose_${topicId}`,
+      type:         'normal',
+      tag:          'OPERATIONS',
+      sender:       'Staff',
+      avatar:       '📋',
+      subject:      'Message received',
+      preview:      'Your message has been noted.',
+      body:         'Your message was received. The staff will follow up if there\'s anything that needs your attention.',
+      autoResolved: true,
+      _resolved:    false,
+      gameIdx:      state.currentGameIndex || 0,
+      yesLabel:     'Noted',
+      ...pending,
+    };
+  } else {
+    const context  = _buildContextForCompose(state, channelId);
+    // Select region-aware / narrative-aware variant before token resolution
+    const chosenBody = _selectComposeVariant(cardDef, state);
+    const { values } = buildTokenMap(cardDef, context, state);
+    const body       = applyTokens(chosenBody,           values);
+    const subject    = applyTokens(cardDef.subject || '', values);
+    instance = {
+      instanceId:   _uuid(),
+      cardId:       cardDef.id,
+      type:         cardDef.type   || 'normal',
+      tag:          cardDef.tag    || 'OPERATIONS',
+      sender:       applyTokens(cardDef.sender  || 'Staff', values),
+      avatar:       cardDef.avatar || '📋',
+      subject,
+      preview:      subject,
+      body,
+      autoResolved: true,
+      _resolved:    false,
+      gameIdx:      state.currentGameIndex || 0,
+      yesLabel:     cardDef.yesLabel || 'Noted',
+      yesEffect:    cardDef.yesEffect || {},
+      _raw:         cardDef,
+      ...pending,
+    };
   }
 
-  const context  = _buildContextForCompose(state, channelId);
-  // Select region-aware / narrative-aware variant before token resolution
-  const chosenBody = _selectComposeVariant(cardDef, state);
-  const { values } = buildTokenMap(cardDef, context, state);
-  const body       = applyTokens(chosenBody,           values);
-  const subject    = applyTokens(cardDef.subject || '', values);
-
-  const instance = {
-    instanceId:   _uuid(),
-    cardId:       cardDef.id,
-    type:         cardDef.type   || 'normal',
-    tag:          cardDef.tag    || 'OPERATIONS',
-    sender:       applyTokens(cardDef.sender  || 'Staff', values),
-    avatar:       cardDef.avatar || '📋',
-    subject,
-    preview:      subject,
-    body,
-    isCompose:    true,
-    autoResolved: true,
-    _resolved:    false,
-    deliveredAt:  Date.now(),
-    gameIdx:      state.currentGameIndex || 0,
-    yesLabel:     cardDef.yesLabel || 'Noted',
-    yesEffect:    cardDef.yesEffect || {},
-    _raw:         cardDef,
-  };
-
+  // Waits with the other scheduled cards; releaseDueCards() puts it in the inbox (and the push worker alerts) on time.
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), { ...instance, arrivedAtMs: Date.now() }];
-    _sortInbox(s.inbox);
+    s.scheduledCards = [...(s.scheduledCards || []), instance].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
   });
+  return instance;
+}
+
+/** Messages the GM sent that haven't been answered yet (§105), oldest first. */
+export function pendingComposeReplies(state = StateManager.get()) {
+  return (state?.scheduledCards || []).filter(c => c.isCompose).sort((a, b) => (a._sentAtMs || 0) - (b._sentAtMs || 0));
+}
+
+/** Our games that keep field staff busy from now on: [first pitch, about when it ends]. */
+function _userGameWindows(state, nowMs) {
+  const out = [];
+  for (const g of state.schedule || []) {
+    if (g._committed || !Number.isFinite(g.gameTime)) continue;
+    const lastPlay = (g.plays || []).reduce((m, p) => Math.max(m, p._timestamp || 0), 0);
+    const end = lastPlay || g.gameTime + COMPOSE_REPLY.gameLengthMs;
+    if (end <= nowMs) continue;
+    if (g.gameTime > nowMs + 2 * 86_400_000) break;
+    out.push([g.gameTime, end]);
+  }
+  return out;
 }
 
 /**

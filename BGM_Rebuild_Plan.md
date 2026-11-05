@@ -8578,3 +8578,48 @@ That saves about 48 px; the stack goes from 292 to 244 px.
 - **Harness, All-Star checks.** These now run at the break itself: the first of our games after the All-Star Game. Before, they ran at our game numbered 66, and a rainout made up after the break could put that game after the All-Star Game.
 - **Harness, break count.** The count now also excepts a game suspended before the break and finished after it.
 - **All-Star votes, small samples.** With rotations now changing mid-season, a pitcher who made three good starts (23 IP, 1.18 ERA, OVR 53) was voted an All-Star starter. A pitcher's ERA in the vote is now read against the league's ERA over 30 extra innings (`ERA_PRIOR_IP` in `AllStarEngine.pitcherVote`). That three-start stint now reads 2.89. A regular starter's half (about 60 IP) barely moves.
+
+## 105. Radar during games, compose replies that take time, compose layout (r118)
+
+### 105.1 The radar during a live game
+Before this change, the radar showed on the dashboard only in two places: the pre-game card, and our live game's card during a weather hold. In a game being played in fair weather, the only weather shown was a text line.
+- **Our live game.** The weather line under the linescore now ends in a **Radar** button. It opens the full radar sheet on the game's ballpark (`venueOf(game)`). The card redraws on every tick, so the button is handled by one delegated listener on `#dashboard-content`, added in `mount` and removed in `unmount`.
+- **A league game's viewer** (`LiveGame.openLeagueGame`) gets the same button, on that game's park (`venueId || homeId`), until the game is final.
+
+### 105.2 Compose replies come back later
+Before, `deliverComposeCard` put the reply in the inbox the moment the message was sent. Now the reply is written at send time and parked in `state.scheduledCards`. `releaseDueCards` delivers it on time, and the push worker sends the alert.
+
+When a reply arrives (`CardScheduler.replyTime`):
+- **Per-person windows** (`COMPOSE_REPLY.windows`, in minutes):
+
+  | Who | Window |
+  |---|---|
+  | Groundskeeper | 15–90 |
+  | Coaches, manager | 20–180 |
+  | Front office | 45–360 |
+  | Scouting, community | up to 8–10 hours |
+
+- **Timing within the window** is skewed early (`r^1.6`): most replies come sooner, a few much later.
+- **Quiet hours:** a reply is never delivered in quiet hours. It waits for the morning, plus 15–90 minutes.
+- **Field staff work the game** (`COMPOSE_REPLY.gameWorkers`): the manager, the coaches, the bullpen coach and the groundskeeper. A reply that would land during one of our games comes 10–50 minutes after it ends. The end is the last play's time, or 3 hours after first pitch if the game hasn't been simulated yet.
+
+### 105.3 The compose layout
+Before, the recipients were a grid. Picking one put the topics below the grid, and on a phone they were out of view, with nothing saying to scroll. Compose is now two steps, each its own screen:
+1. **Who.** A list of people, each row showing the person's role and their state: "2 topics", "awaiting a reply", or "again in N games".
+   - Above the list, a **Waiting to hear back** section shows what was sent and when.
+   - Other GMs still opens the trade composer.
+2. **What.** "‹ All recipients" to go back, "To: Head Groundskeeper", then the topics, with **Send** right under them.
+   - If only one topic is open, it is pre-selected.
+   - A topic waiting on a reply says "Sent 6:05 PM · awaiting reply".
+   - A topic on cooldown says when it opens again.
+   - Each step opens at the top.
+
+After sending, the GM is back on the list with the message under Waiting to hear back. When the reply arrives, the Compose tab redraws.
+
+### 105.4 Tests
+- `check-compose-replies.mjs` (14 checks): every person's window, varied timing, quiet hours, and field staff answering after the game.
+- `test-compose-ui.mjs` (12 checks), in the real app:
+  - the live game's Radar button, including after the card redraws;
+  - a league game viewer's Radar button;
+  - compose topics and Send on screen at 844px and 640px tall;
+  - no reply at once, the reply due after the game, the waiting list, and arrival on time.

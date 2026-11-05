@@ -82,6 +82,8 @@ export function mount() {
   };
 
   wire('game:tick',         _onTick);
+  // §105 the live game's Radar button (the card redraws, so one delegated listener).
+  document.getElementById('dashboard-content')?.addEventListener('click', _onRadarButton);
   wire('game:committed',    () => { _firstPitchSounded = false; _stopCountdown(); refresh(); });
   wire('game:phaseChanged', () => refresh());
   wire('roster:changed',    () => refresh());
@@ -127,6 +129,7 @@ export function unmount() {
     _visibilityHandler = null;
   }
   window.removeEventListener('resize', _fitRadar);
+  document.getElementById('dashboard-content')?.removeEventListener('click', _onRadarButton);
   _radar?.dispose();
   _radar = null;
   _mounted = false;
@@ -672,6 +675,14 @@ function _radarSlot(game) {
   return `<div id="dash-radar-slot" data-focus="${_escape(venueOf(game))}"></div>`;
 }
 
+function _onRadarButton(e) {
+  const b = e.target.closest?.('.lgv-radar-btn');
+  if (!b) return;
+  e.stopPropagation();
+  App.playClick();
+  openRadarSheet({ state: StateManager.get(), focusId: b.dataset.radarFocus || 'user' });
+}
+
 /** Put the radar card into this redraw's slot (creating it the first time). */
 function _attachRadar(state) {
   const slot = document.getElementById('dash-radar-slot');
@@ -804,8 +815,10 @@ function _wxBanner(game, ds) {
   const w = ds.wx || { kind: null };
   _wxKindShown = w.kind;
   if (!w.kind) {
+    // §105 the radar is a tap away during the game too: the weather it's played in, and a Radar button.
     const line = weatherLine(game);
-    return line ? `<div class="lgv-wx-line">${_escape(line)}</div>` : '';
+    return `<div class="lgv-wx-line"><span>${_escape(line)}</span>
+      <button type="button" class="lgv-radar-btn" data-radar-focus="${_escape(venueOf(game))}">Radar</button></div>`;
   }
   const clock = w.kind === 'delay' || w.kind === 'start-delay'
     ? ` · <span data-wx-since="${w.sinceMs}">${elapsedLabel(Date.now() - w.sinceMs)}</span>` : '';
@@ -1564,7 +1577,9 @@ function _injectCSS() {
     .lgv-final{color:var(--muted);border-color:var(--border);}
     .lgv-delay{color:#f97316;border-color:rgba(249,115,22,.4);}
     .pbp-play.pbp-weather .pbp-play-text{color:#f97316;font-weight:600;}
-    .lgv-wx-line{font-size:11px;color:var(--muted);padding:6px 14px 0;}
+    .lgv-wx-line{font-size:11px;color:var(--muted);padding:6px 14px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:28px;}
+    .lgv-radar-btn{flex-shrink:0;font:inherit;font-size:11px;font-weight:700;letter-spacing:.3px;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;}
+    .lgv-radar-btn:active{transform:scale(.96);}
     .lgv-wx-banner{margin:8px 12px 4px;padding:8px 10px;border-radius:10px;border:1px solid rgba(249,115,22,.35);background:rgba(249,115,22,.08);}
     .lgv-wx-banner.lgv-wx-called{border-color:var(--border);background:var(--surface2, rgba(127,127,127,.08));}
     .lgv-wx-title{font-size:12px;font-weight:800;color:#f97316;letter-spacing:.3px;}

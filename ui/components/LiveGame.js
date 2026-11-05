@@ -146,6 +146,11 @@ export function openLeagueGame(date, id) {
       const keep = sheet ? sheet.scrollTop : 0;
       body.innerHTML = _viewerHtml(state, g, now);
       body.querySelector('#lg-close')?.addEventListener('click', close);
+      body.querySelector('.lg-radar-btn')?.addEventListener('click', async (e) => {
+        const focusId = e.currentTarget.dataset.radarFocus;
+        const { openRadarSheet } = await import('./RadarSheet.js');
+        openRadarSheet({ state: StateManager.get(), focusId });
+      });
       if (sheet) sheet.scrollTop = keep;
     }
     if (g.played) clearInterval(_viewerTimer);
@@ -170,7 +175,11 @@ function _viewerHtml(state, g, now = Date.now()) {
     ? `${ls.wx.sub}${ls.wx.kind === 'delay' || ls.wx.kind === 'start-delay' ? ` (${elapsedLabel(now - ls.wx.sinceMs)} so far)` : ''}`
     : weatherLine(g);
   const notes = gameNotes(g);
-  const wxRow = wxText || notes.length ? `<div class="lg-wx">${_esc([wxText, ...notes].filter(Boolean).join(' · '))}</div>` : '';
+  // §105 the radar on this game's ballpark, a tap away.
+  const park = g.venueId || g.homeId;
+  const radarBtn = !ls.final && park ? `<button type="button" class="lg-radar-btn" data-radar-focus="${_esc(park)}">Radar</button>` : '';
+  const wxRow = wxText || notes.length || radarBtn
+    ? `<div class="lg-wx"><span>${_esc([wxText, ...notes].filter(Boolean).join(' · '))}</span>${radarBtn}</div>` : '';
 
   // Box: committed box when final, else accumulated from revealed plays.
   let box = g.boxScore;
@@ -271,7 +280,8 @@ function _injectCSS() {
     .lg-pill{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;padding:3px 7px;border-radius:10px;border:1px solid var(--border);color:var(--muted);}
     .lg-pill.lg-live{color:var(--danger);border-color:var(--danger);}
     .lg-pill.lg-wx{color:#f97316;border-color:rgba(249,115,22,.5);}
-    .lg-wx{margin:0 16px 8px;font-size:11px;color:var(--soft);line-height:1.35;}
+    .lg-wx{margin:0 16px 8px;font-size:11px;color:var(--soft);line-height:1.35;display:flex;align-items:center;justify-content:space-between;gap:10px;}
+    .lg-radar-btn{flex-shrink:0;font:inherit;font-size:11px;font-weight:700;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;}
     .lg-pbp.wx span:last-child{color:#f97316;font-weight:600;}
     .lg-mini-wx{color:#f97316;font-weight:800;font-size:9px;letter-spacing:.5px;}
     .lg-inn{font-size:12px;font-weight:700;color:var(--text);}

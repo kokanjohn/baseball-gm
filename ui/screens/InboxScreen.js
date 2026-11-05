@@ -195,7 +195,8 @@ export function mount() {
     _listeners.push({ event, handler });
   };
 
-  wire('card:delivered',   () => { if (_activeTab === 'todo') refresh(); });
+  // (Compose too: a reply arriving leaves "Waiting to hear back", §105.)
+  wire('card:delivered',   () => { if (_activeTab === 'todo' || _activeTab === 'compose') refresh(); });
   wire('card:resolved',    () => refresh());
   wire('inbox:changed',    () => refresh());   // roster clock: new or withdrawn cards (§65)
   wire('nav:tabActivated', ({ tab }) => { if (tab === 'decisions') refresh(); });
@@ -467,69 +468,73 @@ function _renderCompleted(state) {
 // ─────────────────────────────────────────────────────────────
 
 function _renderCompose(state) {
-  const gameIdx   = state.currentGameIndex || 0;
-  const cooldowns = state.composeCooldowns || {};
+  // §105 Two steps, each a screen of its own: who (the list of people), then what (that person's
+  // topics, with Send right under them) — the topics are never below the fold after picking someone.
+  const ch = _composeChannel && COMPOSE_CHANNELS.find(c => c.id === _composeChannel);
+  return `<div id="compose-panel" style="padding:0 16px 24px;">${ch ? _composeTopics(state, ch) : _composeRecipients(state)}</div>`;
+}
 
-  const recipientGrid = COMPOSE_CHANNELS.map(ch => {
-    const onCooldown = _isOnCooldown(ch, cooldowns, gameIdx);
-    const left       = onCooldown ? _cooldownGamesLeft(ch, cooldowns, gameIdx) : 0;
-    const isSel      = _composeChannel === ch.id;
-    return `<div class="compose-recipient-btn${isSel ? ' selected' : ''}" data-channel="${ch.id}">
-      <div class="compose-recipient-icon">${ch.icon}</div>
-      <div class="compose-recipient-label">${ch.label}</div>
-      ${onCooldown ? `<div style="font-size:9px;color:var(--muted);margin-top:2px;">📵 ${left}g</div>` : ''}
-    </div>`;
+/** Topic state for one topic: awaiting a reply, cooling down (games left), or open. */
+function _topicState(t, state) {
+  const gameIdx = state.currentGameIndex || 0, cd = state.composeCooldowns || {};
+  const waiting = (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id);
+  if (waiting) return { waiting };
+  const span = t.cooldown || COMPOSE_COOLDOWN_GAMES;
+  const left = cd[t.id] !== undefined ? Math.max(0, span - (gameIdx - cd[t.id])) : 0;
+  return { left };
+}
+
+function _composeRecipients(state) {
+  const waiting = (state.scheduledCards || []).filter(c => c.isCompose).sort((a, b) => (a._sentAtMs || 0) - (b._sentAtMs || 0));
+  const waitingHtml = waiting.length ? `
+    <div class="compose-h">Waiting to hear back</div>
+    <div class="compose-waiting">${waiting.map(c => {
+      const who = COMPOSE_CHANNELS.find(x => x.id === c._composeChannel)?.label || c.sender || 'Staff';
+      return `<div class="compose-wait-row"><span class="cw-who">${_escape(who)}</span>
+        <span class="cw-what">${_escape(c._composeLabel || '')}${c._sentAtMs ? ` · sent ${_shortWhen(c._sentAtMs)}` : ''}</span></div>`;
+    }).join('')}</div>` : '';
+
+  const rows = COMPOSE_CHANNELS.map(ch => {
+    let sub;
+    if (ch.id === 'other_gms') sub = 'Trade talks with the other clubs';
+    else {
+      const st = ch.topics.map(t => _topicState(t, state));
+      const open = st.filter(x => !x.waiting && !x.left).length;
+      const wait = st.filter(x => x.waiting).length;
+      sub = open ? `${open} topic${open !== 1 ? 's' : ''}${wait ? ` · awaiting ${wait} repl${wait !== 1 ? 'ies' : 'y'}` : ''}`
+          : wait ? `Awaiting a reply`
+          : `Recently contacted · again in ${Math.min(...st.map(x => x.left))} game${Math.min(...st.map(x => x.left)) !== 1 ? 's' : ''}`;
+    }
+    return `<button type="button" class="compose-person" data-channel="${ch.id}">
+      <span class="cp-main"><span class="cp-name">${_escape(ch.label)}</span><span class="cp-sub">${_escape(ch.role)} · ${_escape(sub)}</span></span>
+      <span class="cp-go">›</span></button>`;
   }).join('');
 
-  let topicSection = '';
-  if (_composeChannel) {
-    const ch = COMPOSE_CHANNELS.find(c => c.id === _composeChannel);
-    if (ch) {
-      const onCooldown = _isOnCooldown(ch, cooldowns, gameIdx);
-      if (onCooldown) {
-        const left = _cooldownGamesLeft(ch, cooldowns, gameIdx);
-        topicSection = `<div style="background:var(--surface2);border-radius:10px;padding:12px 14px;text-align:center;color:var(--muted);font-size:12px;margin-bottom:18px;">
-          <div style="font-size:18px;margin-bottom:6px;">📵</div>
-          <div style="font-weight:600;color:var(--soft);margin-bottom:4px;">Recently contacted</div>
-          <div>Available again in <strong>${left} game${left !== 1 ? 's' : ''}</strong></div>
-        </div>`;
-      } else {
-        const rows = ch.topics.map(t => {
-          const isSel = _composeTopic === t.id;
-          const tCool = cooldowns[t.id] !== undefined &&
-            (gameIdx - (cooldowns[t.id] || 0)) < (t.cooldown || COMPOSE_COOLDOWN_GAMES);
-          const tLeft = tCool ? Math.max(0,
-            (t.cooldown || COMPOSE_COOLDOWN_GAMES) - (gameIdx - (cooldowns[t.id] || 0))) : 0;
-          if (tCool) {
-            return `<div class="compose-topic-btn disabled" style="opacity:.4;cursor:default;">
-              <div style="display:flex;align-items:center;justify-content:space-between;">
-                <span>${t.label}</span>
-                <span style="font-size:10px;color:var(--muted);">Available in ${tLeft}g</span>
-              </div>
-              <span class="topic-desc">${t.desc}</span>
-            </div>`;
-          }
-          return `<div class="compose-topic-btn${isSel ? ' selected' : ''}" data-topic="${t.id}">
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-              <span>${t.label}</span>
-              <span style="font-size:10px;color:var(--muted);">· ${t.cooldown || COMPOSE_COOLDOWN_GAMES}g lockout</span>
-            </div>
-            <span class="topic-desc">${t.desc}</span>
-          </div>`;
-        }).join('');
-        topicSection = `<div style="margin-bottom:8px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;">Topic</div>
-          <div class="compose-topic-list">${rows}</div>`;
-      }
-    }
-  }
+  return `${waitingHtml}
+    <div class="compose-h">Send a message to…</div>
+    <div class="compose-people">${rows}</div>`;
+}
 
-  const canSend = _composeChannel && _composeTopic;
-  return `<div style="padding:0 16px 24px;">
-    <div style="margin-bottom:6px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;">Send a message to…</div>
-    <div class="compose-recipient-grid" style="margin-bottom:18px;">${recipientGrid}</div>
-    ${topicSection}
-    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">Send Message</button>
-  </div>`;
+function _composeTopics(state, ch) {
+  const rows = ch.topics.map(t => {
+    const st = _topicState(t, state);
+    const isSel = _composeTopic === t.id;
+    const note = st.waiting ? `Sent ${_shortWhen(st.waiting._sentAtMs)} · awaiting reply`
+      : st.left ? `Available again in ${st.left} game${st.left !== 1 ? 's' : ''}` : '';
+    const off = !!(st.waiting || st.left);
+    return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
+      <span>${_escape(t.label)}</span>
+      <span class="topic-desc">${_escape(note || t.desc)}</span>
+    </div>`;
+  }).join('');
+  const canSend = !!_composeTopic;
+  return `
+    <button type="button" class="compose-back" id="compose-back">‹ All recipients</button>
+    <div class="compose-to"><span class="compose-to-label">To</span> ${_escape(ch.label)}<span class="compose-to-role">${_escape(ch.role)}</span></div>
+    <div class="compose-h">What about?</div>
+    <div class="compose-topic-list">${rows}</div>
+    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : 'Pick a topic'}</button>
+    <div class="compose-cooldown-note">Replies come back later, the way they would from a real staff — field staff answer after the game.</div>`;
 }
 
 function _isOnCooldown(channel, cooldowns, gameIdx) {
@@ -549,7 +554,6 @@ function _cooldownGamesLeft(channel, cooldowns, gameIdx) {
   return Math.max(...vals, 0);
 }
 
-function _renderTopicList() { return ''; }
 
 
 
@@ -628,7 +632,7 @@ function _attachTabListeners(state) {
     refresh();
   });
 
-  // Compose channel selection
+  // Compose: pick a person (step 1) → that person's topics (step 2), shown from the top.
   document.querySelectorAll('[data-channel]').forEach(el => {
     el.addEventListener('click', () => {
       const ch = COMPOSE_CHANNELS.find(c => c.id === el.dataset.channel);
@@ -637,12 +641,18 @@ function _attachTabListeners(state) {
         import('../components/TradeComposer.js').then(m => m.openTradeComposer({}));
         return;
       }
-      const onCooldown = _isOnCooldown(ch, state.composeCooldowns || {}, state.currentGameIndex || 0);
-      if (onCooldown) return;
-      _composeChannel = el.dataset.channel;
-      _composeTopic   = null;
+      _composeChannel = ch.id;
+      // One open topic: picked already.
+      const open = ch.topics.filter(t => { const st = _topicState(t, StateManager.get()); return !st.waiting && !st.left; });
+      _composeTopic = open.length === 1 ? open[0].id : null;
       refresh();
+      _composeToTop();
     });
+  });
+  document.getElementById('compose-back')?.addEventListener('click', () => {
+    _composeChannel = null; _composeTopic = null;
+    refresh();
+    _composeToTop();
   });
 
   // Compose topic selection
@@ -711,30 +721,34 @@ async function _resolveCard(instanceId, choice) {
 
 async function _sendCompose(topicId, channelId, state) {
   const gameIdx = state.currentGameIndex || 0;
+  const ch = COMPOSE_CHANNELS.find(c => c.id === channelId);
+  const topic = ch?.topics.find(t => t.id === topicId);
 
   // Record cooldown immediately
   StateManager.mutate(s => {
     s.composeCooldowns = { ...(s.composeCooldowns || {}), [topicId]: gameIdx };
   });
 
-  // Deliver a compose card via CardEngine
-  // The card pool generates the appropriate response card from the topic
+  // §105 the reply is written now and arrives later (CardEngine schedules it; a push when it lands).
   try {
     const { deliverComposeCard } = await import('../../engine/CardEngine.js');
-    if (typeof deliverComposeCard === 'function') {
-      deliverComposeCard(topicId, channelId);
-    }
-  } catch (_) {
-    // deliverComposeCard is added in a future content phase — graceful fallback
+    deliverComposeCard(topicId, channelId, { topicLabel: topic?.label || '' });
+    import('../PushClient.js').then(P => P.syncPushSchedule()).catch(() => {});
+  } catch (err) {
+    console.error('InboxScreen._sendCompose:', err);
   }
 
-  // panel reset handled by refresh()
-  _activeTab = 'todo';
-
-  App.showToast(`Message sent to ${COMPOSE_CHANNELS.find(c => c.id === channelId)?.label || 'staff'}.`, 'positive', 2500);
-  EventBus.emit('card:delivered', { source: 'compose', topicId });
-
+  // Back to the list, where the message waits under "Waiting to hear back".
+  _composeChannel = null;
+  _composeTopic   = null;
+  App.showToast(`Message sent to ${ch?.label || 'staff'}. You'll hear back.`, 'positive', 2500);
   refresh();
+  _composeToTop();
+}
+
+function _composeToTop() {
+  document.getElementById('compose-panel')?.scrollIntoView({ block: 'start' });
+  document.querySelector('.inbox-tabs')?.scrollIntoView({ block: 'start' });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -757,8 +771,24 @@ function _injectCSS() {
   _cssInjected = true;
   const style = document.createElement('style');
   style.textContent = `
-    /* Compose topic panel slide */
-    #compose-topic-panel{animation:slideUp .2s ease;}
+    /* Compose (§105): who, then what */
+    #compose-panel{animation:slideUp .2s ease;}
+    .compose-h{margin:4px 0 8px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
+    .compose-people{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+    .compose-person{display:flex;align-items:center;gap:10px;width:100%;text-align:left;font:inherit;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:11px 14px;cursor:pointer;color:var(--text);}
+    .compose-person:active{opacity:.8;}
+    .cp-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+    .cp-name{font-size:14px;font-weight:700;}
+    .cp-sub{font-size:11px;color:var(--muted);}
+    .cp-go{font-size:20px;color:var(--muted);line-height:1;}
+    .compose-waiting{display:flex;flex-direction:column;gap:4px;margin-bottom:16px;background:var(--surface2);border-radius:12px;padding:10px 14px;}
+    .compose-wait-row{display:flex;flex-direction:column;font-size:12px;}
+    .cw-who{font-weight:700;color:var(--text);}
+    .cw-what{color:var(--muted);font-size:11px;}
+    .compose-back{font:inherit;font-size:13px;font-weight:700;color:var(--accent);background:none;border:none;padding:4px 0 10px;cursor:pointer;}
+    .compose-to{font-size:17px;font-weight:800;color:var(--text);margin-bottom:14px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+    .compose-to-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
+    .compose-to-role{font-size:12px;font-weight:600;color:var(--muted);}
     .completed-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;min-height:28px;}
     .completed-tool{font-size:11px;font-weight:700;padding:5px 10px;border-radius:8px;border:1px solid var(--accent);color:var(--text);background:transparent;cursor:pointer;}
     .completed-tool.muted{border-color:var(--border);color:var(--muted);}

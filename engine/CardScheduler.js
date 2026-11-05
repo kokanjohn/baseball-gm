@@ -99,7 +99,7 @@ export function pushTimeFor(ms, quietStart = '22:00', quietEnd = '08:00') {
   return inQuietHours(ms, quietStart, quietEnd) ? nextWakeTime(ms, quietEnd) : ms;
 }
 
-function nextWakeTime(fromMs, quietEnd) {
+export function nextWakeTime(fromMs, quietEnd) {
   const d = new Date(fromMs); d.setHours(0, 0, 0, 0);
   let t = _at(d.getTime(), _minutes(quietEnd));
   if (t <= fromMs) t = _at(_nextDay(d.getTime()), _minutes(quietEnd));
@@ -120,4 +120,28 @@ function _at(dayMs, minutes) {
 function _nextDay(dayMs) {
   const d = new Date(dayMs); d.setDate(d.getDate() + 1); d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+
+/**
+ * replyTime(opts) — §105 when someone the GM wrote to writes back.
+ * Not at once: after a while that varies (most replies come sooner, a few much
+ * later — the window's early part is likelier), never during quiet hours (the
+ * reply waits for the morning, then a little longer), and never while the
+ * person is busy — field staff answer after the game, not during it.
+ *   opts: { nowMs, minMin, maxMin, quietStart, quietEnd, busy: [[startMs, endMs], …], rand }
+ */
+export function replyTime(opts) {
+  const rand = opts.rand || Math.random;
+  const minMs = (opts.minMin ?? 30) * 60_000, maxMs = Math.max(minMs, (opts.maxMin ?? 180) * 60_000);
+  let t = opts.nowMs + minMs + (maxMs - minMs) * Math.pow(rand(), 1.6);
+  // Busy (a game the person works): after it, once they're through with it.
+  for (let pass = 0; pass < 3; pass++) {
+    const hit = (opts.busy || []).find(([a, b]) => t >= a && t < b);
+    if (hit) t = hit[1] + (10 + 40 * rand()) * 60_000;
+    // Quiet hours: first thing in the morning, give or take.
+    if (inQuietHours(t, opts.quietStart || '22:00', opts.quietEnd || '08:00')) {
+      t = nextWakeTime(t, opts.quietEnd || '08:00') + (15 + 75 * rand()) * 60_000;
+    } else if (!hit) break;
+  }
+  return Math.round(t);
 }
