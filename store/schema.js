@@ -262,6 +262,7 @@ export function createGameState(config = {}) {
     // ── Compose cooldowns ────────────────────────────────
     // { [composeTopicId]: gameIndex } — prevents repeated compose use
     composeCooldowns: {},
+    composeLog: [],          // §106 what the staff told the GM (topic, when, what to remember)
 
     // ── Roster transactions on a real clock (§65) ─────────────
     // One record per move, for EVERY team:

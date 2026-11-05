@@ -112,9 +112,17 @@ const arrived = await page.evaluate(async (at) => {
   const early = (SM.get().inbox || []).some(c => c.isCompose);
   CE.releaseDueCards(at);
   const c = (SM.get().inbox || []).find(c => c.isCompose);
-  return { early, subject: c?.subject, arrivedAtMs: c?.arrivedAtMs };
+  return { early, subject: c?.subject, sender: c?.sender, body: c?.body, arrivedAtMs: c?.arrivedAtMs, logged: (SM.get().composeLog || []).length };
 }, after.at);
-check(`a second early it isn't there; at its time it arrives (“${arrived.subject}”)`, !arrived.early && !!arrived.subject && arrived.arrivedAtMs === after.at);
+check(`a second early it isn't there; at its time it arrives (“${arrived.subject}” from ${arrived.sender})`, !arrived.early && arrived.subject === 'Re: Field conditions' && arrived.arrivedAtMs === after.at);
+check(`…written by the groundskeeper from the club as it stands, and remembered (${arrived.logged} in the log)`,
+      /— Head Groundskeeper$/.test(arrived.body || '') && /field/i.test(arrived.body || '') && arrived.logged === 1, arrived.body);
+console.log('\n' + arrived.body + '\n');
+// The inbox shows it.
+await page.click('#itab-todo'); await page.waitForTimeout(300);
+const shown = await page.evaluate(() => [...document.querySelectorAll('#inbox-content *')].some(e => e.children.length === 0 && /Re: Field conditions/.test(e.textContent)));
+check('the reply is in the inbox', shown);
+await page.screenshot({ path: `${out}/compose-reply-${theme}.png` });
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 console.log(ok ? 'ALL PASS' : 'SOME FAILED');

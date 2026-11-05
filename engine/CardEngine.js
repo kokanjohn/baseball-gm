@@ -76,6 +76,7 @@ import * as Finance from './FinanceEngine.js';
 import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor, replyTime } from './CardScheduler.js';
+import { writeComposeReply } from './ComposeReplies.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
@@ -1311,16 +1312,28 @@ export function deliverMomentCard(moment, context, game = null, timing = 'soon')
  */
 export function releaseDueCards(nowMs = Date.now()) {
   const state = StateManager.get();
-  const due = (state?.scheduledCards || []).filter(c => c.deliverAtMs <= nowMs);
+  let due = (state?.scheduledCards || []).filter(c => c.deliverAtMs <= nowMs);
   if (!due.length) return [];
   const ids = new Set(due.map(c => c.instanceId));
+  // §106 a staff reply is written now, as of the moment it was sent back.
+  const log = [];
+  due = due.map(c => {
+    if (!c._composeWrite) return c;
+    const reply = writeComposeReply(state, { topicId: c._composeTopic, channelId: c._composeChannel, atMs: c.deliverAtMs,
+                                             subject: c._composeLabel ? `Re: ${c._composeLabel}` : null });
+    if (!reply) return { ...c, _composeWrite: false };
+    log.push({ topicId: c._composeTopic, channelId: c._composeChannel, atMs: c.deliverAtMs, memo: reply.memo });
+    return { ...c, _composeWrite: false, sender: reply.sender, subject: reply.subject, preview: reply.preview, body: reply.body };
+  });
   StateManager.mutate(s => {
     s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId));
     s.inbox = [...(s.inbox || []), ...due.map(c => ({ ...c, arrivedAtMs: c.deliverAtMs }))];
     _sortInbox(s.inbox);
+    if (log.length) s.composeLog = [...(s.composeLog || []), ...log].slice(-COMPOSE_LOG_MAX);
   });
   return due;
 }
+const COMPOSE_LOG_MAX = 80;
 
 /**
  * getPushSchedule(state, nowMs = Date.now())
@@ -1603,7 +1616,9 @@ export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs 
     quietStart: state.push?.quietStart, quietEnd: state.push?.quietEnd,
     busy: COMPOSE_REPLY.gameWorkers.includes(channelId) ? _userGameWindows(state, nowMs) : [],
   });
-  const pending = { isCompose: true, _composeTopic: topicId, _composeChannel: channelId,
+  // §106 written when it comes back (releaseDueCards), from the club as it stands then; until then the
+  // card carries only what the GM's phone needs (who, "Re: …") and the pool's text as a fallback.
+  const pending = { isCompose: true, _composeTopic: topicId, _composeChannel: channelId, _composeWrite: true,
                     _composeLabel: topicLabel, _sentAtMs: nowMs, deliverAtMs, deliveredAt: deliverAtMs };
 
   let instance;
@@ -1652,6 +1667,7 @@ export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs 
     };
   }
 
+  if (topicLabel) { instance.subject = `Re: ${topicLabel}`; instance.preview = instance.subject; }
   // Waits with the other scheduled cards; releaseDueCards() puts it in the inbox (and the push worker alerts) on time.
   StateManager.mutate(s => {
     s.scheduledCards = [...(s.scheduledCards || []), instance].sort((a, b) => a.deliverAtMs - b.deliverAtMs);

@@ -8623,3 +8623,64 @@ After sending, the GM is back on the list with the message under Waiting to hear
   - a league game viewer's Radar button;
   - compose topics and Send on screen at 844px and 640px tall;
   - no reply at once, the reply due after the game, the waiting list, and arrival on time.
+
+## 106. Staff replies written from the real situation (r119)
+
+### 106.1 The problem
+Compose replies were canned pool text. For example, the groundskeeper's weather reply said "the system coming through is manageable… the game gets in" whatever the forecast was, and every other topic was a fixed paragraph. Replies could contradict the forecast, the radar, the box scores and the GM's own decisions.
+
+### 106.2 The model
+- **Written when it comes back.** A reply is written when it is sent back (`releaseDueCards`, at the card's `deliverAtMs`), from the club as it stands at that moment. Until then, the scheduled card carries only the sender and "Re: <topic>" for the phone notification, plus the old pool text as a fallback.
+- **Pure engines.** `ComposeFacts.composeFacts(state, atMs)` works out each fact lazily, then keeps it for the rest of the reply. `ComposeReplies.writeComposeReply(state, { topicId, channelId, atMs, subject })` returns `{ sender, subject, body, preview, memo }`, with one writer per topic (all 22).
+- **Only what the club can know:**
+  - **Weather:** the same forecasts the GM sees (`forecastForGame` and `dailyForecastDay` at the reply's moment), plus observed rain (`rainTotal` over the past hours) and current conditions. It never reads a game's own weather plan.
+  - **Results:** a game's result only once it has been committed.
+- **Memory.** `state.composeLog` keeps the last 80 replies as `{ topicId, channelId, atMs, memo }`. Writers read their own past replies, for example:
+  - "Not much has changed since I wrote last night."
+  - "Good news first: X has come around since we talked."
+  - The scouting director moves on to a prospect not reported last time.
+- **The GM's decisions.** Answered cards (yes/no), cards left unanswered (auto/skip), the GM log (trades, injuries) and the finance ledger. Each desk reads its own:
+  - **Groundskeeper:** field and tarp calls ("we're still making do without the tarp replacement").
+  - **Manager:** discipline calls ("the matter with Ewing") and weather calls (holding a starter, a bullpen game in a doubleheader).
+  - **Ticket office:** marketing complaints left unanswered.
+  - **Media relations:** a leak to the press left without a response.
+  - **Community affairs:** requests approved, declined or ignored.
+- **Who's writing.**
+  - Coaches sign with their names (`coachingStaff`); departments sign with their role.
+  - The opening line follows the relationship score: warm, plain or short.
+  - Wording varies through a seeded generator (topic, time, save).
+  - Text is gender-neutral ("that bat", "the arm", "runners on").
+- **Dates** follow the app: "tonight", "tomorrow", then the baseball calendar's date ("July 22"). Weekdays are never named, because the real calendar's weekday wouldn't match the baseball date.
+- **Spring** reads spring stats; the offseason reads the roster with no games ahead.
+
+### 106.3 What each person draws on
+| Topic | Facts |
+|---|---|
+| gk_field | Rain in the last 24/72 hours, rain now, heat or cold, the last home game's field condition, delays and rainouts in the last 10 days, road trip vs. next home game and its forecast, the GM's field and tarp calls, the last reply |
+| gk_weather | Each home game within 4 days: the GM's forecast (temperature, sky, chance, when, wind), with a plan by chance and kind (storms → lightning, snow → early call); rain already in the ground; the last weather event; a far-out caution. With no home game, the next one and why it's too far out to plan |
+| mgr_lineup | The top of the order's OBP, hot and cold bats (last 10 games), the next probable starter by style, trade arrivals in the order, injured regulars |
+| mgr_morale | Morale band, streak, last 10, players traded away, IL count, discipline calls, leave, the race |
+| mgr_rotation | Who starts each upcoming game, worked out the way the sim chooses (in turn, or the next rested starter; `nextStarters`); last start lines; injured starters; struggling arms; doubleheader and hold-the-starter calls |
+| mgr_matchup | Series length and venue, the opponent's record and streak, our record against them, probable starters, their best bats, the opener's forecast if it's wet |
+| pc_rotation | Each starter's ERA over the last three starts and days since the last outing, workload, who's struggling or rolling, the pitching IL with time left |
+| pc_reliever | Appearances and innings over 7 games, down and tired arms (`armStatus`), the closer, bullpen ERA, starters not getting through five |
+| pc_prospect | The top farm arm (rotating), tools, development plan, distance from the club's rotation or bullpen |
+| hc_slump | The coldest lineup bat (18+ AB over 10 games), why (strikeouts, bad luck, weak contact), last time's player (improved or still cold), lineup spot |
+| hc_development | A young hitter with a plan, or the youngest regular, or the top farm bat: tools, plan progress, recent line |
+| hc_lineup | Best OBP vs. leadoff, the best slugger's spot, a weak bat high in the order |
+| bc_morale | One-run record, extra innings, steal success rate, blown saves, close losses |
+| bpc_health | Availability for the next game, with each arm's last outing |
+| fac_status | The homestand ahead, heat or cold and rain at first pitch, sellout wear, facility spending, passed-on and handled items |
+| tix_attendance | Average gate vs. capacity, sellouts, weekend vs. weekday, upcoming home dates (weather policy when wet), the promo, the streak, the atmosphere |
+| tix_renewals | Renewal rate from the record and atmosphere (by phase), unanswered holder issues, marketing calls |
+| sc_prospect | The top farm prospect (rotating), tools, arc, plan, who's ahead at the position |
+| sc_opponent | Probable starters by style, the dangerous bats, base-running, our record against them, their streak |
+| mr_narrative | The storyline (streak, first place, games back, contention), trades, the home-run leader, a season-ending injury, press-relations calls, owner patience |
+| ca_event | The next off day for the youth clinic, community calls (approved, declined, ignored), pregame ceremonies on a homestand |
+
+### 106.4 Tests
+- `sim-season`:
+  - Every 7 games, and at the run's end (the offseason after a full season), all 22 topics are written from the live state. Each must be clean (no undefined/NaN, no gendered words) and under 500 ms.
+  - Mid-season truth checks: the groundskeeper's weather equals `forecastForGame` exactly; a second prospect report covers someone new; a passed-on tarp shows up in the groundskeeper's reply; the full trip works (sent → waiting → written at arrival → logged).
+- `compose-replies.mjs state.json [minutes] [topic]` prints every reply from a saved game (sim-season `STATE_DUMP=dir STATE_DUMP_AT=idx,…`).
+- `test-compose-ui.mjs` (16 checks): the reply arrives written by the groundskeeper, as "Re: Field conditions", and lands in the log.

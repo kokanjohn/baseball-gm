@@ -31,6 +31,7 @@ import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
 import * as CardPools from '../../data/cards-pool.js';
+import { writeComposeReply, COMPOSE_TOPICS } from '../../engine/ComposeReplies.js';
 import {
   GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP,
   SPRING_TRAINING_GAME_COUNT, REGULAR_SEASON_GAME_COUNT,
@@ -61,6 +62,63 @@ const summarize = () => {
   console.log(`${passed}/${results.length} checks passed`);
   return passed === results.length;
 };
+
+// ── §106 compose replies: every topic, written from the live state ─
+const composeStats = { n: 0, bad: [], slow: 0, maxMs: 0 };
+const COMPOSE_CH = { gk_: 'groundskeeper', mgr_: 'manager', pc_: 'pitching_coach', hc_: 'hitting_coach', bc_: 'bench_coach', bpc_: 'bullpen_coach',
+                     fac_: 'facilities', tix_: 'ticket_office', sc_: 'scouting', mr_: 'media_relations', ca_: 'community' };
+function composeAudit(st, atMs, where) {
+  const G = /\b(he|him|his|himself|he's|he'll|he'd|she|her|hers|herself|guy|guys|fella|fellas|man|men|boys)\b/i;
+  for (const topicId of COMPOSE_TOPICS) {
+    const channelId = COMPOSE_CH[Object.keys(COMPOSE_CH).find(k => topicId.startsWith(k))];
+    const t0 = performance.now();
+    const r = writeComposeReply(st, { topicId, channelId, atMs });
+    const ms = performance.now() - t0;
+    composeStats.n++; composeStats.maxMs = Math.max(composeStats.maxMs, ms); if (ms > 500) composeStats.slow++;
+    const why = !r ? 'no reply' : /undefined|NaN|null|\[object|\$\{|Infinity/.test(r.body) ? 'broken text' : G.test(r.body) ? `gendered (${r.body.match(G)[0]})` : '';
+    if (why) composeStats.bad.push(`${where} ${topicId}: ${why}${r ? ` — ${r.body.replace(/\s+/g, ' ').slice(0, 160)}` : ''}`);
+    if (process.env.COMPOSE_DUMP && r) console.log(`\n━━ ${where} ${topicId}\n${r.body}`);
+  }
+}
+
+// §106 the replies tell the truth: the forecast the GM sees, what this person said last time, the GM's own calls,
+// and the whole trip — sent, waiting, written when it comes back, remembered.
+let composeMid = null;
+async function checkComposeTruth(st, at) {
+  const { weatherContext } = await import('../../engine/WeatherClimate.js');
+  const { forecastForGame } = await import('../../engine/GameWeather.js');
+  // The weather in the groundskeeper's reply is the forecast on the GM's screen.
+  const wx = writeComposeReply(st, { topicId: 'gk_weather', channelId: 'groundskeeper', atMs: at });
+  const g = (st.schedule || []).find(x => x.gameTime === wx?.memo?.gameTime);
+  const fc = g ? forecastForGame(weatherContext(st), at, g) : null;
+  check(`compose: the groundskeeper's weather is the GM's forecast (${fc ? `${fc.tempF}°, ${fc.chance}% for ${g.date}` : 'no home game found'})`,
+        !!g && wx.memo.chance === fc.chance && wx.body.includes(`${fc.tempF}°`) && (fc.chance < 10 || wx.body.includes(`${fc.chance}%`)), wx?.body?.slice(0, 300));
+  // Memory: the scouting director moves on to another prospect after reporting one.
+  const first = writeComposeReply(st, { topicId: 'sc_prospect', channelId: 'scouting', atMs: at });
+  const st2 = { ...st, composeLog: [{ topicId: 'sc_prospect', channelId: 'scouting', atMs: at - 86_400_000, memo: first.memo }] };
+  const second = writeComposeReply(st2, { topicId: 'sc_prospect', channelId: 'scouting', atMs: at + 86_400_000 });
+  check(`compose: a second prospect report covers someone new (${st.players[first.memo.playerId]?.name} → ${st.players[second.memo.playerId]?.name})`,
+        (st.userTeam.farmIds || []).length < 2 || second.memo.playerId !== first.memo.playerId);
+  // The GM's own decision, in the reply of the person it concerned.
+  const dec = { instanceId: 'test-dec', cardId: 'test_tarp', tag: 'FACILITIES', subject: 'Tarp replacement — the old one is torn', resolved: true, choice: 'no', resolvedAtMs: at - 2 * 86_400_000 };
+  const st3 = { ...st, inbox: [...(st.inbox || []), dec] };
+  const gk = writeComposeReply(st3, { topicId: 'gk_field', channelId: 'groundskeeper', atMs: at });
+  check('compose: the groundskeeper remembers the tarp the GM passed on', /tarp replacement/i.test(gk?.body || ''), gk?.body?.slice(0, 300));
+  // The whole trip, through the real engine.
+  SM.mutate(s => { s.composeCooldowns = {}; });
+  const { deliverComposeCard } = await import('../../engine/CardEngine.js');
+  const sent = clock.get();
+  const inst = deliverComposeCard('hc_slump', 'hitting_coach', { topicLabel: 'Hitter in a slump', nowMs: sent });
+  const waiting = (SM.get().scheduledCards || []).find(c => c.instanceId === inst.instanceId);
+  releaseDueCards(inst.deliverAtMs - 1000);
+  const early = (SM.get().inbox || []).some(c => c.instanceId === inst.instanceId);
+  releaseDueCards(inst.deliverAtMs);
+  const got = (SM.get().inbox || []).find(c => c.instanceId === inst.instanceId);
+  const logged = (SM.get().composeLog || []).some(x => x.topicId === 'hc_slump' && x.atMs === inst.deliverAtMs);
+  check(`compose: sent, waits ${Math.round((inst.deliverAtMs - sent) / 60_000)} min, then arrives written by the hitting coach, and is remembered`,
+        !!waiting && !early && !!got && /— /.test(got.body) && got.subject === 'Re: Hitter in a slump' && logged,
+        got?.body?.slice(0, 200));
+}
 
 // ── §65: a simulated GM living between games ─────────────────────
 // Walks the virtual clock through every card delivery before first pitch so
@@ -1469,6 +1527,16 @@ async function main() {
 
     await commitGame(idx);
     releaseDueCards();   // the App's next tick
+    // Saved games, for tools that read a real state (STATE_DUMP=dir STATE_DUMP_AT=schedule indexes, comma-separated).
+    if (process.env.STATE_DUMP && String(process.env.STATE_DUMP_AT || '60').split(',').map(Number).includes(idx)) {
+      const { writeFileSync } = await import('node:fs');
+      writeFileSync(`${process.env.STATE_DUMP}/state-${process.env.REGION || 'north'}-${SEED}-${idx}.json`, JSON.stringify({ state: SM.get(), clockMs: clock.get() }));
+    }
+    // §106 the staff's replies, written from the club as it stands, every few games.
+    if (idx % 7 === 3) composeAudit(SM.get(), clock.get() + 40 * 60_000, `game ${idx}`);
+    // (Mid-season, with a home game next, so the weather has something to say.)
+    if (!composeMid && SM.get().schedule[idx]?.regularSeasonIndex >= 40 && SM.get().schedule[idx + 1]?.isHome && !SM.get().schedule[idx + 1]?.venueId)
+      composeMid = { st: structuredClone(SM.get()), at: clock.get() + 40 * 60_000 };
     if (process.env.ROSTER_TRACE) {
       const st = SM.get();
       const act = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(p => p && p.group !== PLAYER_GROUP.IL);
@@ -2122,6 +2190,12 @@ async function main() {
     await checkNames('season 2');
     await checkNeutralText(SM.get());
   }
+
+  // §106 the staff write back in every part of the year (here: wherever the run ended — the offseason after a full one).
+  composeAudit(SM.get(), clock.get() + 40 * 60_000, `end (${SM.get().phase})`);
+  if (composeMid) await checkComposeTruth(composeMid.st, composeMid.at);
+  check(`compose: every topic writes a clean reply from the live club (${composeStats.n} replies across the run; slowest ${composeStats.maxMs.toFixed(0)} ms)`,
+        composeStats.bad.length === 0 && composeStats.slow === 0, composeStats.bad.slice(0, 3).join(' | '));
 
   if (process.env.DBG) {
     const st = SM.get();
