@@ -184,7 +184,9 @@ export function composeFacts(state, atMs) {
   const forecastFor = (g) => (g && g.gameTime > atMs ? forecastForGame(wx(), atMs, g) : null);
   const outlook = (id = 'user', d = 0) => { const pk = park(id); return dailyForecastDay(wx(), atMs, pk.x, pk.y, d); };
   /** Rain that has fallen at a park (inches) in the hours before `atMs`. */
-  const rainPast = (hours, id = 'user') => { const pk = park(id); return rainTotal(wx(), pk.x, pk.y, atMs - hours * MS_HOUR, atMs, 20); };
+  // (The last day in 20-minute steps, earlier days in hourly ones; each span worked out once.)
+  const rainSpan = (id, h0, h1, step) => (memo[`rain|${id}|${h0}|${h1}`] ??= (() => { const pk = park(id); return rainTotal(wx(), pk.x, pk.y, atMs - h1 * MS_HOUR, atMs - h0 * MS_HOUR, step); })());
+  const rainPast = (hours, id = 'user') => Math.round((rainSpan(id, 0, Math.min(24, hours), 20) + (hours > 24 ? rainSpan(id, 24, hours, 60) : 0)) * 100) / 100;
   const nowAt = (id = 'user') => { const pk = park(id); return conditionsAt(wx(), pk.x, pk.y, atMs); };
   /** Recent weather trouble at our park: delays, rainouts, suspensions (newest first). */
   const homeWeatherEvents = once('homeWx', () => {

@@ -1257,7 +1257,14 @@ function checkWeatherSeason(st) {
     gs.sort((a, b) => a.gameTime - b.gameTime);
     for (let i = 1; i < gs.length; i++) {
       const prevEnd = gs[i - 1].endedAt ?? (gs[i - 1].gameTime + 3 * 3_600_000);
-      if (gs[i].gameTime < prevEnd && gs[i].date === gs[i - 1].date) clash.push(`${t} ${gs[i].date}`);
+      if (gs[i].gameTime < prevEnd && gs[i].date === gs[i - 1].date) {
+        clash.push(`${t} ${gs[i].date}`);
+        if (process.env.CLASH_DUMP) for (const g of [gs[i - 1], gs[i]]) console.log('CLASH', t, JSON.stringify({ id: g.id, idx: g.index, date: g.date, gameTime: new Date(g.gameTime).toISOString(),
+          endedAt: g.endedAt && new Date(g.endedAt).toISOString(), lastPlay: g.plays?.length ? new Date(g.plays[g.plays.length - 1]._timestamp).toISOString() : null, nPlays: g.plays?.length,
+          status: g.status, makeup: g.makeup, ppd: g.postponements, susp: g.suspension, resumedAt: g.resumedAt && new Date(g.resumedAt).toISOString(),
+          wx: g.wx && { outcome: g.wx.outcome, startAt: g.wx.startAt && new Date(g.wx.startAt).toISOString(), delays: g.wx.delays?.length, resumption: g.wx.resumption },
+          wxResult: g.wxResult && { startAt: g.wxResult.startAt && new Date(g.wxResult.startAt).toISOString(), delays: (g.wxResult.delays || []).map(d => [new Date(d.startT).toISOString(), new Date(d.endT).toISOString()]) } }));
+      }
     }
   }
   const dh = Object.values(byClub).flatMap(gs => gs.filter((g, i) => i && g.date === gs[i - 1].date)).length;

@@ -8684,3 +8684,25 @@ Compose replies were canned pool text. For example, the groundskeeper's weather 
   - Mid-season truth checks: the groundskeeper's weather equals `forecastForGame` exactly; a second prospect report covers someone new; a passed-on tarp shows up in the groundskeeper's reply; the full trip works (sent → waiting → written at arrival → logged).
 - `compose-replies.mjs state.json [minutes] [topic]` prints every reply from a saved game (sim-season `STATE_DUMP=dir STATE_DUMP_AT=idx,…`).
 - `test-compose-ui.mjs` (16 checks): the reply arrives written by the groundskeeper, as "Re: Field conditions", and lands in the log.
+
+## 107. A doubleheader's second game waits for the first — ours too (r120)
+
+**The bug.** It was seen once in a full-season run (south, seed 1): "no club plays two games at once", with our club and our opponent on 2026-08-15. Game two of our doubleheader started at its scheduled time while game one was still being played.
+
+**Root cause.** `_wxHoldForClubs` held a game only while either club had a game in progress (`clubBusyUntil`, which looks at live games only).
+- **CPU doubleheaders worked.** Their game two is checked at its first pitch, while game one is still live.
+- **Ours didn't.** `tick()` only looks at our current game, so our game two is first checked after game one is committed. By then game one is final, not live. So when game one overran game two's slot (a delay, extra innings), game two started at the old time, before game one had ended.
+
+**The fix (structural).**
+- `WeatherSchedule.clubFreeAt(state, teamId, beforeMs, except)` gives when a club is through with the game it started before this one, within the day before:
+  - a game still going: its last play;
+  - a finished game: its recorded `endedAt`;
+  - a game held at the start by the weather: an estimate (start + 3 hours), looked at again once it's under way.
+- `_wxHoldForClubs` moves first pitch to `DH_BREAK_MIN` (30) after that time whenever that is later than the scheduled first pitch. It applies to every game start, for us and the CPU alike.
+- `clubBusyUntil` keeps its own meaning (a club in the middle of a game, for trades).
+
+**Test.** `check-doubleheader.mjs` makes our next two games a doubleheader with game two only 60 minutes after game one's first pitch, so game one always overruns. On the old code, game two started up to 119 minutes before game one ended. Now it starts 30–33 minutes after game one ends, in all three doubleheaders.
+- `clubFreeAt` estimates an end only for a start the weather holds but will play (`DELAYED` and not postponed). One the forecast calls off frees the club. Without that rule, a later game could be pushed past midnight.
+- Regression: full seasons south 1, north 3 and west 4 pass in full. On east seed 2, two checks fail (a roster count at game 64; 37 of 1,408 starts on short rest). The r119 code fails both with identical numbers, so they existed before this change and are left as their own item.
+- Found along the way: the same seed on the same code plays exactly the same season (the shims seed `Math.random` and the clock). Runs that differed were runs on different code. A failure can be replayed by rerunning its seed.
+- `ComposeFacts.rainPast`: the last day in 20-minute steps and earlier days in hourly steps, each span worked out once (the field reply went from about 600 ms to about 100 ms under load).

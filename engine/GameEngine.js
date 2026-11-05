@@ -59,7 +59,7 @@ import {
   teamRating, recordRating,
 } from './RosterEngine.js';
 
-import { rosterClock, applyDue, hasDue, callUp, cpuSalaryMove, clubBusyUntil } from './TransactionEngine.js';
+import { rosterClock, applyDue, hasDue, callUp, cpuSalaryMove } from './TransactionEngine.js';
 import {
   seedDivision, buildBracket, prepareRound, recordGame, roundComplete, roundSeries,
   roundForPhase, nextRound, seriesGames, ROUND_PHASE, ROUND_LABEL,
@@ -91,7 +91,7 @@ import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso, weatherContext } from './WeatherClimate.js';
 import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME } from './GameWeather.js';
-import { findMakeupSlot, seriesShift, gameTeams } from './WeatherSchedule.js';
+import { findMakeupSlot, seriesShift, gameTeams, clubFreeAt } from './WeatherSchedule.js';
 
 import {
   PHASE,
@@ -2125,20 +2125,24 @@ function _resumeGame(ref, atMs) {
 
 /**
  * _wxHoldForClubs(ref, atMs) — a doubleheader's second game waits for the
- * first (§102.3): if either club is still playing at first pitch — a long
- * delay in the opener — this game's first pitch moves to DH_BREAK_MIN after
- * that game ends (its weather plan is worked out again). → true if it waits.
+ * first (§102.3, §107): if either club's previous game — still going, or
+ * finished after this one's first pitch (a long delay, extra innings) — ends
+ * too late, this game's first pitch moves to DH_BREAK_MIN after it (its
+ * weather plan is worked out again). → true if it waits.
  */
 function _wxHoldForClubs(ref, atMs) {
   const st = StateManager.get();
   const { g, isUser } = _wxResolve(st, ref);
   if (!g) return false;
   const t = gameTeams(g, isUser);
-  const end = Math.max(clubBusyUntil(st, t.homeId, atMs), clubBusyUntil(st, t.awayId, atMs));
-  if (!end) return false;
+  // §107 both clubs through with the game before this one — still going, or finished after this one's
+  // first pitch (our game two is looked at only once game one is committed, so "still live" alone missed it).
+  const free = Math.max(clubFreeAt(st, t.homeId, g.gameTime, g), clubFreeAt(st, t.awayId, g.gameTime, g));
+  const need = free ? free + GAME_WEATHER.DH_BREAK_MIN * 60_000 : 0;
+  if (!need || need <= g.gameTime) return false;
   StateManager.mutate(s => {
     const x = _wxResolve(s, ref).g;
-    x.gameTime = end + GAME_WEATHER.DH_BREAK_MIN * 60_000;
+    x.gameTime = need;
     x.wx = null;
     if (isUser) _wxSortSchedule(s);
   });

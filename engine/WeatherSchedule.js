@@ -16,7 +16,7 @@
  * Pure: state in, a slot out. GameEngine moves the games.
  */
 
-import { GAME_TIMES_BY_DOW, GAME_WEATHER as GW } from '../data/constants.js';
+import { GAME_TIMES_BY_DOW, GAME_WEATHER as GW, GAME_STATUS } from '../data/constants.js';
 
 const MIN = 60_000, DAY = 86_400_000;
 const DOW = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -38,6 +38,30 @@ export function allGames(state) {
     for (const g of games) if (!g.isAllStar) out.push({ g, isUser: false, date, ...gameTeams(g, false) });
   }
   return out;
+}
+
+/**
+ * clubFreeAt(state, teamId, beforeMs, except) — §107 when a club is through with the game it started
+ * before `beforeMs` (within the day before): the last play of one still going, the recorded end of one
+ * finished, or — for one the weather holds at the start but will play — an estimate from its delayed start (looked at
+ * again once it's under way). 0 when it has none. A doubleheader's second game, or any game, waits for this.
+ */
+export function clubFreeAt(state, teamId, beforeMs, except = null) {
+  let end = 0;
+  for (const x of allGames(state)) {
+    const g = x.g;
+    if (g === except || (x.homeId !== teamId && x.awayId !== teamId)) continue;
+    if (!Number.isFinite(g.gameTime) || g.gameTime >= beforeMs || beforeMs - g.gameTime > 86_400_000) continue;
+    if (g.cancelled || g.status === GAME_STATUS.POSTPONED || g.status === GAME_STATUS.SUSPENDED) continue;
+    const last = g.plays?.length ? g.plays[g.plays.length - 1]._timestamp : null;
+    const done = Number.isFinite(g.endedAt) ? g.endedAt : null;
+    // (A start held by the weather: only one that will be played — one the weather calls off frees the club.)
+    const held = g.status === GAME_STATUS.DELAYED && g.wx?.outcome !== 'postponed' && Number.isFinite(g.wx?.startAt);
+    const e = done ?? (g.status === GAME_STATUS.LIVE && Number.isFinite(last) ? last
+      : held ? g.wx.startAt + 3 * 3_600_000 : null);
+    if (Number.isFinite(e)) end = Math.max(end, e);
+  }
+  return end;
 }
 
 const _iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
