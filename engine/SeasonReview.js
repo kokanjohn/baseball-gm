@@ -76,11 +76,17 @@ export function seasonReview(state) {
   const cut = div[4];
   const gamesOut = cut && place > 5 ? ((cut.wins - w) + (l - cut.losses)) / 2 : 0;
 
+  // §112.6 All five clubs in a division play in October (§26.1, LOCKED), so a
+  // playoff trip alone says little: the year is judged by how far the club
+  // went and its record. A real run is a series won or a strong record; an
+  // early exit after a .500 year is a middling one ('near'); a losing year is
+  // 'missed' whatever the bracket says; under .420, a disaster.
+  const wonRound = /Division Series|World Series|Champions/.test(post);
   const outcome = post === 'Champions' ? 'champion'
     : post === 'Lost in the World Series' ? 'pennant'
-    : post !== 'Did not qualify' ? 'playoffs'
     : pct < 0.42 ? 'disaster'
-    : gamesOut <= 4 ? 'near' : 'missed';
+    : (wonRound || pct >= 0.55) && post !== 'Did not qualify' ? 'playoffs'
+    : pct >= 0.49 ? 'near' : 'missed';
 
   // What worked: the league's ranks in runs scored (1 = most) and allowed (1 = fewest).
   const runs = _runs(state);
@@ -223,6 +229,14 @@ function _gate(state) {
 
 function fmt3(x) { return x >= 1 ? x.toFixed(3) : x.toFixed(3).replace(/^0/, ''); }
 
+/** "out in the wild-card game" / "out in the first round" (everyone plays in October). */
+function _early(post) {
+  if (/Wild Card/.test(post)) return 'out in the wild-card game';
+  if (/First Round/.test(post)) return 'out in the first round';
+  if (/Division Series/.test(post)) return 'out in the Division Series';
+  return 'and no October';
+}
+
 /** The review in a sentence or two, for the owner and the manager. */
 export function reviewWords(state, R) {
   const P = (id) => state.players[id];
@@ -232,8 +246,8 @@ export function reviewWords(state, R) {
     champion: `${rec}, and champions`,
     pennant: `${rec}, and a trip to the World Series`,
     playoffs: `${rec}, and a playoff run that ended ${R.post.replace(/^Lost in the /, 'in the ')}`,
-    near: `${rec}, ${R.gamesOut ? `${R.gamesOut} game${R.gamesOut === 1 ? '' : 's'} short of the playoffs` : 'out on the tiebreaker'}`,
-    missed: `${rec}, ${R.place ? `${ord(R.place)} in the division` : 'out of the race'}`,
+    near: `${rec}, ${R.place ? `${ord(R.place)} in the division, ` : ''}${_early(R.post)}`,
+    missed: `${rec}, a losing year${R.place ? `, ${ord(R.place)} in the division` : ''}${R.post !== 'Did not qualify' ? `, ${_early(R.post)}` : ''}`,
     disaster: `${rec}, a season to forget`,
   }[R.outcome];
   const worked = [], didnt = [];

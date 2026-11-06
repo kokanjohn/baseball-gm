@@ -54,6 +54,7 @@ import {
   computePayroll,
   reconcileRoster,
   applyRosterMutation,
+  settleRoster,
   defaultActiveGroup,
   pendingArrivals,
   teamRating, recordRating,
@@ -1306,6 +1307,7 @@ function _applyPhase(newPhase) {
       // Add spring invitees from farm — fires each season (not just season 1)
       StateManager.mutate(s => {
         _addSpringInvitees(s);
+        settleRoster(s, 'user');   // §112.6 an invitee can take an open rotation turn or lineup spot
       });
       break;
 
@@ -3052,8 +3054,9 @@ function _runOffseasonStep(step, atMs) {
     let ev = [];
     StateManager.mutate(s => {
       ev = Offseason.openNewSeason(s, atMs);
-      for (const t of s.leagueTeams || []) applyRosterMutation(s, reconcileRoster(s, t.id, { autoManage: true }));
-      applyRosterMutation(s, reconcileRoster(s, 'user'));
+      // §112.6 settled: a club rebuilt over the winter puts its call-ups in the lineup and the rotation.
+      for (const t of s.leagueTeams || []) settleRoster(s, t.id, { autoManage: true });
+      settleRoster(s, 'user');
       const { schedule, leagueSchedule } = generateLeagueCalendar(s.seasonNum, s.leagueTeams, new Date(springAt),
         { year: baseballYear(s), userDivisionId: s.userTeam.divisionId || 'A' });
       s.schedule       = schedule;

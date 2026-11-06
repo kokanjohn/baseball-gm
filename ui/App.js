@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r129';
+export const APP_VERSION = 'tfo-v2-r130';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;

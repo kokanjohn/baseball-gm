@@ -3284,8 +3284,8 @@ function _ownerOpening(state) {
     champion: ['A championship. I don\'t think either of us will forget this one. ', 'Champions. The city hasn\'t stopped celebrating, and neither have I. '],
     pennant:  ['We were one series from a title. That\'s a season to be proud of — and it leaves me hungry. ', 'A pennant. Not the ending we wanted, but this club is close. '],
     playoffs: vs >= 0 ? ['We were a playoff club this year, and we earned it. ', 'October baseball, and the fans felt it. '] : ['We made the playoffs, which matters — but I expected more from this group. '],
-    near:     ['We came close — too close not to look hard at what kept us out. ', 'A few games short. Those are the seasons that sting the most. '],
-    missed:   vs >= 0 ? ['Not a playoff year, but the club did what we asked of it. '] : ['This wasn\'t the season we planned for. ', 'We fell short of where this club should be. '],
+    near:     ['A .500 club and a quick exit in October. Middle of the pack isn\'t where I want us. ', 'We were in it, and then we were out early. That stings. '],
+    missed:   vs >= 0 ? ['A losing record, but the club did what we asked of it this year. '] : ['This wasn\'t the season we planned for. ', 'We fell short of where this club should be. '],
     disaster: ['I won\'t dress it up: this was a hard year, for the club and for the fans. ', 'A season like this one can\'t happen again. '],
   }[R.outcome] || [''];
   return lines[(R.w + R.l) % lines.length];
@@ -3628,7 +3628,7 @@ export function deliverCampaignCard(atMs, expiresAtMs) {
   if (!o.fill || !Finance.canSpend(state, o.cost)) return null;
   const pitch = { champion: 'Champions sell themselves. The campaign writes itself: the trophy, the parade, the same club coming back.',
     pennant: 'A pennant is an easy pitch: this club was one series from a title.', playoffs: 'October baseball is the pitch: come back for more of it.',
-    near: 'We were a few games short. The pitch is the club that comes back hungrier.', missed: 'The pitch is the winter\'s changes and a fresh start.',
+    near: 'A .500 year and an early exit. The pitch is the club that comes back hungrier.', missed: 'The pitch is the winter\'s changes and a fresh start.',
     disaster: 'It will be a hard sell after this year. The pitch has to be what changes.' }[R.outcome] || 'The pitch is next season.';
   const card = _rosterCard(state, {
     cardId: 'fo_campaign', tag: 'BUSINESS', sender: 'Ticket Office', avatar: '📣', type: 'normal',

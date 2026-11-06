@@ -391,8 +391,8 @@ async function runOffseasonChecks() {
       if (c.cardId === 'os_priority') priorityCard = c;
       if (c.cardId === 'os_coach_review' || c.cardId === 'os_coach_hire') coachCards.set(c.instanceId, c);
       if (['os_resign', 'os_extension', 'os_release'].includes(c.cardId)) contractCards.set(c.instanceId, c);
-      if (c._meetings || (c._proposingTeamId && c._tradeOffer)) meetCards.set(c.instanceId, { ...c, _day: Offseason.offseasonDay(SM.get(), clock.get()) });
-      if (/^fo_/.test(c.cardId)) foCards.set(c.instanceId, { ...c, _day: Offseason.offseasonDay(SM.get(), clock.get()) });
+      if ((c._meetings || (c._proposingTeamId && c._tradeOffer)) && !meetCards.has(c.instanceId)) meetCards.set(c.instanceId, { ...c, _day: Offseason.offseasonDay(SM.get(), clock.get()) });   // (the day it arrived)
+      if (/^fo_/.test(c.cardId) && !foCards.has(c.instanceId)) foCards.set(c.instanceId, { ...c, _day: Offseason.offseasonDay(SM.get(), clock.get()) });
       if (!gm.review && SM.get().offseason?.review) gm.review = SM.get().offseason.review;
       if (c.cardId === 'os_free_agent' && SM.get().offseason?.priority && !firstFaAfterPriority) firstFaAfterPriority = { id: c._targetPlayerId, pri: SM.get().offseason.priority };
     }
@@ -1880,14 +1880,16 @@ async function main() {
       // between them (in the first part for one club, gone by the second) — check each at their own time.
       const firstAt = {}, lastAt = {};
       for (const pl of pre?.plays || []) for (const id of [pl.batterId, pl.pitcherId]) if (id && Number.isFinite(pl._timestamp)) { if (!(id in firstAt)) firstAt[id] = pl._timestamp; lastAt[id] = pl._timestamp; }
-      const on = (x, team) => [firstAt[x.id] ?? g.suspension?.gameTime ?? g.gameTime, lastAt[x.id] ?? g.gameTime].every(t => onTeamAt(x.id, team, t));
+      // (A player in the box with no play of his own here — a resumed game's second part, whose
+      //  plays the harness doesn't keep — played when the game was finished: g.gameTime.)
+      const on = (x, team) => [firstAt[x.id] ?? g.gameTime, lastAt[x.id] ?? g.gameTime].every(t => onTeamAt(x.id, team, t));
       const wrong = [
         ...[...userSide.hitters, ...userSide.pitchers].filter(x => !on(x, 'user')),
         ...(oppT ? [...oppSide.hitters, ...oppSide.pitchers].filter(x => !on(x, oppT.id)) : []),
       ];
       check(`game ${idx}: nobody plays before reporting / after leaving`, wrong.length === 0,
             wrong.map(x => x.name).join(', '));
-      if (wrong.length && process.env.TX_DUMP) for (const x of wrong) console.log(x.name, JSON.stringify([...txSeen.values()].filter(t => t.playerId === x.id).map(t => [t.kind, t.teamId, t.fromTeamId, t.reason, t.status, t.createdAt - g.gameTime, t.effectiveAt - g.gameTime])), post.players[x.id]?.teamId, post.players[x.id]?.group);
+      if (wrong.length && process.env.TX_DUMP) for (const x of wrong) console.log(`game ${idx}`, x.name, "first", (firstAt[x.id] ?? 0) - g.gameTime, "last", (lastAt[x.id] ?? 0) - g.gameTime, JSON.stringify([...txSeen.values()].filter(t => t.playerId === x.id).map(t => [t.kind, t.teamId, t.fromTeamId, t.reason, t.status, t.createdAt - g.gameTime, t.effectiveAt - g.gameTime])), post.players[x.id]?.teamId, post.players[x.id]?.group);
     }
     assertNoGhosts(`after game ${idx}`);
     for (const pl of Object.values(post.players)) {
@@ -2203,7 +2205,9 @@ async function main() {
       check(`pitching: starters go about 5–6 innings (${ipgs.toFixed(2)} IP/GS)`, ipgs >= 4.8 && ipgs <= 6.6);
       // A roster spot belongs to its side: every club still carries its staff.
       const lop = [st.userTeam, ...st.leagueTeams].map(t => {
-        const act = (t.rosterIds || []).map(id => st.players[id]).filter(p => p && p.group !== PLAYER_GROUP.IL);
+        // (Players already on their way — a call-up reporting tomorrow — count for their side.)
+        const act = [...(t.rosterIds || []), ...pendingArrivals(st, t.id || 'user').map(x => x.playerId)]
+          .map(id => st.players[id]).filter(p => p && p.group !== PLAYER_GROUP.IL);
         const pit = act.filter(p => p.pos === 'SP' || p.pos === 'RP').length;
         return { abbr: t.abbr || 'USR', h: act.length - pit, p: pit };
       }).filter(c => Math.abs(c.p - 14) > 2 || Math.abs(c.h - 14) > 2);

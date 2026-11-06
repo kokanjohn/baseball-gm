@@ -57,7 +57,7 @@ export function ticketOffer(state) {
     why = `the park was only ${Math.round(fill * 100)}% full${R.outcome === 'disaster' ? ' in a hard year' : ''}`;
   } else if (fill < 0.7 && ['missed', 'near'].includes(R.outcome)) {
     pct = -0.05;
-    why = `the park was ${Math.round(fill * 100)}% full without a playoff race to sell`;
+    why = `the park was ${Math.round(fill * 100)}% full in a year without much to sell`;
   } else {
     pct = R.outcome === 'playoffs' ? 0.05 : 0.03;
     why = `the park was ${Math.round(fill * 100)}% full${R.outcome === 'playoffs' ? ' and we played in October' : ''}`;

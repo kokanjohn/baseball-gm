@@ -9019,3 +9019,49 @@ Coaches renew silently, and only matter as a relationship nudge to development p
   - The cards name the free-agent alternative.
   - The meetings end on day 8 with the wrap line.
   - Seeds 3, 5 and 7 and ember 11 pass. Their priorities were catcher, bullpen, starting pitching and shortstop; 0–4 calls to us during the meetings.
+
+### 112.6 Phase F done (r130): several seasons in a row — the year's turn, and what it found
+- **How the calendar turns** (the user's question, recorded here). Two clocks:
+  - The real clock runs everything: games, cards, and the 10 offseason days.
+  - The baseball calendar is a label over it. `state.weatherCalendar` gets one `season` entry per season ("this real moment is March 14 of league year Y", counted forward a day per real day) and one `offseason` entry per winter. Entries are only appended, so a moment's date never changes.
+  - The last out lands in late September (October with a playoff run). The offseason's 10 days have no baseball date: the card reads "Offseason · Day N of 10", and the climate blends from the season's end to March's.
+  - At spring (`openNewSeason`), `seasonNum` +1 (the league year is `baseYear + seasonNum − 1`). The new schedule is built from that real moment, and a new `season` entry ties it to March 14.
+  - Ages come from the league year (age on July 1), so everyone ages exactly one year per season.
+- **`tools/harness/multi-season.mjs [seasons] [seed]`** (`ARCH`, `REGION`, `MANAGER=1`, `DUMP=dir`) plays every game, the postseason and the whole offseason, season after season. A simple GM answers about four cards in five (yes or no) and leaves the rest for their deadlines. At every turn of the year it checks:
+  - **The calendar:** the new schedule and the first pitch read March 14 of the new year; the last game was in September or October of the old one; no baseball date during the offseason; every offseason day came; the calendar's entries run forward (one season and one offseason each); the schedule's dates run forward.
+  - **Ages:** every player is exactly a year older.
+  - **The offseason:** it's closed, the meetings ran, and every `os_`/`fo_` decision is settled.
+  - **Our club:** a legal roster, nine in the lineup, exactly five in the rotation, nobody on an expired deal, every coaching chair filled into the new season.
+  - **The books:** sound; no dead money left for a past season; ticket price and facilities in range; last season's campaign over.
+  - **The league:** each player belongs to one club at most, free agents aren't on rosters, and every league club has a legal roster and a lineup.
+  - **At the end:** the league's talent holds (average of each club's best 26, within 4) and no club falls more than 8 below the league.
+  - It also logs our strength against the league's at every spring.
+- **What it found, and the fixes.**
+  1. **All five clubs in a division play in October (§26.1, LOCKED)**, so the review's outcome made every club a "playoff" club: a 53–79 team got a playoff-run appreciation weekend. `SeasonReview` now judges the year by how far the club went and its record:
+
+     | Result | Outcome |
+     |---|---|
+     | Champions | `champion` |
+     | Lost in the World Series | `pennant` |
+     | Under .420 | `disaster` |
+     | A series won, or .550+ | `playoffs` (a real run) |
+     | .490+ | `near` (a .500-ish year and an early exit) |
+     | Otherwise | `missed` (a losing year) |
+
+     The words follow ("out in the wild-card game", "a losing year, 4th in the division"), and so do the owner's opening, the campaign's pitch and the ticket reasoning. Over four seasons the fan event now ran the range: parade, appreciation, caravan, outreach.
+  2. **CPU clubs didn't refill over the winter.** Each club signed at most one free agent a day, so a club that lost half its roster to expiring deals reached spring with 14 players and a five-man lineup. `cpuFreeAgencyRound` now signs what a club is short, spread over the free-agency days left (up to 4 a day; `_cpuSignOne` is the old one-signing logic).
+  3. **Spring call-ups never reached the lineup or rotation.** Without a clock, `reconcileRoster` calls players up directly after it has already set the lineup and rotation. The new `RosterEngine.settleRoster` reconciles until nothing changes (at most 3 passes) and is used for every club at spring. Our club is also settled after the spring invitees join, so an invitee can take an open turn or spot.
+  4. **The rotation had no limit.** A sixth starter (a signing, a trade) joined it: a six-man rotation nobody chose. `reconcileRoster` now keeps five turns: the existing order first, then open turns filled best-first, and any extra starter goes to the pitcher bench.
+  5. **Two harness checks were wrong.**
+     - "nobody plays before reporting" used the suspension date for a resumed game's second-part players (who have no plays in the harness's copy). It now uses the day the game was finished.
+     - The 14/14 roster-balance snapshot ignored players reporting tomorrow; it now counts them.
+     - Also: the offseason card logs (meetings, front office) re-stamped an unanswered card's day every hour; now they keep the day it arrived.
+- **Found, not changed: an unmanaged lineup decays.**
+  - A starter back from the IL returns to the bench, and the replacement keeps the job (the user's lineup is the GM's call).
+  - The harness's GM never touches the lineup, so over seasons its clubs collapsed: a contender with the league's best talent went 50–82.
+  - With `MANAGER=1` (the GM plays the best nine and best five before each game) results track talent: the contender went 90 / 76 / 87 / 71, and the empire won a title in season 3.
+  - A user who doesn't revisit the lineup after injuries will see the same decay. A possible follow-up: offer to restore the returning starter on the IL-return card, or a "let the manager set the lineup" option.
+- **Results.**
+  - `multi-season.mjs`, 4 seasons each: contender, ember and empire (seed 2) and lab (seed 9, south, managed). All 77 checks pass in each.
+  - `sim-season.js` seeds 3, 5 and 7 and ember 11 pass.
+  - `check-contracts` 11, `check-frontoffice` 17 and `check-coaches` 14 pass.

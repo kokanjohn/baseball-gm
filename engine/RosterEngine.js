@@ -680,8 +680,15 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   for (const id of (oldRotation.order || [])) {
     if (validSP(id) && !inOrder.has(id)) { order.push(id); inOrder.add(id); }
   }
-  for (const id of rosterIds) {
-    if (validSP(id) && !inOrder.has(id)) { order.push(id); inOrder.add(id); }
+  // §112.6 five turns, no more: the rotation keeps its own order first; a new
+  // starter (a signing, a trade, an extension) joins only a turn that's open,
+  // best first, and any extra starter waits on the pitcher bench.
+  const extraSP = rosterIds.filter(id => validSP(id) && !inOrder.has(id))
+    .sort((a, b) => (players[b]?.ovr || 0) - (players[a]?.ovr || 0));
+  for (const id of order.splice(REQUIRED_SP_COUNT)) { inOrder.delete(id); extraSP.push(id); }
+  for (const id of extraSP) {
+    if (order.length < REQUIRED_SP_COUNT) { order.push(id); inOrder.add(id); }
+    else setPatch(id, { group: PLAYER_GROUP.PITCHER_BENCH });
   }
   while (order.length < REQUIRED_SP_COUNT) {
     const pbSP = rosterIds
@@ -852,6 +859,24 @@ function _sideCounts(rosterIds, groupOf, players, inbound) {
  * @param {Object} state
  * @param {Object} mutation
  */
+/**
+ * settleRoster(draft, teamId, options) — §112.6 reconcile until the roster
+ * stops changing (at most three passes), applying each pass to the draft.
+ * Without a clock, reconcileRoster calls players up directly — after it has
+ * already set the lineup and rotation from the roster it started with — so a
+ * club rebuilt between seasons needs a second pass to put them to work.
+ */
+export function settleRoster(draft, teamId = 'user', options = {}) {
+  const team = () => (teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(t => t.id === teamId));
+  const sig = () => { const t = team(); return JSON.stringify([t?.rosterIds, (t?.lineupSlots || []).map(sl => sl.playerId), t?.rotation?.order]); };
+  for (let pass = 0; pass < 3; pass++) {
+    const before = sig();
+    applyRosterMutation(draft, reconcileRoster(draft, teamId, options));
+    if (sig() === before) break;
+  }
+  return team();
+}
+
 export function applyRosterMutation(state, mutation) {
   if (!mutation) return;
   for (const [key, value] of Object.entries(mutation)) {

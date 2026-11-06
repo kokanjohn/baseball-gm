@@ -828,7 +828,26 @@ export function freeAgents(draft) {
 export function cpuFreeAgencyRound(draft, atMs) {
   const events = [];
   const order = _shuffle([...(draft.leagueTeams || [])]);
+  // §112.6 a club well short of a full roster signs more than one a day: what
+  // it's missing, spread over the free-agency days left (days 5–10).
+  const day = offseasonDay(draft, atMs) || 5;
+  const roundsLeft = Math.max(1, OFFSEASON_DAYS - Math.max(5, day) + 1);
   for (const t of order) {
+    const short = ROSTER_LIMITS.ACTIVE_TOTAL - activeCount(draft, t.id);
+    const signings = short > 0 ? Math.min(4, Math.ceil(short / roundsLeft)) : 1;
+    for (let k = 0; k < signings; k++) {
+      const ev = _cpuSignOne(draft, t, atMs);
+      if (!ev.length) break;
+      events.push(...ev);
+    }
+  }
+  return events;
+}
+
+/** One free-agent signing for a CPU club: its biggest need, or an upgrade when it's full. */
+function _cpuSignOne(draft, t, atMs) {
+  const events = [];
+  {
     // §78.5 only the free agents this club's owner can pay for.
     const pool = freeAgents(draft).filter(fa =>
       Finance.canAddSalary(draft, (fa._ask || marketTerms(draft, fa)).salary, 0, t.id));
@@ -842,18 +861,18 @@ export function cpuFreeAgencyRound(draft, atMs) {
           break;
         }
       }
-      continue;
+      return events;
     }
     const need = teamNeed(draft, t.id);
-    if (!need) continue;
+    if (!need) return events;
     const byOvr = (a, b) => (b.ovr || 0) - (a.ovr || 0);
     const best = pool.filter(p => _fits(p, need)).sort(byOvr)[0]
       || pool.filter(p => _fits(p, { side: need.side, pos: null })).sort(byOvr)[0];
-    if (!best) continue;
+    if (!best) return events;
     const farmBest = (t.farmIds || []).map(id => draft.players[id])
       .filter(p => p && !p.isInjured && _fits(p, need))
       .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
-    if (farmBest && (farmBest.ovr || 0) >= (best.ovr || 0)) continue;
+    if (farmBest && (farmBest.ovr || 0) >= (best.ovr || 0)) return events;
     events.push(...(signFreeAgent(draft, best.id, t.id, atMs) || []));
   }
   return events;
