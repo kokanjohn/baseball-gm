@@ -376,7 +376,7 @@ async function runOffseasonChecks() {
   const sched1Len = pre.schedule.filter(g => !g.isPlayoff).length;
   const phases = []; let lastPhase = pre.phase; let offseasonAt = null, springAt = null;
   const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0, ownerBody = '', priorityCard = null, firstFaAfterPriority = null;
-  const coachCards = new Map(), contractCards = new Map(), foCards = new Map();
+  const coachCards = new Map(), contractCards = new Map(), foCards = new Map(), meetCards = new Map();
   const fo0 = { tp: pre.userTeam.finances.ticketPrice || 1, atmo: pre.userTeam.atmosphere, fac: { ...(pre.userTeam.facilities || {}) } };
   const staffBefore = JSON.parse(JSON.stringify(pre.userTeam.coachingStaff || {}));
   clock.set(Math.max(clock.get(), os.endedAt));
@@ -391,6 +391,7 @@ async function runOffseasonChecks() {
       if (c.cardId === 'os_priority') priorityCard = c;
       if (c.cardId === 'os_coach_review' || c.cardId === 'os_coach_hire') coachCards.set(c.instanceId, c);
       if (['os_resign', 'os_extension', 'os_release'].includes(c.cardId)) contractCards.set(c.instanceId, c);
+      if (c._meetings || (c._proposingTeamId && c._tradeOffer)) meetCards.set(c.instanceId, { ...c, _day: Offseason.offseasonDay(SM.get(), clock.get()) });
       if (/^fo_/.test(c.cardId)) foCards.set(c.instanceId, { ...c, _day: Offseason.offseasonDay(SM.get(), clock.get()) });
       if (!gm.review && SM.get().offseason?.review) gm.review = SM.get().offseason.review;
       if (c.cardId === 'os_free_agent' && SM.get().offseason?.priority && !firstFaAfterPriority) firstFaAfterPriority = { id: c._targetPlayerId, pri: SM.get().offseason.priority };
@@ -468,6 +469,25 @@ async function runOffseasonChecks() {
   check('offseason: ownership evaluation card delivered and decided',
         ownershipCard === 1 && (st.userTeam.finances.payrollTargetHistory || []).some(h => h.seasonNum === 2));
   check('offseason: every required decision resolved by spring', Offseason.hardGates(st).open.length === 0);
+  {
+    // §112.5 the winter meetings.
+    const cards = [...meetCards.values()];
+    const targets = cards.filter(c => c._meetings), calls = cards.filter(c => !c._meetings && c._day >= 6 && c._day <= 7);
+    const pri = gm.review?.needs?.find(n => n.short === (SM.get().offseason?.priority?.short)) || null;
+    console.log(`  meetings: ${targets.length} target card(s): ${targets.map(c => `${c.subject} (day ${c._day})`).join(' | ') || 'none'}; ${calls.length} trade call(s) to us on days 6–7`);
+    for (const c of targets.slice(0, 1)) console.log(`    “${c.body.slice(0, 520)}…”`);
+    const feed = (st.activityFeed || []).map(e => e.text || '');
+    const filledAll = feed.some(t => /holes Pro Scouting was asked to fill are filled/.test(t));
+    check(`meetings: Pro Scouting brings targets for the winter's priority on day 6 (or says it's filled)`,
+          filledAll || (targets.length >= 1 && targets.every(c => c._day === 6)));
+    const offers = targets.filter(c => c.cardId === 'lt_offer');
+    check(`meetings: each target fills the need and is on another club (${offers.map(c => { const id = c._ideaOffer?.incomingIds?.[0]; const p = st.players[id] || pre.players[id]; return `${p?.name} ${p?.pos} ${p?.ovr}`; }).join(', ') || 'none'})`,
+          offers.every(c => (c._ideaOffer?.incomingIds || []).length >= 1 && c._ideaTeamId && c._ideaTeamId !== 'user')
+          && new Set(offers.map(c => c._ideaTeamId)).size === offers.length);
+    check('meetings: the target cards name the free-agent alternative', targets.every(c => /free-agent market/.test(c.body)));
+    const wrap = feed.find(t => /winter meetings wrap up/.test(t));
+    check(`meetings: the meetings end on day 8 with a line in Recent (“${wrap || '—'}”)`, !!wrap && !SM.get().offseason?.meetings);
+  }
   {
     // §112.4 the front office's winter.
     const cards = [...foCards.values()];

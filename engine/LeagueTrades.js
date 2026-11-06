@@ -291,7 +291,7 @@ function _settle(state, deal, { sellerBar, buyerSlack, shedK = 0 }) {
 function _dailyChance(state) {
   const ph = state.phase;
   const c = LEAGUE_TRADES.dailyChance;
-  if (ph === PHASE.OFFSEASON) return c.offseason;
+  if (ph === PHASE.OFFSEASON) return state.offseason?.meetings ? c.meetings : c.offseason;   // §112.5
   if (ph === PHASE.SPRING_TRAINING) return c.spring;
   const g = regularIndex(state);
   return g >= TRADE_DEADLINE_OPEN - 3 && g <= TRADE_DEADLINE_CLOSE ? c.deadline : c.season;
@@ -309,10 +309,12 @@ export function findLeagueTrades(state, atMs, rand = Math.random) {
   const chance = _dailyChance(state);
   const used = new Set();
   const deals = [];
-  let calls = LEAGUE_TRADES.maxCallsPerDay;
+  const meet = !!state.offseason?.meetings;            // §112.5 the winter meetings: everyone's in one hotel
+  let calls = meet ? LEAGUE_TRADES.meetings.calls : LEAGUE_TRADES.maxCallsPerDay;
+  const maxDeals = meet ? LEAGUE_TRADES.meetings.maxPerDesk : LEAGUE_TRADES.maxPerDay;
   const order = [...clubs].sort(() => rand() - 0.5);
   for (const buyer of order) {
-    if (deals.length >= LEAGUE_TRADES.maxPerDay) break;
+    if (deals.length >= maxDeals) break;
     if (used.has(buyer.id)) continue;
     // A club waiting on our answer to its offer isn't shopping elsewhere.
     if (offerAwaitingUs(state, buyer.id)) continue;

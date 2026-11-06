@@ -8996,3 +8996,26 @@ Coaches renew silently, and only matter as a relationship nudge to development p
     - the money is posted; declining outreach costs goodwill, not money.
   - `sim-season.js`: the ticket card on day 9; the event that fits the outcome, on the right day (a champion's on day 1); the price into season 2; the campaign paid and set for season 2; the upgrade built; the atmosphere moved; gender-neutral text. The harness GM says yes to every front-office card.
   - Seeds 3 and 5 (champions, parade), 7 (pennant) and ember 11 (playoffs) pass. A cut, the caravan and the outreach are covered by `check-frontoffice.mjs`.
+
+### 112.5 Phase E done (r129): the winter meetings (offseason days 6–7)
+- **Every club in one hotel.**
+  - Day 6's step sets `offseason.meetings` (and `meetingsAt`); day 8's clears it.
+  - While the meetings run:
+    - the trade desk's daily chance for a club with a need is 0.30 (`LEAGUE_TRADES.dailyChance.meetings`; the rest of the offseason, 0.08);
+    - a desk makes up to 3 deals (`meetings.maxPerDesk`) and up to 2 calls to us (`meetings.calls`);
+    - a second desk runs at each meetings day's step (`_runTradeDesk(at, { extra: true })`, which leaves the day's own desk in place).
+  - Calls to us are the existing §91 trade calls: an opening bid for one of our players.
+- **Pro Scouting's targets for the winter's priority** (`CardEngine.deliverMeetingsTargets`, day 6).
+  - The priority is the need chosen on day 1 (`offseason.priority`, from the review's two needs).
+  - `priorityNow` checks it against today's roster: free agency may already have filled it (today's player at the spot is at least `upgradeMin` better). In that case Pro Scouting works on the other need, and says so ("Free agency took care of starting pitching, so we went to work on catcher."). With both filled, a line in Recent says there's nothing to chase.
+  - Up to two offers from different clubs (`bestOption`, excluding the first's club for the second). Each one fills the need, would start for us, and beats the current player by at least `upgradeMin`. Each comes with Pro Scouting's package, to make, adjust or pass on (`lt_offer`, the §90 offer card, marked `_meetings`).
+  - Each card names the best free agent who'd fill the same spot, the asking price, and whether ownership would approve it ("no players out, but money on the books").
+  - Nothing fits: the §99 watch card (keep watching for two weeks, or drop it), with the same comparison.
+- **The wrap** (day 8): a line in Recent with the trades made during the meetings, the league's and ours (cancelled trades not counted).
+- The day-6 and day-7 headlines on the offseason card now describe the meetings.
+- **Tests** (`sim-season.js`):
+  - Targets arrive on day 6 (or the line saying the holes are filled).
+  - Each target fills the need, is on another club, and the clubs are different.
+  - The cards name the free-agent alternative.
+  - The meetings end on day 8 with the wrap line.
+  - Seeds 3, 5 and 7 and ember 11 pass. Their priorities were catcher, bullpen, starting pitching and shortstop; 0–4 calls to us during the meetings.

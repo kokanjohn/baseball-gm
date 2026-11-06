@@ -435,7 +435,8 @@ export const TRADE = Object.freeze({
 // another club has the player and wants what it can give.
 export const LEAGUE_TRADES = Object.freeze({
   // The chance, each day, that a club with a need works the phones.
-  dailyChance:  { season: 0.03, deadline: 0.20, spring: 0.02, offseason: 0.08 },
+  dailyChance:  { season: 0.03, deadline: 0.20, spring: 0.02, offseason: 0.08, meetings: 0.30 },   // §112.5 the winter meetings (offseason days 6–7)
+  meetings:     { maxPerDesk: 3, calls: 2 },   // §112.5 at the meetings: more deals a desk, more calls to us
   maxPerDay:    2,
   clubRestMs:   14 * 86_400_000,   // a club that just traded waits this long before another
   reTradeMs:    120 * 86_400_000,  // a player a CPU club traded for isn't moved on again this soon

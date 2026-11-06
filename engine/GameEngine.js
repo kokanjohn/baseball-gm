@@ -3022,6 +3022,15 @@ function _runOffseasonStep(step, atMs) {
 
   if (/^day([5-9]|10)$/.test(step)) {
     _cpuFreeAgencyRound(atMs);
+    // §112.5 the winter meetings (days 6–7): every club in one hotel — the
+    // trade desk opens twice a day, busier, with more calls to us; Pro
+    // Scouting brings its targets for the winter's priority on day 6.
+    if (step === 'day6') {
+      StateManager.mutate(s => { if (s.offseason) { s.offseason.meetings = true; s.offseason.meetingsAt = atMs; } });
+      CardEngine.deliverMeetingsTargets(atMs);
+    }
+    if (step === 'day6' || step === 'day7') events.push(..._runTradeDesk(atMs + Math.floor(Math.random() * 90) * 60_000, { extra: true }));
+    if (step === 'day8') _meetingsWrap(atMs);
     if (step === 'day5') CardEngine.deliverFreeAgentCards(cardAt(5, OFFSEASON_FA_CARD_HOUR), springAt);
     if (step === 'day8') CardEngine.deliverFreeAgentCards(cardAt(8, OFFSEASON_FA_CARD_HOUR), springAt);
     if (step === 'day9') {
@@ -3065,6 +3074,20 @@ function _runOffseasonStep(step, atMs) {
 }
 
 /** One CPU free-agency round, recorded in the activity feed. */
+/** §112.5 the meetings are over: the busier desk closes; a line in Recent on what the league did there. */
+function _meetingsWrap(atMs) {
+  const st = StateManager.get();
+  const from = st.offseason?.meetingsAt;
+  if (!from) return;
+  const deals = (st.transactions || []).filter(t => t.kind === 'trade' && t.status !== 'cancelled' && (t.createdAt || 0) >= from && (t.createdAt || 0) <= atMs);
+  const ours = deals.filter(t => !t.league).length, league = deals.length - ours;
+  StateManager.mutate(s => {
+    s.offseason.meetings = false;
+    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('trade', s.userTeam.abbr,
+      `The winter meetings wrap up: ${league} trade${league === 1 ? '' : 's'} around the league${ours ? `, and ${ours} of ours` : ''}.`, atMs)]);
+  });
+}
+
 function _cpuFreeAgencyRound(atMs) {
   let ev = [];
   StateManager.mutate(s => { ev = Offseason.cpuFreeAgencyRound(s, atMs); });
@@ -3123,7 +3146,7 @@ const _clubAbbr = (st, id) => id === 'user' ? st.userTeam.abbr : ((st.leagueTeam
  * players calls instead (§91): its opening offer reaches the inbox, and it
  * waits for our answer. The next desk is tomorrow.
  */
-function _runTradeDesk(atMs) {
+function _runTradeDesk(atMs, { extra = false } = {}) {
   const found = LeagueTrades.findLeagueTrades(StateManager.get(), atMs);
   const deals = found.filter(d => !d.call);
   for (const d of found.filter(x => x.call)) CardEngine.deliverTradeCall(d, atMs);
@@ -3136,7 +3159,8 @@ function _runTradeDesk(atMs) {
       s.transactions = [...(s.transactions || []), LeagueTrades.leagueTradeTx(d, atMs)];
       last[d.a] = atMs; last[d.b] = atMs;
     }
-    s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: LeagueTrades.nextDeskAt(atMs), lastTradeMs: last };
+    // (extra: §112.5 a second desk at the winter meetings — the day's own desk still opens.)
+    s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: extra ? s.tradeDesk?.nextAtMs : LeagueTrades.nextDeskAt(atMs), lastTradeMs: last };
   });
   // §90 as the deadline nears, Pro Scouting's best target for our biggest need.
   const g = regularIndex(StateManager.get());

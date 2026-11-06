@@ -3000,6 +3000,88 @@ function _workThePhones({ key, spec, what, atMs, sender = 'Pro Scouting', subjec
   });
 }
 
+// ── §112.5 The winter meetings: Pro Scouting's targets for the winter's priority ──
+
+const _needKey = (n) => (n?.kind === 'slot' ? `slot:${n.slot}` : n?.kind);
+
+/**
+ * Where the winter's priority stands now (free agency may already have filled
+ * it): the spot as the roster has it today. Returns { need (today's), filled }.
+ */
+export function priorityNow(st, pri) {
+  if (!pri) return null;
+  const now = LeagueTrades.clubNeeds(st, 'user', LeagueTrades.leagueNorms(st), { all: true }).find(n => _needKey(n) === _needKey(pri));
+  if (!now) return { need: pri, filled: true };
+  return { need: { ...pri, incumbentId: now.incumbentId, ovr: now.ovr }, filled: (now.ovr || 0) >= (pri.ovr || 0) + LEAGUE_TRADES.upgradeMin };
+}
+
+/**
+ * deliverMeetingsTargets(atMs) — §112.5 day 6: Pro Scouting's best two trade
+ * targets for the winter's priority (the other need, when free agency already
+ * filled it), each an offer to make, adjust or pass on, with the best free
+ * agent who'd fill the same spot for comparison. Nothing fits: a watch card.
+ */
+export function deliverMeetingsTargets(atMs) {
+  const st = StateManager.get();
+  const R = st.offseason?.review;
+  if (!R) return 0;
+  const pri = st.offseason.priority || R.needs?.[0];
+  const order = [pri, ...(R.needs || []).filter(n => _needKey(n) !== _needKey(pri))].filter(Boolean);
+  let target = null, filledFirst = null;
+  for (const n of order) {
+    const now = priorityNow(st, n);
+    if (now && !now.filled) { target = now.need; break; }
+    if (!filledFirst) filledFirst = n;
+  }
+  if (!target) {
+    StateManager.mutate(s => {
+      s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('trade', s.userTeam.abbr,
+        `Winter meetings: the holes Pro Scouting was asked to fill are filled. Nothing to chase.`, atMs)]);
+    });
+    return 0;
+  }
+  const words = target.short || 'the roster';
+  const inc = st.players[target.incumbentId];
+  const fits = (p) => LeagueTrades.fillsNeed(p, target) && (p.ovr || 0) >= (target.ovr || 0) + LEAGUE_TRADES.upgradeMin;
+  // The free-agent alternative, for comparison.
+  const fa = Offseason.freeAgents(st).filter(fits).sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+  const faAsk = fa ? (fa._ask || Offseason.marketTerms(st, fa)).salary : 0;
+  const faLine = fa ? `On the free-agent market, the best fit is ${_ref(fa)}, asking ${formatK(faAsk)} a year: no players out, but money on the books`
+                      + `${Finance.canAddSalary(st, faAsk) ? '.' : ', more than ownership would approve right now.'}`
+                    : 'Nobody on the free-agent market fills it.';
+  const why = filledFirst && _needKey(filledFirst) !== _needKey(target)
+    ? `Free agency took care of ${filledFirst.short}, so we went to work on ${words}.`
+    : `${_needKey(target) === _needKey(st.offseason.priority) ? 'Your priority this winter' : 'The biggest hole'} is ${words}${inc ? `, where ${_ref(inc)} is the best we have` : ''}.`;
+  const used = new Set(), deliveredIds = [];
+  let n = 0;
+  for (let i = 0; i < 2; i++) {
+    const cur = StateManager.get();
+    const at = atMs + (40 + i * 75 + Math.floor(Math.random() * 30)) * 60_000;
+    const opt = LeagueTrades.bestOption(cur, fits, at, { excludeTeams: used });
+    if (!opt) break;
+    used.add(opt.teamId);
+    const t = (cur.leagueTeams || []).find(x => x.id === opt.teamId), p = cur.players[opt.playerId];
+    const c = _deliverIdea(cur, {
+      key: `os:meet:${cur.seasonNum}:${i}`, teamId: opt.teamId, deal: opt.deal, atMs: at, sender: 'Pro Scouting',
+      subject: `Winter meetings: ${p.name} for ${words}`,
+      preview: `${_ref(p)} of ${t.name}${i ? ', the second option' : ' is the best fit we found'}.`,
+      lead: `${why} We talked to every club here. ${i ? 'The second-best option' : 'The best fit'}: ${_ref(p)} of ${t.name}${isRental(p, cur) ? ', in the last year of the contract' : ''}. ${faLine}`,
+      extra: { _meetings: true },
+    });
+    if (c) { n++; deliveredIds.push(p.id); }
+  }
+  if (!n) {
+    return _deliverWatchCard(`os:meet:${st.seasonNum}:none`, {
+      subject: `Winter meetings: nothing for ${words}`,
+      preview: `We talked to every club about ${words}; nobody fits at a price that works.`,
+      body: `${why} We talked to every club here. Nobody who'd start for us is available at a price their club would take and our owner would carry. ${faLine}`,
+      spec: { type: 'need', need: { kind: target.kind, slot: target.slot || null, incumbentId: target.incumbentId, ovr: target.ovr }, minOvr: (target.ovr || 0) + LEAGUE_TRADES.upgradeMin },
+      what: words, atMs: atMs + 60 * 60_000, extra: { _meetings: true },
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
 // ── §99 "nobody fits right now": keep watching, or drop it ──────────────
 
 const WATCH_DAYS = 14;
