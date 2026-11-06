@@ -71,6 +71,7 @@ import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Coach from './CoachEngine.js';
+import * as FrontOffice from './FrontOffice.js';
 import * as Development from './DevelopmentEngine.js';
 import { CARD_ACTIONS, cardFeasible } from './CardActions.js';
 import * as AllStar from './AllStarEngine.js';
@@ -3507,6 +3508,115 @@ export function deliverFreeAgentCards(atMs, springAt) {
   return n;
 }
 
+// §112.4 THE FRONT OFFICE'S WINTER — tickets, a season-ticket campaign, the ballpark, the fans.
+const _pct = (x) => `${Math.round(Math.abs(x) * 100)}%`;
+const _signedK = (k) => `${k >= 0 ? '+' : '−'}${formatK(Math.abs(k))}`;
+
+/** Next season's ticket prices: the Ticket Office's proposal against holding them. */
+export function deliverTicketCard(atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const o = FrontOffice.ticketOffer(state);
+  const G = state.offseason?.review?.gate || {};
+  const raise = o.pct > 0;
+  const level = o.price !== 1 ? ` Prices are ${_pct(o.price - 1)} ${o.price > 1 ? 'above' : 'below'} where they were when you took over.` : '';
+  const card = _rosterCard(state, {
+    cardId: 'fo_tickets', tag: 'BUSINESS', sender: 'Ticket Office', avatar: '🎟️', type: 'normal',
+    _rosterKey: `fo:tickets:${state.seasonNum}`, _foOffer: o,
+    subject: `Next season's ticket prices: ${raise ? 'a raise' : 'a cut'}?`,
+    preview: `We recommend ${raise ? 'raising' : 'cutting'} prices ${_pct(o.pct)}: ${o.why}.`,
+    body: `${G.games ? `Last season we drew ${G.avg.toLocaleString()} a game to a ${G.capacity.toLocaleString()}-seat park (${Math.round((G.fill || 0) * 100)}% full), with ${G.sellouts} sellout${G.sellouts === 1 ? '' : 's'} and ${formatK(G.gateK)} at the gate.` : 'We have no home crowds to go on yet.'}${level} `
+        + `We recommend ${raise ? 'raising' : 'cutting'} prices ${_pct(o.pct)}: ${o.why}. `
+        + `At last season's crowds, that's about ${_signedK(o.gateDeltaK)} at the gate over the season`
+        + `${o.fansPerGame ? `, with ${Math.abs(o.fansPerGame).toLocaleString()} ${o.fansPerGame < 0 ? 'fewer' : 'more'} fans a game` : ' and the park as full as it was'}. `
+        + (o.atmo < 0 ? 'Fans will grumble about a raise after the year we had. ' : o.atmo > 0 ? 'Fans will notice the cut, and appreciate it. ' : '')
+        + `With no decision before spring training, prices stay where they are.`,
+    yesLabel: `${raise ? 'Raise' : 'Cut'} prices ${_pct(o.pct)}`, noLabel: 'Hold prices',
+    expiresAtMs,
+    _raw: { onYes: 'fo_tix_change', onNo: 'fo_tix_hold', onAuto: 'fo_tix_hold' },
+    _autoLabel: 'No decision — prices held',
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** A season-ticket drive for next season. */
+export function deliverCampaignCard(atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const o = FrontOffice.campaignOffer(state);
+  const R = state.offseason?.review || {};
+  if (!o.fill || !Finance.canSpend(state, o.cost)) return null;
+  const pitch = { champion: 'Champions sell themselves. The campaign writes itself: the trophy, the parade, the same club coming back.',
+    pennant: 'A pennant is an easy pitch: this club was one series from a title.', playoffs: 'October baseball is the pitch: come back for more of it.',
+    near: 'We were a few games short. The pitch is the club that comes back hungrier.', missed: 'The pitch is the winter\'s changes and a fresh start.',
+    disaster: 'It will be a hard sell after this year. The pitch has to be what changes.' }[R.outcome] || 'The pitch is next season.';
+  const card = _rosterCard(state, {
+    cardId: 'fo_campaign', tag: 'BUSINESS', sender: 'Ticket Office', avatar: '📣', type: 'normal',
+    _rosterKey: `fo:campaign:${state.seasonNum}`, _foOffer: o,
+    subject: 'A season-ticket campaign for next season?',
+    preview: `${formatK(o.cost)} for about ${o.seats.toLocaleString()} more fans a game, worth about ${formatK(o.worthK)} at the gate.`,
+    body: `${pitch} A winter campaign (ads, a holder event, early-renewal perks) costs ${formatK(o.cost)} from club funds now. `
+        + `We'd expect it to build a base of about ${o.seats.toLocaleString()} more fans a game next season, about ${formatK(o.worthK)} at the gate at next season's prices${o.worthK < o.cost ? ', less than it costs, though the crowd helps the atmosphere' : ''}. `
+        + `Club funds: ${formatK(state.userTeam.finances?.funds || 0)}.`,
+    yesLabel: `Run the campaign (${formatK(o.cost)})`, noLabel: 'Skip it',
+    expiresAtMs,
+    _raw: { onYes: 'fo_camp_run', onNo: 'fo_camp_skip', onAuto: 'fo_camp_skip' },
+    _autoLabel: 'No decision — no campaign',
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** One ballpark or facility upgrade, where the club needs it most. */
+export function deliverFacilityCard(atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const o = FrontOffice.facilityOffer(state);
+  if (!o || !Finance.canSpend(state, o.cost)) return null;
+  const what = o.kind === 'concourse'
+    ? { name: 'the ballpark concourse', does: 'wider concourses, better food and shade: a park people want to spend an afternoon in. It lifts the atmosphere now and fills about 1.5% more of the seats every game from here on' }
+    : { name: 'the training center', does: 'a new pitching lab and hitting cages: our players get more out of their work. Development plans gain about 5% more, and every player grows a little more each winter' };
+  const card = _rosterCard(state, {
+    cardId: 'fo_facility', tag: 'BUSINESS', sender: 'Facilities & Ops', avatar: '🏗️', type: 'normal',
+    _rosterKey: `fo:facility:${state.seasonNum}`, _foOffer: o,
+    subject: `Upgrade ${what.name}?`,
+    preview: `${formatK(o.cost)}: ${o.why}.`,
+    body: `Our proposal for the winter: ${what.name}${o.level > 1 ? ` (phase ${o.level} of 3)` : ''}. ${Cap(what.does)}. `
+        + `Why now: ${o.why}. It costs ${formatK(o.cost)} from club funds (${formatK(state.userTeam.finances?.funds || 0)} today), and the work is done by spring training.`,
+    yesLabel: `Build it (${formatK(o.cost)})`, noLabel: 'Not this winter',
+    expiresAtMs,
+    _raw: { onYes: 'fo_fac_build', onNo: 'fo_fac_skip', onAuto: 'fo_fac_skip' },
+    _autoLabel: 'No decision — not this winter',
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** How the club meets its fans after the year it had. */
+export function deliverFanEventCard(atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const o = FrontOffice.eventOffer(state);
+  const R = state.offseason?.review || {};
+  const rec = `${R.w ?? 0}–${R.l ?? 0}`;
+  const T = {
+    parade: { subject: 'The championship parade', yes: `Throw the parade (${formatK(o.cost)})`, no: 'A ring ceremony on Opening Day',
+      body: `The city wants a parade. Downtown, the trophy, the players on the floats, a rally at the park: ${formatK(o.cost)} for the city's costs and ours. Sponsors want in on it, and it's a day the fans will remember. The alternative is a ring ceremony on Opening Day.` },
+    appreciation: { subject: 'A fan appreciation weekend', yes: `Hold it (${formatK(o.cost)})`, no: 'Skip it',
+      body: `A ${rec} season and a playoff run: the fans came with us. A winter appreciation weekend (players signing, the park open for photos on the field, a holiday market) costs ${formatK(o.cost)}. It keeps the season's energy going into next year.` },
+    caravan: { subject: 'A winter caravan', yes: `Send the caravan (${formatK(o.cost)})`, no: 'Skip it this year',
+      body: `After a ${rec} season, a winter caravan (a few players and coaches visiting towns across the region, schools, hospitals) keeps the club in front of fans who drifted. It costs ${formatK(o.cost)}. Skipping it costs a little goodwill.` },
+    outreach: { subject: 'Reaching out to the fans after a hard year', yes: `Reach out (${formatK(o.cost)})`, no: 'Let the winter pass',
+      body: `${rec}. The fans are frustrated, and they're saying so. Community Affairs proposes a letter to every season-ticket holder about what's changing, open forums with the front office, and an early-renewal discount: ${formatK(o.cost)}. Saying nothing this winter will cost us more goodwill.` },
+  }[o.kind];
+  const card = _rosterCard(state, {
+    cardId: 'fo_event', tag: 'FANS', sender: 'Community Affairs', avatar: o.kind === 'parade' ? '🏆' : '🤝', type: o.kind === 'parade' ? 'good' : 'normal',
+    _rosterKey: `fo:event:${state.seasonNum}`, _foOffer: o,
+    subject: T.subject,
+    preview: T.body.split('. ')[0] + '.',
+    body: T.body + ` Club funds: ${formatK(state.userTeam.finances?.funds || 0)}.`,
+    yesLabel: T.yes, noLabel: T.no,
+    expiresAtMs,
+    _raw: { onYes: 'fo_event_yes', onNo: 'fo_event_no', onAuto: 'fo_event_no' },
+    _autoLabel: `No decision — ${T.no.toLowerCase()}`,
+  });
+  return _deliverAt(card, atMs);
+}
+
 /** Day 5: one reminder listing required decisions still open. */
 export function deliverGateReminder(atMs, springAt) {
   const state = StateManager.get();
@@ -3577,6 +3687,13 @@ function _applyOffseasonAction(action, instance, atMs) {
       return true;
     }
     case 'os_fa_pass': return true;
+    // §112.4 the front office
+    case 'fo_tix_change': StateManager.mutate(s => FrontOffice.applyTicketPrice(s, instance._foOffer)); return true;
+    case 'fo_camp_run':   StateManager.mutate(s => { if (Finance.canSpend(s, instance._foOffer.cost)) FrontOffice.applyCampaign(s, instance._foOffer, atMs); }); return true;
+    case 'fo_fac_build':  StateManager.mutate(s => { if (Finance.canSpend(s, instance._foOffer.cost)) FrontOffice.applyFacility(s, instance._foOffer, atMs); }); return true;
+    case 'fo_event_yes':  StateManager.mutate(s => FrontOffice.applyEvent(s, instance._foOffer, true, atMs)); return true;
+    case 'fo_event_no':   StateManager.mutate(s => FrontOffice.applyEvent(s, instance._foOffer, false, atMs)); return true;
+    case 'fo_tix_hold': case 'fo_camp_skip': case 'fo_fac_skip': return true;
     // §112.3 extensions and releases
     case 'os_extend':       StateManager.mutate(s => { Offseason.applyExtension(s, id, instance._extTerms); s.userTeam.finances.payroll = computePayroll(s); }); return true;
     case 'os_extend_pass':  return true;
@@ -3718,6 +3835,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'os_coach_renew', 'os_coach_keep', 'os_coach_letgo', 'os_coach_fire', 'os_hire_a', 'os_hire_b',
   'os_fa_sign', 'os_fa_pass',
   'os_extend', 'os_extend_pass', 'os_release', 'os_release_keep',
+  'fo_tix_change', 'fo_tix_hold', 'fo_camp_run', 'fo_camp_skip', 'fo_fac_build', 'fo_fac_skip', 'fo_event_yes', 'fo_event_no',
   // §75 All-Star Game
   'as_lobby_yes', 'as_lobby_no',
   // §78 the owner's cut orders
@@ -3738,7 +3856,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
   const raw    = instance._raw || {};
   const action = choice === 'yes' ? raw.onYes : choice === 'no' ? raw.onNo : choice === 'auto' ? raw.onAuto : null;
   if (!action) return;
-  if (action.startsWith('os_')) { _applyOffseasonAction(action, instance, atMs); return; }
+  if (action.startsWith('os_') || action.startsWith('fo_')) { _applyOffseasonAction(action, instance, atMs); return; }
   if (action.startsWith('as_')) { _applyAllStarAction(action, instance, atMs); return; }
   if (action.startsWith('fin_')) { _applyFinanceAction(action, instance, atMs); return; }
   if (action.startsWith('talk_')) { _applyTalkAction(action, instance, atMs); return; }

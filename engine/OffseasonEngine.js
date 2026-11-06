@@ -80,6 +80,7 @@ import { uniqueName, namesInUse, surnameOf } from './Names.js';
 import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
 import * as Coach from './CoachEngine.js';
+import { trainingWinterBonus } from './FrontOffice.js';
 import { fillsNeed } from './LeagueTrades.js';
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
@@ -409,7 +410,8 @@ export function beginOffseason(draft, atMs) {
   const nextYear = baseballYear(draft) + 1;
   for (const p of Object.values(draft.players || {})) {
     if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
-    _develop(p, nextYear, draft.seasonNum || 1, p.teamId === 'user' ? draft.userTeam?.coachingStaff : null);
+    _develop(p, nextYear, draft.seasonNum || 1, p.teamId === 'user' ? draft.userTeam?.coachingStaff : null,
+             p.teamId === 'user' ? trainingWinterBonus(draft.userTeam) : 0);
   }
   draft.ilReturnQueue = [];
   draft.impScores = {};
@@ -475,7 +477,7 @@ function _archiveStats(draft) {
 }
 
 /**
- * _develop(player, nextYear, seasonNum, staff)
+ * _develop(player, nextYear, seasonNum, staff, facility)
  * Section 4.1 (LOCKED) age curves on each active sub-rating, by the player's
  * baseball age in the coming season, with trait modifiers and variance; OVR
  * recomputed. Injuries heal over the winter.
@@ -491,7 +493,7 @@ const CURVES = [
   [1.0, 0.5, -1.0, -2.0, -3.5],
   [0.5, 0.0, -1.5, -2.5, -4.0],
 ];
-function _develop(p, nextYear, seasonNum, staff = null) {
+function _develop(p, nextYear, seasonNum, staff = null, facility = 0) {
   const sr = p.subRatings;
   if (sr) {
     const age = computeAge(p.dob, nextYear);
@@ -508,6 +510,7 @@ function _develop(p, nextYear, seasonNum, staff = null) {
       if (p.trait === 'youngGun' && age < 28) change += 1;
       else if (p.trait === 'veteran' && age >= 30 && i === 0 && change < 0) change *= 0.5;
       if (staff) change += Coach.winterBonus(staff, p, key, age);   // §112.2 our coaches' winter work
+      change += facility;                                          // §112.4 the training center
       if (p.trait === 'consistent') variance = _rng(-1, 1);
       if (p.trait === 'volatile')   variance = _rng(-4, 4);
       const delta = Math.max(-5, Math.min(4, Math.round(change + variance)));

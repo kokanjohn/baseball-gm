@@ -1624,6 +1624,9 @@ export const FIN_WEATHER = Object.freeze({
   playoffScale: 0.5,                     // a playoff crowd minds the weather half as much
 });
 
+// §112.4 how the crowd answers the ticket price: +10% on price → −6% of the
+// demand (a sold-out park's extra demand absorbs it first).
+export const FIN_PRICE_ELASTICITY = 0.6;
 export const FIN_ATTENDANCE = Object.freeze({
   base: 0.44, perAtmo: 0.0045,                 // fill from atmosphere (40 → 62%, 68 → 75%, 95 → 87%)
   formWeight: 0.6, formMin: 0.85, formMax: 1.15, formAfterGames: 10,   // the club's form vs .500

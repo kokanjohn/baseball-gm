@@ -39,6 +39,7 @@ import {
 } from '../data/constants.js';
 import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
 import { devFactor } from './CoachEngine.js';
+import { trainingDevFactor } from './FrontOffice.js';
 
 const DAY = 86_400_000;
 const WEIGHT = {
@@ -75,7 +76,7 @@ export function gainMultiplier(draft, player) {
   const rel = player.teamId === 'user' && Number.isFinite(coach?.relationship) ? coach.relationship : 50;
   m *= 0.85 + 0.3 * (rel / 100);
   // §112.2 the coach's quality, and a youth specialist with the young ones.
-  if (player.teamId === 'user') m *= devFactor(draft.userTeam?.coachingStaff, player, age);
+  if (player.teamId === 'user') m *= devFactor(draft.userTeam?.coachingStaff, player, age) * trainingDevFactor(draft.userTeam);   // §112.4 the training center
   return m;
 }
 

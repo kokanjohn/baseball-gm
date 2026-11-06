@@ -2956,6 +2956,8 @@ function _runOffseasonStep(step, atMs) {
     }
     // The manager's look back, and the winter's priority (due before free agency opens).
     CardEngine.deliverPriorityCard(cardAt(1, OFFSEASON_REVIEW_HOUR), Offseason.dayStart(os, 5));
+    // §112.4 a champion's city wants its parade now, not on day 9.
+    if (StateManager.get().offseason?.review?.outcome === 'champion') CardEngine.deliverFanEventCard(cardAt(1, 15), Offseason.dayStart(os, 4));
     done();
     return events;
   }
@@ -3022,7 +3024,15 @@ function _runOffseasonStep(step, atMs) {
     _cpuFreeAgencyRound(atMs);
     if (step === 'day5') CardEngine.deliverFreeAgentCards(cardAt(5, OFFSEASON_FA_CARD_HOUR), springAt);
     if (step === 'day8') CardEngine.deliverFreeAgentCards(cardAt(8, OFFSEASON_FA_CARD_HOUR), springAt);
-    if (step === 'day9') CardEngine.deliverGateReminder(cardAt(9, OFFSEASON_CARD_HOUR), springAt);
+    if (step === 'day9') {
+      CardEngine.deliverGateReminder(cardAt(9, OFFSEASON_CARD_HOUR), springAt);
+      // §112.4 the front office: next season's tickets, a campaign, the ballpark, the fans.
+      const jit = () => Math.floor(Math.random() * 25) * 60_000;
+      CardEngine.deliverTicketCard(cardAt(9, 10) + jit(), springAt);
+      CardEngine.deliverCampaignCard(cardAt(9, 11) + jit(), springAt);
+      CardEngine.deliverFacilityCard(cardAt(9, 13) + jit(), springAt);
+      if (StateManager.get().offseason?.review?.outcome !== 'champion') CardEngine.deliverFanEventCard(cardAt(9, 15) + jit(), springAt);
+    }
     done();
     return events;
   }

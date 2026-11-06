@@ -8952,3 +8952,47 @@ Coaches renew silently, and only matter as a relationship nudge to development p
   - `sim-season.js`: re-sign cards carry the context; the new cards are gender-neutral; extensions go only to the young core and take effect; a release leaves the money owed, season by season (offset when the player signs elsewhere), and still counts against the room. The harness GM takes the first extension and releases the first overpaid player, so both paths run when they come up.
   - Seeds 3, 5, 7 and ember 11 pass; seed 5 exercised a release and its offset.
   - `check-coaches.mjs` now defaults to 1,500 games a staff (at 300, the gaps in runs scored are noise).
+
+### 112.4 Phase D done (r128): the front office's winter — tickets, a season-ticket campaign, the ballpark, the fans
+- **`engine/FrontOffice.js`** (pure): each offer is built from the season review and the books; each `apply*` carries out the choice.
+- **The review's gate** (`SeasonReview` → `gate`): home games, the park's capacity, average attendance and share of seats filled, sellouts, and the season's gate (from the schedule's `attendance` / `sellout` / `gateK`).
+- **Ticket prices** (Ticket Office, day 9 at 10:00; held with no answer by spring).
+  - The recommendation fits the year:
+
+    | Situation | Recommendation |
+    |---|---|
+    | 92%+ full, 30%+ sellouts, or a pennant or title | Raise 8% |
+    | Under 62% full, or a disaster | Cut 10% |
+    | Under 70% full with no playoff race | Cut 5% |
+    | Otherwise | Raise 5% after a playoff year, 3% after another |
+
+  - The card gives last season's crowd, sellouts and gate, any change in the price level since the GM took over, the projected gate change and fans per game at last season's crowds (a sold-out park's unmet demand counts), and the fans' reaction: −2 atmosphere for a raise after a losing year, +2 for a cut.
+  - `fin.ticketPrice` (kept season to season) multiplies the gate per fan. Demand answers it in `crowdFor`: a 10% raise loses 6% of the demand (`FIN_PRICE_ELASTICITY` 0.6). That's applied before the park's capacity, so a sold-out park absorbs a raise. CPU clubs are unaffected (price 1).
+- **A season-ticket campaign** (Ticket Office, day 9 at 11:00).
+  - It costs 1.5% of the payroll target, paid now; the winter's spending counts on next season's books.
+  - It builds a base of seats for every regular-season home game next season (`fin.campaign = { season, fill }`). The base is +2% of seats after a disaster up to +5% after a title, capped at 60% of the empty seats; it's cleared when that season's books close.
+  - The pitch fits the year ("Champions sell themselves…" / "It will be a hard sell after this year…"), with the expected gain at the gate. When the gain is less than the cost, the card says so. It isn't offered when the funds can't cover it.
+- **One facility upgrade** (Facilities & Ops, day 9 at 13:00), `userTeam.facilities` levels 0–3, cost rising 25% a level.
+  - **Concourse** (when atmosphere is under 62 or the park was under 72% full): +3 atmosphere now and +1.5% of seats a level, every game.
+  - **Training center** (otherwise): development plans ×(1 + 0.05 a level) (`DevelopmentEngine.gainMultiplier`) and +0.15 a level on each rating's winter change (`OffseasonEngine._develop`).
+  - The card isn't offered when both are built out or the funds can't cover it.
+- **The fans** (Community Affairs):
+
+  | Outcome | Event | Cost (share of target) | Yes | No |
+  |---|---|---|---|---|
+  | Champion (day 1 at 15:00, due day 4) | A parade | 1.2% | +5 atmosphere, +3 owner trust, +3% local income | A ring ceremony, +1 |
+  | Pennant or playoffs | An appreciation weekend | 0.6% | +3 atmosphere, +1 trust | — |
+  | Near or missed | A winter caravan | 0.4% | +2 atmosphere | −1 |
+  | Disaster | Outreach: letters, forums, an early-renewal discount | 0.8% | +4 atmosphere, +1 trust | −3 |
+
+- **The books.** New spending categories: `facilities`, `marketing` and `events`. The Finances tab's ballpark row shows the ticket price level, the campaign, and the facility levels.
+- **Fixed on the way:** roster-card actions are routed by prefix (`_applyRosterAction`), and only `os_` reached the offseason handler. `fo_` is now added. This was found by the harness: the cards arrived, but the choices did nothing.
+- **Tests.**
+  - `check-frontoffice.mjs` (17):
+    - a raise costs fans and earns more per game; a cut brings fans in; a sold-out park absorbs a raise;
+    - the campaign lasts its season only; the concourse fills seats;
+    - the offers fit a title or a hard year; a full park has less room for a campaign; the right facility is offered, and none when built out;
+    - the training center's development factor;
+    - the money is posted; declining outreach costs goodwill, not money.
+  - `sim-season.js`: the ticket card on day 9; the event that fits the outcome, on the right day (a champion's on day 1); the price into season 2; the campaign paid and set for season 2; the upgrade built; the atmosphere moved; gender-neutral text. The harness GM says yes to every front-office card.
+  - Seeds 3 and 5 (champions, parade), 7 (pennant) and ember 11 (playoffs) pass. A cut, the caravan and the outreach are covered by `check-frontoffice.mjs`.

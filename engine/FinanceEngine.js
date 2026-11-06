@@ -47,7 +47,7 @@ import {
   FIN_PAYDAYS, FIN_PAYDAY_HOUR, FIN_PLAYOFF_GATE_MULT, FIN_START_FUNDS_SHARE,
   FIN_CAPACITY_BASE, FIN_CAPACITY_PER_M, FIN_ATTENDANCE, FIN_WEATHER,
   OWNER_PROFILE, OWNER_PATIENCE, OWNER_STAGE, OWNER_TRUST_FX, OWNER_ORDER_TARGET_PENALTY,
-  FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER, FIN_CPU, FIN_MIN_MOVE_K,
+  FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER, FIN_CPU, FIN_MIN_MOVE_K, FIN_PRICE_ELASTICITY,
 } from '../data/constants.js';
 import { dayOf } from './PitchingEngine.js';
 
@@ -60,7 +60,8 @@ export const STAGES = Object.freeze(['content', 'watching', 'concerned', 'cuts']
 export const INCOME_LABELS = Object.freeze({ gate: 'Home gates', media: 'League media share', local: 'Local media & sponsors',
   cards: 'Deals & promotions', allstar: 'All-Star Game', trade: 'Cash in trades', owner: 'Owner covered the shortfall', other: 'Other' });
 export const SPEND_LABELS = Object.freeze({ payroll: 'Player payroll', staff: 'Coaching staff', dead: 'Released players (dead money)',
-  cards: 'Front-office decisions', bonus: 'Signing bonuses', trade: 'Cash in trades', other: 'Other' });
+  cards: 'Front-office decisions', bonus: 'Signing bonuses', trade: 'Cash in trades',
+  facilities: 'Ballpark & facilities', marketing: 'Season-ticket campaign', events: 'Fan events', other: 'Other' });
 
 /** The local calendar day's first moment, from a day number (PitchingEngine.dayOf). */
 export function dayStartMs(day) {
@@ -442,13 +443,20 @@ export function crowdFor(state, teamId, { atMs, playoff = false, atmosphere = nu
   const noise = expected ? 1 : 1 + (Math.random() * 2 - 1) * A.noise;
   // §110 the weather on the demand, before the seats run out (a sellout's extra demand absorbs it).
   const wf = weather ? weatherDemand(weather, { playoff }).factor : 1;
-  let fill = clamp((A.base + A.perAtmo * (atmosphere ?? t.atmosphere ?? 60)) * form * dayMult * noise * wf, A.min, 1);
+  // §112.4 the winter's front-office decisions: the ticket price (demand
+  // answers it — a sellout's extra demand absorbs a raise), the season-ticket
+  // campaign's base, the concourse's comfort.
+  const tp = fin.ticketPrice || 1;
+  const camp = !playoff && fin.campaign?.season === (state.seasonNum || 1) ? fin.campaign.fill || 0 : 0;
+  const comfort = teamId === 'user' ? 0.015 * (t.facilities?.concourse || 0) : 0;
+  let fill = clamp((A.base + A.perAtmo * (atmosphere ?? t.atmosphere ?? 60)) * form * dayMult * noise * wf
+                   * (1 - FIN_PRICE_ELASTICITY * (tp - 1)) + camp + comfort, A.min, 1);
   if (playoff) fill = Math.min(1, fill + A.playoffLift);
   // A ticket promotion (§78.8): its price and its crowd, regular-season home games.
   const promo = !playoff && fin.promo?.gamesLeft > 0 ? fin.promo : null;
   if (promo) fill = clamp(fill + (promo.fill || 0), A.min, 1);
   const attendance = round(fin.market.capacity * fill);
-  const gateK = round(attendance * fin.market.perFan * (1 + (promo?.price || 0)) / 1000 * (playoff ? FIN_PLAYOFF_GATE_MULT : 1));
+  const gateK = round(attendance * fin.market.perFan * tp * (1 + (promo?.price || 0)) / 1000 * (playoff ? FIN_PLAYOFF_GATE_MULT : 1));
   return { attendance, gateK, sellout: fill >= 0.995 };
 }
 
@@ -720,6 +728,7 @@ export function seasonEndReview(draft, atMs, teamId = 'user') {
   fin.seasonTargetAdj = 0;     // a mid-season loosening (or tightening) lasts the season
   fin.retained = [];           // §85 salary kept on traded players runs out with the season
   fin.promo = null;
+  fin.campaign = null;         // §112.4 a season-ticket campaign is for one season
   if (fin.owner) { fin.owner.order = null; fin.owner.stage = 'content'; }
   return summary;
 }

@@ -244,6 +244,13 @@ function gmActs() {
       }
       continue;
     }
+    // §112.4 say yes to every front-office proposal, so every path runs.
+    if (/^fo_/.test(c.cardId)) {
+      gm.fo = gm.fo || {}; gm.fo[c.cardId] = { offer: c._foOffer, funds0: SM.get().userTeam.finances.funds, atmo0: SM.get().userTeam.atmosphere };
+      resolveCard(c.instanceId, 'yes'); gm.acted++; advanceClock(clock.get());
+      gm.fo[c.cardId].funds1 = SM.get().userTeam.finances.funds; gm.fo[c.cardId].atmo1 = SM.get().userTeam.atmosphere;
+      continue;
+    }
     // §112.3 take the first extension and release the first overpaid player, so both paths always run.
     if (c.cardId === 'os_extension' && !gm.extended) {
       gm.extended = { id: c._targetPlayerId, terms: c._extTerms, season: SM.get().seasonNum }; resolveCard(c.instanceId, 'yes'); gm.acted++; advanceClock(clock.get()); continue;
@@ -369,7 +376,8 @@ async function runOffseasonChecks() {
   const sched1Len = pre.schedule.filter(g => !g.isPlayoff).length;
   const phases = []; let lastPhase = pre.phase; let offseasonAt = null, springAt = null;
   const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0, ownerBody = '', priorityCard = null, firstFaAfterPriority = null;
-  const coachCards = new Map(), contractCards = new Map();
+  const coachCards = new Map(), contractCards = new Map(), foCards = new Map();
+  const fo0 = { tp: pre.userTeam.finances.ticketPrice || 1, atmo: pre.userTeam.atmosphere, fac: { ...(pre.userTeam.facilities || {}) } };
   const staffBefore = JSON.parse(JSON.stringify(pre.userTeam.coachingStaff || {}));
   clock.set(Math.max(clock.get(), os.endedAt));
   for (let guard = 0; guard < 24 * (OFFSEASON_DAYS + 3); guard++) {
@@ -383,6 +391,7 @@ async function runOffseasonChecks() {
       if (c.cardId === 'os_priority') priorityCard = c;
       if (c.cardId === 'os_coach_review' || c.cardId === 'os_coach_hire') coachCards.set(c.instanceId, c);
       if (['os_resign', 'os_extension', 'os_release'].includes(c.cardId)) contractCards.set(c.instanceId, c);
+      if (/^fo_/.test(c.cardId)) foCards.set(c.instanceId, { ...c, _day: Offseason.offseasonDay(SM.get(), clock.get()) });
       if (!gm.review && SM.get().offseason?.review) gm.review = SM.get().offseason.review;
       if (c.cardId === 'os_free_agent' && SM.get().offseason?.priority && !firstFaAfterPriority) firstFaAfterPriority = { id: c._targetPlayerId, pri: SM.get().offseason.priority };
     }
@@ -459,6 +468,33 @@ async function runOffseasonChecks() {
   check('offseason: ownership evaluation card delivered and decided',
         ownershipCard === 1 && (st.userTeam.finances.payrollTargetHistory || []).some(h => h.seasonNum === 2));
   check('offseason: every required decision resolved by spring', Offseason.hardGates(st).open.length === 0);
+  {
+    // §112.4 the front office's winter.
+    const cards = [...foCards.values()];
+    const by = (id) => cards.find(c => c.cardId === id);
+    console.log(`  front office: ${cards.map(c => `${c.cardId} (day ${c._day}): ${c.subject}`).join(' | ')}`);
+    for (const c of cards) console.log(`    ${c.cardId}: “${c.body.slice(0, 420)}…”`);
+    const RR = gm.review || {};
+    check(`front office: the ticket card arrives on day 9 (${by('fo_tickets')?._foOffer ? `${Math.round(by('fo_tickets')._foOffer.pct * 100)}%, park ${Math.round((RR.gate?.fill || 0) * 100)}% full, ${RR.gate?.sellouts} sellouts` : 'missing'})`,
+          by('fo_tickets')?._day === 9 && RR.gate?.games > 40);
+    const ev = by('fo_event');
+    check(`front office: the fan event fits the year (${RR.outcome} → ${ev?._foOffer?.kind}, day ${ev?._day})`,
+          !!ev && ({ champion: 'parade', pennant: 'appreciation', playoffs: 'appreciation', disaster: 'outreach' }[RR.outcome] || 'caravan') === ev._foOffer.kind
+          && ev._day === (RR.outcome === 'champion' ? 1 : 9));
+    const tix = gm.fo?.fo_tickets;
+    if (tix) check(`front office: the new ticket price holds into season 2 (${fo0.tp} → ${st.userTeam.finances.ticketPrice})`,
+                   Math.abs(st.userTeam.finances.ticketPrice - fo0.tp * (1 + tix.offer.pct)) < 0.002);
+    const camp = gm.fo?.fo_campaign;
+    if (camp) check(`front office: the campaign is paid now and builds next season's base (${camp.offer.cost}K; +${Math.round(camp.offer.fill * 1000) / 10}% of seats)`,
+                    Math.round(camp.funds0 - camp.funds1) === camp.offer.cost && st.userTeam.finances.campaign?.season === 2);
+    const fac = gm.fo?.fo_facility;
+    if (fac) check(`front office: the ${fac.offer.kind} upgrade is built (${fac.offer.cost}K; level ${st.userTeam.facilities?.[fac.offer.kind]})`,
+                   Math.round(fac.funds0 - fac.funds1) === fac.offer.cost && st.userTeam.facilities?.[fac.offer.kind] === (fo0.fac[fac.offer.kind] || 0) + 1);
+    if (ev && gm.fo?.fo_event) check(`front office: the fan event moves the atmosphere (${gm.fo.fo_event.atmo0} → ${gm.fo.fo_event.atmo1})`,
+                                     gm.fo.fo_event.atmo1 - gm.fo.fo_event.atmo0 === Math.min(100 - gm.fo.fo_event.atmo0, ev._foOffer.yes.atmo || 0));
+    const GEN = /\b(he|him|his|she|her|guys?|men|man)\b/i;
+    check('front office: the cards are gender-neutral', !cards.some(c => GEN.test(c.body)));
+  }
   {
     // §112.3 contract day for the GM: what each decision rests on; extensions; releases and dead money.
     const cards = [...contractCards.values()];

@@ -890,6 +890,19 @@ function _renderStaff(state) {
 // FINANCES (§78) — Club Funds, the owner, the season's books
 // ─────────────────────────────────────────────────────────────
 
+/** §112.4 the winter's front-office decisions, as they stand: prices, the campaign, the facilities. */
+function _ballparkExtras(state) {
+  const u = state.userTeam || {}, fin = u.finances || {};
+  const bits = [];
+  const tp = fin.ticketPrice || 1;
+  if (Math.abs(tp - 1) >= 0.005) bits.push(`Ticket prices ${Math.round(Math.abs(tp - 1) * 100)}% ${tp > 1 ? 'above' : 'below'} where they started`);
+  if (fin.campaign?.season >= (state.seasonNum || 1)) bits.push(`season-ticket campaign: about ${Math.round(fin.campaign.fill * (fin.market?.capacity || 0)).toLocaleString()} more fans a game${fin.campaign.season > (state.seasonNum || 1) ? ' next season' : ''}`);
+  const f = u.facilities || {};
+  if (f.concourse) bits.push(`concourse upgrades ${f.concourse} of 3`);
+  if (f.training) bits.push(`training center ${f.training} of 3`);
+  return bits.length ? `<div class="fin-sub">${_escape(bits.join(' · ').replace(/^./, c => c.toUpperCase()))}.</div>` : '';
+}
+
 const _OWNER_STAGE_TEXT = {
   content:   ['Content',        'Ownership is happy with the books.'],
   watching:  ['Watching',       'Ownership has noticed the spending. Winning helps.'],
@@ -969,6 +982,7 @@ function _renderFinances(state) {
       ${avgAtt ? `<div class="fin-card">
         <div class="fin-row-head"><span class="fin-label">The ballpark</span><span>${(fin.market?.capacity || 0).toLocaleString()} seats</span></div>
         <div class="fin-sub">Average crowd ${avgAtt.toLocaleString()}${sellouts ? ` · ${sellouts} sellout${sellouts === 1 ? '' : 's'}` : ''} over ${homeGames.length} home game${homeGames.length === 1 ? '' : 's'}.</div>
+        ${_ballparkExtras(state)}
       </div>` : ''}
 
       ${recent ? `<div class="fin-card"><div class="fin-label">Recent</div>${recent}</div>` : ''}

@@ -140,6 +140,7 @@ export function seasonReview(state) {
     offense, pitching, rotation, bullpen, stars, letdowns, needs,
     payroll: fin.payroll || 0, payrollTarget: fin.payrollTarget ? seasonTarget(fin) : null,
     units: _units(state, season),
+    gate: _gate(state),
     expiring, core, injuries: (state.history || []).filter(h => h.type === 'injury' && h.season === season).length,
   };
 }
@@ -208,6 +209,16 @@ function _units(state, season) {
   }
   out.growth = grow;
   return out;
+}
+
+/** §112.4 The ballpark's season: average attendance and share of seats, sellouts, the gate. */
+function _gate(state) {
+  const cap = state.userTeam?.finances?.market?.capacity || 0;
+  const home = (state.schedule || []).filter(g => g.isHome && !g.isSpring && !g.isPlayoff && g._committed && g.attendance > 0);
+  if (!home.length || !cap) return { games: 0, capacity: cap, avg: 0, fill: null, sellouts: 0, gateK: 0 };
+  const avg = home.reduce((a, g) => a + g.attendance, 0) / home.length;
+  return { games: home.length, capacity: cap, avg: Math.round(avg), fill: Math.round(avg / cap * 1000) / 1000,
+           sellouts: home.filter(g => g.sellout).length, gateK: home.reduce((a, g) => a + (g.gateK || 0), 0) };
 }
 
 function fmt3(x) { return x >= 1 ? x.toFixed(3) : x.toFixed(3).replace(/^0/, ''); }
