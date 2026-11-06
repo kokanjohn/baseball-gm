@@ -8706,3 +8706,25 @@ Compose replies were canned pool text. For example, the groundskeeper's weather 
 - Regression: full seasons south 1, north 3 and west 4 pass in full. On east seed 2, two checks fail (a roster count at game 64; 37 of 1,408 starts on short rest). The r119 code fails both with identical numbers, so they existed before this change and are left as their own item.
 - Found along the way: the same seed on the same code plays exactly the same season (the shims seed `Math.random` and the clock). Runs that differed were runs on different code. A failure can be replayed by rerunning its seed.
 - `ComposeFacts.rainPast`: the last day in 20-minute steps and earlier days in hourly steps, each span worked out once (the field reply went from about 600 ms to about 100 ms under load).
+
+## 108. Spot starters; the harness stops jumping the clock (r121)
+
+### 108.1 Starters on short rest (east seed 2: 37 of 1,408 starts)
+- **Root cause.** `SimEngine._getRotationSP` takes the first rested starter from the turn. When nobody in the rotation has had four days, it fell back to the starter in turn, tired or not. Weather makeups (doubleheaders, a game on an off day) compress the schedule, which made this more common.
+- **The fix.** Before that fallback, a spot starter is used: the best starter on the pitcher bench or in the bullpen (`pos SP`, not in the rotation, available, rested by `starterRested`, arm `fresh`). Only when there is none does a tired regular start. The rotation index still advances one per game, as before.
+- **Result.** 8 of 1,410 starts are now on short rest (clubs with no spare starter), against a 2% allowance.
+
+### 108.2 "Roster one short at game 64" was the harness
+- **What happened.** `playToFinal` captured the game, then walked the clock toward its first pitch (`stepTo`). During that walk the game was rained out, and its makeup went to the clubs' next meeting, 38 days later (the meeting-doubleheader rule). The engine moves a game in place, so the harness's copy showed the new time, and it set the clock 38 days ahead. The whole league ran a month at once, then the clock went back. The roster count was checked inside that jump.
+- **The fix.** The harness keeps the game's id and time from before the walk, and looks again if either changed. `JUMP_DBG=1` prints any clock jump of more than ten days and where it came from.
+- **Possibly related.** The earlier one-off failures (a player in a box score for a club they weren't on, north seed 4; trade-desk calls missing, west seed 4) came from runs with this jump. Both seeds now pass in full.
+
+### 108.3 Trade-desk calls that never came (east seed 4: no calls all season)
+- **Root cause.** A buyer with a need looked at only our three best players who fill it (`slice(0, 3)` after sorting by OVR). For a strong club, those are the most valuable players on the roster, and `callOffer` found no package the buyer would make for any of them. So it never called. The spare starter or bench bat that fills the hole, the call real clubs make, was never considered.
+- **The fix.** `LeagueTrades.findLeagueTrades` considers the buyer's best three fits and its cheapest three.
+- **Result.** East 4: 8 calls (was 0), all 3,612 checks pass. North 3: 5 calls. South 3: 7. All within the 2–30 band.
+
+### 108.4 A suspended game's second part is simulated on its first day (open)
+- **Found while chasing "a player in the box score for a club they weren't on."** `SimEngine.simulateGame` simulates the whole game at first pitch. When the weather suspends it, the plays after the stop are kept as `resumePlays` and replayed when it resumes days later, with the rosters as they were on the first day. So a player traded, injured or sent down in between still appears in the second part. In MLB, the completion uses the clubs' rosters on the day it resumes.
+- **The check now tests each player at their own first and last appearance** (from the plays) rather than only at the resumption time. It used to test everyone at the resumption time, which also flagged first-part players who left legitimately.
+- **The structural fix (next).** Simulate the remainder at resumption: save the game's state at the stop (inning, half, outs, runners, score, batting-order positions, pitchers used), then continue from it with each club's roster as it stands then.

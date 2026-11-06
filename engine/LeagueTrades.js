@@ -343,10 +343,12 @@ export function findLeagueTrades(state, atMs, rand = Math.random) {
     let ours = null;
     if (calls > 0 && !busyWithUs(state, buyer.id, atMs)) {
       for (const [i, n] of needs.slice(0, 2).entries()) {
-        const fits = _org(state.userTeam).map(id => state.players[id])
+        // §109 its best three fits, and its cheapest three: a contender's stars are often more than a
+        // buyer can pay, and a spare arm or a bench bat that fills the hole is the call real clubs make.
+        const all = _org(state.userTeam).map(id => state.players[id])
           .filter(p => movable(p, atMs, state) && fillsNeed(p, n) && (p.ovr || 0) >= n.ovr + LEAGUE_TRADES.upgradeMin)
-          .sort((x, y) => (y.ovr || 0) - (x.ovr || 0))
-          .slice(0, 3);
+          .sort((x, y) => (y.ovr || 0) - (x.ovr || 0));
+        const fits = [...new Set([...all.slice(0, 3), ...all.slice(-3)])];
         for (const p of fits) {
           const c = callOffer(state, buyer.id, p.id, atMs, { need: n });
           if (!c) continue;

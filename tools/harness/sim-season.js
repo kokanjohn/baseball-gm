@@ -44,6 +44,8 @@ import {
   reconcileRoster, applyRosterMutation, eligibleSlotsFor, pendingArrivals, nextCalendarDay,
 } from '../../engine/RosterEngine.js';
 
+// JUMP_DBG=1: print every clock jump of more than ten days, and where it came from.
+if (process.env.JUMP_DBG) { const set0 = clock.set; clock.set = (ms) => { const d = ms - clock.get(); if (Math.abs(d) > 10 * 86_400_000) console.log('JUMP', (d / 86_400_000).toFixed(1), 'days', new Error().stack.split('\n').slice(2, 5).map(x => x.trim()).join(' < ')); set0(ms); }; }
 const GAMES = parseInt(process.argv[2] || '20', 10);
 const SEED  = parseInt(process.argv[3] || '1', 10);
 
@@ -552,8 +554,13 @@ function playToFinal(idx) {
         || (g.status === GAME_STATUS.SUSPENDED && g.gameTime > clock.get())) {   // (a suspended game waits for its turn like any game)
       // Live the day before first pitch (cards, decisions, deadlines).
       advanceClock(clock.get()); releaseDueCards(); gmActs();
-      stepTo(g.gameTime || clock.get());
-      clock.set((g.gameTime || clock.get()) + 60_000);
+      const id0 = g.id, t0 = g.gameTime;   // (the engine moves a game in place: keep what it was)
+      stepTo(t0 || clock.get());
+      // The day before can move this game (a rainout made up weeks later, a doubleheader's wait) or
+      // put another in its place: look again rather than jump the clock to where it used to be.
+      const now = SM.get().schedule[idx];
+      if (!now || now.id !== id0 || now.gameTime !== t0) continue;
+      clock.set((t0 || clock.get()) + 60_000);
     } else if (g.status === GAME_STATUS.LIVE) {
       const np = g.plays?.[g.livePlayIndex];
       if (np && np._timestamp) clock.set(np._timestamp + (g._tickOffset || 0) + 1_000);
@@ -651,6 +658,7 @@ async function runAllStarChecks() {
     for (const q of Object.values(sq)) console.log('SQUAD', q.name, q.starters.map(x => `${x.slot}:${st.players[x.id].name}(${x.teamId}) ${q.votes[x.id]}`).join(' · '), '| RES', q.reserves.map(x => st.players[x.id].pos).join(','), '| SP', q.sp.length, 'RP', q.rp.length);
   }
   // The game: live it, and nothing but the game changes.
+  if (process.env.ASG_DBG) console.log('ASGDBG', asg.date, new Date(asg.gameTime).toISOString(), 'clock', new Date(clock.get()).toISOString(), 'next user', SM.get().schedule[SM.get().currentGameIndex]?.date, JSON.stringify(asg.postponements || []));
   stepTo(asg.gameTime - 1000);
   clock.set(asg.gameTime - 1000); advanceClock(clock.get());
   const pre = SM.get();
@@ -1713,9 +1721,14 @@ async function main() {
       const oppT = post.leagueTeams.find(t => t.name === g.opponent);
       const userSide = box.userIsHome ? box.home : box.away;
       const oppSide  = box.userIsHome ? box.away : box.home;
+      // When each one played: a suspended game is played on two days, and a player can come or go
+      // between them (in the first part for one club, gone by the second) — check each at their own time.
+      const firstAt = {}, lastAt = {};
+      for (const pl of pre?.plays || []) for (const id of [pl.batterId, pl.pitcherId]) if (id && Number.isFinite(pl._timestamp)) { if (!(id in firstAt)) firstAt[id] = pl._timestamp; lastAt[id] = pl._timestamp; }
+      const on = (x, team) => [firstAt[x.id] ?? g.suspension?.gameTime ?? g.gameTime, lastAt[x.id] ?? g.gameTime].every(t => onTeamAt(x.id, team, t));
       const wrong = [
-        ...[...userSide.hitters, ...userSide.pitchers].filter(x => !onTeamAt(x.id, 'user', g.gameTime)),
-        ...(oppT ? [...oppSide.hitters, ...oppSide.pitchers].filter(x => !onTeamAt(x.id, oppT.id, g.gameTime)) : []),
+        ...[...userSide.hitters, ...userSide.pitchers].filter(x => !on(x, 'user')),
+        ...(oppT ? [...oppSide.hitters, ...oppSide.pitchers].filter(x => !on(x, oppT.id)) : []),
       ];
       check(`game ${idx}: nobody plays before reporting / after leaving`, wrong.length === 0,
             wrong.map(x => x.name).join(', '));
@@ -1997,7 +2010,11 @@ async function main() {
           if (o.start) {
             starts++; startOuts += o.outs || 0;
             const prev = outs.slice(0, i).reverse().find(x => x.start);
-            if (prev && dd(prev, o) < 5) shortRest++;   // four days' rest = the fifth day
+            if (prev && dd(prev, o) < 5) {
+              shortRest++;   // four days' rest = the fifth day
+              if (process.env.SHORT_DUMP) { const pl = st.players[pid];
+                console.log('SHORT', pl?.teamId, pl?.name, pl?.pos, pl?.group, `prev d${prev.day} bf${prev.bf} outs${prev.outs} at ${new Date(prev.at).toISOString()}`, `now d${o.day} bf${o.bf} outs${o.outs} at ${new Date(o.at).toISOString()}`); }
+            }
           } else {
             reliefOut++;
             reliefOutsBy.set(pid, (reliefOutsBy.get(pid) || 0) + (o.outs || 0));

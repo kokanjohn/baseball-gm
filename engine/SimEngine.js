@@ -2297,6 +2297,17 @@ function _getRotationSP(team, players, atMs = null) {
     const id = rotation.order[(rotation.currentIndex + k) % n];
     if (ready(id)) return { id };
   }
+  // §108 nobody in the rotation has had four days (doubleheaders, makeups): a spot starter — a
+  // starter on the pitcher bench or in the bullpen, rested and fresh — before a tired regular.
+  if (atMs != null) {
+    const inRot = new Set(rotation.order);
+    const spot = (team.rosterIds || []).map(id => players[id])
+      .filter(p => p && p.pos === 'SP' && !inRot.has(p.id) && isAvailable(p)
+                && (p.group === PLAYER_GROUP.PITCHER_BENCH || p.group === PLAYER_GROUP.BULLPEN)
+                && starterRested(p, atMs) && armStatus(p, atMs).status === 'fresh')
+      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+    if (spot) return { id: spot.id };
+  }
   const spId = rotation.order[rotation.currentIndex % n];
   if (players[spId] && isAvailable(players[spId])) return { id: spId };
   return _findHealthySP(team.rosterIds || [], players);
