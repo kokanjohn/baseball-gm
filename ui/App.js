@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r123';
+export const APP_VERSION = 'tfo-v2-r124';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -306,6 +306,8 @@ export async function init() {
     if (titleEl)    titleEl.textContent    = m.title    || 'Milestone';
     if (subtitleEl) subtitleEl.textContent = m.subtitle || '';
     if (trophyEl)   trophyEl.textContent   = m.icon     || '🏆';
+    const ov = document.getElementById('milestone-overlay');
+    if (ov) ov.dataset.palette = m.palette || 'neutral';   // §111 the title's color by occasion
   });
 
   // Continue button — dismiss milestone and resume normal navigation

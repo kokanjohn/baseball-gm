@@ -2635,6 +2635,10 @@ function _seasonProgress(atMs) {
     const results = _regularSeasonResults(st);
     const bracket = buildBracket(seedDivision(standings.divA, results), seedDivision(standings.divB, results));
     StateManager.mutate(s => { s.standings = standings; s.playoffBracket = bracket; });
+    // §111 our season ends here when we're not in the bracket: the Season Over screen says how it ended.
+    // (A division's seeds are its whole standings, in the tiebreak order; the first five play.)
+    const seeded = [bracket.divA.seeds || [], bracket.divB.seeds || []];
+    if (!seeded.some(d => d.slice(0, 5).some(t => t?.id === 'user'))) _queueMissedPlayoffs(StateManager.get(), seeded.find(d => d.some(t => t?.id === 'user')) || []);
     _applyPhase(PHASE.PLAYOFF_BRACKET_BUILD);
     events.push({ type: 'PHASE', to: PHASE.PLAYOFF_BRACKET_BUILD });
     _startRound('WILD_CARD', atMs);
@@ -2775,6 +2779,25 @@ function _queuePhaseMilestones(phase) {
       s.milestoneQueue = [...(s.milestoneQueue || []), { ...m }];
     });
   }
+}
+
+/** §111 We missed the playoffs: Season Over, with the record and how far out we finished. */
+function _queueMissedPlayoffs(st, rows = []) {
+  const base = MILESTONE_SCREENS.SEASON_OVER;
+  if (!base) return;
+  const key = `SEASON_OVER@${st.seasonNum || 1}`;
+  if ((st.seenMilestones || []).includes(key)) return;
+  const u = st.userTeam, w = u.wins || 0, l = u.losses || 0;
+  const i = rows.findIndex(x => x.id === 'user');
+  const place = i >= 0 ? ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth'][i] || `${i + 1}th` : null;
+  const cut = rows[4];   // the last playoff spot in the division (five clubs go)
+  const out = cut && i > 4 ? ((cut.wins - w) + (l - cut.losses)) / 2 : null;   // (0: tied, lost the tiebreak)
+  const where = place ? `${place} in the division` : 'Out of the race';
+  const behind = out == null ? '' : out > 0 ? `, ${out % 1 ? out.toFixed(1) : out} game${out === 1 ? '' : 's'} out of the last playoff spot` : ', out on the tiebreaker';
+  StateManager.mutate(s => {
+    s.seenMilestones = [...(s.seenMilestones || []), key];
+    s.milestoneQueue = [...(s.milestoneQueue || []), { ...base, subtitle: `Finished ${w}–${l}. ${where}${behind}. ${base.subtitle}` }];
+  });
 }
 
 /** The user's series ended: Series Won / Champions / Season Over. */

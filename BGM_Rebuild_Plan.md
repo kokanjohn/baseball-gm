@@ -8803,3 +8803,17 @@ Dates further out are flagged as not yet counting the weather. Spring games are 
 | South (3) | 19 at 85% | none |
 
 Every check passes in both, including the finance and owner checks.
+
+## 111. The end-of-season screens (r124)
+
+**Asked:** confirm that the Season Over and Champions screens actually appear.
+
+- **They do, for a playoff club.** A clinched series queues its screen (`_queueSeriesMilestone`): Series Won, Champions ("World Series won 4–2 over the …"), or Season Over ("Eliminated 3–4 by the … in the World Series"). The commit of that final game hands the screen to the App (`result.milestone`), and the App shows anything else queued one per tick.
+- **The gap: missing the playoffs showed nothing.** Season Over only came from a playoff series, so a club that missed the bracket got no end-of-season screen. `_queueMissedPlayoffs` now runs when the bracket is built: "Finished 74–68. Sixth in the division, 3 games out of the last playoff spot." (or "out on the tiebreaker"). A division's seeds are its whole standings in tiebreak order, and the first five play.
+- **The look.** The title was in the team's accent color, so a dark team color on the dark theme was nearly unreadable. The milestone palettes (ceremony / triumph / calm / respectful), defined but unused, now color the title: Champions in gold with a glow, Series Won in green, and so on, with versions for both themes. The trophy's glow is round rather than a square.
+- **Tests.**
+  - `sim-season` checks the right screen is shown or queued at season's end. Screens handed over by commits are recorded (`gm.milestones`). Passes: north 2 (Champions), west 5 with `ARCH=ember` (Season Over, World Series loss).
+  - `test-milestones-ui.mjs` (8 checks, both themes): Champions, Season Over (knocked out) and Season Over (missed the playoffs) show one at a time, each with its own text; Continue dismisses each.
+- **`sim-season` `ARCH=…`** picks the user club's archetype.
+
+**Also asked:** one daily summary push in the offseason (§23.3). The GM declined: offseason messages stay individual, and should instead be aware of the club's situation (see §112).

@@ -127,7 +127,7 @@ async function checkComposeTruth(st, at) {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { talks: [], calls: [], offers: [], counters: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { milestones: [], talks: [], calls: [], offers: [], counters: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -311,7 +311,7 @@ async function runPostseason() {
     const g = st.schedule[idx];
     if (g && !g._committed) {
       playToFinal(idx);
-      await commitGame(idx);
+      { const res = await commitGame(idx); if (res?.milestone) gm.milestones.push(res.milestone); }
       releaseDueCards();
       if (g.isPlayoff) userGames++;
       continue;
@@ -536,7 +536,7 @@ async function runOffseasonChecks() {
   for (let i = 0; i < 3; i++) {
     const idx = SM.get().currentGameIndex;
     if (!playToFinal(idx)) break;
-    await commitGame(idx); releaseDueCards(); played++;
+    { const res = await commitGame(idx); if (res?.milestone) gm.milestones.push(res.milestone); } releaseDueCards(); played++;
   }
   check(`season 2: spring games play and commit (${played}/3)`, played === 3 && SM.get().phase === PHASE.SPRING_TRAINING);
 }
@@ -1346,7 +1346,7 @@ async function main() {
   await checkPrecache();
 
   await startNewGame({
-    archetypeId: 'contender',
+    archetypeId: process.env.ARCH || 'contender',   // (ARCH=ember etc. for a weaker club)
     gmName: 'Test GM', city: 'Testville', nickname: 'Testers',
     abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: process.env.REGION || 'north',
   });
@@ -1551,7 +1551,7 @@ async function main() {
       seasonGames++;
     }
 
-    await commitGame(idx);
+    { const res = await commitGame(idx); if (res?.milestone) gm.milestones.push(res.milestone); }   // (the App shows it)
     releaseDueCards();   // the App's next tick
     // Saved games, for tools that read a real state (STATE_DUMP=dir STATE_DUMP_AT=schedule indexes, comma-separated).
     if (process.env.STATE_DUMP && String(process.env.STATE_DUMP_AT || '60').split(',').map(Number).includes(idx)) {
@@ -2217,6 +2217,17 @@ async function main() {
 
   // ── §70: the offseason on the league calendar → season 2 ────────
   if (SM.get().phase === PHASE.SEASON_SUMMARY) {
+    // §111 how our season ended, on its own screen: Champions, or Season Over (knocked out, or never in).
+    {
+      const st = SM.get(), b = st.playoffBracket;
+      const inIt = [b?.divA?.seeds || [], b?.divB?.seeds || []].some(d => d.slice(0, 5).some(t => t?.id === 'user'));
+      const champ = b?.champion?.id === 'user';
+      // (Shown at the final out — the commit hands it to the App — or still waiting in the queue.)
+      const ends = [...gm.milestones, ...(st.milestoneQueue || [])].filter(m => m.id === 'SEASON_OVER' || m.id === 'CHAMPIONS');
+      const want = champ ? 'CHAMPIONS' : 'SEASON_OVER';
+      check(`season end: the ${want === 'CHAMPIONS' ? 'Champions' : 'Season Over'} screen is queued (${champ ? 'won it all' : inIt ? 'knocked out in the playoffs' : 'missed the playoffs'}: “${ends[0]?.subtitle || '—'}”)`,
+            ends.length === 1 && ends[0].id === want && /Finished|Eliminated|World Series won/.test(ends[0].subtitle || ''), JSON.stringify(ends.map(m => m.id)));
+    }
     await checkCardMoney(SM.get());
     await checkTradeEngine(SM.get());
     checkTalks(SM.get());

@@ -837,8 +837,16 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;
   display:none;align-items:center;justify-content:center;flex-direction:column;
   padding:32px 28px;text-align:center;}
 #milestone-overlay.active{display:flex;}
-.milestone-trophy{font-size:64px;margin-bottom:16px;animation:pulse 2s ease-in-out infinite;}
-.milestone-title{font-family:'Bebas Neue',sans-serif;font-size:36px;letter-spacing:4px;color:var(--accent);line-height:1.1;margin-bottom:8px;}
+.milestone-trophy{font-size:64px;margin-bottom:20px;width:112px;height:112px;border-radius:50%;display:flex;align-items:center;justify-content:center;animation:pulse 2s ease-in-out infinite;}
+.milestone-title{font-family:'Bebas Neue',sans-serif;font-size:36px;letter-spacing:4px;color:var(--text);line-height:1.1;margin-bottom:8px;}
+/* §111 each milestone's palette: the title reads on any team's colors, in both themes */
+#milestone-overlay[data-palette="ceremony"] .milestone-title{color:#E8B931;text-shadow:0 0 24px rgba(232,185,49,.35);font-size:44px;}
+#milestone-overlay[data-palette="triumph"]  .milestone-title{color:#3FB950;}
+#milestone-overlay[data-palette="calm"]     .milestone-title{color:#7FB3FF;}
+#milestone-overlay[data-palette="respectful"] .milestone-title{color:var(--text);}
+:root[data-theme="light"] #milestone-overlay[data-palette="ceremony"] .milestone-title{color:#A8780A;text-shadow:none;}
+:root[data-theme="light"] #milestone-overlay[data-palette="triumph"]  .milestone-title{color:#1A7F37;}
+:root[data-theme="light"] #milestone-overlay[data-palette="calm"]     .milestone-title{color:#1F5FBF;}
 .milestone-subtitle{font-size:15px;color:var(--soft);line-height:1.6;max-width:300px;margin:0 auto 32px;}
 .milestone-continue-btn{background:var(--accent);color:var(--accent-txt);border:none;
   padding:16px 40px;border-radius:12px;font-family:'DM Sans',sans-serif;
