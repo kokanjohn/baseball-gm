@@ -1290,6 +1290,17 @@ function checkWeatherSeason(st) {
   check(`weather cards: the manager asked about the starter ${byId('wx_rain_start').length} times; ${byId('wx_doubleheader').length} doubleheader questions (${userDh} of our makeups were doubleheaders); none left hanging`,
         wxCards.every(c => c.resolved || (c.expiresAtMs ?? Infinity) > clock.get()),
         wxCards.filter(c => !(c.resolved || (c.expiresAtMs ?? Infinity) > clock.get())).map(c => `${c.cardId} ${c._rosterKey} exp ${new Date(c.expiresAtMs).toISOString()} deliver ${c.deliverAtMs ? new Date(c.deliverAtMs).toISOString() : '-'} inbox ${(st.inbox || []).includes(c)} withdrawn ${!!c.withdrawn}`).join(' | '));   // (how often is in the rates tool; a dry season can ask none)
+  // §110 the weather and the gate: a wet start (rain at the gate, a held start) draws fewer than a dry one.
+  {
+    const gates = all.filter(x => x.played && !x.g.isSpring && !x.g.isPlayoff && x.g.attendance > 0 && (x.user ? x.g.isHome : true));
+    const wetStart = (g) => (Number.isFinite(g.wxResult?.startAt) && g.wxResult.startAt - g.gameTime > 10 * 60_000) || (g.wxResult?.conditions?.[0]?.rateMmH ?? 0) > 0.5;
+    const cold = (g) => (g.weather?.tempF ?? 70) < 50;
+    const avg = (xs) => xs.length ? xs.reduce((a, x) => a + x.g.attendance, 0) / xs.length : NaN;
+    const wet = gates.filter(x => wetStart(x.g)), cl = gates.filter(x => cold(x.g) && !wetStart(x.g)), fine = gates.filter(x => !wetStart(x.g) && !cold(x.g));
+    const r = (xs) => avg(xs) / avg(fine);
+    check(`weather: a wet start draws fewer (${wet.length} games at ${(100 * r(wet)).toFixed(0)}% of a dry, mild one's crowd), and so does the cold (${cl.length} at ${(100 * r(cl)).toFixed(0)}%)`,
+          (wet.length < 5 || r(wet) < 0.97) && (cl.length < 5 || r(cl) < 0.99), `${wet.length} / ${cl.length} / ${fine.length}`);
+  }
   const delayed = all.filter(x => x.played && x.g.wxResult?.delays?.length).length;
   const called = all.filter(x => x.played && x.g.wxResult?.ruling?.outcome === 'final').length;
   const n = reg.length;

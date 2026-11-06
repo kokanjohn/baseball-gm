@@ -45,7 +45,7 @@ import {
   PLAYER_GROUP, REGULAR_SEASON_GAME_COUNT,
   FIN_MEDIA_SHARE_K, FIN_BREAK_EVEN_MARGIN, FIN_CARDS_ALLOWANCE, FIN_LOCAL_SHARE, FIN_LOCAL_PER_TIER,
   FIN_PAYDAYS, FIN_PAYDAY_HOUR, FIN_PLAYOFF_GATE_MULT, FIN_START_FUNDS_SHARE,
-  FIN_CAPACITY_BASE, FIN_CAPACITY_PER_M, FIN_ATTENDANCE,
+  FIN_CAPACITY_BASE, FIN_CAPACITY_PER_M, FIN_ATTENDANCE, FIN_WEATHER,
   OWNER_PROFILE, OWNER_PATIENCE, OWNER_STAGE, OWNER_TRUST_FX, OWNER_ORDER_TARGET_PENALTY,
   FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER, FIN_CPU, FIN_MIN_MOVE_K,
 } from '../data/constants.js';
@@ -382,7 +382,7 @@ export function payday(draft, i, atMs, teamId = 'user') {
  * crowd at a home game (known at first pitch) and the gate it will pay:
  * { attendance, gateK, sellout }. Pure — nothing is posted.
  */
-export function crowdFor(state, teamId, { atMs, playoff = false, atmosphere = null, wins = null, losses = null }) {
+export function crowdFor(state, teamId, { atMs, playoff = false, atmosphere = null, wins = null, losses = null, weather = null, expected = false }) {
   const t = _club(state, teamId);
   const fin = t?.finances;
   if (!fin?.market) return null;
@@ -391,8 +391,10 @@ export function crowdFor(state, teamId, { atMs, playoff = false, atmosphere = nu
   const form = w + l >= A.formAfterGames ? _formAt(w / (w + l)) : 1;
   const dow = new Date(atMs).getDay();
   const dayMult = (dow === 5 || dow === 6 || dow === 0) ? A.weekend : A.weekday;
-  const noise = 1 + (Math.random() * 2 - 1) * A.noise;
-  let fill = _fill(atmosphere ?? t.atmosphere ?? 60, form, dayMult, noise);
+  const noise = expected ? 1 : 1 + (Math.random() * 2 - 1) * A.noise;
+  // §110 the weather on the demand, before the seats run out (a sellout's extra demand absorbs it).
+  const wf = weather ? weatherDemand(weather, { playoff }).factor : 1;
+  let fill = clamp((A.base + A.perAtmo * (atmosphere ?? t.atmosphere ?? 60)) * form * dayMult * noise * wf, A.min, 1);
   if (playoff) fill = Math.min(1, fill + A.playoffLift);
   // A ticket promotion (§78.8): its price and its crowd, regular-season home games.
   const promo = !playoff && fin.promo?.gamesLeft > 0 ? fin.promo : null;
@@ -403,13 +405,32 @@ export function crowdFor(state, teamId, { atMs, playoff = false, atmosphere = nu
 }
 
 /**
+ * weatherDemand({ chance, wet, tempF }, { playoff }) — §110 what the weather does to a home crowd's
+ * demand: the walk-up (game-day tickets) by the forecast fans saw that day (`chance`, the GM's own
+ * forecast a few hours out), rain at the gate or a held start (`wet`) and the temperature at first
+ * pitch; the advance sale a little. → { factor (on the whole crowd's demand), walk, adv }.
+ */
+export function weatherDemand(w, { playoff = false } = {}) {
+  const W = FIN_WEATHER;
+  const lerp = (x, pts) => { if (x <= pts[0][0]) return pts[0][1]; for (let i = 1; i < pts.length; i++) if (x <= pts[i][0]) { const [x0, y0] = pts[i - 1], [x1, y1] = pts[i]; return y0 + (y1 - y0) * (x - x0) / (x1 - x0); } return pts[pts.length - 1][1]; };
+  const ch = Number.isFinite(w?.chance) ? w.chance : 0;
+  const rainFrac = clamp((ch - W.chanceFrom) / (W.chanceTo - W.chanceFrom), 0, 1);
+  let walk = (1 - W.chanceCut * rainFrac) * (w?.wet ? 1 - W.wetCut : 1) * (Number.isFinite(w?.tempF) ? lerp(w.tempF, W.temp) : 1);
+  walk = Math.max(W.walkFloor, walk);
+  let adv = 1 - W.advChanceCut * clamp((ch - 40) / 50, 0, 1) - (Number.isFinite(w?.tempF) && w.tempF < W.advColdF ? W.advColdCut : 0);
+  if (playoff) { walk = 1 - (1 - walk) * W.playoffScale; adv = 1 - (1 - adv) * W.playoffScale; }
+  return { factor: (1 - W.walkShare) * adv + W.walkShare * walk, walk, adv };
+}
+
+/**
  * homeGate(draft, teamId, opts) — post a home game's gate. `opts.crowd` (from
  * crowdFor at first pitch) is used when given; otherwise the crowd is drawn now.
  * Returns { attendance, gateK, sellout }.
  */
 export function homeGate(draft, teamId, opts) {
   const t = _club(draft, teamId);
-  const crowd = opts.crowd || crowdFor(draft, teamId, opts);
+  // (The crowd is the first pitch's: its day of the week, its weather — §110. The gate posts at the final.)
+  const crowd = opts.crowd || crowdFor(draft, teamId, { ...opts, atMs: opts.dayMs ?? opts.atMs });
   if (!crowd || !t?.finances) return null;
   post(t.finances, crowd.gateK, 'gate', opts.playoff ? 'Playoff gate' : 'Home gate', opts.atMs);
   if (!opts.playoff && t.finances.promo?.gamesLeft > 0) t.finances.promo.gamesLeft -= 1;

@@ -142,6 +142,7 @@ import {
   ADVANCE_SCOUT,
   LEAGUE_TRADES,
   GAME_WEATHER,
+  FIN_WEATHER,
 } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -800,7 +801,7 @@ function _activateGame(game) {
     g.liveLineups          = liveLineups;
     // §78: the crowd is in the seats at first pitch (the gate is banked at the final).
     if (g.isHome && !isSpring && !g.attendance) {
-      const crowd = Finance.crowdFor(s, 'user', { atMs: g.gameTime || Date.now(), playoff: !!g.isPlayoff });
+      const crowd = Finance.crowdFor(s, 'user', { atMs: g.gameTime || Date.now(), playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true) });
       if (crowd) { g.attendance = crowd.attendance; g.gateK = crowd.gateK; g.sellout = crowd.sellout; }
     }
   });
@@ -1008,12 +1009,12 @@ export async function commitGame(gameIndex) {
       g._gateApplied = true;
       if (g.isHome) {
         const crowd = g.attendance ? { attendance: g.attendance, gateK: g.gateK, sellout: !!g.sellout } : null;
-        const gate = Finance.homeGate(s, 'user', { atMs: _gameEndMs(g), playoff: !!g.isPlayoff, crowd });
+        const gate = Finance.homeGate(s, 'user', { atMs: _gameEndMs(g), dayMs: g.gameTime, playoff: !!g.isPlayoff, crowd, weather: _gateWeather(s, g, true) });
         if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
       } else {
         // §78.5 on the road, the home club's crowd pays the home club.
         const host = (s.leagueTeams || []).find(t => t.name === g.opponent);
-        if (host?.finances) Finance.homeGate(s, host.id, { atMs: _gameEndMs(g), playoff: !!g.isPlayoff });
+        if (host?.finances) Finance.homeGate(s, host.id, { atMs: _gameEndMs(g), dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true) });
       }
     }
 
@@ -1852,6 +1853,22 @@ function _wxResolve(s, ref) {
 }
 const _wxRefOf = (g, isUser) => (isUser ? { user: true, i: g.index } : { user: false, id: g.id });
 
+/**
+ * _gateWeather(state, g, isUser) — §110 the weather a home crowd decides on: the forecast fans saw on
+ * game day (the GM's own, FIN_WEATHER.forecastLeadH before first pitch), whether it was raining at the
+ * gate or the start was held, and the temperature at first pitch. → { chance, wet, tempF } or null.
+ */
+function _gateWeather(state, g, isUser) {
+  if (!g || !Number.isFinite(g.gameTime)) return null;
+  const res = g.wxResult, c0 = res?.conditions?.[0];
+  const held = Number.isFinite(res?.startAt) && res.startAt - g.gameTime > 10 * 60_000;
+  const wet = held || (c0?.rateMmH ?? 0) > 0.5 || (res?.delays || []).some(d => d.startT <= g.gameTime + 15 * 60_000 && d.endT >= g.gameTime - 30 * 60_000);
+  let chance = null;
+  try { chance = forecastForGame(weatherContext(state), g.gameTime - FIN_WEATHER.forecastLeadH * 3_600_000, _wxVenueGame(state, g, isUser)).chance; } catch { chance = null; }
+  const tempF = g.weather?.tempF ?? c0?.tempF ?? null;
+  return { chance, wet, tempF };
+}
+
 /** Where a game is played and when, for its weather (the All-Star Game: the host's park). */
 function _wxVenueGame(state, g, isUser) {
   if (g.isAllStar) return { gameTime: g.gameTime, homeId: state.allStar?.season?.hostId || 'user' };
@@ -2289,7 +2306,7 @@ function _finishLeagueGame(date, i) {
     _advanceRotation(away);
     // §78.5 the home club's gate (not in spring).
     if (!g.isSpring && home?.finances) {
-      const gate = Finance.homeGate(s, home.id, { atMs: endMs, playoff: !!g.isPlayoff });
+      const gate = Finance.homeGate(s, home.id, { atMs: endMs, dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, false) });
       if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
     }
     if (home) Development.countGame(s, home.id);

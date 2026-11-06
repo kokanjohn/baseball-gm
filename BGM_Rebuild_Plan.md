@@ -8758,3 +8758,48 @@ Compose replies were canned pool text. For example, the groundskeeper's weather 
 - `sim-season`: the box check tests each player at their own first and last appearance (§108.4).
 - **Found in the season run:** the first pitching change of a resumed game showed 0–0. A new pitcher's play takes its score from the play before it, and a resumption's run has none before it. It now falls back to the game's score (`gs.userScore` / `gs.oppScore`). `check-game-sim-weather` now also checks the running score on every play of both parts.
 - **Seasons:** south 1, north 4, east 2 and west 3 pass in full, with 5, 1, 0 and 0 suspended games. The box check per appearance (§108.4) passes in all four.
+
+## 110. The weather and the gate (r123)
+
+**GM's call:** weather affects attendance, to keep the game as realistic as possible.
+
+### 110.1 The model
+Announced attendance is tickets sold, so the weather works through who buys a ticket.
+- **The advance sale** (season tickets, tickets bought days ahead) barely moves: −6% at most for a likely-wet forecast, −4% when it's colder than 45°.
+- **The walk-up** (`FIN_WEATHER.walkShare` 24% of a typical crowd) follows what fans see on game day:
+  - **The forecast's chance of rain.** It's the GM's own forecast, `forecastLeadH` (4 hours) before first pitch. 20% → 90% costs up to 55% of the walk-up.
+  - **Rain at the gate, or a held start:** −45% more.
+  - **The temperature at first pitch:**
+
+    | Temperature | Walk-up kept |
+    |---|---|
+    | 32° | 30% |
+    | 40° | 45% |
+    | 48° | 68% |
+    | 55° | 88% |
+    | 62–86° | 100% |
+    | 92° | 90% |
+    | 100° | 72% |
+
+  - The walk-up never falls below 15%.
+- **Playoff crowds** mind the weather half as much.
+- **The factor applies to demand,** before the seats run out, so a sellout's extra demand absorbs it. The floor (`FIN_ATTENDANCE.min`) still holds.
+- **Code.** `FinanceEngine.weatherDemand(w, { playoff })` gives `{ factor, walk, adv }`. `crowdFor` takes `weather: { chance, wet, tempF }`, and `expected: true` gives the crowd with no random draw, for projections. `homeGate` draws the crowd at first pitch's day (`dayMs`).
+- **Where crowds are drawn.** `GameEngine._gateWeather(state, g, isUser)` gives what the crowd decides on: the forecast at `gameTime − 4h`; `wet` = a held start, rain at first pitch, or a delay at the gate; `tempF` from the game's record. It's passed everywhere a crowd is drawn: our home game at first pitch, the catch-up commit, the host club's gate when we're on the road, and every CPU home gate.
+
+### 110.2 What the GM sees
+The ticket office's attendance reply projects each home date in the next week with the same model (`crowdFor` with `expected: true`). It uses the forecast for dates within three days:
+- "July 22: about 19,500"
+- "March 20: about 20,000 — the forecast (snow likely, 100%) is costing us about 7,400 walk-up sales"
+
+Dates further out are flagged as not yet counting the weather. Spring games are left out, since they're not part of the gate.
+
+### 110.3 Tests
+`sim-season` compares crowds against dry, mild games: a wet start draws fewer (under 97%), and so does cold (under 99%).
+
+| Region (seed) | Wet starts | Cold games (under 50°) |
+|---|---|---|
+| North (2) | 10 at 83% | 23 at 93% |
+| South (3) | 19 at 85% | none |
+
+Every check passes in both, including the finance and owner checks.

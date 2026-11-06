@@ -1605,6 +1605,20 @@ export const FIN_START_FUNDS_SHARE    = 0.15;   // default opening funds, share 
 // Ballparks and crowds.
 export const FIN_CAPACITY_BASE        = 26000;  // + per $1M of starting payroll level
 export const FIN_CAPACITY_PER_M       = 450;
+// §110 Weather and the gate. Announced attendance is tickets sold: the advance sale (season tickets,
+// tickets bought days ahead) barely moves; the walk-up (bought that day) follows the forecast fans see on
+// game day, the weather at the gate, and the temperature. A sellout's extra demand absorbs it.
+export const FIN_WEATHER = Object.freeze({
+  walkShare: 0.24,                       // of a typical crowd, tickets bought on game day
+  forecastLeadH: 4,                      // the forecast fans see when they decide (hours before first pitch)
+  chanceFrom: 20, chanceTo: 90, chanceCut: 0.55,   // walk-up lost as the chance of rain runs 20% → 90%
+  wetCut: 0.45,                          // more walk-up lost when it's raining at the gate (or the start is held)
+  temp: [[32, 0.30], [40, 0.45], [48, 0.68], [55, 0.88], [62, 1], [86, 1], [92, 0.9], [100, 0.72]],   // walk-up by °F at first pitch
+  walkFloor: 0.15,
+  advChanceCut: 0.06, advColdF: 45, advColdCut: 0.04,   // the advance sale: a little, for a wet or cold forecast
+  playoffScale: 0.5,                     // a playoff crowd minds the weather half as much
+});
+
 export const FIN_ATTENDANCE = Object.freeze({
   base: 0.44, perAtmo: 0.0045,                 // fill from atmosphere (40 → 62%, 68 → 75%, 95 → 87%)
   formWeight: 0.6, formMin: 0.85, formMax: 1.15, formAfterGames: 10,   // the club's form vs .500

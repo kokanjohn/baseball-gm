@@ -13,6 +13,7 @@
 
 import { composeFacts, avgOf, fmtAvg, eraOf } from './ComposeFacts.js';
 import { MS_HOUR, MS_DAY } from './WeatherClimate.js';
+import { crowdFor } from './FinanceEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -599,16 +600,25 @@ W.tix_attendance = (f, r, who) => {
       if (a - b > 2500) out.push(`Weekends are carrying us — about ${a.toLocaleString()} on weekends against ${b.toLocaleString()} on weeknights.`);
     }
   } else out.push(f.season === 'off' ? 'No games to sell right now; we\'re focused on next season.' : 'We haven\'t had enough home dates yet to talk about trends.');
-  const homes = f.homeGamesWithin(7).filter(g => g.gameTime > f.atMs).slice(0, 4);
+  // (Spring games aren't part of the gate.)
+  const homes = f.homeGamesWithin(7).filter(g => g.gameTime > f.atMs && !g.isSpring).slice(0, 4);
+  if (f.season === 'spring' && !homes.length) out.push(`Spring games aren't part of our gate; we're focused on the home opener and the first homestand.`);
   if (homes.length) {
+    // §110 our projection: the same crowd model the gate uses, with the forecast fans will see.
     const notes = homes.map(g => {
       const fc = g.gameTime - f.atMs <= 3 * MS_DAY ? f.forecastFor(g) : null;
-      const dow = new Date(g.gameTime + f.tz() * 60_000).getUTCDay();
-      const wkend = dow === 0 || dow === 5 || dow === 6;
-      const risk = fc && fc.chance >= 40 ? ` (${fc.label.toLowerCase()}, ${fc.chance}% — we're sending out the weather policy)` : '';
-      return `${f.when(g.gameTime)}${wkend ? ', a weekend date' : ''}${risk}`;
+      const base = crowdFor(f.state, 'user', { atMs: g.gameTime, playoff: !!g.isPlayoff, expected: true });
+      const proj = fc ? crowdFor(f.state, 'user', { atMs: g.gameTime, playoff: !!g.isPlayoff, expected: true, weather: { chance: fc.chance, tempF: fc.tempF, wet: false } }) : base;
+      const n = (x) => `${Math.round((x?.attendance || 0) / 500) * 500 >= 1000 ? (Math.round(x.attendance / 500) * 500).toLocaleString() : x?.attendance}`;
+      const lost = (base?.attendance || 0) - (proj?.attendance || 0);
+      const why = fc && fc.chance >= 30 ? `${fc.label.toLowerCase()}, ${fc.chance}%` : fc && fc.tempF < 55 ? `${fc.tempF}°` : fc && fc.tempF >= 90 ? `${fc.tempF}° heat` : '';
+      const tail = proj?.sellout ? 'a sellout' : `about ${n(proj)}`;
+      return lost >= 800 && why
+        ? `${f.when(g.gameTime)}: ${tail} — the forecast (${why}) is costing us about ${(Math.round(lost / 100) * 100).toLocaleString()} walk-up sales`
+        : `${f.when(g.gameTime)}: ${tail}`;
     });
-    out.push(`Coming up at home: ${list(notes)}.`);
+    out.push(`Coming up at home:\n${notes.map(x => `• ${x}`).join('\n')}`);
+    if (homes.some(g => g.gameTime - f.atMs > 3 * MS_DAY)) out.push(`(Those further out don't account for the weather yet — the walk-up decides on the day.)`);
     const promo = f.fin().promo;
     if (promo?.gamesLeft > 0) out.push(`The ticket promotion has ${plural(promo.gamesLeft, 'home game')} left on it.`);
   }
