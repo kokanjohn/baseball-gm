@@ -8727,4 +8727,34 @@ Compose replies were canned pool text. For example, the groundskeeper's weather 
 ### 108.4 A suspended game's second part is simulated on its first day (open)
 - **Found while chasing "a player in the box score for a club they weren't on."** `SimEngine.simulateGame` simulates the whole game at first pitch. When the weather suspends it, the plays after the stop are kept as `resumePlays` and replayed when it resumes days later, with the rosters as they were on the first day. So a player traded, injured or sent down in between still appears in the second part. In MLB, the completion uses the clubs' rosters on the day it resumes.
 - **The check now tests each player at their own first and last appearance** (from the plays) rather than only at the resumption time. It used to test everyone at the resumption time, which also flagged first-part players who left legitimately.
-- **The structural fix (next).** Simulate the remainder at resumption: save the game's state at the stop (inning, half, outs, runners, score, batting-order positions, pitchers used), then continue from it with each club's roster as it stands then.
+- **Fixed in r122 (§109).**
+
+## 109. A suspended game is finished with the rosters of the day it resumes (r122)
+
+**GM's call:** when a player from the first part is gone, a bench player takes the spot, as in real baseball. The player who left counts as replaced and can't come back in.
+
+### 109.1 The model
+- **At the suspension.** `_simulateFullGame` stops at the suspension, with no `game_end`. `_snapshotForResume` keeps where the game stands as plain data on the game (`g.resumeState`):
+  - the half it stopped in, outs, runners, runs in the half, `fieldMod`;
+  - the game state (`gs`): inning, score, each side's place in the order, the pitchers in, pitch counts and innings, the pitchers used (Sets kept as `{ __set }`), and both sides set to need a new pitcher (nobody pitches on through a suspension);
+  - each side's batting order (slots) and everyone who has batted (`appeared`).
+
+  The day's things are rebuilt at resumption rather than kept: the weather, the scouting report, the league's norms, the bullpens.
+- **`generatePlays` returns `resumeState`** in place of `resumePlays`. Its box score covers the first part only.
+- **At the resumption,** `generateResumption(game, userTeam, opponentTeam, players, { resumeState, partOne, liveLineups, phase, isSpring, norms })` plays the rest:
+  - Each club's lineup, bench and bullpen are built from its roster that day.
+  - **A lineup player who can't play** (off the roster, injured, unavailable) is replaced by the best unused bench player, one who plays the position first. This shows as a `lineup_change` play: "X takes Y's place in the lineup (no longer with the club)." A player who has already batted can't come back in.
+  - **A runner who has left** is run for by whoever took his place in the order.
+  - The loop starts in the stopped half (`resume`). The fielding side changes pitchers at once (`_midHalfChange`), and the batting side changes when it takes the field.
+  - `_assignTimestamps` over both parts gives the second part's playing minutes after the stop (`_resumeMin`); `resumeTimeline` puts them on the resumption day's clock with that day's delays.
+  - Win/loss/save decisions are worked out over the whole game. The box score is rebuilt over both parts, with the home side's players as the union of the first part's, the roster that day and the lineup that day.
+- **`GameEngine._resumeGame`** calls it for our games and the league's (`gameTeams`). It replaces `_precomputedBoxScore` and `liveLineups`, and clears `resumeState`.
+- **The resumption's weather plan** needs the game's length before it's played: `resumeMinutesLeft` (the halves still to come, 10 minutes a half).
+- **Old saves:** a game suspended before r122 carries `resumePlays` and is finished from those as before.
+
+### 109.2 Tests
+- `check-game-sim-weather` (19 checks). Suspended games resume through `generateResumption` and must pick up exactly where they stopped, with the box matching the score.
+- A new check covers 12 suspended games in which, between the days, one of our hitters is traded and another goes on the IL. Neither plays on. Two `lineup_change` plays appear. The box, the decisions (W and L) and the clock hold.
+- `sim-season`: the box check tests each player at their own first and last appearance (§108.4).
+- **Found in the season run:** the first pitching change of a resumed game showed 0–0. A new pitcher's play takes its score from the play before it, and a resumption's run has none before it. It now falls back to the game's score (`gs.userScore` / `gs.oppScore`). `check-game-sim-weather` now also checks the running score on every play of both parts.
+- **Seasons:** south 1, north 4, east 2 and west 3 pass in full, with 5, 1, 0 and 0 suspended games. The box check per appearance (§108.4) passes in all four.

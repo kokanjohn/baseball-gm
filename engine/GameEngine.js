@@ -75,6 +75,8 @@ import {
   leagueNorms,
   resumeTimeline,
   rotationStarter,
+  generateResumption,
+  resumeMinutesLeft,
 } from './SimEngine.js';
 import * as CardEngine from './CardEngine.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
@@ -775,7 +777,7 @@ function _activateGame(game) {
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
   const wx = _wxAtFirstPitch(state, game, true);   // §102.3
 
-  const { plays, boxScore, liveLineups, resumePlays, weather } = generatePlays(
+  const { plays, boxScore, liveLineups, resumeState, weather } = generatePlays(
     wx ? { ...game, ...wx.record } : game,
     userTeam,
     opponentTeam,
@@ -792,7 +794,7 @@ function _activateGame(game) {
     g.livePlayIndex = 0;
     g.status        = GAME_STATUS.LIVE;
     if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = weather; }
-    if (resumePlays) g.resumePlays = resumePlays;
+    if (resumeState) g.resumeState = resumeState;   // §109 suspended: where it stands, finished when it resumes
     // Pre-computed full-game box (promoted to g.boxScore at commit) + seed lineups.
     g._precomputedBoxScore = boxScore;
     g.liveLineups          = liveLineups;
@@ -835,21 +837,21 @@ function _silentlyCommitGame(game) {
 
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
   const wx = _wxAtFirstPitch(state, game, true);   // §102.3
-  const { plays, boxScore, liveLineups, resumePlays, weather } = generatePlays(
+  const { plays, boxScore, liveLineups, resumeState, weather } = generatePlays(
     wx ? { ...game, ...wx.record } : game, userTeam, opponentTeam, players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
       norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null }
   );
 
   // Suspended by the weather: it stands where it stopped, to be finished another day.
-  if (resumePlays) {
+  if (resumeState) {
     const sp = plays[plays.length - 1];
     StateManager.mutate(s => {
       const g = s.schedule[game.index];
       if (!g) return;
       Object.assign(g, wx.record);
       g.wx = wx.plan; g.wxResult = weather;
-      g.plays = plays; g.resumePlays = resumePlays; g.livePlayIndex = plays.length;
+      g.plays = plays; g.resumeState = resumeState; g.livePlayIndex = plays.length;
       g.ourScore = sp?.cumOurScore ?? 0; g.theirScore = sp?.cumTheirScore ?? 0;
       g.status = GAME_STATUS.LIVE;
       g._precomputedBoxScore = boxScore;
@@ -1883,8 +1885,10 @@ function _ensureWeatherPlans(clockMs) {
   const ctx = weatherContext(st);
   const plans = todo.map(t => {
     if (!t.susp) return gameWeatherPlan(ctx, t.vg);
+    // (How long the rest will take: about the halves still to come — §109 it's played when it resumes.)
     const rest = t.g.resumePlays || [];
-    const r = resumptionPlan(ctx, t.vg, t.g.gameTime, rest.length ? rest[rest.length - 1]._resumeMin ?? 0 : 0);
+    const left = t.g.resumeState ? resumeMinutesLeft(t.g.resumeState) : rest.length ? rest[rest.length - 1]._resumeMin ?? 0 : 0;
+    const r = resumptionPlan(ctx, t.vg, t.g.gameTime, left);
     return { ...r.plan, resumption: true, resumeOk: r.ok };
   });
   StateManager.mutate(s => {
@@ -2112,12 +2116,28 @@ function _resumeGame(ref, atMs) {
     return;
   }
   const sp = g.plays[g.plays.length - 1];
-  const more = resumeTimeline(g.resumePlays || [], plan, sp);
+  // §109 the rest of the game, simulated now — from where it stopped, with each club's roster
+  // as it is today. (A save from before r122 carries the rest already played: it's used as it is.)
+  let rest = g.resumePlays || [], box = null, lineups = null;
+  if (g.resumeState) {
+    const t = gameTeams(g, isUser);
+    const club = (id) => id === 'user' ? st.userTeam : (st.leagueTeams || []).find(x => x.id === id) || null;
+    const [first, second] = isUser ? [st.userTeam, club(g.opponentId)] : [club(t.homeId), club(t.awayId)];
+    const sim = generateResumption(isUser ? g : { ...g, isHome: true }, first, second, st.players, {
+      resumeState: g.resumeState, partOne: g.plays, liveLineups: g.liveLineups || {}, phase: st.phase, isSpring: !!g.isSpring,
+      norms: leagueNorms([st.userTeam, ...(st.leagueTeams || [])], st.players),
+    });
+    rest = sim.plays; box = sim.boxScore; lineups = sim.liveLineups;
+  }
+  const more = resumeTimeline(rest, plan, sp);
   StateManager.mutate(s => {
     const x = _wxResolve(s, ref).g;
     const base = x.plays.length;
     x.plays = [...x.plays, ...more.map((p, k) => ({ ...p, playIndex: base + k }))];
+    if (box) x._precomputedBoxScore = box;
+    if (lineups) x.liveLineups = lineups;
     delete x.resumePlays;
+    delete x.resumeState;
     x.status = GAME_STATUS.LIVE;
     x.resumedAt = plan.startAt;
   });
@@ -2224,7 +2244,7 @@ function _startLeagueGame(date, i) {
     g.liveLineups          = sim.liveLineups;
     g.status               = GAME_STATUS.LIVE;
     if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = sim.weather; }
-    if (sim.resumePlays) g.resumePlays = sim.resumePlays;
+    if (sim.resumeState) g.resumeState = sim.resumeState;   // §109
   });
 }
 
@@ -2288,6 +2308,7 @@ function _finishLeagueGame(date, i) {
     delete g.plays;
     delete g._precomputedBoxScore;
     delete g.resumePlays;
+    delete g.resumeState;
     if (home && away) {
       const [w, l, ws, ls] = homeScore > awayScore ? [home, away, homeScore, awayScore] : [away, home, awayScore, homeScore];
       const tag = g.isPlayoff ? 'Playoffs: ' : g.isSpring ? 'Spring: ' : '';

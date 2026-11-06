@@ -5,7 +5,7 @@
 import { seedRandom } from './shims.js';            // MUST be first (installs globals)
 import * as SM from '../../store/StateManager.js';
 import { startNewGame } from '../../engine/GameEngine.js';
-import { generatePlays, accumulateBox, accumulateStats, leagueNorms, playRuns, weatherEnv } from '../../engine/SimEngine.js';
+import { generatePlays, generateResumption, accumulateBox, accumulateStats, leagueNorms, playRuns, weatherEnv } from '../../engine/SimEngine.js';
 import { weatherContext, MS_HOUR, MS_DAY } from '../../engine/WeatherClimate.js';
 import { gameWeatherPlan, gameConditions } from '../../engine/GameWeather.js';
 import { venueSample } from '../../engine/WeatherSystems.js';
@@ -49,7 +49,7 @@ console.log(`Pacing (no weather) — ${REGION}`);
     const innings = end.inning;
     lens.push((end._timestamp - T0) / MIN);
     if (innings > 9) extras++;
-    if (monotonic(ps) && ps[0]._timestamp === T0 && end.type === 'game_end' && !r.resumePlays && r.weather === null) ok++;
+    if (monotonic(ps) && ps[0]._timestamp === T0 && end.type === 'game_end' && !r.resumeState && r.weather === null) ok++;
   }
   lens.sort((a, b) => a - b);
   check(`every game paced on the clock, start to end (median ${lens[20].toFixed(0)} min, ${lens[0].toFixed(0)}–${last(lens).toFixed(0)}, ${extras} went extra)`,
@@ -120,7 +120,7 @@ console.log('\nCalled games');
       finals++;
       if (ru.revertIdx != null) reverted++;
       const sc = homeAway(end), bx = boxRuns(ps);
-      if (end.type !== 'game_end' || end._timestamp !== callT || r.resumePlays) bad.push('final: end');
+      if (end.type !== 'game_end' || end._timestamp !== callT || r.resumeState) bad.push('final: end');
       if (sc.home !== bx.home || sc.away !== bx.away) bad.push(`final: box ${JSON.stringify(bx)} vs ${JSON.stringify(sc)}`);
       if (sc.home === sc.away) bad.push('final: a tie');
       // Official: 5 innings, or 4½ with the home team ahead.
@@ -130,7 +130,10 @@ console.log('\nCalled games');
       if (!stats.players) bad.push('stats');
     } else {
       susp++;
-      const rp = r.resumePlays || [];
+      // §109 the rest is simulated when it resumes, from where it stopped.
+      const rp = r.resumeState ? generateResumption({ isHome: true, gameTime: T0 }, user, opp, players,
+        { resumeState: r.resumeState, partOne: ps, liveLineups: r.liveLineups, phase: st.phase, norms }).plays : [];
+      if (!r.resumeState) bad.push('suspended: no resume state');
       if (end.type !== 'game_suspended' || end._timestamp !== callT) bad.push('suspended: end');
       if (!rp.length || last(rp).type !== 'game_end' || rp.some(x => x._timestamp !== null) || !rp.every((x, i) => !i || x._resumeMin >= rp[i - 1]._resumeMin)) bad.push('suspended: resume plays');
       const all = [...ps, ...rp], sc = homeAway(last(rp)), bx = boxRuns(all);
@@ -153,6 +156,48 @@ console.log('\nCalled games');
   const po = generatePlays({ isHome: true, gameTime: T0, isPlayoff: true, weather: null, fieldCondition: null }, user, opp, players, { norms, weather: { plan: { ...pc, delays: [{ ...pc.delays[0], atPlayMin: 165, startT: T0 + 165 * MIN }], stopAtPlayMin: 165 }, conditions: [] } });
   check(`spring games simply end; postseason games are never shortened (${sp.weather.ruling?.outcome}, ${po.weather.ruling?.outcome ?? 'over before the call'})`,
         sp.weather.ruling?.outcome === 'final' && (po.weather.ruling == null || po.weather.ruling.outcome === 'suspended'));
+}
+
+console.log('\nA suspended game finished with the rosters of the day it resumes (§109)');
+{
+  let tried = 0, done = 0, bad = [];
+  for (let k = 0; k < 80 && done < 12; k++) {
+    const at = [40, 60, 75, 95][k % 4];
+    const p = plan({ outcome: 'called', calledBy: 'limit', reason: 'rain', decidedAt: T0 + (at + 150) * MIN, stopAtPlayMin: at,
+                     delays: [{ startT: T0 + at * MIN, endT: T0 + (at + 150) * MIN, atPlayMin: at, reason: 'rain', mm: 30 }] });
+    const r = play({ isHome: true, gameTime: T0 }, { plan: p, conditions: [] });
+    if (!r.resumeState) continue;
+    tried++;
+    // Between the days: one of our hitters is traded (off the roster), another goes on the IL.
+    const slots = r.resumeState.slots.user.map(x => x.id);
+    const [goneId, hurtId] = [slots[1], slots[4]];
+    const team = { ...user, rosterIds: user.rosterIds.filter(id => id !== goneId) };
+    const pl = { ...players, [hurtId]: { ...players[hurtId], isInjured: true } };
+    const res = generateResumption({ isHome: true, gameTime: T0 }, team, opp, pl,
+      { resumeState: r.resumeState, partOne: r.plays, liveLineups: r.liveLineups, phase: st.phase, norms });
+    const rest = res.plays, end = last(rest);
+    const appearsAfter = rest.some(x => x.batterId === goneId || x.batterId === hurtId || Object.keys(x._statDeltas || {}).some(id => id === goneId || id === hurtId));
+    const changes = rest.filter(x => x.type === 'lineup_change');
+    const all = [...r.plays, ...rest];
+    const bx = accumulateBox(all, pl, { userIsHome: true, homeIds: res.liveLineups.homeIds });
+    const sc = homeAway(end);
+    const dec = Object.values(end._statDeltas || {}).flat().map(x => x.stat);
+    if (appearsAfter) bad.push('a player who left played on');
+    if (changes.length !== 2) bad.push(`${changes.length} lineup changes`);
+    if (end.type !== 'game_end') bad.push('no end');
+    if (bx.home.runs !== sc.home || bx.away.runs !== sc.away) bad.push('box');
+    if (!dec.includes('w') || !dec.includes('l')) bad.push('decisions');
+    if (rest.some(x => x._resumeMin == null)) bad.push('clock');
+    // The running score on every play of the rest is the runs scored so far (both parts).
+    let h = 0, a = 0;
+    for (const x of all) { if (x.half === 'BOT') h += playRuns(x); else if (x.half === 'TOP') a += playRuns(x);
+      if (x.type !== 'game_end' && x.type !== 'game_suspended' && (x.cumOurScore !== h || x.cumTheirScore !== a)) { bad.push(`running score at ${x.type}`); break; } }
+    const sp = last(r.plays)._suspended, first = rest.find(x => x.type !== 'pitching_change' && x.type !== 'lineup_change');
+    if (first?.inning !== sp.inning || first?.half !== sp.half) bad.push('resumes elsewhere');
+    done++;
+  }
+  check(`a player traded and one hurt between the days don't play on: bench players take their spots; the box, the decisions and the clock hold (${done} games)`,
+        done >= 8 && bad.length === 0, bad.slice(0, 4).join('; '));
 }
 
 console.log('\nWhat the weather does to the ball');

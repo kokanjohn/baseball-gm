@@ -528,7 +528,8 @@ export function _makeGameObject(config) {
     boxScore:      null,
     recap:         null,
 
-    resumePlays:      null,
+    resumePlays:      null,   // (saves before r122; §109 keeps resumeState instead)
+    resumeState:      null,
   };
 }
 

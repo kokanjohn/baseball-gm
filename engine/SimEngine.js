@@ -269,11 +269,10 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
   if (gameEndPlay && Object.keys(decisionDeltas).length > 0) {
     gameEndPlay._statDeltas = decisionDeltas;
   }
-  // A suspended game: what's played today, and the rest — played when it
-  // resumes (its clock is set then; GameEngine).
-  const split = allPlays.findIndex(p => p.type === 'game_suspended');
-  const plays       = split >= 0 ? allPlays.slice(0, split + 1) : allPlays;
-  const resumePlays = split >= 0 ? allPlays.slice(split + 1) : null;
+  // A suspended game (§109): what's played today; the rest is simulated when it
+  // resumes (generateResumption), from where it stands (resumeState).
+  const plays       = allPlays;
+  const resumeState = gameState.suspended || null;
 
   // Build box score via the shared accumulator (single source of truth).
   // Home roster ids: who is on which side, independent of who the user is.
@@ -293,7 +292,121 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     conditions: wx.env,
   } : null;
 
-  return { plays, boxScore, liveLineups, resumePlays, weather };
+  return { plays, boxScore, liveLineups, resumeState, weather };
+}
+
+// ─────────────────────────────────────────────────────────────
+// A SUSPENDED GAME, FINISHED ANOTHER DAY (§109)
+// ─────────────────────────────────────────────────────────────
+
+// What a game in progress keeps through a suspension (the rest of gs is the day's: the weather, the
+// scouting report, the league's norms, the bullpens — rebuilt from the rosters when it resumes).
+const _SNAP_SKIP = new Set(['norms', 'scout', 'exhibition', 'wx', 'env', 'bullpens', 'userRoles', 'oppRoles', 'wxStop', 'ruling', 'suspendSnap', 'atMs', 'isSpring']);
+
+/** Where a suspended game stands: plain data, kept on the game until it resumes. */
+function _snapshotForResume(gs, plays, { isTop, outs, bases, halfRuns, userBatsBottom, fieldMod, slots }) {
+  const g = {};
+  for (const [k, v] of Object.entries(gs)) {
+    if (_SNAP_SKIP.has(k) || typeof v === 'function') continue;
+    if (v instanceof Set) g[k] = { __set: [...v] };
+    else if (typeof v === 'number') g[k] = Number.isFinite(v) ? v : 1e9;
+    else if (v === null || ['string', 'boolean'].includes(typeof v)) g[k] = v;
+    else if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length <= 4) g[k] = JSON.parse(JSON.stringify(v));   // { id } pitchers
+  }
+  // Everyone who has batted for each side (they can't come back in once replaced).
+  const appeared = { user: [], opp: [] };
+  for (const p of plays) {
+    if (!p.batterId || (p.half !== 'TOP' && p.half !== 'BOT')) continue;
+    const side = (p.half === 'BOT') === userBatsBottom ? 'user' : 'opp';
+    if (!appeared[side].includes(p.batterId)) appeared[side].push(p.batterId);
+  }
+  return {
+    v: 1, isTop, outs, bases: { ...bases }, halfRuns, fieldMod, gs: g, appeared,
+    slots: { user: slots.user.map(x => ({ id: x.id, subbed: !!x.subbed })), opp: slots.opp.map(x => ({ id: x.id, subbed: !!x.subbed })) },
+  };
+}
+
+function _restoreForResume(gs, R) {
+  for (const [k, v] of Object.entries(R.gs || {})) gs[k] = v && typeof v === 'object' && v.__set ? new Set(v.__set) : v;
+}
+
+/** Playing minutes left in a suspended game, about (for the resumption's weather plan): the halves still to come. */
+export function resumeMinutesLeft(R) {
+  if (!R) return 0;
+  const halfIdx = (R.gs.inning - 1) * 2 + (R.isTop ? 0 : 1);
+  const HALF = GAME_WEATHER.HALF_MIN;
+  return Math.max(HALF, (Math.max(18, halfIdx + 1) - halfIdx) * HALF - R.outs * HALF / 3);
+}
+
+/**
+ * generateResumption(game, userTeam, opponentTeam, players, context) — §109 a
+ * suspended game finished on the day it resumes: from exactly where it
+ * stopped (inning, outs, runners, score, the batting orders, the pitchers
+ * used), with each club's roster as it is now. A player who has left the club
+ * or can't play (traded, injured, sent down) is replaced in the lineup by a
+ * bench player — one who can play the position first — and can't come back
+ * in; a runner who has left gets a pinch runner. The bullpens are today's.
+ *   context: { resumeState, partOne (the game's plays so far), liveLineups, phase, isSpring, norms }
+ * → { plays (the rest, each with _resumeMin: playing minutes after the stop — resumeTimeline
+ *     puts them on the day's clock), boxScore (the whole game), liveLineups }
+ */
+export function generateResumption(game, userTeam, opponentTeam, players, context) {
+  const { resumeState: R, partOne = [], liveLineups = {}, phase = PHASE.REGULAR_SEASON, isSpring = false, norms = null } = context;
+  const effOpp = opponentTeam || _buildSyntheticCPUTeam(players);
+  const clubs = { user: userTeam, opp: effOpp };
+  const fresh = { user: _buildLineup(userTeam, players, false), opp: _buildLineup(effOpp, players, true) };
+  const userBatsBottom = !!game.isHome;
+  const sp = partOne[partOne.length - 1];
+  const half = R.isTop ? 'TOP' : 'BOT';
+  const where = { inning: R.gs.inning, half, outsAfter: R.outs };
+  const pre = [];
+  const replaced = {};   // who left → who took his place
+  const lineups = {};
+  for (const side of ['user', 'opp']) {
+    const roster = new Set(clubs[side]?.rosterIds || []);
+    const can = (id) => roster.has(id) && players[id] && isAvailable(players[id]) && players[id].group !== PLAYER_GROUP.IL;
+    const slots = R.slots[side].map(x => ({ ...x }));
+    const out = new Set([...(R.appeared[side] || []), ...slots.map(x => x.id)]);
+    const bench = fresh[side].bench.filter(b => !out.has(b.id));
+    for (const sl of slots) {
+      if (can(sl.id)) continue;
+      const gone = players[sl.id];
+      const fits = (b) => { const q = players[b.id]; return q && gone && (q.pos === gone.pos || q.nativePos === gone.pos || (/^(LF|CF|RF|OF)$/.test(q.pos) && /^(LF|CF|RF|OF)$/.test(gone.pos))); };
+      const sub = bench.filter(b => !b.used).sort((a, b) => (fits(b) - fits(a)) || ((players[b.id]?.ovr || 0) - (players[a.id]?.ovr || 0)))[0];
+      if (!sub) continue;   // (no one left on the bench: the spot stays as it was)
+      sub.used = true;
+      replaced[sl.id] = sub.id;
+      pre.push({
+        playIndex: 0, _halfInning: `${half}_${where.inning}`, inning: where.inning, half, batterId: null, pitcherId: null,
+        type: 'lineup_change', description: `${players[sub.id]?.name || 'A substitute'} takes ${gone?.name || 'a starter'}'s place in the lineup (${!roster.has(sl.id) ? 'no longer with the club' : 'unavailable'}).`,
+        rbi: 0, isScoring: false, isBigPlay: false, outsAfter: R.outs, _basesAfter: { ...R.bases },
+        cumOurScore: sp?.cumOurScore ?? 0, cumTheirScore: sp?.cumTheirScore ?? 0, _timestamp: 0, _statDeltas: {},
+      });
+      sl.id = sub.id; sl.subbed = false;
+    }
+    lineups[side] = { slots, bench, bullpen: fresh[side].bullpen, roles: fresh[side].roles };
+  }
+  // A runner who has left: whoever took his place in the order runs for him.
+  const bases = { ...R.bases };
+  for (const b of ['first', 'second', 'third']) if (bases[b] && replaced[bases[b]]) bases[b] = replaced[bases[b]];
+  const gameState = _simulateFullGame(lineups.user, lineups.opp, R.gs.userPitcher || null, R.gs.oppPitcher || null, players, {
+    game, fieldMod: R.fieldMod ?? 1, isHome: game.isHome, phase, isSpring, norms, atMs: game.gameTime || 0, scout: null, wx: null,
+    resume: { ...R, bases },
+  });
+  gameState.plays.forEach(p => { p._basesAfter ??= { first: null, second: null, third: null }; });
+  // On the clock: the playing minutes after the stop.
+  const timed = _assignTimestamps([...partOne, ...pre, ...gameState.plays], game, null, gameState);
+  const rest = timed.slice(partOne.length);
+  // The decisions, over the whole game.
+  const all = timed.filter(p => !p._reverted);
+  const dec = _assignPitcherDecisions(all, gameState.userScore, gameState.oppScore, game.isHome, 15);
+  const end = rest.find(p => p.type === 'game_end');
+  if (end && Object.keys(dec).length) end._statDeltas = dec;
+  const homeTeam = userBatsBottom ? userTeam : effOpp;
+  const homeIds = [...new Set([...(liveLineups.homeIds || []), ...(homeTeam?.rosterIds || []), ...lineups[userBatsBottom ? 'user' : 'opp'].slots.map(x => x.id)])];
+  const lineupsOut = { ...liveLineups, homeIds };
+  const boxScore = accumulateBox(timed, players, { awayOrder: liveLineups.away || [], homeOrder: liveLineups.home || [], userIsHome: userBatsBottom, homeIds });
+  return { plays: rest, boxScore, liveLineups: lineupsOut };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -381,39 +494,59 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     if (plays[iDelay]?.type === 'weather_delay' && plays[iDelay - 1]?.type === 'pitching_change') plays.splice(iDelay - 1, 1);
     gs.ruling = _calledRuling(gs, plays, { isTop, userBatsBottom, exhibition: !!(isSpring || exhibition), playoff: !!game?.isPlayoff });
     if (gs.ruling.outcome === 'final') return true;
-    // Suspended. Nobody pitches on through a suspension: both clubs start the
-    // resumption with fresh arms. It picks up exactly where it stopped.
+    // Suspended (§109): the game stops here. Where it stands is kept, and the
+    // rest is played when it resumes (generateResumption) — with each club's
+    // roster as it is that day, as the rules have it. Nobody pitches on
+    // through a suspension: both clubs start the resumption with fresh arms.
     plays.push(_suspendedPlay(st, gs, plays));
-    gs.wx = null;
     for (const side of ['user', 'opp']) { gs[`${side}Fatigued`] = true; gs[`${side}MustGo`] = true; }
-    const userBats = isTop ? !userBatsBottom : userBatsBottom;
-    const fieldSide = userBats ? 'opp' : 'user';
-    _midHalfChange(gs, players, fieldSide, plays, gs.inning, isTop ? 'TOP' : 'BOT', st.outs, st.bases);
-    runHalf(isTop, walkoffRuns, { outs: st.outs, bases: st.bases, halfRuns: st.halfRuns });
-    return false;
+    gs.suspendSnap = _snapshotForResume(gs, plays, {
+      isTop, outs: st.outs, bases: st.bases, halfRuns: st.halfRuns, userBatsBottom, fieldMod,
+      slots: { user: userLineup.slots, opp: oppLineup.slots },
+    });
+    return true;
   };
 
-  while (!_gameOver(gs)) {
-    // Top of inning — away team bats. The home side takes the field: a tired
-    // pitcher is replaced now, as he walks out (never at the end of his last
-    // inning — the game may be over before he'd have pitched again).
-    _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning, 'TOP');
-    runHalf(true);
-    if (afterStop(true, Infinity)) break;
+  // A suspended game picked up (§109): where it stood, and the half it stopped in comes first.
+  let pending = null;
+  if (ctx.resume) { _restoreForResume(gs, ctx.resume); pending = ctx.resume; }
+  const resumeHalf = (isTop, walkoffRuns) => {
+    const userBats = isTop ? !userBatsBottom : userBatsBottom;
+    _midHalfChange(gs, players, userBats ? 'opp' : 'user', plays, gs.inning, isTop ? 'TOP' : 'BOT', pending.outs, pending.bases);
+    runHalf(isTop, walkoffRuns, { outs: pending.outs, bases: pending.bases, halfRuns: pending.halfRuns });
+  };
 
-    _accrueInningAndFatigue(gs, players, userBatsBottom ? 'user' : 'opp');
+  while (pending || !_gameOver(gs)) {
+    const resumeTop = !!pending && pending.isTop, resumeBot = !!pending && !pending.isTop;
+    if (!resumeBot) {
+      // Top of inning — away team bats. The home side takes the field: a tired
+      // pitcher is replaced now, as he walks out (never at the end of his last
+      // inning — the game may be over before he'd have pitched again).
+      if (resumeTop) resumeHalf(true, Infinity);
+      else {
+        _checkPitcherChange(gs, players, userBatsBottom ? 'user' : 'opp', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning, 'TOP');
+        runHalf(true);
+      }
+      if (afterStop(true, Infinity)) break;
 
-    // 9th inning or later: if the HOME team already leads after the top half,
-    // the bottom half is not played (home team wins).
-    if (gs.inning >= 9 && homeScore() > awayScore()) break;
+      _accrueInningAndFatigue(gs, players, userBatsBottom ? 'user' : 'opp');
 
-    // Bottom of inning — home team bats; the away side takes the field.
-    _checkPitcherChange(gs, players, userBatsBottom ? 'opp' : 'user', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning, 'BOT');
+      // 9th inning or later: if the HOME team already leads after the top half,
+      // the bottom half is not played (home team wins).
+      if (gs.inning >= 9 && homeScore() > awayScore()) break;
+    }
 
     // 9th inning or later: the bottom half ends the moment the home team takes
-    // the lead (walk-off). Pass the number of runs that wins it.
-    const walkoffRuns = gs.inning >= 9 ? (awayScore() - homeScore() + 1) : Infinity;
-    runHalf(false, walkoffRuns);
+    // the lead (walk-off). Pass the number of runs that wins it (counted from
+    // the start of the half — a resumed half has some of its runs in already).
+    const walkoffRuns = gs.inning >= 9 ? (awayScore() - (homeScore() - (resumeBot ? pending.halfRuns : 0)) + 1) : Infinity;
+    if (resumeBot) resumeHalf(false, walkoffRuns);
+    else {
+      // Bottom of inning — home team bats; the away side takes the field.
+      _checkPitcherChange(gs, players, userBatsBottom ? 'opp' : 'user', userLineup.bullpen, oppLineup.bullpen, plays, gs.inning, 'BOT');
+      runHalf(false, walkoffRuns);
+    }
+    pending = null;
     if (afterStop(false, walkoffRuns)) break;
 
     // Walk-off: home team leads after its half of the 9th or later — game over.
@@ -438,6 +571,9 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
       }
     }
   }
+
+  // Suspended: it ends here for now (no final), and keeps where it stands.
+  if (gs.suspendSnap) return { plays, userScore: gs.userScore, oppScore: gs.oppScore, ruling: gs.ruling, suspended: gs.suspendSnap };
 
   // A game called and official: the plays that don't count (a score that
   // reverts to the last complete inning) stay in the record of what happened
@@ -1688,8 +1824,9 @@ function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, 
     isBigPlay:    false,
     outsAfter:    0,
     _basesAfter:  { first: null, second: null, third: null },
-    cumOurScore:   prev?.cumOurScore   ?? 0,
-    cumTheirScore: prev?.cumTheirScore ?? 0,
+    // (The first play of a resumed game has none before it in this run: the score it stands at — §109.)
+    cumOurScore:   prev?.cumOurScore   ?? gs.userScore ?? 0,
+    cumTheirScore: prev?.cumTheirScore ?? gs.oppScore  ?? 0,
     _timestamp:   0,
     _statDeltas:  {},
   });
