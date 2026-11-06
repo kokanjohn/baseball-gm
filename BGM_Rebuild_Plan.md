@@ -8817,3 +8817,73 @@ Every check passes in both, including the finance and owner checks.
 - **`sim-season` `ARCH=…`** picks the user club's archetype.
 
 **Also asked:** one daily summary push in the offseason (§23.3). The GM declined: offseason messages stay individual, and should instead be aware of the club's situation (see §112).
+
+## 112. The offseason, rebuilt: aware of the club's situation, about ten days, real decisions (plan)
+
+**The GM's brief.** Individual messages, as in the season. Each one should fit the club's situation:
+- the roster, and how well or poorly the club did last year;
+- contracts and salaries, and keeping coaches or not;
+- the decisions and situations that come up in a real offseason.
+
+It should feel different from the season, and like something to look forward to because of the decisions and changes the GM gets to make.
+
+**Decisions (asked):**
+- **Length:** about 10 days.
+- **Coaches** get real abilities, so hiring and firing them matters.
+- **New decision types:** contracts, the front office, the winter meetings.
+- **Not now:** prospect signings and winter ball.
+
+**Today (audit).** Six days:
+- day 1: the owner's review, retirement notices;
+- day 2: re-sign cards, the first free agents;
+- day 3: the manager's contract;
+- day 4: more free agents;
+- day 5: a reminder;
+- day 7: spring.
+
+Coaches renew silently, and only matter as a relationship nudge to development plans. There's no season review, no extensions or releases, no front-office decisions, and the trade market is quiet. Every message reads the same after a title as after 95 losses.
+
+### The calendar (10 days; spring opens the midnight after day 10)
+| Day | Focus | Messages |
+|---|---|---|
+| 1 | Season review | The owner's review and budget (in a tone that fits the season); the manager's season review and **the winter's priority**, a real choice between the club's two biggest needs that steers free agency and the winter meetings; retirements |
+| 2 | The staff | The manager's contract; each coach's evaluation from their unit's real numbers (renew or replace) |
+| 3 | Hiring | Candidates for any opening, each with a specialty, a quality and a salary |
+| 4 | Contracts | CPU decisions; re-sign cards (his season, age, role, who could replace him, payroll); **extension offers** for young core players before free agency; **releases** for overpaid underperformers (dead money vs. the spot) |
+| 5 | Free agency opens | Free-agent cards fitted to the winter's priority; rival interest |
+| 6–7 | The winter meetings | A burst of trade calls about our players; Pro Scouting's targets for our needs |
+| 8 | Free agency | A second round of free agents; bids for anyone still on the market |
+| 9 | The front office | Next season's ticket prices and season-ticket campaign; an offseason facility upgrade; a championship celebration, or fan outreach after a bad year; a reminder of open decisions |
+| 10 | Spring eve | The last moves before camp |
+
+### Phases
+- **A.** The calendar, the season review (a pure `SeasonReview` engine: record, place, postseason, vs. target, league ranks in runs scored and allowed, rotation and bullpen, the stars and the disappointments, needs by position, payroll and contracts), the tone of the owner's card, and the winter's-priority card.
+- **B.** Coaches with real abilities: a specialty and a quality per coach, with effects (development gains, and each coach's part of the game). Evaluations from their units; a hiring market.
+- **C.** Contracts: richer re-sign cards, extensions, releases.
+- **D.** The front office: ticket prices and season tickets, facilities, celebration or outreach.
+- **E.** The winter meetings.
+- **F.** Multi-season verification: every message by club situation (champion, contender, middling, losing), and the harness over 10 days.
+
+### 112.1 Phase A done (r125): ten days, the season review, the owner's tone, the winter's priority
+- **The calendar.**
+  - `OFFSEASON_DAYS` 10, with `OFFSEASON_STEPS` built from it.
+  - `OFFSEASON_STEP_HOURS` runs day1 … day10, then spring (day 11, 00:00).
+  - `DAY_FOCUS` has ten days, and the offseason card reads "Day N of 10".
+  - The steps moved: the manager's contract is day 2; contracts (CPU decisions, our re-sign cards) are day 4; free agency opens day 5, with CPU rounds on days 5–10 and our free-agent cards on days 5 and 8; the reminder is day 9. Days 3, 6–7 and 9 are kept for phases B, E and D.
+- **`SeasonReview.seasonReview(state)`** is pure and runs on day 1, after the season is locked and the stats archived. It's stored in `state.offseason.review`:
+  - the record, its place in the division, the games out of the fifth spot, and the postseason result;
+  - the outcome: `champion` / `pennant` / `playoffs` / `near` (missed by 4 games or fewer) / `missed` / `disaster` (under .420);
+  - versus the owner's target;
+  - the league ranks in runs scored and allowed (from the regular-season results), and the rotation's and bullpen's ERA;
+  - the stars (best OPS with 250+ AB, best ERA with 100+ IP as a starter, best relief ERA under 2.80 with 40+ IP);
+  - the letdown (a regular above the club's median OVR who hit under .640 OPS, or a starter over 5.20 ERA);
+  - the two biggest holes (`clubNeeds(…, { all: true })`, on the roster after aging and retirements);
+  - the payroll and target, the expiring contracts, and the young core.
+
+  `reviewWords` puts it in sentences.
+- **The owner's review** opens with a line that fits the outcome and the target ("A championship. I don't think either of us will forget this one." / "We made the playoffs, which matters — but I expected more from this group." / "I won't dress it up: this was a hard year…").
+- **The winter's priority** (`os_priority`, from the manager, day 1 at 11:00, due when free agency opens). The manager's look back covers how it went, what worked and what didn't (with the ranks and ERAs), who carried the club, who disappointed, and the two biggest holes. The GM picks which hole comes first.
+  - `os_priority_a` / `os_priority_b` set `state.offseason.priority`. With no answer, the first hole is the priority.
+  - `Offseason.userFreeAgentTargets` puts the free agents who fill it first, and says so in the card.
+- **Seasons.** North 2 (champion, 93–39) and south 3 with `ARCH=ember` (a 63–69 playoff club) pass the new offseason checks: the review, the owner's opening, the manager's look back and priority, and the ten-day calendar.
+- **Found:** blown saves are never counted (there's no `bs` delta in SimEngine). The review mentions them only when there are any. Left as its own item.

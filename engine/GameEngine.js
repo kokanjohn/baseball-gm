@@ -79,6 +79,7 @@ import {
   resumeMinutesLeft,
 } from './SimEngine.js';
 import * as CardEngine from './CardEngine.js';
+import { seasonReview } from './SeasonReview.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
 import * as AllStar from './AllStarEngine.js';
@@ -104,6 +105,7 @@ import {
   MILESTONE_SCREENS,
   OFFSEASON_CARD_HOUR,
   OFFSEASON_FA_CARD_HOUR,
+  OFFSEASON_REVIEW_HOUR,
   PLAYOFF_WILD_CARD_GAMES,
   PLAYOFF_FIRST_ROUND_BEST_OF,
   PLAYOFF_DIVISION_SERIES_BEST_OF,
@@ -2929,41 +2931,50 @@ function _runOffseasonStep(step, atMs) {
       addCalendarEntry(s, offseasonAnchor(os.dayStarts[0], springAt, springStartIso(baseballYear(s) + 1), s.seasonNum || 1));
     });
     _feedLeagueMoves(ev);
+    // §112 the season, looked back on: every offseason message reads from it.
+    StateManager.mutate(s => { if (s.offseason) s.offseason.review = seasonReview(s); });
     const offer = Offseason.ownershipOffer(StateManager.get());
     CardEngine.deliverOwnershipCard(offer, cardAt(1, OFFSEASON_CARD_HOUR), springAt);
     for (const e of ev.filter(e => e.type === 'RETIRED' && e.teamId === 'user')) {
       CardEngine.deliverRetirementNotice(e.playerId, e.age, cardAt(1, OFFSEASON_CARD_HOUR));
     }
+    // The manager's look back, and the winter's priority (due before free agency opens).
+    CardEngine.deliverPriorityCard(cardAt(1, OFFSEASON_REVIEW_HOUR), Offseason.dayStart(os, 5));
     done();
     return events;
   }
 
+  // §112 the ten days: the staff (2), hiring (3), contracts (4), free agency (5–10),
+  // the winter meetings (6–7), the front office (9).
   if (step === 'day2') {
-    let ev = [];
-    StateManager.mutate(s => { ev = Offseason.contractDay(s, atMs); });
-    _feedLeagueMoves(ev);
-    for (const { player } of Offseason.userExpiring(StateManager.get())) {
-      CardEngine.deliverResignCard(player.id, cardAt(2, OFFSEASON_CARD_HOUR), springAt);
+    if (Offseason.managerContractIsUp(StateManager.get())) {
+      CardEngine.deliverManagerContractCard(cardAt(2, OFFSEASON_CARD_HOUR), springAt);
     }
-    _cpuFreeAgencyRound(atMs);
-    CardEngine.deliverFreeAgentCards(cardAt(2, OFFSEASON_FA_CARD_HOUR), springAt);
     done();
     return events;
   }
 
   if (step === 'day3') {
-    if (Offseason.managerContractIsUp(StateManager.get())) {
-      CardEngine.deliverManagerContractCard(cardAt(3, OFFSEASON_CARD_HOUR), springAt);
-    }
-    _cpuFreeAgencyRound(atMs);
     done();
     return events;
   }
 
-  if (step === 'day4' || step === 'day5' || step === 'day6') {
+  if (step === 'day4') {
+    let ev = [];
+    StateManager.mutate(s => { ev = Offseason.contractDay(s, atMs); });
+    _feedLeagueMoves(ev);
+    for (const { player } of Offseason.userExpiring(StateManager.get())) {
+      CardEngine.deliverResignCard(player.id, cardAt(4, OFFSEASON_CARD_HOUR), springAt);
+    }
+    done();
+    return events;
+  }
+
+  if (/^day([5-9]|10)$/.test(step)) {
     _cpuFreeAgencyRound(atMs);
-    if (step === 'day4') CardEngine.deliverFreeAgentCards(cardAt(4, OFFSEASON_FA_CARD_HOUR), springAt);
-    if (step === 'day5') CardEngine.deliverGateReminder(cardAt(5, OFFSEASON_CARD_HOUR), springAt);
+    if (step === 'day5') CardEngine.deliverFreeAgentCards(cardAt(5, OFFSEASON_FA_CARD_HOUR), springAt);
+    if (step === 'day8') CardEngine.deliverFreeAgentCards(cardAt(8, OFFSEASON_FA_CARD_HOUR), springAt);
+    if (step === 'day9') CardEngine.deliverGateReminder(cardAt(9, OFFSEASON_CARD_HOUR), springAt);
     done();
     return events;
   }

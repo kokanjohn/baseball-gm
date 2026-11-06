@@ -1486,21 +1486,26 @@ export const IMP_MIN_IP_SEASON = 20.0;
 // ─────────────────────────────────────────────────────────────
 // OFFSEASON ON THE LEAGUE CALENDAR (§70)
 // ─────────────────────────────────────────────────────────────
-// Six calendar days, starting the midnight after the World Series ends;
-// spring training opens the midnight after day 6. Every step happens at a
+// §112 Ten calendar days, starting the midnight after the World Series ends;
+// spring training opens the midnight after day 10. Every step happens at a
 // fixed local hour of its day (catch-up runs them in order at their times).
-export const OFFSEASON_DAYS = 6;
+export const OFFSEASON_DAYS = 10;
 export const OFFSEASON_STEP_HOURS = Object.freeze({
-  day1: 0,     // record locked, stats archived, players age & develop, retirements
-  day2: 10,    // contracts: CPU decisions, farm renewals; free agency opens
-  day3: 10,    // manager contract; free agency
-  day4: 10,    // free agency
-  day5: 10,    // free agency; reminder for required decisions
-  day6: 10,    // last free-agency round
-  spring: 0,   // (day 7) required decisions auto-resolve; spring training opens
+  day1: 0,     // the season review: record locked, stats archived, players age & develop, retirements
+  day2: 10,    // the staff: the manager's contract (coaches' evaluations — §112 B)
+  day3: 10,    // hiring (§112 B)
+  day4: 10,    // contracts: CPU decisions, farm renewals; our re-sign cards
+  day5: 10,    // free agency opens
+  day6: 10,    // the winter meetings (§112 E); free agency
+  day7: 10,    // the winter meetings; free agency
+  day8: 10,    // free agency, second round
+  day9: 10,    // the front office (§112 D); reminder for required decisions
+  day10: 10,   // spring eve: the last free-agency round
+  spring: 0,   // (day 11) required decisions auto-resolve; spring training opens
 });
 export const OFFSEASON_CARD_HOUR     = 9;    // ownership / contract / manager cards arrive
-export const OFFSEASON_FA_CARD_HOUR  = 12;   // free-agent cards arrive (days 2 and 4)
+export const OFFSEASON_FA_CARD_HOUR  = 12;   // free-agent cards arrive (days 5 and 8)
+export const OFFSEASON_REVIEW_HOUR   = 11;   // §112 the manager's season review and the winter's priority (day 1)
 export const FA_CARD_TTL_DAYS        = 3;    // §23.2 soft gate: auto-decline after 3 days
 export const FA_CARDS_PER_ROUND      = 3;
 

@@ -2,10 +2,10 @@
  * ui/components/OffseasonCard.js
  * The dashboard card between the last out of the season and spring training
  * (§70). Live-only: no "start spring" button — the league calendar opens
- * spring training the midnight after offseason day 6.
+ * spring training the midnight after the last offseason day (OFFSEASON_DAYS, §112).
  *
  *   ┌──────────────────────────────────────────────┐
- *   │ OFFSEASON · DAY 3 OF 6        Spring in 3d 14h│
+ *   │ OFFSEASON · DAY 3 OF 10       Spring in 7d 14h│
  *   │ Staff & Free Agency                           │
  *   │ The manager's future, and the market keeps…   │
  *   │ [✓ Ownership] [● Contracts 2] [✓ Manager]     │
@@ -17,6 +17,7 @@
  */
 
 import { offseasonDay, hardGates, DAY_FOCUS, freeAgents } from '../../engine/OffseasonEngine.js';
+import { OFFSEASON_DAYS } from '../../data/constants.js';
 
 let _cssInjected = false;
 
@@ -49,7 +50,7 @@ export function renderOffseasonCard(state, nowMs = Date.now()) {
   return `
     <div class="os-card" id="os-card">
       <div class="os-top">
-        <span class="os-day">${day === 0 ? 'SEASON COMPLETE' : `OFFSEASON · DAY ${day} OF 6`}</span>
+        <span class="os-day">${day === 0 ? 'SEASON COMPLETE' : `OFFSEASON · DAY ${day} OF ${OFFSEASON_DAYS}`}</span>
         <span class="os-count" id="os-count" data-target="${target}">${_countdown(target - nowMs, day === 0 ? 'Offseason' : 'Spring')}</span>
       </div>
       <div class="os-focus">${focus.label}</div>

@@ -1,0 +1,174 @@
+/**
+ * engine/SeasonReview.js
+ * §112 The season, looked back on, the morning after it ends: how it went
+ * (the record, where it finished, the postseason, against the owner's
+ * target), what worked and what didn't (where the club ranked in runs scored
+ * and allowed; the rotation and the bullpen), who carried it and who let it
+ * down, and what the winter has to fix (the two biggest holes). Every
+ * offseason message reads from it, so its tone fits the year the club had.
+ *
+ * Pure: reads a state (after the season is locked and the stats archived —
+ * OffseasonEngine.beginOffseason), returns plain data for state.offseason.review.
+ */
+
+import { PLAYER_GROUP } from '../data/constants.js';
+import { clubNeeds, leagueNorms } from './LeagueTrades.js';
+import { computeAge, baseballYear } from './PlayerFactory.js';
+import { seasonTarget } from './FinanceEngine.js';
+import { contractIsUp } from './OffseasonEngine.js';
+
+const isPitcher = (p) => p?.pos === 'SP' || p?.pos === 'RP';
+const era = (er, ip) => (ip > 0 ? (9 * er) / ip : null);
+const ops = (s) => {
+  const pa = (s.ab || 0) + (s.bb || 0) + (s.hbp || 0);
+  const obp = pa ? ((s.h || 0) + (s.bb || 0) + (s.hbp || 0)) / pa : 0;
+  const slg = s.ab ? (s.tb || 0) / s.ab : 0;
+  return { obp, slg, ops: obp + slg, avg: s.ab ? (s.h || 0) / s.ab : 0 };
+};
+
+/** Runs scored and allowed by every club in the regular season (from the results). */
+function _runs(state) {
+  const by = {};
+  const add = (id, rs, ra) => { const r = by[id] || (by[id] = { rs: 0, ra: 0, g: 0 }); r.rs += rs; r.ra += ra; r.g++; };
+  for (const g of state.schedule || []) {
+    if (!g._committed || g.isSpring || g.isPlayoff || g.result === 'postponed' || !g.score) continue;
+    add('user', g.score.us || 0, g.score.them || 0);
+    if (g.opponentId) add(g.opponentId, g.score.them || 0, g.score.us || 0);
+  }
+  for (const games of Object.values(state.leagueSchedule?.dayMap || {})) {
+    for (const g of games) {
+      if (!g.played || g.isSpring || g.isPlayoff || g.isAllStar || g.cancelled || g._void) continue;
+      add(g.homeId, g.homeScore || 0, g.awayScore || 0);
+      add(g.awayId, g.awayScore || 0, g.homeScore || 0);
+    }
+  }
+  return by;
+}
+
+/** A player's line for the season just finished (archived into seasonLog). */
+function _line(p, season) {
+  return (p.seasonLog || []).filter(x => x.season === season).pop()?.stats || null;
+}
+
+/** "shortstop (Ju, 58)" — a need in words. */
+function needWords(state, n) {
+  const p = state.players[n.incumbentId];
+  const who = p ? `${p.name}, ${p.ovr}` : 'nobody established';
+  const slot = { C: 'catcher', '1B': 'first base', '2B': 'second base', '3B': 'third base', SS: 'shortstop', OF: 'the outfield', LF: 'left field', CF: 'center field', RF: 'right field', DH: 'designated hitter' };
+  if (n.kind === 'sp') return { short: 'starting pitching', long: `the back of the rotation (${who})` };
+  if (n.kind === 'rp') return { short: 'the bullpen', long: `the bullpen (${who})` };
+  return { short: slot[n.slot] || n.slot, long: `${slot[n.slot] || n.slot} (${who})` };
+}
+
+export function seasonReview(state) {
+  const season = state.seasonNum || 1;
+  const u = state.userTeam || {};
+  const hist = (state.seasonHistory || []).filter(h => h.seasonNum === season).pop() || {};
+  const w = hist.wins ?? u.wins ?? 0, l = hist.losses ?? u.losses ?? 0;
+  const pct = w + l ? w / (w + l) : 0.5;
+  const target = hist.winTarget ?? u._ownerWinTarget ?? null;
+  const post = hist.postseason?.result || 'Did not qualify';
+
+  // Where it finished: the division, and the gap to the last playoff spot (five go).
+  const div = (hist.standings || []).filter(t => t.divisionId === (u.divisionId || 'A'))
+    .sort((a, b) => (b.wins - b.losses) - (a.wins - a.losses));
+  const place = div.findIndex(t => t.id === 'user') + 1 || null;
+  const cut = div[4];
+  const gamesOut = cut && place > 5 ? ((cut.wins - w) + (l - cut.losses)) / 2 : 0;
+
+  const outcome = post === 'Champions' ? 'champion'
+    : post === 'Lost in the World Series' ? 'pennant'
+    : post !== 'Did not qualify' ? 'playoffs'
+    : pct < 0.42 ? 'disaster'
+    : gamesOut <= 4 ? 'near' : 'missed';
+
+  // What worked: the league's ranks in runs scored (1 = most) and allowed (1 = fewest).
+  const runs = _runs(state);
+  const clubs = Object.entries(runs).filter(([, r]) => r.g >= 20);
+  const rank = (key, asc) => 1 + clubs.filter(([id, r]) => id !== 'user' && (asc ? r[key] < (runs.user?.[key] ?? 0) : r[key] > (runs.user?.[key] ?? 0))).length;
+  const offense = { runs: runs.user?.rs || 0, rank: rank('rs', false), of: clubs.length };
+  const pitching = { runs: runs.user?.ra || 0, rank: rank('ra', true), of: clubs.length };
+
+  // The staff, split: the rotation and the bullpen.
+  const mine = Object.values(state.players || {}).filter(p => (p.seasonLog || []).some(x => x.season === season && x.teamId === 'user'));
+  let spIp = 0, spEr = 0, rpIp = 0, rpEr = 0, bs = 0, sv = 0;
+  const arms = [], bats = [];
+  for (const p of mine) {
+    const s = _line(p, season);
+    if (!s) continue;
+    if (isPitcher(p)) {
+      const starter = (s.gs || 0) >= Math.max(1, (s.g || 0) / 2);
+      if (starter) { spIp += s.ip || 0; spEr += s.er || 0; } else { rpIp += s.ip || 0; rpEr += s.er || 0; }
+      bs += s.bs || 0; sv += s.sv || 0;
+      arms.push({ p, s, starter, era: era(s.er || 0, s.ip || 0) });
+    } else if ((s.ab || 0) > 0) bats.push({ p, s, ...ops(s) });
+  }
+  const rotation = { era: era(spEr, spIp), ip: Math.round(spIp) };
+  const bullpen = { era: era(rpEr, rpIp), ip: Math.round(rpIp), blownSaves: bs, saves: sv };
+
+  // Who carried it, and who let it down.
+  const hitters = bats.filter(x => (x.s.ab || 0) >= 250).sort((a, b) => b.ops - a.ops);
+  const starters = arms.filter(x => x.starter && (x.s.ip || 0) >= 100).sort((a, b) => a.era - b.era);
+  const relievers = arms.filter(x => !x.starter && (x.s.ip || 0) >= 40).sort((a, b) => a.era - b.era);
+  const stars = [];
+  if (hitters[0]) stars.push({ id: hitters[0].p.id, kind: 'bat', line: `${fmt3(hitters[0].avg)}/${fmt3(hitters[0].obp)}/${fmt3(hitters[0].slg)}${hitters[0].s.hr ? `, ${hitters[0].s.hr} HR` : ''}` });
+  if (starters[0]) stars.push({ id: starters[0].p.id, kind: 'arm', line: `${starters[0].era.toFixed(2)} ERA in ${Math.round(starters[0].s.ip)} innings` });
+  if (relievers[0] && relievers[0].era < 2.8) stars.push({ id: relievers[0].p.id, kind: 'pen', line: `${relievers[0].era.toFixed(2)} ERA${relievers[0].s.sv ? `, ${relievers[0].s.sv} saves` : ''}` });
+  const ovrs = mine.map(p => p.ovr || 0).sort((a, b) => a - b);
+  const median = ovrs[Math.floor(ovrs.length / 2)] || 60;
+  const letdowns = [
+    ...bats.filter(x => (x.s.ab || 0) >= 200 && x.ops < 0.640 && (x.p.ovr || 0) >= median + 3).map(x => ({ id: x.p.id, kind: 'bat', line: `${fmt3(x.avg)}/${fmt3(x.obp)}/${fmt3(x.slg)}` , score: 0.64 - x.ops })),
+    ...arms.filter(x => x.starter && (x.s.ip || 0) >= 70 && x.era > 5.2 && (x.p.ovr || 0) >= median + 3).map(x => ({ id: x.p.id, kind: 'arm', line: `${x.era.toFixed(2)} ERA`, score: (x.era - 5.2) / 4 })),
+  ].sort((a, b) => b.score - a.score).slice(0, 1);
+
+  // What the winter has to fix: the two biggest holes, on the roster as it stands now.
+  const needs = clubNeeds(state, 'user', leagueNorms(state), { all: true })
+    .filter((n, i, all) => all.findIndex(x => (x.kind === 'slot' ? x.slot : x.kind) === (n.kind === 'slot' ? n.slot : n.kind)) === i)
+    .slice(0, 2).map(n => ({ kind: n.kind, slot: n.slot || null, incumbentId: n.incumbentId, ovr: n.ovr, gap: Math.round(n.gap * 10) / 10, ...needWords(state, n) }));
+
+  // The money and the contracts.
+  const year = baseballYear(state);
+  const fin = u.finances || {};
+  const expiring = (u.rosterIds || []).map(id => state.players[id])
+    .filter(p => p && contractIsUp(p, season) && p.group !== PLAYER_GROUP.RETIRED).map(p => p.id);
+  const core = (u.rosterIds || []).map(id => state.players[id])
+    .filter(p => p && computeAge(p.dob, year) <= 26 && (p.ovr || 0) >= median + 4).sort((a, b) => b.ovr - a.ovr).slice(0, 3).map(p => p.id);
+
+  return {
+    season, year, w, l, pct: Math.round(pct * 1000) / 1000, target, vsTarget: target == null ? null : w - target,
+    post, outcome, place, of: div.length || null, gamesOut,
+    offense, pitching, rotation, bullpen, stars, letdowns, needs,
+    payroll: fin.payroll || 0, payrollTarget: fin.payrollTarget ? seasonTarget(fin) : null,
+    expiring, core, injuries: (state.history || []).filter(h => h.type === 'injury' && h.season === season).length,
+  };
+}
+
+function fmt3(x) { return x >= 1 ? x.toFixed(3) : x.toFixed(3).replace(/^0/, ''); }
+
+/** The review in a sentence or two, for the owner and the manager. */
+export function reviewWords(state, R) {
+  const P = (id) => state.players[id];
+  const ord = (n) => `${n}${['th', 'st', 'nd', 'rd'][(n % 100 >= 11 && n % 100 <= 13) ? 0 : n % 10] || 'th'}`;
+  const rec = `${R.w}–${R.l}`;
+  const how = {
+    champion: `${rec}, and champions`,
+    pennant: `${rec}, and a trip to the World Series`,
+    playoffs: `${rec}, and a playoff run that ended ${R.post.replace(/^Lost in the /, 'in the ')}`,
+    near: `${rec}, ${R.gamesOut ? `${R.gamesOut} game${R.gamesOut === 1 ? '' : 's'} short of the playoffs` : 'out on the tiebreaker'}`,
+    missed: `${rec}, ${R.place ? `${ord(R.place)} in the division` : 'out of the race'}`,
+    disaster: `${rec}, a season to forget`,
+  }[R.outcome];
+  const worked = [], didnt = [];
+  const rk = (x) => `${ord(x.rank)} of ${x.of}`;
+  if (R.offense.rank <= 3) worked.push(`the offense (${R.offense.runs} runs, ${rk(R.offense)})`);
+  else if (R.offense.rank >= R.offense.of - 2) didnt.push(`the offense (${R.offense.runs} runs, ${rk(R.offense)})`);
+  if (R.pitching.rank <= 3) worked.push(`run prevention (${R.pitching.runs} allowed, ${rk(R.pitching)})`);
+  else if (R.pitching.rank >= R.pitching.of - 2) didnt.push(`run prevention (${R.pitching.runs} allowed, ${rk(R.pitching)})`);
+  if (R.rotation.era != null && R.rotation.era < 3.6) worked.push(`the rotation (${R.rotation.era.toFixed(2)} ERA)`);
+  if (R.rotation.era != null && R.rotation.era > 4.9) didnt.push(`the rotation (${R.rotation.era.toFixed(2)} ERA)`);
+  if (R.bullpen.era != null && R.bullpen.era < 3.4) worked.push(`the bullpen (${R.bullpen.era.toFixed(2)} ERA)`);
+  if (R.bullpen.era != null && (R.bullpen.era > 4.8 || R.bullpen.blownSaves >= 25)) didnt.push(`the bullpen (${R.bullpen.era.toFixed(2)} ERA${R.bullpen.blownSaves ? `, ${R.bullpen.blownSaves} blown saves` : ''})`);
+  const stars = R.stars.map(s => `${P(s.id)?.name} (${s.line})`).filter(x => !x.startsWith('undefined'));
+  const letdown = R.letdowns.map(s => `${P(s.id)?.name} (${s.line})`)[0] || null;
+  return { how, worked, didnt, stars, letdown, needs: R.needs.map(n => n.long) };
+}

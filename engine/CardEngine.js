@@ -77,6 +77,7 @@ import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor, replyTime } from './CardScheduler.js';
 import { writeComposeReply } from './ComposeReplies.js';
+import { reviewWords } from './SeasonReview.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
@@ -3174,7 +3175,8 @@ export function deliverOwnershipCard(offer, atMs, expiresAtMs) {
     subject: "Season review — next year's payroll",
     preview: `${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses}`
            + `${books ? `, ${net >= 0 ? '+' : '−'}${formatK(Math.abs(net))} on the books` : ''}. Ownership wants to ${dir} the payroll target.`,
-    body: `We finished ${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses} against a target of ${last.winTarget ?? '—'} wins`
+    body: _ownerOpening(state)
+        + `We finished ${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses} against a target of ${last.winTarget ?? '—'} wins`
         + `${last.postseason?.result && last.postseason.result !== 'Did not qualify' ? ` (${last.postseason.result.toLowerCase()})` : ''}. `
         + booksLine + penaltyLine
         + `For next season ownership is setting a payroll target of ${formatK(offer.payrollTarget)} (was ${formatK(offer.prevPayrollTarget)}). `
@@ -3187,6 +3189,57 @@ export function deliverOwnershipCard(offer, atMs, expiresAtMs) {
   });
   return _deliverAt(card, atMs);
 }
+
+/** §112 How the owner opens the review: the year the club had, in the owner's words. */
+function _ownerOpening(state) {
+  const R = state.offseason?.review;
+  if (!R) return '';
+  const vs = R.vsTarget ?? 0;
+  const lines = {
+    champion: ['A championship. I don\'t think either of us will forget this one. ', 'Champions. The city hasn\'t stopped celebrating, and neither have I. '],
+    pennant:  ['We were one series from a title. That\'s a season to be proud of — and it leaves me hungry. ', 'A pennant. Not the ending we wanted, but this club is close. '],
+    playoffs: vs >= 0 ? ['We were a playoff club this year, and we earned it. ', 'October baseball, and the fans felt it. '] : ['We made the playoffs, which matters — but I expected more from this group. '],
+    near:     ['We came close — too close not to look hard at what kept us out. ', 'A few games short. Those are the seasons that sting the most. '],
+    missed:   vs >= 0 ? ['Not a playoff year, but the club did what we asked of it. '] : ['This wasn\'t the season we planned for. ', 'We fell short of where this club should be. '],
+    disaster: ['I won\'t dress it up: this was a hard year, for the club and for the fans. ', 'A season like this one can\'t happen again. '],
+  }[R.outcome] || [''];
+  return lines[(R.w + R.l) % lines.length];
+}
+
+/**
+ * §112 The manager's look back at the season, and the winter's priority: the club's two biggest holes,
+ * from the review — the GM picks the one free agency (and the winter meetings) go after first.
+ */
+export function deliverPriorityCard(atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const R = state.offseason?.review;
+  if (!R || !R.needs?.length) return null;
+  const W = reviewWords(state, R);
+  const [a, b] = R.needs;
+  const mgr = _managerName(state);
+  const sentences = [
+    `${Cap(W.how)}.`,
+    W.worked.length ? `What worked: ${_listWords(W.worked)}.` : '',
+    W.didnt.length ? `What didn't: ${_listWords(W.didnt)}.` : '',
+    W.stars.length ? `${W.stars.length > 1 ? 'The players who carried us' : 'The player who carried us'}: ${_listWords(W.stars)}.` : '',
+    W.letdown ? `The one I expected more from: ${W.letdown}.` : '',
+    `Going into the winter, the biggest hole${b ? 's are' : ' is'} ${b ? `${a.long} and ${b.long}` : a.long}. Tell me which one we go after first, and Pro Scouting will build the free-agent list around it.`,
+  ].filter(Boolean);
+  const card = _rosterCard(state, {
+    cardId: 'os_priority', tag: 'COACHING', sender: mgr, avatar: '📋', type: 'normal',
+    _rosterKey: `os:priority:${state.seasonNum}`,
+    subject: R.outcome === 'champion' ? 'Looking back on a title — and the winter\'s priority' : 'Looking back — and the winter\'s priority',
+    preview: `${Cap(W.how)}. The winter's biggest hole${b ? 's' : ''}: ${b ? `${a.short} and ${b.short}` : a.short}.`,
+    body: sentences.join(' '),
+    yesLabel: `Priority: ${a.short}`, noLabel: b ? `Priority: ${b.short}` : 'No single priority',
+    expiresAtMs,
+    _raw: { onYes: 'os_priority_a', onNo: 'os_priority_b', onAuto: 'os_priority_a' },
+    _autoLabel: `No answer — ${mgr} went after ${a.short} first`,
+  });
+  return _deliverAt(card, atMs);
+}
+const Cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+const _listWords = (xs) => (xs.length <= 1 ? xs.join('') : xs.length === 2 ? `${xs[0]} and ${xs[1]}` : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
 /** A user player whose deal is up: re-sign at his asking terms, or let him walk. */
 export function deliverResignCard(playerId, atMs, expiresAtMs) {
@@ -3303,6 +3356,8 @@ export function deliverRetirementNotice(playerId, age, atMs) {
 function _applyOffseasonAction(action, instance, atMs) {
   const id = instance._targetPlayerId;
   switch (action) {
+    case 'os_priority_a':   StateManager.mutate(s => { if (s.offseason) s.offseason.priority = s.offseason.review?.needs?.[0] || null; }); return true;
+    case 'os_priority_b':   StateManager.mutate(s => { if (s.offseason) s.offseason.priority = s.offseason.review?.needs?.[1] || null; }); return true;
     case 'os_owner_accept': StateManager.mutate(s => Offseason.applyOwnership(s, instance._offer, 'accept')); return true;
     case 'os_owner_push':   StateManager.mutate(s => Offseason.applyOwnership(s, instance._offer, 'push'));   return true;
     case 'os_owner_auto':   StateManager.mutate(s => Offseason.applyOwnership(s, instance._offer, 'auto'));   return true;
@@ -3447,6 +3502,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   ...Object.keys(CARD_ACTIONS),
   // §70 offseason
   'os_owner_accept', 'os_owner_push', 'os_owner_auto',
+  'os_priority_a', 'os_priority_b',
   'os_resign', 'os_walk', 'os_walk_auto',
   'os_mgr_extend', 'os_mgr_replace', 'os_mgr_auto',
   'os_fa_sign', 'os_fa_pass',

@@ -64,7 +64,7 @@ export function leagueNorms(state) {
  * clubNeeds(state, teamId, norms) — the spots where this club is well below
  * the league's norm, worst first: { kind: 'slot'|'sp'|'rp', slot, incumbentId, ovr, gap }.
  */
-export function clubNeeds(state, teamId, norms = leagueNorms(state)) {
+export function clubNeeds(state, teamId, norms = leagueNorms(state), { all = false } = {}) {
   const t = _club(state, teamId);
   if (!t) return [];
   const P = (id) => state.players[id];
@@ -88,7 +88,8 @@ export function clubNeeds(state, teamId, norms = leagueNorms(state)) {
     const best = Math.max(0, ...reserves.filter(p => fillsNeed(p, n)).map(p => p.ovr || 0));
     if (best > n.ovr) { n.gap -= best - n.ovr; n.internal = best; }
   }
-  return out.filter(n => n.gap >= LEAGUE_TRADES.needGap).sort((x, y) => y.gap - x.gap);
+  // (all: every spot ranked, for the season review's priorities — §112 — not only the trade-sized holes.)
+  return out.filter(n => all || n.gap >= LEAGUE_TRADES.needGap).sort((x, y) => y.gap - x.gap);
 }
 
 /** Does this player fill the need? */

@@ -4,13 +4,18 @@
  *
  *   World Series final ─ SEASON_SUMMARY
  *   day 1 00:00  OFFSEASON: record locked, stats archived, every player ages a
- *                year and develops/declines, retirements; ownership evaluation
- *   day 2 10:00  contracts: CPU clubs re-sign or let go; farm deals renewed;
- *                the user's re-sign cards; free agency opens
- *   day 3 10:00  manager contract (if it is up); free agency
- *   day 4–6      free agency (CPU clubs sign to fill needs; FA cards for the GM)
- *   day 5        reminder for any required decision still open
- *   day 7 00:00  required decisions auto-resolve conservatively; unsigned free
+ *                year and develops/declines, retirements; the season review
+ *                (SeasonReview); ownership's evaluation; the winter's priority
+ *   day 2        the staff: the manager's contract (coaches — §112 B)
+ *   day 3        hiring (§112 B)
+ *   day 4 10:00  contracts: CPU clubs re-sign or let go; farm deals renewed;
+ *                the user's re-sign cards
+ *   day 5        free agency opens (CPU clubs sign to fill needs; FA cards)
+ *   day 6–7      the winter meetings (§112 E); free agency
+ *   day 8        free agency, second wave of cards
+ *   day 9        the front office (§112 D); reminder for required decisions
+ *   day 10       spring eve
+ *   day 11 00:00 required decisions auto-resolve conservatively; unsigned free
  *                agents leave the league; amateur prospects join every farm;
  *                season N+1 begins with spring training
  *
@@ -71,8 +76,9 @@ import { STAFF_NAMES, PLAYER_SURNAMES } from '../data/player-names.js';
 import { uniqueName, namesInUse, surnameOf } from './Names.js';
 import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
+import { fillsNeed } from './LeagueTrades.js';
 
-export const OFFSEASON_STEPS = Object.freeze(['day1', 'day2', 'day3', 'day4', 'day5', 'day6', 'spring']);
+export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const OFF_ROSTER = new Set([PLAYER_GROUP.FREE_AGENT, PLAYER_GROUP.RETIRED, PLAYER_GROUP.DEPARTED, 'waivers']);
@@ -99,8 +105,8 @@ export function createOffseason(endMs, seasonNum) {
   return {
     seasonNum,
     endedAt:   endMs,
-    dayStarts: dayStarts.slice(0, OFFSEASON_DAYS),   // [day1 … day6] midnights
-    springAt:  dayStarts[OFFSEASON_DAYS],            // day 7 midnight
+    dayStarts: dayStarts.slice(0, OFFSEASON_DAYS),   // [day1 … day10] midnights
+    springAt:  dayStarts[OFFSEASON_DAYS],            // day 11 midnight
     done:      [],
   };
 }
@@ -119,7 +125,7 @@ export function _atHour(dayStartMs, hour) {
   return d.getTime();
 }
 
-/** Midnight that starts offseason day `n` (1–6), or spring (7). */
+/** Midnight that starts offseason day `n` (1–10), or spring (11). */
 export function dayStart(os, n) {
   return n > OFFSEASON_DAYS ? os.springAt : os.dayStarts[n - 1];
 }
@@ -134,7 +140,7 @@ export function dueSteps(state, atMs) {
     .filter(x => x.at <= atMs);
 }
 
-/** The offseason day (1–6) at `nowMs`, or 0 before day 1 / outside the offseason. */
+/** The offseason day (1–10) at `nowMs`, or 0 before day 1 / outside the offseason. */
 export function offseasonDay(state, nowMs = Date.now()) {
   const os = state?.offseason;
   if (!os) return 0;
@@ -144,13 +150,17 @@ export function offseasonDay(state, nowMs = Date.now()) {
 }
 
 export const DAY_FOCUS = Object.freeze({
-  0: { label: 'Season Complete',      sub: 'The offseason opens at midnight.' },
-  1: { label: 'Season Review',        sub: 'The record is in the books. Ownership weighs in.' },
-  2: { label: 'Contract Decisions',   sub: 'Expiring deals: re-sign or let them walk. Free agency opens.' },
-  3: { label: 'Staff & Free Agency',  sub: 'The manager\'s future, and the market keeps moving.' },
-  4: { label: 'Free Agency',          sub: 'Clubs are filling holes. New names on the market.' },
-  5: { label: 'Final Decisions',      sub: 'Anything required still open is decided for you at midnight tomorrow.' },
-  6: { label: 'Spring Eve',           sub: 'Spring training opens at midnight.' },
+  0:  { label: 'Season Complete',    sub: 'The offseason opens at midnight.' },
+  1:  { label: 'Season Review',      sub: 'The record is in the books. Ownership weighs in; the winter\'s priority is set.' },
+  2:  { label: 'The Staff',          sub: 'The manager\'s future, and how each coach\'s side of the game went.' },
+  3:  { label: 'Hiring',             sub: 'Candidates for any opening on the staff.' },
+  4:  { label: 'Contract Decisions', sub: 'Expiring deals: re-sign or let them walk.' },
+  5:  { label: 'Free Agency Opens',  sub: 'The market opens. Clubs start filling holes.' },
+  6:  { label: 'Winter Meetings',    sub: 'Clubs are talking trades.' },
+  7:  { label: 'Winter Meetings',    sub: 'The meetings wrap up; the market keeps moving.' },
+  8:  { label: 'Free Agency',        sub: 'A second wave. The best names are going fast.' },
+  9:  { label: 'Front Office',       sub: 'Next season\'s plans. Anything required still open is decided for you after tomorrow.' },
+  10: { label: 'Spring Eve',         sub: 'Spring training opens at midnight.' },
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -708,7 +718,10 @@ export function userFreeAgentTargets(draft, max, excludeIds = new Set()) {
   const full = activeCount(draft, 'user') >= ROSTER_LIMITS.ACTIVE_TOTAL;
   const starterAt = (slot) => (u.lineupSlots || []).filter(s => s.slot === slot && s.playerId)
     .map(s => draft.players[s.playerId]).filter(Boolean).sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0] || null;
-  for (const p of freeAgents(draft).sort((a, b) => (b.ovr || 0) - (a.ovr || 0))) {
+  // §112 the winter's priority first: the free agents who fill it, then the rest.
+  const pri = draft.offseason?.priority || null;
+  const hits = (p) => (pri ? fillsNeed(p, pri) : false);
+  for (const p of freeAgents(draft).sort((a, b) => (hits(b) - hits(a)) || ((b.ovr || 0) - (a.ovr || 0)))) {
     if (out.length >= max) break;
     if (excludeIds.has(p.id)) continue;
     if (!full && need && _fits(p, need)) {
@@ -725,7 +738,7 @@ export function userFreeAgentTargets(draft, max, excludeIds = new Set()) {
         .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0] || null;
     }
     if (target && (p.ovr || 0) >= (target.ovr || 0) + FA_UPGRADE_MIN) {
-      out.push({ player: p, replaces: target, reason: `an upgrade on ${target.name} (OVR ${target.ovr})` });
+      out.push({ player: p, replaces: target, reason: `an upgrade on ${target.name} (OVR ${target.ovr})${hits(p) ? ' — and the winter\'s priority' : ''}` });
     }
   }
   return out;
@@ -830,7 +843,7 @@ export function hardGates(state) {
 
 /**
  * openNewSeason(draft, atMs)
- * Day 7, after required decisions have auto-resolved: unsigned free agents
+ * Spring (the day after the last), after required decisions have auto-resolved: unsigned free agents
  * leave the league, coaches are kept on, amateur prospects join every farm,
  * payroll is recomputed and every record starts over in season N+1.
  * (The calendar and the phase change belong to GameEngine.)

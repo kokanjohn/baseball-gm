@@ -31,11 +31,12 @@ import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { planDeliveryTimes, inQuietHours } from '../../engine/CardScheduler.js';
 import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js';
 import * as CardPools from '../../data/cards-pool.js';
+import { fillsNeed as LeagueTradesFills } from '../../engine/LeagueTrades.js';
 import { writeComposeReply, COMPOSE_TOPICS } from '../../engine/ComposeReplies.js';
 import {
   GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP,
   SPRING_TRAINING_GAME_COUNT, REGULAR_SEASON_GAME_COUNT,
-  NEW_TEAM_SEED_CARDS, ALL_STAR_BREAK_AFTER_GAME, ALLSTAR_ANNOUNCE_GAME_MIN, ALLSTAR_ANNOUNCE_GAME_MAX,
+  NEW_TEAM_SEED_CARDS, OFFSEASON_DAYS, ALL_STAR_BREAK_AFTER_GAME, ALLSTAR_ANNOUNCE_GAME_MIN, ALLSTAR_ANNOUNCE_GAME_MAX,
   ALLSTAR_SQUAD_SIZE, ALLSTAR_STARTER_INNINGS, LINEUP_SLOTS,
 } from '../../data/constants.js';
 import * as Roster from '../../engine/RosterEngine.js';
@@ -127,7 +128,7 @@ async function checkComposeTruth(st, at) {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { milestones: [], talks: [], calls: [], offers: [], counters: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { review: null, milestones: [], talks: [], calls: [], offers: [], counters: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -339,7 +340,7 @@ async function runPostseason() {
 async function runOffseasonChecks() {
   const pre   = SM.get();
   const os    = pre.offseason;
-  check('offseason: calendar set when the season ended', !!os && os.dayStarts?.length === 6 && os.springAt > os.dayStarts[5]);
+  check(`offseason: calendar set when the season ended (${OFFSEASON_DAYS} days)`, !!os && os.dayStarts?.length === OFFSEASON_DAYS && os.springAt > os.dayStarts[OFFSEASON_DAYS - 1]);
   if (!os) return;
   const year1 = baseballYear(pre);
   const before = {};
@@ -352,16 +353,19 @@ async function runOffseasonChecks() {
   const extendedUser = (pre.userTeam.rosterIds || []).filter(id => pre.players[id].pendingContract);
   const sched1Len = pre.schedule.filter(g => !g.isPlayoff).length;
   const phases = []; let lastPhase = pre.phase; let offseasonAt = null, springAt = null;
-  const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0;
+  const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0, ownerBody = '', priorityCard = null, firstFaAfterPriority = null;
   clock.set(Math.max(clock.get(), os.endedAt));
-  for (let guard = 0; guard < 24 * 9; guard++) {
+  for (let guard = 0; guard < 24 * (OFFSEASON_DAYS + 3); guard++) {
     clock.advance(3600_000);
     advanceClock(clock.get());
     releaseDueCards();
     for (const c of getInbox()) {
       if ((c._rosterKey || '').startsWith('os:resign:')) resignCards.add(c._targetPlayerId);
       if ((c._rosterKey || '').startsWith('os:fa:')) faCards.add(c._targetPlayerId);
-      if (c.cardId === 'os_ownership') ownershipCard = 1;
+      if (c.cardId === 'os_ownership') { ownershipCard = 1; ownerBody = c.body; }
+      if (c.cardId === 'os_priority') priorityCard = c;
+      if (!gm.review && SM.get().offseason?.review) gm.review = SM.get().offseason.review;
+      if (c.cardId === 'os_free_agent' && SM.get().offseason?.priority && !firstFaAfterPriority) firstFaAfterPriority = { id: c._targetPlayerId, pri: SM.get().offseason.priority };
     }
     const faBefore = SM.get().userTeam.rosterIds.length;
     gmActs();
@@ -375,12 +379,23 @@ async function runOffseasonChecks() {
   }
   const st = SM.get();
   const year2 = baseballYear(st);
+  // §112 the season review, and what reads from it.
+  {
+    const RR = gm.review;
+    check(`offseason: the season review (${RR ? `${RR.outcome}, ${RR.w}–${RR.l}, offense ${RR.offense.rank}/${RR.offense.of}, runs allowed ${RR.pitching.rank}/${RR.pitching.of}; needs: ${RR.needs.map(n => n.short).join(', ')}` : 'missing'})`,
+          !!RR && ['champion', 'pennant', 'playoffs', 'near', 'missed', 'disaster'].includes(RR.outcome) && RR.needs.length >= 1 && RR.offense.of >= 8);
+    check(`offseason: the owner's review opens in the season's terms (“${(ownerBody || '').slice(0, 90)}…”)`, /^(A championship|Champions|We were|A pennant|October|We made|We came|A few games|Not a playoff|This wasn't|We fell|I won't|A season like)/.test(ownerBody || ''));
+    check(`offseason: the manager looks back and asks the winter's priority (“${(priorityCard?.body || '').slice(0, 140)}…”)`,
+          !!priorityCard && new RegExp(`${RR?.w}–${RR?.l}`).test(priorityCard.body) && /biggest hole/.test(priorityCard.body) && /^Priority: /.test(priorityCard.yesLabel || ''));
+    const fa = firstFaAfterPriority && st.players[firstFaAfterPriority.id];
+    console.log(`  offseason: the first free agent after the priority (${firstFaAfterPriority?.pri?.short || '—'}): ${fa ? `${fa.name} ${fa.pos}, ${LeagueTradesFills(fa, firstFaAfterPriority.pri) ? 'fills it' : 'another need'}` : 'none'}`);
+  }
   check(`offseason: SEASON_SUMMARY → OFFSEASON → SPRING_TRAINING (${phases.join(' → ')})`,
         phases.join(',') === `${PHASE.OFFSEASON},${PHASE.SPRING_TRAINING}`);
   check('offseason: day 1 begins the midnight after the season ended',
         offseasonAt !== null && offseasonAt - os.dayStarts[0] >= 0 && offseasonAt - os.dayStarts[0] < 3600_000 + 1000);
-  check('offseason: spring opens after six full days', springAt !== null && springAt - os.springAt >= 0 && springAt - os.springAt < 3600_000 + 1000
-        && Math.round((os.springAt - os.dayStarts[0]) / 86_400_000) === 6);
+  check(`offseason: spring opens after ${OFFSEASON_DAYS} full days`, springAt !== null && springAt - os.springAt >= 0 && springAt - os.springAt < 3600_000 + 1000
+        && Math.round((os.springAt - os.dayStarts[0]) / 86_400_000) === OFFSEASON_DAYS);
   check(`offseason: season 2 begins (season ${st.seasonNum}, year ${year1} → ${year2})`, st.seasonNum === 2 && year2 === year1 + 1);
   const hist = (st.seasonHistory || []).find(h => h.seasonNum === 1);
   check('offseason: season 1 locked into history (record, postseason result, standings)',
