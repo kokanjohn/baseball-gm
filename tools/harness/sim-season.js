@@ -244,6 +244,10 @@ function gmActs() {
       }
       continue;
     }
+    // §112.2 let the first coach go every run, so the hiring path is always exercised.
+    if (c.cardId === 'os_coach_review' && !gm.coachLetGo) {
+      gm.coachLetGo = c._coachRole; resolveCard(c.instanceId, 'no'); gm.acted++; advanceClock(clock.get()); continue;
+    }
     const r = Math.random();
     if (c._rosterKind === 'need' && r < 0.3) {
       // Team screen path: pick from the dashed spot instead of the card.
@@ -354,6 +358,8 @@ async function runOffseasonChecks() {
   const sched1Len = pre.schedule.filter(g => !g.isPlayoff).length;
   const phases = []; let lastPhase = pre.phase; let offseasonAt = null, springAt = null;
   const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0, ownerBody = '', priorityCard = null, firstFaAfterPriority = null;
+  const coachCards = new Map();
+  const staffBefore = JSON.parse(JSON.stringify(pre.userTeam.coachingStaff || {}));
   clock.set(Math.max(clock.get(), os.endedAt));
   for (let guard = 0; guard < 24 * (OFFSEASON_DAYS + 3); guard++) {
     clock.advance(3600_000);
@@ -364,6 +370,7 @@ async function runOffseasonChecks() {
       if ((c._rosterKey || '').startsWith('os:fa:')) faCards.add(c._targetPlayerId);
       if (c.cardId === 'os_ownership') { ownershipCard = 1; ownerBody = c.body; }
       if (c.cardId === 'os_priority') priorityCard = c;
+      if (c.cardId === 'os_coach_review' || c.cardId === 'os_coach_hire') coachCards.set(c.instanceId, c);
       if (!gm.review && SM.get().offseason?.review) gm.review = SM.get().offseason.review;
       if (c.cardId === 'os_free_agent' && SM.get().offseason?.priority && !firstFaAfterPriority) firstFaAfterPriority = { id: c._targetPlayerId, pri: SM.get().offseason.priority };
     }
@@ -440,6 +447,30 @@ async function runOffseasonChecks() {
   check('offseason: ownership evaluation card delivered and decided',
         ownershipCard === 1 && (st.userTeam.finances.payrollTargetHistory || []).some(h => h.seasonNum === 2));
   check('offseason: every required decision resolved by spring', Offseason.hardGates(st).open.length === 0);
+  {
+    // §112.2 the coaches: evaluated on their side of the game, renewed / let go / fired, the chairs filled by spring.
+    const U = gm.review?.units;
+    const roles = ['pitchingCoach', 'hittingCoach', 'bullpenCoach', 'benchCoach'];
+    check(`coaches: the review measures each side of the game (rotation ERA ${U?.spEra?.v?.toFixed(2)} #${U?.spEra?.rank}, pen ${U?.rpEra?.v?.toFixed(2)} #${U?.rpEra?.rank}, OPS ${U?.ops?.v?.toFixed(3)} #${U?.ops?.rank}, of ${U?.of})`,
+          !!U && U.of >= 10 && [U.spEra, U.rpEra, U.ops, U.bb9, U.k9].every(m => m?.v != null && m.rank >= 1 && m.rank <= U.of));
+    check(`coaches: blown saves recorded (${U?.bs} blown in ${U?.svo} chances)`, (U?.bs || 0) > 0 && (U?.svo || 0) >= (U?.bs || 0));
+    const cards = [...coachCards.values()];
+    const reviews = cards.filter(c => c.cardId === 'os_coach_review'), hires = cards.filter(c => c.cardId === 'os_coach_hire');
+    const upRoles = roles.filter(r => (staffBefore[r]?.contractExpiry ?? 99) <= 2);
+    check(`coaches: a card for every coach whose deal was up (${upRoles.join(', ') || 'none'}; ${reviews.length} review cards: ${reviews.map(c => c.subject).join(' | ')})`,
+          upRoles.every(r => reviews.some(c => c._coachRole === r)));
+    console.log(`  coaches: ${reviews.map(c => `${c.subject} → ${c.choice || '—'}`).join('; ') || 'no review cards'}`);
+    for (const c of reviews.slice(0, 2)) console.log(`    “${c.body.slice(0, 260)}…”`);
+    for (const c of hires.slice(0, 1)) console.log(`    hire: “${c.body.slice(0, 420)}…”`);
+    const gone = reviews.filter(c => c.choice === 'no').map(c => c._coachRole);
+    check(`coaches: every chair let go gets a hiring card (${gone.join(', ') || 'none let go'}; ${hires.length} hiring)`, gone.every(r => hires.some(h => h._coachRole === r)));
+    const staff = st.userTeam.coachingStaff || {};
+    check('coaches: every chair is filled at spring, with a quality, a specialty and a deal into season 2',
+          roles.every(r => staff[r] && !staff[r].vacant && staff[r].name && Number.isFinite(staff[r].quality) && staff[r].specialty && staff[r].contractExpiry > 2),
+          JSON.stringify(roles.map(r => [r, staff[r]?.name, staff[r]?.quality, staff[r]?.specialty, staff[r]?.contractExpiry, staff[r]?.vacant])));
+    const names = roles.map(r => staff[r]?.name);
+    check('coaches: no two coaches share a name', new Set(names).size === names.length, names.join(','));
+  }
   const signings = (st.activityFeed || []).filter(e => /sign free agent/.test(e.text)).length;
   check(`offseason: CPU clubs sign free agents (${signings} signings, ${faCards.size} FA cards to the GM, ${signedByUser} signed)`, signings >= 3);
   const cpuBad = st.leagueTeams.filter(t => Offseason.activeCount(st, t.id) !== ROSTER_LIMITS.ACTIVE_TOTAL);

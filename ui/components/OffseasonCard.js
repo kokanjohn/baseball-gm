@@ -44,7 +44,7 @@ export function renderOffseasonCard(state, nowMs = Date.now()) {
     <div class="os-gates" aria-label="Required before spring training">
       ${chip(gates.ownership, 'Ownership')}
       ${chip(gates.contracts, 'Contracts', openContracts ? ` <b>${openContracts}</b>` : '')}
-      ${chip(gates.manager, 'Manager')}
+      ${chip(gates.manager && gates.staff, 'Staff')}
     </div>`;
 
   return `

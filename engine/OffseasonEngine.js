@@ -6,8 +6,11 @@
  *   day 1 00:00  OFFSEASON: record locked, stats archived, every player ages a
  *                year and develops/declines, retirements; the season review
  *                (SeasonReview); ownership's evaluation; the winter's priority
- *   day 2        the staff: the manager's contract (coaches — §112 B)
- *   day 3        hiring (§112 B)
+ *   day 2        the staff: the manager's contract; each coach's evaluation
+ *                (CoachEngine — renew or let go a coach whose deal is up;
+ *                keep or fire one whose side of the game struggled)
+ *   day 3        hiring: two candidates for every empty chair (a coach let
+ *                go later gets candidates a few hours after)
  *   day 4 10:00  contracts: CPU clubs re-sign or let go; farm deals renewed;
  *                the user's re-sign cards
  *   day 5        free agency opens (CPU clubs sign to fill needs; FA cards)
@@ -76,6 +79,7 @@ import { STAFF_NAMES, PLAYER_SURNAMES } from '../data/player-names.js';
 import { uniqueName, namesInUse, surnameOf } from './Names.js';
 import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
+import * as Coach from './CoachEngine.js';
 import { fillsNeed } from './LeagueTrades.js';
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
@@ -404,7 +408,7 @@ export function beginOffseason(draft, atMs) {
   const nextYear = baseballYear(draft) + 1;
   for (const p of Object.values(draft.players || {})) {
     if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
-    _develop(p, nextYear, draft.seasonNum || 1);
+    _develop(p, nextYear, draft.seasonNum || 1, p.teamId === 'user' ? draft.userTeam?.coachingStaff : null);
   }
   draft.ilReturnQueue = [];
   draft.impScores = {};
@@ -470,7 +474,7 @@ function _archiveStats(draft) {
 }
 
 /**
- * _develop(player, nextYear, seasonNum)
+ * _develop(player, nextYear, seasonNum, staff)
  * Section 4.1 (LOCKED) age curves on each active sub-rating, by the player's
  * baseball age in the coming season, with trait modifiers and variance; OVR
  * recomputed. Injuries heal over the winter.
@@ -486,7 +490,7 @@ const CURVES = [
   [1.0, 0.5, -1.0, -2.0, -3.5],
   [0.5, 0.0, -1.5, -2.5, -4.0],
 ];
-function _develop(p, nextYear, seasonNum) {
+function _develop(p, nextYear, seasonNum, staff = null) {
   const sr = p.subRatings;
   if (sr) {
     const age = computeAge(p.dob, nextYear);
@@ -502,6 +506,7 @@ function _develop(p, nextYear, seasonNum) {
       let variance = _rng(-2, 2);
       if (p.trait === 'youngGun' && age < 28) change += 1;
       else if (p.trait === 'veteran' && age >= 30 && i === 0 && change < 0) change *= 0.5;
+      if (staff) change += Coach.winterBonus(staff, p, key, age);   // §112.2 our coaches' winter work
       if (p.trait === 'consistent') variance = _rng(-1, 1);
       if (p.trait === 'volatile')   variance = _rng(-4, 4);
       const delta = Math.max(-5, Math.min(4, Math.round(change + variance)));
@@ -815,12 +820,65 @@ export function applyManagerDecision(draft, mode) {
   return { name: m.name };
 }
 
-/** Coaches whose deals are up are kept on (soft gate, §23.2): two more years. */
-function _renewCoaches(draft) {
-  const start = (draft.seasonNum || 1) + 1;
-  for (const [role, c] of Object.entries(draft.userTeam?.coachingStaff || {})) {
-    if (role === 'manager' || !c) continue;
-    if ((c.contractExpiry ?? 99) <= start) c.contractExpiry = start + 2;
+// ─────────────────────────────────────────────────────────────
+// §112.2 THE COACHES — renew, let go, fire, hire
+// ─────────────────────────────────────────────────────────────
+
+/** Coaches whose deals are up after this season. */
+export function coachesUp(draft) {
+  const next = (draft.seasonNum || 1) + 1;
+  return Coach.COACH_ROLES.filter(r => Coach.coachContractIsUp(draft.userTeam?.coachingStaff?.[r], next));
+}
+
+/** Empty chairs on the staff. */
+export function coachVacancies(draft) {
+  return Coach.COACH_ROLES.filter(r => draft.userTeam?.coachingStaff?.[r]?.vacant);
+}
+
+/** mode: 'renew' (at `salary`, two years) | 'letgo' | 'fire' (the rest of the deal is paid now). */
+export function applyCoachDecision(draft, role, mode, { salary = null, atMs = 0 } = {}) {
+  const u = draft.userTeam;
+  const staff = u?.coachingStaff;
+  const c = staff?.[role];
+  if (!c || c.vacant) return null;
+  const next = (draft.seasonNum || 1) + 1;
+  if (mode === 'renew') {
+    Coach.renewCoach(staff, role, salary ?? c.salary, next);
+    return { name: c.name, salary: c.salary };
+  }
+  const name = c.name;
+  const owed = mode === 'fire' ? Coach.buyoutOwed(c, next) : 0;
+  if (owed) Finance.post(u.finances, -owed, 'staff', `Buyout — ${name}, ${Coach.ROLE_INFO[role].title}`, atMs);
+  Coach.vacate(staff, role);
+  if (mode === 'fire') u.morale = Math.max(0, (u.morale || 50) - 1);
+  return { name, owed };
+}
+
+export function applyCoachHire(draft, role, cand) {
+  const staff = draft.userTeam?.coachingStaff;
+  if (!staff || !cand) return null;
+  return Coach.hire(staff, role, cand, (draft.seasonNum || 1) + 1);
+}
+
+/**
+ * Spring opens: any coach whose deal ran out without a decision stays two
+ * more years; an empty chair nobody filled gets a league-typical coach.
+ * (The cards resolve these first; this only catches what they couldn't.)
+ */
+function _settleStaff(draft) {
+  const staff = draft.userTeam?.coachingStaff;
+  if (!staff) return;
+  const start = (draft.seasonNum || 1) + 1;   // the season about to open
+  for (const role of Coach.COACH_ROLES) {
+    const c = staff[role];
+    if (!c) continue;
+    if (c.vacant) {
+      const taken = new Set(Object.values(staff).map(x => x?.name).filter(Boolean).concat(draft.userTeam.ownerName));
+      const [cand] = Coach.candidates(draft, role, null, { taken });
+      Coach.hire(staff, role, { ...cand, quality: 55, salary: Coach.salaryFor(role, 55) }, start);
+    } else if ((c.contractExpiry ?? 99) <= start) {
+      c.contractExpiry = start + 2;
+    }
   }
 }
 
@@ -828,12 +886,13 @@ function _renewCoaches(draft) {
  * hardGates(state)
  * §23.2: spring cannot begin with these open — they auto-resolve at spring.
  * Read from the GM's unresolved offseason cards (`_osGate`).
- * @returns {{ ownership: Boolean, contracts: Boolean, manager: Boolean, open: String[] }}  true = cleared
+ * @returns {{ ownership: Boolean, contracts: Boolean, manager: Boolean, staff: Boolean, open: String[] }}  true = cleared
+ * (staff: §112.2 an empty coaching chair still to fill)
  */
 export function hardGates(state) {
   const cards = [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])];
   const open = (g) => cards.some(c => c._osGate === g);
-  const gates = { ownership: !open('ownership'), contracts: !open('contracts'), manager: !open('manager') };
+  const gates = { ownership: !open('ownership'), contracts: !open('contracts'), manager: !open('manager'), staff: !open('staff') };
   return { ...gates, open: Object.entries(gates).filter(([, v]) => !v).map(([k]) => k) };
 }
 
@@ -851,7 +910,7 @@ export function hardGates(state) {
 export function openNewSeason(draft, atMs) {
   const events = [];
   for (const p of freeAgents(draft)) events.push(departLeague(draft, p.id, atMs, 'unsigned'));
-  _renewCoaches(draft);
+  _settleStaff(draft);
   for (const t of _allTeams(draft)) events.push(..._signProspects(draft, t, atMs));
 
   // Anyone who joined a club after contract day (a waiver claim, a late

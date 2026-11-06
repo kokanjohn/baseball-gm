@@ -14,6 +14,7 @@
  */
 
 import { renameLeague, lastNameOnly } from '../engine/Names.js';
+import { ensureAbilities } from '../engine/CoachEngine.js';
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso } from '../engine/WeatherClimate.js';
 import {
   SCHEMA_VERSION,
@@ -546,6 +547,13 @@ function _fillDefaults(state) {
     renameLeague(state.players);
     for (const m of Object.values(state.userTeam?.coachingStaff || {})) if (m?.name) m.name = lastNameOnly(m.name);
     state._lastNamesOnly = true;
+  }
+
+  // §112.2 coaches with real abilities: a save from before r126 gives each of
+  // its coaches a quality and a specialty once.
+  if (state.userTeam?.coachingStaff && state._coachAbilities !== true) {
+    ensureAbilities(state.userTeam.coachingStaff);
+    state._coachAbilities = true;
   }
 
   for (const key of Object.keys(defaults)) {

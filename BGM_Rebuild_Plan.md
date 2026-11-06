@@ -8887,3 +8887,39 @@ Coaches renew silently, and only matter as a relationship nudge to development p
   - `Offseason.userFreeAgentTargets` puts the free agents who fill it first, and says so in the card.
 - **Seasons.** North 2 (champion, 93–39) and south 3 with `ARCH=ember` (a 63–69 playoff club) pass the new offseason checks: the review, the owner's opening, the manager's look back and priority, and the ten-day calendar.
 - **Found:** blown saves are never counted (there's no `bs` delta in SimEngine). The review mentions them only when there are any. Left as its own item.
+
+### 112.2 Phase B done (r126): coaches with real abilities; evaluations, firing and hiring; blown saves
+- **The model (`engine/CoachEngine.js`, pure).** Each of the four coaches (pitching, hitting, bullpen, bench) has a **quality** (40–90; 60 is league-typical; rolled as the mean of three draws, so most are near 58) and a **specialty**:
+
+  | Role | Specialties |
+  |---|---|
+  | Pitching coach | command (control) · power (stuff) · youth (young arms grow faster) |
+  | Hitting coach | contact · power · youth (young hitters grow faster) |
+  | Bullpen coach | command (relievers' control) · late (relievers from the 8th inning on) |
+  | Bench coach | baserunning (speed on the bases) · defense (fewer errors) |
+
+  - Salary follows quality (`salaryFor`: 0.7× to 1.3× the role's base of $125K / $75K).
+  - The manager has no quality yet; the manager's contract card is unchanged.
+  - CPU clubs' staffs stay a budget line: their coaching is league-typical (no effect).
+  - An empty chair coaches like a weak coach (quality 45).
+- **Effects.**
+  - *In the sim* (`staffEffects`, passed by GameEngine as `staff` to `generatePlays` and `generateResumption`; SimEngine adds the points in `_effectiveSR` for players with `teamId === 'user'`, never in `leagueNorms`, never in the All-Star Game). Unit points = (quality − 60)/30 × 0.3; a specialty adds up to 0.25 more, scaled by quality. Starters get the pitching coach; relievers get half the pitching coach plus the bullpen coach. The bench coach's defense multiplies the error rate behind our fielders; a late-innings bullpen coach adds to our relievers from the 8th.
+  - *Calibration* (`tools/harness/check-coaches.mjs`, 1,500 games a staff): an elite staff (90s) against a poor one (40s) is about 5 wins a season; the walks, steals and errors move the specialty's way. The first try (1.5 points a unit) was about 13 wins, too much.
+  - *Development:* `DevelopmentEngine.gainMultiplier` × `devFactor` (0.8 at 40 to 1.2 at 90; a youth specialist ×1.2 more at 25 and under).
+  - *The winter:* `OffseasonEngine._develop` adds `winterBonus` to each of our players' yearly change (quality −0.4 to +0.6, +0.5 on the specialty's rating, +0.6 for a youth specialist's players 25 and under).
+- **New franchises** roll each coach's quality and specialty, pay by quality, and put two of the four on one-year deals, so the first winter has a real staff decision. Old saves get qualities and specialties once on load (`_coachAbilities`).
+- **The review measures each side of the game.** `SeasonReview` now carries `units`: rotation and relief ERA, walks and strikeouts per nine, OPS / OBP / SLG, steal success, each with the league average and our rank; blown saves and save chances; the one-run record; and how our young players (26 and under) grew over the winter, by side.
+- **Day 2 — the evaluations** (from the manager, a few minutes apart after the step). `CoachEngine.evaluate` scores each coach's unit (`good` / `fair` / `poor`) with the facts in words.
+  - A coach whose deal is up: **renew** (two years at an ask that follows quality and the year) or **let go**. No answer by free agency (day 5): renewed.
+  - A coach under contract whose unit was poor: **keep**, or **make a change**, which pays out the rest of the deal from club funds (a `staff` ledger line, "Buyout — …").
+  - Every other coach: one line in the Recent feed ("Staff review — Name, pitching coach: the rotation's 3.85 ERA (4th of 16). Signed through season 3.").
+- **Day 3 — hiring.** Every empty chair gets a card from the Front Office with two candidates (`candidates`):
+  - the first has the specialty the unit needs most (`neededSpecialty`, from last season: walks or strikeouts against the league, OBP or slugging, blown-save rate, steal success, or a young roster), rolled around quality 68, at a 10% premium;
+  - the second has another specialty, around quality 60, at 5% less.
+
+  Either can be the better coach. Each candidate has a background, a quality in words and number, and a salary. A coach let go after day 3 gets the card a few hours later. The card is required (`_osGate: 'staff'`; the offseason card's chip is now "Staff", covering the manager and the coaches). With no decision by spring, the second candidate is hired. `_settleStaff` at spring (replacing the silent `_renewCoaches`) renews any deal still up and fills any chair still empty.
+- **Elsewhere.** The Team screen's Staff tab shows quality and specialty, and "Vacant · Hiring". Compose disables a vacant coach's row.
+- **Blown saves** (`_assignPitcherDecisions`): a reliever on either side who entered with a lead of 1–3 and let it go (the lead fell to 0 or below during his span) gets `bs`. Saves and blown saves both count a `svo`. The box shows "BS" when there's no other decision.
+- **Tests.**
+  - `check-coaches.mjs`: 13 checks (the staff at creation, the calibration, development, evaluation, candidates).
+  - `sim-season.js`: new offseason checks (the units, blown saves, a card for every expiring coach, a hiring card for every chair let go, all chairs filled at spring with a deal into season 2, unique names). The harness GM now lets the first coach go every run, so the hiring path always runs.

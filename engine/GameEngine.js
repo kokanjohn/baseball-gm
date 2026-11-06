@@ -92,6 +92,7 @@ import * as FreeAgency from './FreeAgency.js';
 import * as LeagueTrades from './LeagueTrades.js';
 import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
+import * as Coach from './CoachEngine.js';
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso, weatherContext } from './WeatherClimate.js';
 import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME } from './GameWeather.js';
 import { findMakeupSlot, seriesShift, gameTeams, clubFreeAt } from './WeatherSchedule.js';
@@ -517,6 +518,16 @@ export async function startNewGame(config) {
       },
     };
 
+    // §112.2 Each coach's quality and specialty, paid by quality; two of the
+    // four on one-year deals (a real staff decision the first winter).
+    Coach.ensureAbilities(s.userTeam.coachingStaff);
+    const oneYear = [...Coach.COACH_ROLES].sort(() => Math.random() - 0.5).slice(0, 2);
+    for (const role of Coach.COACH_ROLES) {
+      const c = s.userTeam.coachingStaff[role];
+      c.salary = Coach.salaryFor(role, c.quality);
+      if (oneYear.includes(role)) c.contractExpiry = s.seasonNum + 1;
+    }
+
     // Owner — named so ownership cards read "{owner_name} wants…" (§60).
     s.userTeam.ownerName = pickStaffName();
 
@@ -786,7 +797,8 @@ function _activateGame(game) {
     opponentTeam,
     players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
-      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null }
+      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null,
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff) }
   );
 
   // Write plays to state and transition to LIVE
@@ -843,7 +855,8 @@ function _silentlyCommitGame(game) {
   const { plays, boxScore, liveLineups, resumeState, weather } = generatePlays(
     wx ? { ...game, ...wx.record } : game, userTeam, opponentTeam, players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
-      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null }
+      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null,
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff) }
   );
 
   // Suspended by the weather: it stands where it stopped, to be finished another day.
@@ -2145,6 +2158,7 @@ function _resumeGame(ref, atMs) {
     const sim = generateResumption(isUser ? g : { ...g, isHome: true }, first, second, st.players, {
       resumeState: g.resumeState, partOne: g.plays, liveLineups: g.liveLineups || {}, phase: st.phase, isSpring: !!g.isSpring,
       norms: leagueNorms([st.userTeam, ...(st.leagueTeams || [])], st.players),
+      staff: Coach.staffEffects(st.userTeam?.coachingStaff),
     });
     rest = sim.plays; box = sim.boxScore; lineups = sim.liveLineups;
   }
@@ -2254,7 +2268,8 @@ function _startLeagueGame(date, i) {
     { ...cg, isHome: true, weather: null, fieldCondition: null, ...(wx?.record || {}) },
     home, away, state.players,
     { phase: state.phase, isSpring: !!cg.isSpring,
-      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null }
+      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null,
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff) }
   );
   StateManager.mutate(s => {
     const g = s.leagueSchedule.dayMap[date][i];
@@ -2538,7 +2553,8 @@ function _startAllStarGame(date, i) {
     { ...cg, isHome: true, weather: null, fieldCondition: null, ...(wx?.record || {}) },
     home, away, state.players,
     { phase: state.phase, isSpring: false, exhibition: true,
-      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null }
+      norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null,
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff) }
   );
   StateManager.mutate(s => {
     const g = s.leagueSchedule.dayMap[date][i];
@@ -2950,11 +2966,36 @@ function _runOffseasonStep(step, atMs) {
     if (Offseason.managerContractIsUp(StateManager.get())) {
       CardEngine.deliverManagerContractCard(cardAt(2, OFFSEASON_CARD_HOUR), springAt);
     }
+    // §112.2 each coach, evaluated on their side of the game: a deal that's
+    // up (renew or let go) or a hard year under contract (keep or fire) is a
+    // card from the manager; the rest is a line in the Recent feed.
+    st = StateManager.get();
+    const up = new Set(Offseason.coachesUp(st));
+    const U = st.offseason?.review?.units;
+    let k = 0;
+    for (const role of Coach.COACH_ROLES) {
+      const c = st.userTeam.coachingStaff?.[role];
+      if (!c || c.vacant) continue;
+      const ev = Coach.evaluate(role, U);
+      const at = atMs + (25 + 40 * k + Math.floor(Math.random() * 20)) * 60_000;
+      if (up.has(role) || ev.verdict === 'poor') {
+        if (CardEngine.deliverCoachReviewCard(role, up.has(role) ? 'up' : 'poor', at, Offseason.dayStart(os, 5))) k++;
+      } else if (ev.facts.length) {
+        StateManager.mutate(s => {
+          s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('coaching', s.userTeam.abbr,
+            `Staff review — ${c.name}, ${Coach.ROLE_INFO[role].title}: ${ev.facts[0]}. Signed through season ${(c.contractExpiry || 2) - 1}.`, atMs)]);
+        });
+      }
+    }
     done();
     return events;
   }
 
   if (step === 'day3') {
+    // §112.2 candidates for every empty chair (a coach let go on day 2).
+    for (const role of Offseason.coachVacancies(StateManager.get())) {
+      CardEngine.deliverCoachHireCard(role, atMs + Math.floor(Math.random() * 90) * 60_000, springAt);
+    }
     done();
     return events;
   }

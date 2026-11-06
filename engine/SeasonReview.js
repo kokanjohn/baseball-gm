@@ -139,8 +139,75 @@ export function seasonReview(state) {
     post, outcome, place, of: div.length || null, gamesOut,
     offense, pitching, rotation, bullpen, stars, letdowns, needs,
     payroll: fin.payroll || 0, payrollTarget: fin.payrollTarget ? seasonTarget(fin) : null,
+    units: _units(state, season),
     expiring, core, injuries: (state.history || []).filter(h => h.type === 'injury' && h.season === season).length,
   };
+}
+
+/**
+ * §112.2 Each coach's side of the game, against the league: the rotation and
+ * the bullpen (ERA rank, walks and strikeouts per nine, blown saves), the
+ * lineup (OPS rank, on-base and slugging against the league), the bases
+ * (steals and caught stealing), one-run games, and how the club's young
+ * players grew over the winter (the day-1 development, by side).
+ * Clubs are built from each player's archived line for the season (where he
+ * finished it).
+ */
+function _units(state, season) {
+  const by = {};
+  const T = (id) => by[id] || (by[id] = { spIp: 0, spEr: 0, rpIp: 0, rpEr: 0, ip: 0, bbA: 0, kA: 0, ab: 0, h: 0, bb: 0, hbp: 0, tb: 0, sb: 0, cs: 0, bs: 0, svo: 0 });
+  for (const p of Object.values(state.players || {})) {
+    const e = (p?.seasonLog || []).filter(x => x.season === season).pop();
+    if (!e || !e.teamId) continue;
+    const s = e.stats || {}, t = T(e.teamId);
+    if (isPitcher(p)) {
+      const starter = (s.gs || 0) >= Math.max(1, (s.g || 0) / 2);
+      if (starter) { t.spIp += s.ip || 0; t.spEr += s.er || 0; } else { t.rpIp += s.ip || 0; t.rpEr += s.er || 0; }
+      t.ip += s.ip || 0; t.bbA += s.bb || 0; t.kA += s.k || 0; t.bs += s.bs || 0; t.svo += s.svo || 0;
+    } else {
+      t.ab += s.ab || 0; t.h += s.h || 0; t.bb += s.bb || 0; t.hbp += s.hbp || 0; t.tb += s.tb || 0;
+      t.sb += s.sb || 0; t.cs += s.cs || 0;
+    }
+  }
+  const clubs = Object.entries(by).filter(([, t]) => t.ip >= 300 && t.ab >= 1500);
+  const of = clubs.length;
+  const val = {
+    spEra: (t) => era(t.spEr, t.spIp), rpEra: (t) => era(t.rpEr, t.rpIp),
+    ops: (t) => ops(t).ops, obp: (t) => ops(t).obp, slg: (t) => ops(t).slg,
+    bb9: (t) => (t.ip ? 9 * t.bbA / t.ip : null), k9: (t) => (t.ip ? 9 * t.kA / t.ip : null),
+    sb: (t) => t.sb, sbPct: (t) => (t.sb + t.cs ? t.sb / (t.sb + t.cs) : null),
+  };
+  const lowIsGood = new Set(['spEra', 'rpEra', 'bb9']);
+  const u = by.user || T('user');
+  const out = { of };
+  for (const [k, f] of Object.entries(val)) {
+    const mine = f(u);
+    const xs = clubs.map(([, t]) => f(t)).filter(x => x != null);
+    const avg = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+    const rank = mine == null ? null : 1 + clubs.filter(([id, t]) => id !== 'user' && f(t) != null
+      && (lowIsGood.has(k) ? f(t) < mine : f(t) > mine)).length;
+    out[k] = { v: mine, avg, rank };
+  }
+  out.bs = u.bs; out.svo = u.svo; out.sbN = u.sb; out.csN = u.cs;
+  // One-run games.
+  let w1 = 0, l1 = 0;
+  for (const g of state.schedule || []) {
+    if (!g._committed || g.isSpring || g.isPlayoff || !g.score) continue;
+    const d = (g.score.us || 0) - (g.score.them || 0);
+    if (d === 1) w1++; else if (d === -1) l1++;
+  }
+  out.oneRun = { w: w1, l: l1 };
+  // The winter's growth on our side (OffseasonEngine._develop, day 1), for the
+  // young players — what a teacher shows in.
+  const year = baseballYear(state) + 1;
+  const grow = { arms: 0, bats: 0, armsN: 0, batsN: 0 };
+  for (const id of [...(state.userTeam?.rosterIds || []), ...(state.userTeam?.farmIds || [])]) {
+    const p = state.players[id];
+    if (!p || computeAge(p.dob, year) > 26 || !Number.isFinite(p._ovrChange)) continue;
+    if (isPitcher(p)) { grow.arms += p._ovrChange; grow.armsN++; } else { grow.bats += p._ovrChange; grow.batsN++; }
+  }
+  out.growth = grow;
+  return out;
 }
 
 function fmt3(x) { return x >= 1 ? x.toFixed(3) : x.toFixed(3).replace(/^0/, ''); }

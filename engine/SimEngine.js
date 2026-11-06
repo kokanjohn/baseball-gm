@@ -164,7 +164,7 @@ export function computeWinProbability(userRoster, opponentTeam, players, context
  * @returns {Object} { plays, boxScore }
  */
 export function generatePlays(game, userTeam, opponentTeam, players, context) {
-  const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false, scout = null } = context;
+  const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false, scout = null, staff = null } = context;
   // §102.2 the weather this game is played in: its plan (GameWeather.gameWeatherPlan)
   // and the park report through it (GameWeather.gameConditions). Optional.
   const wx = _weatherSetup(context.weather, game);
@@ -206,7 +206,7 @@ export function generatePlays(game, userTeam, opponentTeam, players, context) {
     userLineup, oppLineup,
     userSP, oppSP,
     players,
-    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs, scout, wx,
+    { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs, scout, wx, staff: exhibition ? null : staff,
       // §75 All-Star Game: both starters work ALLSTAR_STARTER_INNINGS, every
       // other arm one inning; the reserves come in on the squads' plan.
       exhibition: exhibition ? { starterIds: new Set([userSP?.id, oppSP?.id].filter(Boolean)) } : null }
@@ -351,7 +351,7 @@ export function resumeMinutesLeft(R) {
  *     puts them on the day's clock), boxScore (the whole game), liveLineups }
  */
 export function generateResumption(game, userTeam, opponentTeam, players, context) {
-  const { resumeState: R, partOne = [], liveLineups = {}, phase = PHASE.REGULAR_SEASON, isSpring = false, norms = null } = context;
+  const { resumeState: R, partOne = [], liveLineups = {}, phase = PHASE.REGULAR_SEASON, isSpring = false, norms = null, staff = null } = context;
   const effOpp = opponentTeam || _buildSyntheticCPUTeam(players);
   const clubs = { user: userTeam, opp: effOpp };
   const fresh = { user: _buildLineup(userTeam, players, false), opp: _buildLineup(effOpp, players, true) };
@@ -390,7 +390,7 @@ export function generateResumption(game, userTeam, opponentTeam, players, contex
   const bases = { ...R.bases };
   for (const b of ['first', 'second', 'third']) if (bases[b] && replaced[bases[b]]) bases[b] = replaced[bases[b]];
   const gameState = _simulateFullGame(lineups.user, lineups.opp, R.gs.userPitcher || null, R.gs.oppPitcher || null, players, {
-    game, fieldMod: R.fieldMod ?? 1, isHome: game.isHome, phase, isSpring, norms, atMs: game.gameTime || 0, scout: null, wx: null,
+    game, fieldMod: R.fieldMod ?? 1, isHome: game.isHome, phase, isSpring, norms, atMs: game.gameTime || 0, scout: null, wx: null, staff,
     resume: { ...R, bases },
   });
   gameState.plays.forEach(p => { p._basesAfter ??= { first: null, second: null, third: null }; });
@@ -414,7 +414,11 @@ export function generateResumption(game, userTeam, opponentTeam, players, contex
 // ─────────────────────────────────────────────────────────────
 
 function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
-  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null, atMs = 0, scout = null, wx = null } = ctx;
+  const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null, atMs = 0, scout = null, wx = null, staff = null } = ctx;
+  // §112.2 the GM's coaching staff, for this game (our players only).
+  _staff = staff || null;
+  const isGM = (lu) => (lu?.slots || []).some(sl => players[sl.id]?.teamId === 'user');
+  const userIsGM = isGM(userLineup), oppIsGM = isGM(oppLineup);
 
   const plays = [];
 
@@ -468,6 +472,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
   // the weather (a suspended game).
   const runHalf = (isTop, walkoffRuns = Infinity, resume = null) => {
     const userBats = isTop ? !userBatsBottom : userBatsBottom;
+    _userFielding = userBats ? oppIsGM : userIsGM;
     gs.halfIdx = (gs.inning - 1) * 2 + (isTop ? 0 : 1);
     gs.env = _envFor(gs.wx, gs.halfIdx);
     const hp = _simulateHalfInning(
@@ -953,9 +958,9 @@ export function leagueNorms(teams, players) {
     for (const sl of t.lineupSlots || []) {
       const p = players[sl.playerId];
       if (!ok(p)) continue;
-      sum.contact += _effectiveSR(p, 'contact', p.subRatings?.contact);
-      sum.power   += _effectiveSR(p, 'power',   p.subRatings?.power);
-      sum.speed   += _effectiveSR(p, 'speed',   p.subRatings?.speed);
+      sum.contact += _effectiveSR(p, 'contact', p.subRatings?.contact, { coached: false });
+      sum.power   += _effectiveSR(p, 'power',   p.subRatings?.power, { coached: false });
+      sum.speed   += _effectiveSR(p, 'speed',   p.subRatings?.speed, { coached: false });
       nh++;
     }
     // Pitchers: the league average a batter FACES — weighted by the innings
@@ -967,8 +972,8 @@ export function leagueNorms(teams, players) {
       const prior = NORM_PITCHER_PRIOR_IP[p?.group];
       if (!ok(p) || prior == null) continue;
       const w = (p.stats?.ip || 0) + prior;
-      sum.stuff   += w * _effectiveSR(p, 'stuff',   p.subRatings?.stuff);
-      sum.control += w * _effectiveSR(p, 'control', p.subRatings?.control);
+      sum.stuff   += w * _effectiveSR(p, 'stuff',   p.subRatings?.stuff, { coached: false });
+      sum.control += w * _effectiveSR(p, 'control', p.subRatings?.control, { coached: false });
       np += w;
     }
   }
@@ -1005,8 +1010,10 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   const contact  = _effectiveSR(batter,  'contact',  sr.contact);
   const power    = _effectiveSR(batter,  'power',    sr.power);
   const speed    = _effectiveSR(batter,  'speed',    sr.speed);
-  const stuff    = _effectiveSR(pitcher, 'stuff',    psr.stuff);
-  const control  = _effectiveSR(pitcher, 'control',  psr.control);
+  // §112.2 a late-innings bullpen coach: our relievers from the eighth on.
+  const late     = _staff?.late && pitcher.teamId === 'user' && pitcher.pos === 'RP' && inning >= 8 ? _staff.late : 0;
+  const stuff    = _effectiveSR(pitcher, 'stuff',    psr.stuff) + late;
+  const control  = _effectiveSR(pitcher, 'control',  psr.control) + late;
 
   // ── Sacrifice bunt check ──────────────────────────────────────
   // Eligible when: low-power batter, runner(s) on, < 2 outs, late inning
@@ -1254,7 +1261,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       const hasFirst  = !!bases.first;
 
       // Error check — before anything else
-      if (_roll() < SIM_ERROR_PROB) {
+      if (_roll() < SIM_ERROR_PROB * (_userFielding && _staff ? _staff.errorMult : 1)) {
         playMod = 'error';
         // Batter reaches first (no out charged)
         // Runners advance one base
@@ -1480,7 +1487,7 @@ export function accumulateBox(plays, players, opts = {}) {
     : (((players[pid]?.teamId === 'user') === userIsHome) ? home : away);
 
   const HIT0 = () => ({ ab:0, r:0, h:0, doubles:0, hr:0, tb:0, rbi:0, bb:0, hbp:0, k:0, sb:0, cs:0, sf:0, sac:0 });
-  const PIT0 = () => ({ outs:0, h:0, hr:0, bb:0, k:0, er:0, w:0, l:0, sv:0, hld:0 });
+  const PIT0 = () => ({ outs:0, h:0, hr:0, bb:0, k:0, er:0, w:0, l:0, sv:0, hld:0, bs:0 });
   const mkSide = () => ({ hit:{}, pit:{}, hitSeen:[], pitSeen:[] });
 
   const away = mkSide();
@@ -1533,6 +1540,7 @@ export function accumulateBox(plays, players, opts = {}) {
           else if (stat === 'l')           line.l   += delta;
           else if (stat === 'sv')          line.sv  += delta;
           else if (stat === 'hld')         line.hld += delta;
+          else if (stat === 'bs')          line.bs  += delta;
         }
       } else {
         const line = ensureHit(battingSide, pid);
@@ -1562,7 +1570,7 @@ export function accumulateBox(plays, players, opts = {}) {
     const pitchers = side.pitSeen.map(id => {
       const s = side.pit[id];
       const p = players[id] || {};
-      const dec = s.w ? 'W' : s.l ? 'L' : s.sv ? 'S' : s.hld ? 'H' : null;
+      const dec = s.w ? 'W' : s.l ? 'L' : s.sv ? 'S' : s.hld ? 'H' : s.bs ? 'BS' : null;
       return { id, name: p.name || '—', ip: ipFromOuts(s.outs), ipOuts: s.outs, h: s.h, er: s.er, bb: s.bb, k: s.k, hr: s.hr, dec };
     });
     return {
@@ -1887,13 +1895,15 @@ function _assignPitcherDecisions(plays, userScore, oppScore, isHome, starterOuts
     const list = spans[side];
     let cur = list[list.length - 1];
     if (!cur || cur.id !== play.pitcherId) {
-      cur = { id: play.pitcherId, outs: 0, entryLead: prevPlay ? lead(prevPlay, side) : 0, firstIdx: play.playIndex };
+      const entry = prevPlay ? lead(prevPlay, side) : 0;
+      cur = { id: play.pitcherId, outs: 0, entryLead: entry, minLead: entry, firstIdx: play.playIndex };
       list.push(cur);
     }
     const outsAfter = Number.isFinite(play.outsAfter) ? play.outsAfter : prevOuts;
     cur.outs += Math.max(0, outsAfter - prevOuts);
     cur.lastIdx = play.playIndex;
     cur.exitLead = lead(play, side);
+    cur.minLead = Math.min(cur.minLead, cur.exitLead);
     prevOuts = outsAfter >= 3 ? 0 : outsAfter;
     prevPlay = play;
   }
@@ -1934,6 +1944,15 @@ function _assignPitcherDecisions(plays, userScore, oppScore, isHome, starterOuts
   for (const sp of spans[winner].slice(1)) {
     if (sp.id === w.id || (sv && sp.id === last.id)) continue;
     if (sp.entryLead > 0 && sp.entryLead <= 3 && sp.outs >= 1 && sp.exitLead > 0) add(sp.id, 'hld');
+  }
+  // §112 BS: a reliever on either side who came in with a lead of three or
+  // fewer and let the tying run score while he was out there (his club can
+  // still come back and win). SVO: every save and every blown save.
+  if (sv) add(last.id, 'svo');
+  for (const side of ['A', 'B']) {
+    for (const sp of spans[side].slice(1)) {
+      if (sp.entryLead > 0 && sp.entryLead <= 3 && sp.minLead <= 0) { add(sp.id, 'bs'); add(sp.id, 'svo'); }
+    }
   }
   return out;
 }
@@ -2694,9 +2713,20 @@ function _gmRelVariance(gmRel) {
 // EFFECTIVE SUB-RATING (applies injury penalty)
 // ─────────────────────────────────────────────────────────────
 
-function _effectiveSR(player, subRatingKey, baseValue) {
+// §112.2 The GM's coaching staff in this game (CoachEngine.staffEffects), set
+// when a game is simulated: rating points our players get from their coaches.
+let _staff = null;
+let _userFielding = false;   // our club is in the field this half (the bench coach's defense)
+function _coachPoints(player, key) {
+  if (!_staff || player?.teamId !== 'user') return 0;
+  if (key === 'contact' || key === 'power' || key === 'speed') return _staff.bat?.[key] || 0;
+  return (player.pos === 'RP' ? _staff.rp : _staff.sp)?.[key] || 0;
+}
+
+function _effectiveSR(player, subRatingKey, baseValue, { coached = true } = {}) {
   if (baseValue === null || baseValue === undefined) return 55; // neutral fallback
   let v = baseValue;
+  if (coached) v += _coachPoints(player, subRatingKey);
   if (player?.injuryPenalty?.subRating === subRatingKey) v -= player.injuryPenalty.amount || 0;
   // §71: playing sick or hurt — a temporary dip for a few games.
   if (player?.condition?.subRating === subRatingKey) v -= player.condition.amount || 0;

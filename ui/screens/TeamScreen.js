@@ -39,6 +39,7 @@ import { eligibleSlotsFor, reconcileRoster, applyRosterMutation }
   from '../../engine/RosterEngine.js';
 import { getRosterNeeds, rankCallupCandidates } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
+import * as Coach from '../../engine/CoachEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -851,11 +852,27 @@ function _renderStaff(state) {
       ? '<span style="font-size:10px;color:var(--danger);background:var(--chip-red-bg);padding:2px 6px;border-radius:4px;">Strained</span>'
       : '';
 
+    if (data.vacant) {
+      return `
+      <div class="staff-card">
+        <div class="staff-card-left">
+          <div class="staff-card-name">Vacant</div>
+          <div class="staff-card-role">${label}${data.prev ? ` · ${_escape(data.prev)} is gone` : ''}</div>
+        </div>
+        <div class="staff-card-meta"><span style="font-size:10px;font-weight:700;color:var(--danger);background:var(--chip-red-bg);padding:2px 6px;border-radius:4px;">Hiring</span></div>
+      </div>`;
+    }
+    // §112.2 the coach's quality and specialty
+    const ability = Number.isFinite(data.quality) && key !== 'manager'
+      ? `<div class="staff-card-role">${Coach.qualityWord(data.quality)[0].toUpperCase() + Coach.qualityWord(data.quality).slice(1)} (${data.quality}) · ${_escape(Coach.specialtyShort(data.specialty))}</div>`
+      : '';
+
     return `
       <div class="staff-card">
         <div class="staff-card-left">
           <div class="staff-card-name">${_escape(data.name || label)}</div>
           <div class="staff-card-role">${label}</div>
+          ${ability}
         </div>
         <div class="staff-card-meta">
           <span class="staff-salary">${formatSalary(data.salary || 0)}/yr</span>

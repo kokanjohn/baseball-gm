@@ -52,6 +52,7 @@ import {
   CARD_MONEY_BASE_TARGET_K,
   GAME_WEATHER,
   COMPOSE_REPLY,
+  OFFSEASON_CARD_HOUR,
 } from '../data/constants.js';
 
 import {
@@ -69,6 +70,7 @@ import {
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
+import * as Coach from './CoachEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import { CARD_ACTIONS, cardFeasible } from './CardActions.js';
 import * as AllStar from './AllStarEngine.js';
@@ -3289,6 +3291,110 @@ export function deliverManagerContractCard(atMs, expiresAtMs) {
 }
 const MANAGER_EXTENSION_YEARS_UI = 2;
 
+// §112.2 THE COACHES — the day-2 evaluation and the hiring market.
+const _UNIT = { pitchingCoach: 'the pitching staff', hittingCoach: 'the lineup', bullpenCoach: 'the bullpen', benchCoach: 'the bases and the late-game work' };
+
+/** "a solid coach (rated 64), a command teacher: fewer walks" */
+function _coachRead(role, c) {
+  const q = Coach.qualityOf(c);
+  const w = Coach.qualityWord(q);
+  return `${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w} coach (rated ${q}), ${Coach.specialtyWords(role, c.specialty)}`;
+}
+
+/**
+ * The manager's evaluation of one coach. `kind`: 'up' (the deal is up:
+ * renew or let go) | 'poor' (under contract, the side of the game struggled:
+ * keep or fire, paying out the deal).
+ */
+export function deliverCoachReviewCard(role, kind, atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const c = state.userTeam.coachingStaff?.[role];
+  if (!c || c.vacant) return null;
+  const U = state.offseason?.review?.units;
+  const ev = Coach.evaluate(role, U);
+  const info = Coach.ROLE_INFO[role];
+  const next = (state.seasonNum || 1) + 1;
+  const mgr = _managerName(state);
+  const how = ev.facts.length
+    ? { good: `It was a good year for ${_UNIT[role]}: ${_listWords(ev.facts)}.`,
+        fair: `${Cap(_UNIT[role])} landed in the middle of the league: ${_listWords(ev.facts)}.`,
+        poor: `${Cap(_UNIT[role])} struggled: ${_listWords(ev.facts)}.` }[ev.verdict]
+    : '';
+  const read = `My read on ${c.name}: ${_coachRead(role, c)}.`;
+  if (kind === 'up') {
+    const ask = Coach.renewalAsk(role, c, ev.verdict);
+    const card = _rosterCard(state, {
+      cardId: 'os_coach_review', tag: 'COACHING', sender: mgr, avatar: '📋', type: ev.verdict === 'poor' ? 'urgent' : 'normal',
+      _rosterKey: `os:coach:${role}:${state.seasonNum}`, _coachRole: role, _coachAsk: ask,
+      subject: `${c.name}, ${info.title}: contract up`,
+      preview: `${Cap({ good: 'a good year', fair: 'a middle-of-the-pack year', poor: 'a hard year' }[ev.verdict])} for ${_UNIT[role]}. Staying costs ${formatK(ask)} a year.`,
+      body: `${c.name}'s deal as ${info.title} is up. ${how} ${read} `
+          + `Staying on means two more years at ${formatK(ask)} a year (${formatK(c.salary || 0)} now). `
+          + `If we let ${c.name} go, I'll bring you candidates for the job. With no answer by the time free agency opens, ${c.name} stays on.`,
+      yesLabel: `Renew (2 years, ${formatK(ask)})`, noLabel: `Let ${c.name} go`,
+      expiresAtMs,
+      _raw: { onYes: 'os_coach_renew', onNo: 'os_coach_letgo', onAuto: 'os_coach_renew' },
+      _autoLabel: `No answer — ${c.name} stays on`,
+    });
+    return _deliverAt(card, atMs);
+  }
+  const owed = Coach.buyoutOwed(c, next);
+  const through = (c.contractExpiry || next) - 1;
+  const card = _rosterCard(state, {
+    cardId: 'os_coach_review', tag: 'COACHING', sender: mgr, avatar: '📋', type: 'urgent',
+    _rosterKey: `os:coach:${role}:${state.seasonNum}`, _coachRole: role,
+    subject: `${c.name}, ${info.title}: a hard look`,
+    preview: `${Cap(_UNIT[role])} struggled. Keep ${c.name}, or make a change (${formatK(owed)} still owed)?`,
+    body: `${how} ${read} ${c.name} is signed through season ${through}. `
+        + `A change now means paying out the rest of the deal, ${formatK(owed)} from club funds, and bringing in someone new. `
+        + `With no answer by the time free agency opens, ${c.name} stays.`,
+    yesLabel: `Keep ${c.name}`, noLabel: `Make a change (${formatK(owed)})`,
+    expiresAtMs,
+    _raw: { onYes: 'os_coach_keep', onNo: 'os_coach_fire', onAuto: 'os_coach_keep' },
+    _autoLabel: `No answer — ${c.name} stays`,
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** Two candidates for an empty chair: the first fits what the unit needs; due by spring. */
+export function deliverCoachHireCard(role, atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const staff = state.userTeam.coachingStaff || {};
+  if (!staff[role]?.vacant) return null;
+  const U = state.offseason?.review?.units || null;
+  const info = Coach.ROLE_INFO[role];
+  const taken = new Set([...Object.values(staff).map(x => x?.name), state.userTeam.ownerName,
+    ...[...(state.inbox || []), ...(state.scheduledCards || [])].flatMap(c => (c._coachCands || []).map(x => x.name))].filter(Boolean));
+  const [A, B] = Coach.candidates(state, role, U, { taken });
+  const need = Coach.neededSpecialty(role, U, state);
+  const who = (x) => `${x.name} ${x.background}: ${_coachRead(role, x)}. The ask: ${formatK(x.salary)} a year for two years.`;
+  const prev = staff[role].prev;
+  const card = _rosterCard(state, {
+    cardId: 'os_coach_hire', tag: 'COACHING', sender: 'Front Office', avatar: '🤝', type: 'normal',
+    _rosterKey: `os:hire:${role}:${state.seasonNum}`, _coachRole: role, _coachCands: [A, B], _osGate: 'staff',
+    subject: `Hiring: ${info.title}`,
+    preview: `${A.name} (rated ${A.quality}, ${Coach.specialtyShort(A.specialty)}) or ${B.name} (rated ${B.quality}, ${Coach.specialtyShort(B.specialty)}).`,
+    body: `The ${info.title} job is open${prev ? ` with ${prev} gone` : ''}. What it needs most, from last season: ${Coach.needReason(role, need, U)}. `
+        + `Two candidates. ${who(A)} ${who(B)} `
+        + `With no decision by the time spring training opens, ${_managerName(state)} picks ${B.name}.`,
+    yesLabel: `Hire ${A.name} (${formatK(A.salary)})`, noLabel: `Hire ${B.name} (${formatK(B.salary)})`,
+    expiresAtMs,
+    _raw: { onYes: 'os_hire_a', onNo: 'os_hire_b', onAuto: 'os_hire_b' },
+    _autoLabel: `No decision — ${B.name} hired`,
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** After a coach is let go: the candidates arrive (day 3 at the earliest, a few hours after otherwise). */
+function _hireCardAfter(role, atMs) {
+  const st = StateManager.get();
+  const os = st.offseason;
+  if (!os) return null;
+  const day3 = Offseason._atHour(Offseason.dayStart(os, 3), OFFSEASON_CARD_HOUR + 1);
+  const at = Math.max(day3, atMs + (2 + Math.random() * 3) * 3600_000);
+  return deliverCoachHireCard(role, Math.min(at, os.springAt - 6 * 3600_000), os.springAt);
+}
+
 /** Free agents worth a look (soft: auto-declined after 3 days). */
 export function deliverFreeAgentCards(atMs, springAt) {
   const state = StateManager.get();
@@ -3329,7 +3435,7 @@ export function deliverGateReminder(atMs, springAt) {
   const state = StateManager.get();
   const gates = Offseason.hardGates(state);
   if (!gates.open.length) return null;
-  const names = { ownership: 'the budget offer from ownership', contracts: 'expiring contracts', manager: 'the manager\'s contract' };
+  const names = { ownership: 'the budget offer from ownership', contracts: 'expiring contracts', manager: 'the manager\'s contract', staff: 'an open coaching job' };
   return _deliverNotice(`os:reminder:${state.seasonNum}`, {
     sender: 'Front Office', type: 'urgent', avatar: '⏰',
     subject: 'Decisions due before spring training',
@@ -3367,6 +3473,21 @@ function _applyOffseasonAction(action, instance, atMs) {
     case 'os_mgr_extend':   StateManager.mutate(s => Offseason.applyManagerDecision(s, 'extend'));  return true;
     case 'os_mgr_replace':  StateManager.mutate(s => Offseason.applyManagerDecision(s, 'replace')); return true;
     case 'os_mgr_auto':     StateManager.mutate(s => Offseason.applyManagerDecision(s, 'auto'));    return true;
+    // §112.2 the coaches
+    case 'os_coach_renew':  StateManager.mutate(s => Offseason.applyCoachDecision(s, instance._coachRole, 'renew', { salary: instance._coachAsk })); return true;
+    case 'os_coach_keep':   return true;
+    case 'os_coach_letgo':
+    case 'os_coach_fire': {
+      StateManager.mutate(s => Offseason.applyCoachDecision(s, instance._coachRole, action === 'os_coach_fire' ? 'fire' : 'letgo', { atMs }));
+      _hireCardAfter(instance._coachRole, atMs);
+      return true;
+    }
+    case 'os_hire_a':
+    case 'os_hire_b': {
+      const cand = (instance._coachCands || [])[action === 'os_hire_a' ? 0 : 1];
+      StateManager.mutate(s => { if (s.userTeam.coachingStaff?.[instance._coachRole]?.vacant) Offseason.applyCoachHire(s, instance._coachRole, cand); });
+      return true;
+    }
     case 'os_fa_sign': {
       StateManager.mutate(s => {
         const p = s.players[id];
@@ -3505,6 +3626,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'os_priority_a', 'os_priority_b',
   'os_resign', 'os_walk', 'os_walk_auto',
   'os_mgr_extend', 'os_mgr_replace', 'os_mgr_auto',
+  'os_coach_renew', 'os_coach_keep', 'os_coach_letgo', 'os_coach_fire', 'os_hire_a', 'os_hire_b',
   'os_fa_sign', 'os_fa_pass',
   // §75 All-Star Game
   'as_lobby_yes', 'as_lobby_no',

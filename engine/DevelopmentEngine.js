@@ -38,6 +38,7 @@ import {
   OVR_P_STAMINA_WEIGHT,
 } from '../data/constants.js';
 import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
+import { devFactor } from './CoachEngine.js';
 
 const DAY = 86_400_000;
 const WEIGHT = {
@@ -73,6 +74,8 @@ export function gainMultiplier(draft, player) {
   const coach = draft.userTeam?.coachingStaff?.[isPitcher(player) ? 'pitchingCoach' : 'hittingCoach'];
   const rel = player.teamId === 'user' && Number.isFinite(coach?.relationship) ? coach.relationship : 50;
   m *= 0.85 + 0.3 * (rel / 100);
+  // §112.2 the coach's quality, and a youth specialist with the young ones.
+  if (player.teamId === 'user') m *= devFactor(draft.userTeam?.coachingStaff, player, age);
   return m;
 }
 

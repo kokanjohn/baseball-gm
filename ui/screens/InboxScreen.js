@@ -494,7 +494,13 @@ function _composeRecipients(state) {
         <span class="cw-what">${_escape(c._composeLabel || '')}${c._sentAtMs ? ` · sent ${_shortWhen(c._sentAtMs)}` : ''}</span></div>`;
     }).join('')}</div>` : '';
 
+  const STAFF_KEY = { pitching_coach: 'pitchingCoach', hitting_coach: 'hittingCoach', bench_coach: 'benchCoach', bullpen_coach: 'bullpenCoach' };
   const rows = COMPOSE_CHANNELS.map(ch => {
+    // §112.2 an empty chair on the staff: nobody to write to until someone's hired.
+    if (state.userTeam?.coachingStaff?.[STAFF_KEY[ch.id]]?.vacant) {
+      return `<div class="compose-person" aria-disabled="true" style="opacity:.55">
+        <span class="cp-main"><span class="cp-name">${_escape(ch.label)}</span><span class="cp-sub">Vacant · hiring</span></span></div>`;
+    }
     let sub;
     if (ch.id === 'other_gms') sub = 'Trade talks with the other clubs';
     else {
