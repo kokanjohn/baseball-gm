@@ -3243,28 +3243,105 @@ export function deliverPriorityCard(atMs, expiresAtMs) {
 const Cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
 const _listWords = (xs) => (xs.length <= 1 ? xs.join('') : xs.length === 2 ? `${xs[0]} and ${xs[1]}` : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
-/** A user player whose deal is up: re-sign at his asking terms, or let him walk. */
+/** §112.3 What a contract decision rests on, in sentences (his season, role, standing, who replaces him, the market). */
+function _contractSentences(state, p, X) {
+  const pos = p.nativePos || p.pos;
+  const out = [];
+  if (X.line) out.push(`Last season: ${X.line}, as ${X.role}.`);
+  else out.push(`${p.name} was ${X.role}.`);
+  if (X.star) out.push(`${p.name} was one of the players who carried us.`);
+  else if (X.letdown) out.push(`${p.name} was one of the disappointments of the year.`);
+  else if (X.core) out.push(`${p.name} is part of our young core.`);
+  out.push(X.internal
+    ? `Without ${p.name}, the job goes to ${X.internal.name} (OVR ${X.internal.ovr}${X.internal.farm ? ', from the farm' : ''}).`
+    : `Without ${p.name}, we have nobody else at ${pos}.`);
+  out.push(X.marketN
+    ? `On the market now at ${pos}: ${_listWords(X.market.map(m => `${m.name} (OVR ${m.ovr}, asking ${formatK(m.ask)})`))}.`
+    : `Nobody comparable is on the market at ${pos} right now.`);
+  return out.join(' ');
+}
+
+/** A user player whose deal is up: re-sign at the asking terms, or let the player walk. */
 export function deliverResignCard(playerId, atMs, expiresAtMs) {
   const state = StateManager.get();
   const p = state.players[playerId];
   if (!p || p.teamId !== 'user') return null;
   const terms = p._ask || Offseason.marketTerms(state, p);
-  const age = computeAge(p.dob, baseballYear(state) + 1);
+  const X = Offseason.contractContext(state, p);
   const payroll = state.userTeam.finances?.payroll || 0;
   const target = Finance.seasonTarget(state.userTeam.finances);
   const delta = terms.salary - (p.contractSalary || 0);
   const card = _rosterCard(state, {
-    cardId: 'os_resign', tag: 'CONTRACT', sender: `${p.name}'s agent`, avatar: '✍️', type: 'normal',
+    cardId: 'os_resign', tag: 'CONTRACT', sender: `${p.name}'s agent`, avatar: '✍️', type: X.star || X.core ? 'urgent' : 'normal',
     _rosterKey: `os:resign:${playerId}:${state.seasonNum}`, _osGate: 'contracts', _targetPlayerId: playerId,
     subject: `${p.name}'s contract is up`,
-    preview: `Asking ${formatK(terms.salary)} a year for ${_years(terms.years)}.`,
-    body: `${_who(p)}, ${age} next season, becomes a free agent unless we re-sign. The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)}`
-        + ` (up from ${formatK(p.contractSalary || 0)}). That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))} — payroll is ${formatK(payroll)} against ownership's ${formatK(target)} target. `
+    preview: `${X.line ? `${X.line}. ` : ''}Asking ${formatK(terms.salary)} a year for ${_years(terms.years)}.`,
+    body: `${_who(p)}, ${X.age} next season, becomes a free agent unless we re-sign. `
+        + _contractSentences(state, p, X) + ' '
+        + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)} (up from ${formatK(p.contractSalary || 0)}). `
+        + `That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))}; payroll is ${formatK(payroll)} against ownership's ${formatK(target)} target. `
         + `If we let ${p.name} walk, every club gets a shot on the free-agent market. No answer by the time spring training opens means the same thing.`,
     yesLabel: `Re-sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: `Let ${p.name} walk`,
     expiresAtMs,
     _raw: { onYes: 'os_resign', onNo: 'os_walk', onAuto: 'os_walk_auto' },
     _autoLabel: `No answer — ${p.name} walked`,
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** §112.3 A young core player: lock up the next years now, at a discount on today's market. */
+export function deliverExtensionCard(cand, atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const p = state.players[cand.player.id];
+  if (!p || p.teamId !== 'user') return null;
+  const { terms, future, left } = cand;
+  const delta = terms.salary - (p.contractSalary || 0);
+  if (delta > 0 && !Finance.canAddSalary(state, delta)) return null;
+  const X = Offseason.contractContext(state, p);
+  const through = (p.contractExpiry || state.seasonNum + 2) - 1;
+  const card = _rosterCard(state, {
+    cardId: 'os_extension', tag: 'CONTRACT', sender: 'Front Office', avatar: '🔒', type: 'good',
+    _rosterKey: `os:extend:${p.id}:${state.seasonNum}`, _targetPlayerId: p.id, _extTerms: terms,
+    subject: `Extend ${p.name}?`,
+    preview: `${_years(terms.years)} at ${formatK(terms.salary)} a year, before ${p.name} gets expensive.`,
+    body: `${_who(p)}, ${X.age} next season, is signed through season ${through} at ${formatK(p.contractSalary || 0)} a year${left > 0 ? ` (${_years(left)} after next season)` : ''}. `
+        + `${X.line ? `Last season: ${X.line}. ` : ''}`
+        + `${p.name}'s agent is open to an extension now: ${_years(terms.years)} at ${formatK(terms.salary)} a year, starting next season, replacing the current deal. `
+        + `If ${p.name} keeps growing, the next deal could cost about ${formatK(future)} a year. `
+        + `${delta > 0 ? `It adds ${formatK(delta)} to next season's payroll.` : 'It costs nothing more next season.'} `
+        + `The offer stands until free agency opens.`,
+    yesLabel: `Extend (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Not now',
+    expiresAtMs,
+    _raw: { onYes: 'os_extend', onNo: 'os_extend_pass', onAuto: 'os_extend_pass' },
+    _autoLabel: 'No answer — not now',
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** §112.3 An overpaid player under contract: keep, or release (the money is still owed). */
+export function deliverReleaseCard(cand, atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const p = state.players[cand.player.id];
+  if (!p || p.teamId !== 'user') return null;
+  const X = Offseason.contractContext(state, p);
+  const through = (p.contractExpiry || state.seasonNum + 2) - 1;
+  const why = [X.line ? `Last season: ${X.line}.` : `Last season, ${p.name} was ${X.role}.`,
+    (p._ovrChange || 0) <= -2 ? `${p.name} lost ${-p._ovrChange} points of OVR over the winter.` : null].filter(Boolean);
+  const card = _rosterCard(state, {
+    cardId: 'os_release', tag: 'CONTRACT', sender: 'Front Office', avatar: '✂️', type: 'normal',
+    _rosterKey: `os:release:${p.id}:${state.seasonNum}`, _targetPlayerId: p.id,
+    subject: `${p.name}'s contract: keep, or release?`,
+    preview: `${formatK(p.contractSalary || 0)} a year through season ${through}; the market says ${formatK(cand.market)}.`,
+    body: `${_who(p)}, ${X.age} next season, is owed ${formatK(p.contractSalary || 0)} a year through season ${through}, ${formatK(cand.owed)} in all. `
+        + `${why.join(' ')} `
+        + `Today the market would pay ${p.name} about ${formatK(cand.market)} a year. `
+        + `Releasing opens the roster spot, but the money is still owed and still counts against the payroll, less whatever another club pays if ${p.name} signs elsewhere. `
+        + (X.internal ? `${X.internal.name} (OVR ${X.internal.ovr}) would take over. ` : '')
+        + `With no answer by the time free agency opens, ${p.name} stays.`,
+    yesLabel: `Keep ${p.name}`, noLabel: `Release (${formatK(cand.owed)} owed)`,
+    expiresAtMs,
+    _raw: { onYes: 'os_release_keep', onNo: 'os_release', onAuto: 'os_release_keep' },
+    _autoLabel: `No answer — ${p.name} stays`,
   });
   return _deliverAt(card, atMs);
 }
@@ -3500,6 +3577,18 @@ function _applyOffseasonAction(action, instance, atMs) {
       return true;
     }
     case 'os_fa_pass': return true;
+    // §112.3 extensions and releases
+    case 'os_extend':       StateManager.mutate(s => { Offseason.applyExtension(s, id, instance._extTerms); s.userTeam.finances.payroll = computePayroll(s); }); return true;
+    case 'os_extend_pass':  return true;
+    case 'os_release_keep': return true;
+    case 'os_release': {
+      StateManager.mutate(s => {
+        Offseason.applyRelease(s, id, atMs);
+        applyRosterMutation(s, reconcileRoster(s, 'user'));
+        s.userTeam.finances.payroll = computePayroll(s);
+      });
+      return true;
+    }
     default: return false;
   }
 }
@@ -3628,6 +3717,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'os_mgr_extend', 'os_mgr_replace', 'os_mgr_auto',
   'os_coach_renew', 'os_coach_keep', 'os_coach_letgo', 'os_coach_fire', 'os_hire_a', 'os_hire_b',
   'os_fa_sign', 'os_fa_pass',
+  'os_extend', 'os_extend_pass', 'os_release', 'os_release_keep',
   // §75 All-Star Game
   'as_lobby_yes', 'as_lobby_no',
   // §78 the owner's cut orders

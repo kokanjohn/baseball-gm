@@ -1,5 +1,5 @@
 // §112.2 Coaches with real abilities — checks.
-//   node tools/harness/check-coaches.mjs [games]
+//   node tools/harness/check-coaches.mjs [games=1500]
 // A real league; the same matchup played with no staff effect, an elite staff
 // and a poor staff (CoachEngine.staffEffects): runs, walks, steals, errors and
 // win share move the right way and by a believable amount. Blown saves and
@@ -10,7 +10,7 @@ import { startNewGame } from '../../engine/GameEngine.js';
 import { generatePlays, leagueNorms, accumulateBox } from '../../engine/SimEngine.js';
 import * as Coach from '../../engine/CoachEngine.js';
 
-const N = parseInt(process.argv[2] || '600', 10);
+const N = parseInt(process.argv[2] || '1500', 10);   // fewer games: the run gaps are noise
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => {
   if (ok) pass++; else fail++;

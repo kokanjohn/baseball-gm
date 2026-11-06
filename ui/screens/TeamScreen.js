@@ -904,7 +904,8 @@ function _renderFinances(state) {
   const projected = Finance.projection(state, 'user');
   const payroll = Finance.payrollOf(state, 'user');
   const target = Finance.seasonTarget(fin);
-  const room = Math.max(0, Math.round(target * (1 + Finance.tolerance(state)) - payroll));
+  const room = Math.max(0, Math.round(Finance.payrollRoom(state)));
+  const dead = Math.round(Finance.deadAhead(state));   // §112.3 still owed to released players
   const stage = fin.owner?.stage || 'content';
   const [stageName, stageText] = _OWNER_STAGE_TEXT[stage] || _OWNER_STAGE_TEXT.content;
   const order = fin.owner?.order;
@@ -955,6 +956,7 @@ function _renderFinances(state) {
       <div class="fin-card">
         <div class="fin-row-head"><span class="fin-label">Payroll</span><span>${formatMoney(payroll)} / ${formatMoney(target)} target</span></div>
         <div class="fin-bar"><div class="${barCls}" style="width:${pct}%"></div></div>
+        ${dead > 0 ? `<div class="fin-sub">Still owed to released players${state.offseason ? ' next season' : ''}: ${formatMoney(dead)} (counts against the room).</div>` : ''}
         <div class="fin-sub">${room > 0 ? `Ownership would approve about ${formatMoney(room)} more in salary right now.` : 'Ownership won\'t approve more salary right now.'}</div>
       </div>
 

@@ -285,6 +285,47 @@ export function addDeadMoney(draft, teamId, playerId, atMs) {
   fin.dead = [...(fin.dead || []), { playerId, salary: p.contractSalary, endDay: cal.endDay }];
 }
 
+/**
+ * §112.3 A player released in the offseason with seasons left on his deal:
+ * each remaining season's salary is owed (fin.deadFuture), and becomes that
+ * season's dead money when its pay calendar starts (ensureSeason).
+ */
+export function addDeadFuture(draft, teamId, playerId, salary, fromSeason, toSeason, name = '') {
+  const fin = _club(draft, teamId)?.finances;
+  if (!fin || !(salary > 0)) return;
+  const add = [];
+  for (let s = fromSeason; s <= toSeason; s++) add.push({ playerId, name, salary, season: s });
+  fin.deadFuture = [...(fin.deadFuture || []), ...add];
+}
+
+/**
+ * §112.3 A released player signs elsewhere: his new salary comes off what the
+ * club that released him still owes, season by season while both deals run.
+ */
+export function offsetDead(draft, playerId, newSalary, newTeamId = null) {
+  const p = draft.players[playerId];
+  if (!p || !(newSalary > 0)) return;
+  const until = (p.contractExpiry ?? 0) - 1;
+  for (const t of [draft.userTeam, ...(draft.leagueTeams || [])]) {
+    const fin = t?.finances;
+    if (!fin?.deadFuture?.length || (t.id || 'user') === newTeamId) continue;
+    fin.deadFuture = fin.deadFuture
+      .map(d => (d.playerId === playerId && d.season <= until && !d.offset ? { ...d, salary: Math.max(0, d.salary - newSalary), offset: true } : d))
+      .filter(d => d.salary > 0);
+  }
+}
+
+/** Dead money committed to the season payroll is measured for: this one, or next (between seasons). */
+export function deadAhead(state, teamId = 'user') {
+  const fin = _club(state, teamId)?.finances;
+  if (!fin) return 0;
+  const season = (state.seasonNum || 1) + (state.offseason ? 1 : 0);
+  // In season, this season's releases are in fin.dead (moved there when its
+  // pay calendar started); between seasons, next season's are still ahead.
+  return (state.offseason ? 0 : (fin.dead || []).reduce((a, d) => a + (d.salary || 0), 0))
+    + (fin.deadFuture || []).filter(d => d.season === season).reduce((a, d) => a + d.salary, 0);
+}
+
 // ─────────────────────────────────────────────────────────────
 // THE SEASON'S CALENDAR — daily accrual, paydays
 // ─────────────────────────────────────────────────────────────
@@ -323,6 +364,13 @@ export function ensureSeason(draft, teamId = 'user') {
     owed: { payroll: 0, staff: 0, dead: 0 },
     mediaPer: FIN_MEDIA_SHARE_K / N, localPer: localAnnual / N,
   };
+  // §112.3 this season's share of offseason releases is now dead money, paid like any.
+  const season = draft.seasonNum || 1;
+  const due = (fin.deadFuture || []).filter(d => d.season === season);
+  if (due.length) {
+    fin.dead = [...(fin.dead || []), ...due.map(d => ({ playerId: d.playerId, salary: d.salary, endDay: sd.endDay }))];
+    fin.deadFuture = (fin.deadFuture || []).filter(d => d.season > season);
+  }
   return true;
 }
 
@@ -504,7 +552,8 @@ export function strain(state, teamId = 'user') {
   const u = _club(state, teamId) || {};
   const fin = u.finances || {};
   const target = seasonTarget(fin) || 1;
-  const payroll = payrollOf(state, teamId);
+  // §112.3 money owed to released players is payroll to the owner too.
+  const payroll = payrollOf(state, teamId) + deadAhead(state, teamId);
   const projected = projection(state, teamId);
   // Money the club is projected to have covers some of the payroll over the
   // target — as much as this owner's personality allows.
@@ -565,7 +614,8 @@ export function canAddSalary(state, addK, outK = 0, teamId = 'user') {
 /** Annual salary the club could still add with the owner's blessing ($K). */
 export function payrollRoom(state, teamId = 'user') {
   const fin = _club(state, teamId)?.finances || {};
-  return seasonTarget(fin) * (1 + tolerance(state, teamId)) - payrollOf(state, teamId);
+  // §112.3 money still owed to released players is spent before anyone new is paid.
+  return seasonTarget(fin) * (1 + tolerance(state, teamId)) - payrollOf(state, teamId) - deadAhead(state, teamId);
 }
 
 /** Can the club spend this much now (a bonus)? A happy owner lets funds dip a little. */

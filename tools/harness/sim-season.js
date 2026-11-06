@@ -244,6 +244,17 @@ function gmActs() {
       }
       continue;
     }
+    // §112.3 take the first extension and release the first overpaid player, so both paths always run.
+    if (c.cardId === 'os_extension' && !gm.extended) {
+      gm.extended = { id: c._targetPlayerId, terms: c._extTerms, season: SM.get().seasonNum }; resolveCard(c.instanceId, 'yes'); gm.acted++; advanceClock(clock.get()); continue;
+    }
+    if (c.cardId === 'os_release' && !gm.released) {
+      const p0 = SM.get().players[c._targetPlayerId];
+      gm.released = { id: c._targetPlayerId, salary: p0.contractSalary, expiry: p0.contractExpiry, season: SM.get().seasonNum, room0: Finance.payrollRoom(SM.get()) };
+      resolveCard(c.instanceId, 'no'); gm.acted++; advanceClock(clock.get());
+      gm.released.room1 = Finance.payrollRoom(SM.get()); gm.released.dead1 = Finance.deadAhead(SM.get());
+      continue;
+    }
     // §112.2 let the first coach go every run, so the hiring path is always exercised.
     if (c.cardId === 'os_coach_review' && !gm.coachLetGo) {
       gm.coachLetGo = c._coachRole; resolveCard(c.instanceId, 'no'); gm.acted++; advanceClock(clock.get()); continue;
@@ -358,7 +369,7 @@ async function runOffseasonChecks() {
   const sched1Len = pre.schedule.filter(g => !g.isPlayoff).length;
   const phases = []; let lastPhase = pre.phase; let offseasonAt = null, springAt = null;
   const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0, ownerBody = '', priorityCard = null, firstFaAfterPriority = null;
-  const coachCards = new Map();
+  const coachCards = new Map(), contractCards = new Map();
   const staffBefore = JSON.parse(JSON.stringify(pre.userTeam.coachingStaff || {}));
   clock.set(Math.max(clock.get(), os.endedAt));
   for (let guard = 0; guard < 24 * (OFFSEASON_DAYS + 3); guard++) {
@@ -371,6 +382,7 @@ async function runOffseasonChecks() {
       if (c.cardId === 'os_ownership') { ownershipCard = 1; ownerBody = c.body; }
       if (c.cardId === 'os_priority') priorityCard = c;
       if (c.cardId === 'os_coach_review' || c.cardId === 'os_coach_hire') coachCards.set(c.instanceId, c);
+      if (['os_resign', 'os_extension', 'os_release'].includes(c.cardId)) contractCards.set(c.instanceId, c);
       if (!gm.review && SM.get().offseason?.review) gm.review = SM.get().offseason.review;
       if (c.cardId === 'os_free_agent' && SM.get().offseason?.priority && !firstFaAfterPriority) firstFaAfterPriority = { id: c._targetPlayerId, pri: SM.get().offseason.priority };
     }
@@ -447,6 +459,36 @@ async function runOffseasonChecks() {
   check('offseason: ownership evaluation card delivered and decided',
         ownershipCard === 1 && (st.userTeam.finances.payrollTargetHistory || []).some(h => h.seasonNum === 2));
   check('offseason: every required decision resolved by spring', Offseason.hardGates(st).open.length === 0);
+  {
+    // §112.3 contract day for the GM: what each decision rests on; extensions; releases and dead money.
+    const cards = [...contractCards.values()];
+    const resign = cards.filter(c => c.cardId === 'os_resign'), ext = cards.filter(c => c.cardId === 'os_extension'), rel = cards.filter(c => c.cardId === 'os_release');
+    console.log(`  contracts: ${resign.length} re-sign, ${ext.length} extension, ${rel.length} release cards`);
+    for (const c of [resign[0], ext[0], rel[0]].filter(Boolean)) console.log(`    ${c.cardId}: “${c.body.slice(0, 520)}…”`);
+    check('contracts: every re-sign card says what the decision rests on (the season or role, who replaces the player, the market at the position)',
+          resign.every(c => /(Last season: |was an? )/.test(c.body) && /Without /.test(c.body) && /(On the market now at|Nobody comparable is on the market)/.test(c.body)),
+          resign.filter(c => !/Without /.test(c.body)).map(c => c.subject).join(', '));
+    const GEN = /\b(he|him|his|she|her|guys?|men|man)\b/i;
+    check('contracts: the new cards are gender-neutral', !cards.some(c => GEN.test(c.body) || GEN.test(c.preview || '')), cards.filter(c => GEN.test(c.body)).map(c => c.body.match(GEN)[0]).join(','));
+    const ids = (st.userTeam.rosterIds || []).concat(st.userTeam.farmIds || []);
+    check(`contracts: extension offers go only to young core players under contract (${ext.map(c => st.players[c._targetPlayerId]?.name + ' ' + st.players[c._targetPlayerId]?.ovr).join(', ') || 'none'})`,
+          ext.every(c => { const q = pre.players[c._targetPlayerId]; return q && computeAge(q.dob, year1 + 1) <= 27 && !Offseason.contractIsUp(q, 1); }));
+    if (gm.extended) {
+      const q = st.players[gm.extended.id];
+      check(`contracts: an extension takes effect (${q?.name}: ${gm.extended.terms.years} years at ${gm.extended.terms.salary}K → through ${q?.contractExpiry - 1})`,
+            !!q && q.contractSalary === gm.extended.terms.salary && q.contractExpiry === 2 + gm.extended.terms.years);
+    }
+    if (gm.released) {
+      const R = gm.released, q = st.players[R.id];
+      const fin = st.userTeam.finances;
+      const owedNow = [...(fin.dead || []), ...(fin.deadFuture || [])].filter(d => d.playerId === R.id);
+      const offset = q?.teamId && q.teamId !== 'user';
+      check(`contracts: a release leaves the money owed, season by season (${q?.name}, ${R.salary}K through ${R.expiry - 1}; now owed ${owedNow.map(d => `${d.salary}K${d.season ? ` s${d.season}` : ''}`).join(', ') || 'nothing'}${offset ? `, signed by ${q.teamId} — offset` : ''})`,
+            q && q.teamId !== 'user' && owedNow.length === R.expiry - 2 && (offset ? owedNow.some(d => d.salary < R.salary) && owedNow.every(d => d.salary <= R.salary) : owedNow.every(d => d.salary === R.salary)));
+      check(`contracts: released money still counts against payroll room (room ${Math.round(R.room0)}K → ${Math.round(R.room1)}K, dead ahead ${Math.round(R.dead1)}K)`,
+            R.dead1 >= R.salary && R.room1 <= R.room0 + R.salary * 0.5);
+    } else console.log('  contracts: no overpaid player to release this winter');
+  }
   {
     // §112.2 the coaches: evaluated on their side of the game, renewed / let go / fired, the chairs filled by spring.
     const U = gm.review?.units;

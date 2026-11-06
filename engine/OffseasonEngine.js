@@ -371,6 +371,7 @@ export function signFreeAgent(draft, playerId, teamId, atMs, { displaceId = null
     _faFrom: null, _faSince: null, _faReason: null,
   });
   applyContract(draft, playerId, terms);
+  Finance.offsetDead(draft, playerId, terms.salary, teamId);   // §112.3 his old club pays less
   events.push({ type: 'FA_SIGNED', playerId, teamId, terms, atMs });
   return events;
 }
@@ -661,6 +662,151 @@ export function applyLetWalk(draft, playerId, atMs, { auto = false } = {}) {
   if (!p || p.teamId !== 'user') return null;
   if (auto) draft.userTeam.morale = Math.max(0, (draft.userTeam.morale || 50) + CONTRACT_AUTO_WALK_MORALE);
   return releaseToFreeAgency(draft, playerId, atMs);
+}
+
+// ─────────────────────────────────────────────────────────────
+// §112.3 CONTRACT DAY, FOR THE GM — what each decision rests on;
+// extensions for the young core; releases of the overpaid
+// ─────────────────────────────────────────────────────────────
+
+const _OFS = new Set(['LF', 'CF', 'RF', 'OF']);
+const _samePos = (a, b) => (isPitcher(a) ? a.pos === b.pos : (a.pos === b.pos || (_OFS.has(a.pos) && _OFS.has(b.pos))));
+const _f3 = (x) => x.toFixed(3).replace(/^0/, '');
+
+/** His line for the season just finished (archived on day 1), in words. */
+export function seasonLineWords(p, season) {
+  const s = (p?.seasonLog || []).filter(x => x.season === season && x.stats).pop()?.stats;
+  if (!s || !(s.g > 0)) return null;
+  if (isPitcher(p)) {
+    if (!(s.ip >= 5)) return null;   // too little to say anything
+    const era = 9 * (s.er || 0) / s.ip;
+    return `${era.toFixed(2)} ERA in ${Math.round(s.ip)} innings${s.gs ? ` (${s.gs} starts)` : ''}${s.sv ? `, ${s.sv} saves` : ''}`;
+  }
+  if (!(s.ab >= 15)) return null;
+  const pa = s.ab + (s.bb || 0) + (s.hbp || 0);
+  const obp = pa ? ((s.h || 0) + (s.bb || 0) + (s.hbp || 0)) / pa : 0;
+  return `${_f3((s.h || 0) / s.ab)}/${_f3(obp)}/${_f3((s.tb || 0) / s.ab)}, ${s.hr || 0} HR in ${s.g} game${s.g === 1 ? '' : 's'}`;
+}
+
+/**
+ * His role on our club, in words: how he was used last season (the club's
+ * lineups and staff are rebuilt over the winter, so his slot today says less).
+ */
+export function roleWords(draft, p) {
+  const season = draft.seasonNum || 1;
+  const s = (p.seasonLog || []).filter(x => x.season === season && x.teamId === 'user').pop()?.stats || {};
+  const u = draft.userTeam;
+  if (isPitcher(p)) {
+    if ((s.gs || 0) >= 10) return 'a starter in our rotation';
+    if ((s.g || 0) >= 15) return (s.sv || 0) >= 10 ? 'our closer' : 'a reliever';
+  } else {
+    if ((s.ab || 0) >= 300) return `an everyday ${p.pos === 'DH' ? 'designated hitter' : p.pos}`;
+    if ((s.ab || 0) >= 120) return `a part-time ${p.pos === 'DH' ? 'designated hitter' : p.pos}`;
+  }
+  if ((u.farmIds || []).includes(p.id)) return 'a player in our farm system';
+  if ((s.g || 0) > 0) return isPitcher(p) ? 'a spare arm' : 'a bench player';
+  return isPitcher(p) ? 'an arm we barely used' : 'a bench player who barely played';
+}
+
+/**
+ * What a contract decision about `p` rests on: his season, his role, his age
+ * next year, who on our club would take his place, and who's on the market
+ * at his position now (contract day has just sent the league's unsigned there).
+ */
+export function contractContext(draft, p) {
+  const season = draft.seasonNum || 1;
+  const u = draft.userTeam;
+  const mine = [...(u.rosterIds || []), ...(u.farmIds || [])].map(id => draft.players[id])
+    .filter(x => x && x.id !== p.id && _samePos(x, p) && !OFF_ROSTER.has(x.group));
+  const internal = mine.sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0] || null;
+  const market = freeAgents(draft).filter(x => _samePos(x, p) && (x.ovr || 0) >= (p.ovr || 0) - 2)
+    .sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
+  const R = draft.offseason?.review;
+  return {
+    line: seasonLineWords(p, season),
+    role: roleWords(draft, p),
+    age: computeAge(p.dob, baseballYear(draft) + 1),
+    internal: internal ? { id: internal.id, name: internal.name, ovr: internal.ovr, farm: (u.farmIds || []).includes(internal.id) } : null,
+    market: market.slice(0, 3).map(x => ({ id: x.id, name: x.name, ovr: x.ovr, ask: (x._ask || marketTerms(draft, x)).salary })),
+    marketN: market.length,
+    star: !!R?.stars?.some(x => x.id === p.id),
+    letdown: !!R?.letdowns?.some(x => x.id === p.id),
+    core: !!R?.core?.includes(p.id),
+  };
+}
+
+/**
+ * Young core players worth locking up before they get expensive: 27 or
+ * younger next season, under contract next season (not expiring — those get a
+ * re-sign card), clearly better than the club's median. The terms buy out his
+ * next years at a discount on today's market (security for him), and look
+ * ahead to what he'd cost if he keeps growing.
+ */
+export function extensionCandidates(draft, max = 2) {
+  const season = draft.seasonNum || 1;
+  const u = draft.userTeam;
+  const year = baseballYear(draft) + 1;
+  const ids = (u.rosterIds || []).filter(id => draft.players[id]);
+  const ovrs = ids.map(id => draft.players[id].ovr || 0).sort((a, b) => a - b);
+  const median = ovrs[Math.floor(ovrs.length / 2)] || 60;
+  return ids.map(id => draft.players[id])
+    .filter(p => !contractIsUp(p, season) && !p.pendingContract && !p._extendedSeason
+      && computeAge(p.dob, year) <= 27 && (p.ovr || 0) >= median + 4)
+    .sort((a, b) => (b.ovr || 0) - (a.ovr || 0)).slice(0, max)
+    .map(p => {
+      const age = computeAge(p.dob, year);
+      const now = marketTerms(draft, p).salary;
+      const future = Math.round(_salaryFor((p.ovr || 50) + (age <= 24 ? 6 : 4)) / 5) * 5;
+      const years = age <= 24 ? 5 : 4;
+      const salary = Math.max(p.contractSalary || 0, Math.round(now * 0.92 / 5) * 5);
+      return { player: p, terms: { salary, years }, future, left: yearsLeft(p, season) - 2 };   // seasons after next
+    });
+}
+
+/** Extend him: the new deal replaces his current one from next season. */
+export function applyExtension(draft, playerId, terms) {
+  const p = draft.players[playerId];
+  if (!p || p.teamId !== 'user') return null;
+  applyContract(draft, playerId, terms);
+  p._extendedSeason = draft.seasonNum || 1;
+  p.gmRelationship = Math.min(100, (p.gmRelationship ?? 50) + 8);
+  return { type: 'EXTENDED', playerId, teamId: 'user', terms };
+}
+
+/**
+ * Overpaid players under contract next season: paid at least 1.35× (and
+ * $200K) more than the market would pay him now, after a poor season or the
+ * winter's decline. Releasing him opens the spot; the money is still owed
+ * (dead money, season by season — minus what a new club pays him).
+ */
+export function releaseCandidates(draft, max = 2) {
+  const season = draft.seasonNum || 1;
+  const u = draft.userTeam;
+  return [...(u.rosterIds || []), ...(u.farmIds || [])].map(id => draft.players[id])
+    .filter(p => p && !contractIsUp(p, season) && !p.pendingContract && (p.contractSalary || 0) > 0 && p.contractMLB !== false)
+    .map(p => {
+      const market = marketTerms(draft, p).salary;
+      const seasonsLeft = yearsLeft(p, season) - 1;
+      const owed = (p.contractSalary || 0) * seasonsLeft;
+      const line = (p.seasonLog || []).filter(x => x.season === season).pop()?.stats || {};
+      const pa = (line.ab || 0) + (line.bb || 0) + (line.hbp || 0);
+      const ops = pa && line.ab ? ((line.h || 0) + (line.bb || 0) + (line.hbp || 0)) / pa + (line.tb || 0) / line.ab : null;
+      const era = line.ip > 0 ? 9 * (line.er || 0) / line.ip : null;
+      const poor = isPitcher(p) ? (era != null && line.ip >= 30 && era > 5.0) : (ops != null && line.ab >= 120 && ops < 0.650);
+      const slipped = (p._ovrChange || 0) <= -2;
+      return { player: p, market, seasonsLeft, owed, poor, slipped, over: (p.contractSalary || 0) - market };
+    })
+    .filter(x => x.seasonsLeft >= 1 && (x.poor || x.slipped) && x.player.contractSalary >= 1.35 * x.market && x.over >= 200)
+    .sort((a, b) => b.over - a.over).slice(0, max);
+}
+
+/** Release him: his deal's remaining seasons become dead money; he's a free agent. */
+export function applyRelease(draft, playerId, atMs) {
+  const p = draft.players[playerId];
+  if (!p || p.teamId !== 'user') return null;
+  const next = (draft.seasonNum || 1) + 1;
+  Finance.addDeadFuture(draft, 'user', playerId, p.contractSalary || 0, next, (p.contractExpiry ?? next) - 1, p.name);
+  return releaseToFreeAgency(draft, playerId, atMs, { reason: 'released' });
 }
 
 // ─────────────────────────────────────────────────────────────

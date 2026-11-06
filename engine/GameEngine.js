@@ -3007,6 +3007,13 @@ function _runOffseasonStep(step, atMs) {
     for (const { player } of Offseason.userExpiring(StateManager.get())) {
       CardEngine.deliverResignCard(player.id, cardAt(4, OFFSEASON_CARD_HOUR), springAt);
     }
+    // §112.3 the young core (lock them up?) and the overpaid (keep or release?),
+    // through the afternoon; due when free agency opens.
+    const faOpens = Offseason.dayStart(os, 5);
+    Offseason.extensionCandidates(StateManager.get()).forEach((c, i) =>
+      CardEngine.deliverExtensionCard(c, cardAt(4, 12) + (i * 50 + Math.floor(Math.random() * 30)) * 60_000, faOpens));
+    Offseason.releaseCandidates(StateManager.get()).forEach((c, i) =>
+      CardEngine.deliverReleaseCard(c, cardAt(4, 15) + (i * 50 + Math.floor(Math.random() * 30)) * 60_000, faOpens));
     done();
     return events;
   }

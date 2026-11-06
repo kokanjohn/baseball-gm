@@ -8923,3 +8923,32 @@ Coaches renew silently, and only matter as a relationship nudge to development p
 - **Tests.**
   - `check-coaches.mjs`: 13 checks (the staff at creation, the calibration, development, evaluation, candidates).
   - `sim-season.js`: new offseason checks (the units, blown saves, a card for every expiring coach, a hiring card for every chair let go, all chairs filled at spring with a deal into season 2, unique names). The harness GM now lets the first coach go every run, so the hiring path always runs.
+
+### 112.3 Phase C done (r127): contract day for the GM — what each decision rests on; extensions; releases and dead money
+- **What a contract decision rests on** (`Offseason.contractContext`, pure):
+  - his line for the season just finished (`seasonLineWords`; nothing under 15 AB / 5 IP);
+  - his role, from how he was used (`roleWords`: everyday / part-time at his position, rotation, closer, reliever, bench, farm). The day-4 lineup is no guide: lineups are rebuilt over the winter;
+  - his age next season;
+  - whether the review named him a star, a letdown or young core;
+  - who on our club would take his place (best at his position, active or farm);
+  - who is on the market at his position now, within 2 OVR (contract day has just sent the league's unsigned there).
+- **Re-sign cards** read all of that before the ask and the payroll line: "Last season: .369/.432/.628, 32 HR in 125 games, as an everyday OF. Gilmore was one of the players who carried us. Without Gilmore, the job goes to Campana (OVR 67). Nobody comparable is on the market at OF right now. The ask is…". A star or a young-core player's card is urgent.
+- **Extensions** (`extensionCandidates`, up to 2; day 4 from 12:00; due when free agency opens):
+  - Who: young core players (27 or under next season, at least 4 over the club's median OVR) under contract next season and not expiring (expiring players get re-sign cards).
+  - Terms: 4 years (5 at 24 and under), at the larger of the current salary or 92% of today's market, replacing the deal from next season.
+  - The card says what the next deal could cost if the player keeps growing (the market at +4/+6 OVR) and what it adds to next season's payroll. It isn't offered when ownership wouldn't approve the raise.
+  - `os_extend` applies it (`applyExtension`; +8 relationship, never offered twice); `os_extend_pass` or no answer: not now.
+- **Releases** (`releaseCandidates`, up to 2; day 4 from 15:00; due when free agency opens):
+  - Who: players under contract next season paid at least 1.35× (and $200K) over what the market would pay them now, after a poor season (OPS under .650 with 120+ AB; ERA over 5.00 with 30+ IP) or a winter decline of 2+ OVR. The card gives the line, the decline, the market value, the money owed, and who takes over.
+  - `os_release` releases the player to free agency (`applyRelease`). The rest of the deal is owed season by season (`Finance.addDeadFuture` → `fin.deadFuture`).
+  - With no answer, the player stays.
+- **Dead money, made whole** (`FinanceEngine`):
+  - `deadFuture` entries become that season's `fin.dead` when its pay calendar starts (`ensureSeason`), paid on paydays like an in-season release.
+  - When another club signs a released player, the new salary comes off what the old club owes for each season both deals cover (`offsetDead`, from `signFreeAgent`; once per entry).
+  - `deadAhead` (this season's dead money in season; next season's between seasons) now counts in `payrollRoom` and in the owner's `strain`. Releasing a player no longer frees payroll room or ownership patience: the money is spent either way. This applies to in-season releases too, which used to free the room.
+  - The Team screen's Finances shows "Still owed to released players" when there is any.
+- **Tests.**
+  - `check-contracts.mjs` (11): the release candidate, the context words, the owed seasons, free agency, room unchanged by a release, the offset when another club signs the player, the move into the season's dead money, in-season counting, and the extension terms.
+  - `sim-season.js`: re-sign cards carry the context; the new cards are gender-neutral; extensions go only to the young core and take effect; a release leaves the money owed, season by season (offset when the player signs elsewhere), and still counts against the room. The harness GM takes the first extension and releases the first overpaid player, so both paths run when they come up.
+  - Seeds 3, 5, 7 and ember 11 pass; seed 5 exercised a release and its offset.
+  - `check-coaches.mjs` now defaults to 1,500 games a staff (at 300, the gaps in runs scored are noise).
