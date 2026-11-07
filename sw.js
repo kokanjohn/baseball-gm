@@ -16,7 +16,7 @@
  *   - If both cache and network fail, serve the offline fallback
  */
 
-const CACHE_VERSION  = 'tfo-v2-r133';
+const CACHE_VERSION  = 'tfo-v2-r134';
 const CACHE_NAME     = `the-front-office-${CACHE_VERSION}`;
 const OFFLINE_URL    = '/baseball-gm/index.html';
 
@@ -255,6 +255,68 @@ self.addEventListener('push', (event) => {
       .then(list => list.forEach(c => c.postMessage({ type: 'PUSH_RECEIVED', cardId: data.data?.cardId }))),
   ]));
 });
+
+// ─────────────────────────────────────────────────────────────
+// SUBSCRIPTION REPLACED (r134)
+// Android can drop or replace a push subscription (an FCM token refresh, site
+// data cleanup). Nothing noticed before, so the worker kept sending to an
+// endpoint that no longer reached this phone. Here the new subscription is
+// registered with the worker straight away, even with the app closed. The
+// schedule isn't sent (the service worker can't compute it): the worker keeps
+// the one it has, and the app re-sends a fresh one when it next opens.
+// PushClient mirrors the device id and worker URL into IndexedDB for this.
+// ─────────────────────────────────────────────────────────────
+
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(_reRegister(event).catch(err => console.warn('[SW] re-register failed:', err?.message)));
+});
+
+async function _reRegister(event) {
+  const meta = await _pushMeta();
+  if (!meta?.deviceId || !meta?.workerUrl) return;   // push never set up on this device
+  let sub = event.newSubscription || null;
+  if (!sub) {
+    // Prefer the worker's current key (a key rotation also lands here).
+    let key = null;
+    try {
+      const res = await fetch(`${meta.workerUrl}/vapid-key`);
+      if (res.ok) key = _b64ToBytes((await res.text()).trim());
+    } catch { /* offline */ }
+    key = key || event.oldSubscription?.options?.applicationServerKey;
+    if (!key) return;
+    sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  }
+  await fetch(`${meta.workerUrl}/register`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ userId: meta.deviceId, subscription: sub.toJSON() }),
+  });
+  const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  list.forEach(c => c.postMessage({ type: 'PUSH_RESUBSCRIBED' }));
+}
+
+function _pushMeta() {
+  return new Promise((resolve) => {
+    let open;
+    try { open = indexedDB.open('bgm-push', 1); } catch { resolve(null); return; }
+    open.onupgradeneeded = (e) => { e.target.result.createObjectStore('meta'); };
+    open.onerror = () => resolve(null);
+    open.onsuccess = (e) => {
+      const db = e.target.result;
+      try {
+        const req = db.transaction('meta', 'readonly').objectStore('meta').get('push');
+        req.onsuccess = () => { db.close(); resolve(req.result || null); };
+        req.onerror   = () => { db.close(); resolve(null); };
+      } catch { db.close(); resolve(null); }
+    };
+  });
+}
+
+function _b64ToBytes(b64) {
+  const s = b64.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(s.padEnd(s.length + (4 - s.length % 4) % 4, '='));
+  return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

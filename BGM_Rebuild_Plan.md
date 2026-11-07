@@ -9166,3 +9166,55 @@ The user's direction on r131:
   - New `--link` token (#6EA8FF dark / #1F5FD1 light) for the back link, the unread dot and the active tab underline. The team accent is too dark to read on the dark theme.
   - Avatar colors use an FNV hash over a fixed palette; "me" is always green.
   - No changes to dashboard colors.
+
+## 116. Push: a lost subscription the app never noticed (r134)
+
+**Reported (Nov 7):** inbox and message alerts never arrived with the app closed.
+
+**Diagnosed end to end before changing anything.**
+- **Worker `/status`:**
+  - Keys fine (`privateMatchesPublic`, `subjectValid`).
+  - One device (`17b4f9b8`, FCM) holding an **empty schedule**.
+  - `lastSend` still the pre-r93 record from Oct 29. r93's cron writes it only when it sends, so not one push had gone out since r93 was deployed, not even a game reminder.
+  - `lastResult: null`: no Send Test recorded against the device.
+- **The deployed worker** matched `workers/push-worker.js` (read through the Cloudflare connector).
+- **Send Test** brought a notification at once. The same device then held **9 items**, next in 14 minutes. The phone, keys, worker and FCM all worked; the app had a full schedule; the worker had simply never received it.
+
+**Root cause.** `PushClient._syncNow` looked up this device's subscription with `create: false` and returned quietly when there was none ("never enabled on this device").
+- The Oct 26 key rotation (§63) left the phone with a subscription made with the old key. The sync detected the mismatch, unsubscribed it, and never made a new one. §77's note that devices "re-subscribe on their next sync" was not true.
+- Android can also drop or replace a subscription (an FCM token refresh, site-data cleanup). `sw.js` had no `pushsubscriptionchange` handler, so that went unnoticed too.
+- Only Send Test created a subscription (`create: true`), which is why it fixed things.
+- **Settings said "Enabled" the whole time.** The label only reflected the browser permission and the pause toggle, so the device was silent for twelve days with nothing to show it.
+
+**Fixed:**
+1. **The sync heals itself.** With permission granted (the app only asks in `enablePush`), a missing or wrong-key subscription is replaced and registered on the next sync. The endpoint is part of the "did anything change" signature, so a new subscription is always registered.
+2. **`pushsubscriptionchange` in `sw.js`.**
+   - When Android replaces the subscription, the service worker subscribes again (preferring the worker's current key from `/vapid-key`) and registers it, even with the app closed.
+   - It reads the device id and worker URL from IndexedDB (`bgm-push` / `meta` / `push`), which `PushClient` mirrors there; a service worker can't read localStorage.
+   - It sends no schedule. The worker keeps the one it has (below), and an open app is told (`PUSH_RESUBSCRIBED`) to re-send a fresh one.
+3. **The Settings line says what's true.** `PushClient.deviceStatus()` syncs first (which repairs), then asks the worker what it holds for this device (`POST /device`).
+   - "Receiving on this device · N alerts scheduled" (or "nothing scheduled yet").
+   - "Not registered on this device — alerts won't arrive", with **Register This Device** under the line.
+   - "Couldn't reach the notification server — check your connection".
+   - "Paused"; "Blocked — change in browser settings"; "Not enabled" with Enable.
+   - A worker from before r134 (no `/device`) falls back to "Enabled".
+4. **Send Test's closed-app item survives.** It used to sit in the schedule for 90 seconds, but switching apps synced the schedule without it, so the cron never sent it. It's now kept (localStorage `bgm_push_test_item`) in every sync until two minutes past due.
+
+**Worker (`workers/push-worker.js`, must be pasted into Cloudflare):**
+- `POST /register` with **no `schedule` field** keeps the stored schedule (the app always sends an array, so nothing changes for it).
+- `POST /device { userId, endpoint }` → `{ ok, known, endpointMatches, scheduled, nextAt, lastResult }`. Reads only, no KV writes.
+
+**Tests.**
+- `check-push-client.mjs` (new, 18) against a fake browser and worker:
+  - a missing subscription is created and the real schedule (with game reminders) registered;
+  - an unchanged schedule isn't re-sent;
+  - an old-key subscription is replaced; one dropped since the last sync is caught;
+  - every `deviceStatus()` state;
+  - the closed-app test item survives a later sync and leaves once past due;
+  - without permission nothing happens.
+  - Against r133's `PushClient.js` it fails exactly where the phone did.
+- `test-webpush.mjs`: plus `/register` without a schedule and the `/device` answers; `/device` writes nothing; the §98 KV budget still holds (0 writes, 0 lists for a day of idle cron and 50 unchanged registers).
+- `test-push-settings-ui.mjs` (new): the real Settings in Chromium against a fake push service and worker, dark and light — receiving, not registered → Register This Device → receiving, paused.
+- `check-refs` passes. `sim-season` 142 games, seed 3: 3652/3653; the one failure ("nobody plays before reporting / after leaving", game 36) also fails on r133 at the same seed, and r134 changes no engine code.
+
+**Still open (designed next, §112 style check-in first):** cards the roster clock makes on catch-up when the app reopens (the trade desk, offseason days, roster and weather cards) don't exist while the app is closed, so they can't be pushed; only the pool cards planned at the last game commit and the game reminders can. Planning those ahead when the app goes to the background needs a design decision.

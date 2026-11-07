@@ -15,6 +15,15 @@
  * offline, subscribed the device with a key that could receive nothing (§77).
  * Without the worker, push can't be set up anyway (registration needs it).
  *
+ * r134 the sync heals itself. Before, a sync that found no subscription (the
+ * Oct 26 key rotation removed one made with the old key; Android can also drop
+ * or replace a subscription) quietly gave up, while Settings still said
+ * "Enabled" — the device received nothing for twelve days. Now, with
+ * permission granted, a missing or wrong-key subscription is replaced and
+ * registered on the next sync; sw.js re-registers one Android replaces
+ * (pushsubscriptionchange); deviceStatus() tells Settings what the worker
+ * actually holds for this device.
+ *
  * Browser-only module (navigator / fetch). Not imported by engines or the harness.
  */
 
@@ -24,7 +33,11 @@ import { getPushSchedule } from '../engine/CardEngine.js';
 
 export const NOTIF_PREF_KEY = 'bgm_notif_enabled';
 const DEVICE_ID_KEY  = 'bgm_push_device_id';
+const TEST_ITEM_KEY  = 'bgm_push_test_item';   // r134 Send Test's closed-app item, until it's due
 const SYNC_DEBOUNCE  = 1500;
+// r134 shared with sw.js (pushsubscriptionchange): which device this is and
+// where the worker lives. The service worker can't read localStorage.
+const META_DB = 'bgm-push', META_STORE = 'meta';
 
 let _syncTimer = null;
 let _lastSyncSignature = '';
@@ -51,8 +64,9 @@ export async function enablePush() {
   if (perm !== 'granted') return perm;
   localStorage.setItem(NOTIF_PREF_KEY, 'true');
   try {
-    await _getSubscription({ create: true });
-    await _register(_currentSchedule());
+    const sub = await _getSubscription({ create: true });
+    await _register(_currentSchedule(), sub);
+    _lastSyncSignature = '';
     return 'granted';
   } catch (err) {
     console.error('[PushClient] enable failed:', err);
@@ -103,7 +117,9 @@ export async function sendTestPush() {
     result = { ok: false, error: `could not reach the push server (${err.message})` };
   }
 
-  // Part 2: the closed-app test via the regular schedule/cron path.
+  // Part 2: the closed-app test via the regular schedule/cron path. r134 it
+  // stays in every sync until it's due — before, closing the app synced the
+  // schedule without it and the cron never saw it.
   const later = {
     id:        `test-closed-${Date.now()}`,
     deliverAt: Date.now() + 90 * 1000,
@@ -111,9 +127,49 @@ export async function sendTestPush() {
     body:      'Delivered with the app closed. ⚾',
     tag:       'bgm-test-closed',
   };
-  try { await _register([later, ..._currentSchedule()]); } catch { /* reported via result */ }
-  _lastSyncSignature = ''; // next normal sync replaces the test entry
+  try { localStorage.setItem(TEST_ITEM_KEY, JSON.stringify(later)); } catch { /* private mode */ }
+  try { await _register(_currentSchedule(), sub); } catch { /* reported via result */ }
+  _lastSyncSignature = '';
   return result;
+}
+
+/**
+ * deviceStatus()
+ * r134 what is really true for this device, for the Settings line. Syncs
+ * first (which heals a missing subscription), then asks the worker what it
+ * holds for this device (POST /device).
+ * @returns {Promise<{ state: 'unsupported'|'off'|'blocked'|'paused'|'unregistered'
+ *                            |'receiving'|'unreachable'|'unknown',
+ *                     scheduled?: Number, nextAt?: Number }>}
+ *   'unknown' — the worker predates /device (r134 not deployed yet).
+ */
+export async function deviceStatus() {
+  if (!pushSupported()) return { state: 'unsupported' };
+  if (Notification.permission === 'denied')  return { state: 'blocked' };
+  if (Notification.permission !== 'granted') return { state: 'off' };
+  if (pushPaused()) return { state: 'paused' };
+  let sub;
+  try {
+    await _syncNow();
+    sub = await _getSubscription({ create: false });
+  } catch (err) {
+    return { state: err?.code === 'unreachable' ? 'unreachable' : 'unregistered' };
+  }
+  if (!sub) return { state: 'unregistered' };
+  try {
+    const res = await fetch(`${PUSH_WORKER_URL}/device`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ userId: _deviceId(), endpoint: sub.endpoint }),
+    });
+    if (res.status === 404) return { state: 'unknown' };
+    const d = await res.json();
+    if (!d?.ok) return { state: 'unreachable' };
+    if (!d.known || !d.endpointMatches) return { state: 'unregistered' };
+    return { state: 'receiving', scheduled: d.scheduled, nextAt: d.nextAt };
+  } catch {
+    return { state: 'unreachable' };
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -123,22 +179,37 @@ export async function sendTestPush() {
 function _currentSchedule() {
   if (pushPaused()) return [];
   const state = StateManager.get();
-  return state ? getPushSchedule(state) : [];
+  const items = state ? getPushSchedule(state) : [];
+  const test = _pendingTestItem();
+  return test ? [test, ...items].sort((a, b) => a.deliverAt - b.deliverAt) : items;
 }
 
+/** Send Test's closed-app item while it's still due to send (r134). */
+function _pendingTestItem() {
+  let item = null;
+  try { item = JSON.parse(localStorage.getItem(TEST_ITEM_KEY) || 'null'); } catch { /* corrupt */ }
+  if (item && Number.isFinite(item.deliverAt) && item.deliverAt > Date.now() - 2 * 60_000) return item;
+  try { localStorage.removeItem(TEST_ITEM_KEY); } catch { /* private mode */ }
+  return null;
+}
+
+/**
+ * r134 permission granted means the GM turned push on (enablePush is the only
+ * place the app asks), so a missing or wrong-key subscription is a fault to
+ * repair here — never a reason to stop syncing.
+ */
 async function _syncNow() {
+  const sub       = await _getSubscription({ create: true });
   const schedule  = _currentSchedule();
-  const signature = JSON.stringify(schedule.map(i => [i.id, i.deliverAt]));
+  const signature = JSON.stringify([sub.endpoint, schedule.map(i => [i.id, i.deliverAt])]);
   if (signature === _lastSyncSignature) return;
-  const sub = await _getSubscription({ create: false });
-  if (!sub) return; // never enabled on this device
-  await _register(schedule);
+  await _register(schedule, sub);
   _lastSyncSignature = signature;
 }
 
-async function _register(schedule) {
-  const sub = await _getSubscription({ create: false });
+async function _register(schedule, sub) {
   if (!sub) throw new Error('no push subscription');
+  _saveMeta();
   const body = JSON.stringify({ userId: _deviceId(), subscription: sub.toJSON(), schedule });
   const res = await fetch(`${PUSH_WORKER_URL}/register`, {
     method:  'POST',
@@ -199,6 +270,26 @@ function _deviceId() {
   let id = localStorage.getItem(DEVICE_ID_KEY);
   if (!id) { id = crypto.randomUUID(); localStorage.setItem(DEVICE_ID_KEY, id); }
   return id;
+}
+
+/** Mirror the device id and worker URL for sw.js (r134). Best effort. */
+let _metaSaved = false;
+function _saveMeta() {
+  if (_metaSaved || typeof indexedDB === 'undefined') return;
+  _metaSaved = true;
+  try {
+    const open = indexedDB.open(META_DB, 1);
+    open.onupgradeneeded = (e) => { e.target.result.createObjectStore(META_STORE); };
+    open.onsuccess = (e) => {
+      try {
+        const db = e.target.result;
+        const tx = db.transaction(META_STORE, 'readwrite');
+        tx.objectStore(META_STORE).put({ deviceId: _deviceId(), workerUrl: PUSH_WORKER_URL }, 'push');
+        tx.oncomplete = () => db.close();
+      } catch { _metaSaved = false; }
+    };
+    open.onerror = () => { _metaSaved = false; };
+  } catch { _metaSaved = false; }
 }
 
 function _b64ToBytes(b64) {

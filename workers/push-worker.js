@@ -11,6 +11,11 @@
  *                       The app re-posts the full schedule whenever it changes.
  *   POST /test-send   → { userId, subscription } — sends a test push NOW and
  *                       returns the push service's answer + a VAPID key check
+ *                       r134: with no `schedule` field the stored schedule is
+ *                       kept (sw.js re-registering a replaced subscription).
+ *   POST /device      → { userId, endpoint } — what the worker holds for this
+ *                       device (known, endpointMatches, scheduled, nextAt,
+ *                       lastResult). Reads only. Settings uses it (r134).
  *   GET  /status      → diagnostics: last cron run, key check, per-device
  *                       schedule size and last send result (no secrets)
  * Cron (every minute)
@@ -194,7 +199,10 @@ async function handleRegister(req, env) {
   if (!userId || !subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
     return new Response('Bad request - missing userId or subscription', { status: 400 });
   }
-  const items = (Array.isArray(schedule) ? schedule : [])
+  // r134 no schedule at all (the service worker re-registering a replaced
+  // subscription, which can't know the schedule): keep the one we have.
+  const prev = await env.SCHEDULES.get(`sub:${userId}`, 'json');
+  const items = (Array.isArray(schedule) ? schedule : (prev?.schedule || []))
     .filter(i => i && Number.isFinite(i.deliverAt))
     .sort((a, b) => a.deliverAt - b.deliverAt)
     .slice(0, MAX_SCHEDULE_ITEMS)
@@ -206,7 +214,6 @@ async function handleRegister(req, env) {
       tag:       String(i.tag   || 'bgm').slice(0, 64),
     }));
   const key = `sub:${userId}`;
-  const prev = await env.SCHEDULES.get(key, 'json');
   // §98 nothing changed (same device subscription, same schedule): no write.
   const same = prev && prev.subscription?.endpoint === subscription.endpoint
     && JSON.stringify(prev.schedule || []) === JSON.stringify(items);
@@ -258,6 +265,25 @@ async function handleTestSend(req, env) {
                                      { expirationTtl: KV_TTL_SECONDS });
   }
   return _json({ ...result, keys });
+}
+
+// POST /device { userId, endpoint } — r134 what the worker holds for this
+// device, so Settings can say whether it is really receiving. Reads only.
+async function handleDevice(req, env) {
+  let data;
+  try { data = await req.json(); } catch { return _json({ ok: false, error: 'Bad JSON' }, 400); }
+  const { userId, endpoint } = data || {};
+  if (!userId) return _json({ ok: false, error: 'missing userId' }, 400);
+  const d = await env.SCHEDULES.get(`sub:${userId}`, 'json');
+  const sched = d?.schedule || [];
+  return _json({
+    ok:             true,
+    known:          !!d?.subscription,
+    endpointMatches: !!d?.subscription && !!endpoint && d.subscription.endpoint === endpoint,
+    scheduled:      sched.length,
+    nextAt:         sched.length ? sched[0].deliverAt : null,
+    lastResult:     d?.lastResult || null,
+  });
 }
 
 // GET /status — diagnostics (no secrets, no full endpoints).
@@ -335,6 +361,8 @@ export default {
         res = await handleRegister(request, env);
       } else if (request.method === 'POST' && url.pathname === '/test-send') {
         res = await handleTestSend(request, env);
+      } else if (request.method === 'POST' && url.pathname === '/device') {
+        res = await handleDevice(request, env);
       } else if (request.method === 'GET' && url.pathname === '/status') {
         res = await handleStatus(env);
       } else if (request.method === 'GET' && url.pathname === '/vapid-key') {

@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r133';
+export const APP_VERSION = 'tfo-v2-r134';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -279,6 +279,9 @@ export async function init() {
     navigator.serviceWorker?.addEventListener('message', (event) => {
       if (event.data?.type === 'OPEN_INBOX')    { _releaseDueCards().then(() => switchTab('decisions')); }
       if (event.data?.type === 'PUSH_RECEIVED') { _releaseDueCards(); }
+      // r134 the service worker registered a replaced subscription: send the
+      // worker this device's current schedule.
+      if (event.data?.type === 'PUSH_RESUBSCRIBED') { _syncPush({ immediate: true }); }
     });
   }
   EventBus.on('game:phaseChanged',   (payload) => _onPhaseChanged(payload));
@@ -1215,6 +1218,7 @@ function _initSettingsPickers() {
 
   // ── Notifications ─────────────────────────────────────────
   document.getElementById('notif-enable-btn')?.addEventListener('click', _requestNotifPermission);
+  document.getElementById('notif-fix-btn')?.addEventListener('click', _requestNotifPermission);   // r134 repair
   document.getElementById('notif-toggle')?.addEventListener('change', _toggleNotifications);
   document.getElementById('notif-test-btn')?.addEventListener('click', _sendTestNotification);
 
@@ -1398,39 +1402,74 @@ function _updateColorPreview(primary, secondary) {
 
 const _NOTIF_PREF_KEY = 'bgm_notif_enabled';
 
-function _refreshNotifStatus() {
-  if (!('Notification' in window)) {
-    const status = document.getElementById('notif-status');
-    if (status) { status.textContent = 'Not supported on this device'; status.className = 'notif-status'; }
-    return;
-  }
+let _notifStatusToken = 0;
 
-  const perm       = Notification.permission;
+/**
+ * _refreshNotifStatus()
+ * r134 the Settings line says what is true for this device, not just what the
+ * browser permission is. "Enabled" used to show while the device had no push
+ * subscription and the worker held nothing for it (Oct 26 – Nov 7). With
+ * permission granted the line reads "Checking…" until PushClient.deviceStatus()
+ * answers (it repairs a missing subscription first, then asks the worker).
+ */
+function _refreshNotifStatus() {
   const status     = document.getElementById('notif-status');
   const enableBtn  = document.getElementById('notif-enable-btn');
   const toggleWrap = document.getElementById('notif-toggle-label');
   const toggle     = document.getElementById('notif-toggle');
   const testRow    = document.getElementById('notif-test-row');
+  const token      = ++_notifStatusToken;
+  const show = (text, cls = '') => { if (status) { status.textContent = text; status.className = 'notif-status ' + cls; } };
+  const repairBtn = document.getElementById('notif-fix-btn');
+  const fixBtn = (label) => {
+    // 'Enable' (never asked) sits beside the toggle; a repair sits under the line.
+    if (enableBtn) enableBtn.style.display = label === 'Enable' ? 'inline-block' : 'none';
+    if (repairBtn) { repairBtn.style.display = label && label !== 'Enable' ? 'inline-block' : 'none';
+                     if (label && label !== 'Enable') repairBtn.textContent = label; }
+  };
 
-  if (perm === 'granted') {
-    const enabled = localStorage.getItem(_NOTIF_PREF_KEY) !== 'false';
-    if (status)     { status.textContent = enabled ? 'Enabled' : 'Paused'; status.className = 'notif-status ' + (enabled ? 'granted' : ''); }
-    if (enableBtn)  enableBtn.style.display  = 'none';
-    if (toggleWrap) toggleWrap.style.display = 'inline-flex';
-    if (toggle)     toggle.checked = enabled;
-    if (testRow)    testRow.style.display = enabled ? '' : 'none';
-  } else if (perm === 'denied') {
-    if (status)     { status.textContent = 'Blocked — change in browser settings'; status.className = 'notif-status denied'; }
-    if (enableBtn)  enableBtn.style.display  = 'none';
+  if (!('Notification' in window)) { show('Not supported on this device'); return; }
+  const perm = Notification.permission;
+
+  if (perm === 'denied') {
+    show('Blocked — change in browser settings', 'denied');
+    fixBtn(null);
     if (toggleWrap) toggleWrap.style.display = 'none';
     if (testRow)    testRow.style.display = 'none';
-  } else {
-    // default — not yet asked
-    if (status)     { status.textContent = 'Not enabled'; status.className = 'notif-status'; }
-    if (enableBtn)  enableBtn.style.display  = 'inline-block';
-    if (toggleWrap) toggleWrap.style.display = 'none';
-    if (testRow)    testRow.style.display = 'none';
+    return;
   }
+  if (perm !== 'granted') {
+    show('Not enabled');
+    fixBtn('Enable');
+    if (toggleWrap) toggleWrap.style.display = 'none';
+    if (testRow)    testRow.style.display = 'none';
+    return;
+  }
+
+  const enabled = localStorage.getItem(_NOTIF_PREF_KEY) !== 'false';
+  if (toggleWrap) toggleWrap.style.display = 'inline-flex';
+  if (toggle)     toggle.checked = enabled;
+  if (testRow)    testRow.style.display = enabled ? '' : 'none';
+  fixBtn(null);
+  if (!enabled) { show('Paused'); return; }
+
+  show('Checking…');
+  import('./PushClient.js').then(P => P.deviceStatus()).then(r => {
+    if (token !== _notifStatusToken) return;   // a newer refresh is on its way
+    if (r.state === 'receiving') {
+      const n = r.scheduled || 0;
+      show(`Receiving on this device · ${n ? `${n} alert${n === 1 ? '' : 's'} scheduled` : 'nothing scheduled yet'}`, 'granted');
+    } else if (r.state === 'unregistered') {
+      show('Not registered on this device — alerts won\'t arrive', 'denied');
+      fixBtn('Register This Device');
+    } else if (r.state === 'unreachable') {
+      show('Couldn\'t reach the notification server — check your connection');
+    } else if (r.state === 'paused') {
+      show('Paused');
+    } else {
+      show('Enabled', 'granted');   // 'unknown': the worker predates its /device check
+    }
+  }).catch(() => { if (token === _notifStatusToken) show('Enabled', 'granted'); });
 }
 
 async function _requestNotifPermission() {
@@ -1462,6 +1501,7 @@ async function _sendTestNotification() {
   const r = await sendTestPush();
   if (r.ok) {
     showToast('✅ Test delivered to your device now. A second one arrives in ~90s — close the app to check it arrives while closed.', 'positive', 7000);
+    _refreshNotifStatus();
     return;
   }
   // Show the real reason so a failure can be diagnosed from the phone.

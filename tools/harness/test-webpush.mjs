@@ -108,6 +108,28 @@ ok('worker payload decrypts on the browser side', out === msg, out);
     Buffer.from(sg, 'base64url'), new TextEncoder().encode(h + '.' + p));
   ok('VAPID JWT verifies with the public key', jwtOk);
 
+  // r134 the service worker re-registers a replaced subscription without a
+  // schedule: the worker keeps the schedule it has and takes the new endpoint.
+  {
+    const before = JSON.parse(kv.get('sub:dev1')).schedule;
+    const fresh  = { ...subJson, endpoint: 'https://fcm.googleapis.com/fcm/send/replaced' };
+    const r = await call('POST', '/register', { userId: 'dev1', subscription: fresh });
+    const after = JSON.parse(kv.get('sub:dev1'));
+    ok('r134 /register with no schedule keeps the schedule and takes the new subscription',
+       r.status === 200 && after.subscription.endpoint === fresh.endpoint
+       && JSON.stringify(after.schedule) === JSON.stringify(before) && before.length > 0);
+    const dv = await (await call('POST', '/device', { userId: 'dev1', endpoint: fresh.endpoint })).json();
+    ok('r134 /device reports the device as registered with its schedule',
+       dv.ok && dv.known && dv.endpointMatches && dv.scheduled === before.length && dv.nextAt === before[0].deliverAt, JSON.stringify(dv));
+    const stale = await (await call('POST', '/device', { userId: 'dev1', endpoint: subJson.endpoint })).json();
+    ok('r134 /device flags an endpoint the worker no longer holds', stale.known && !stale.endpointMatches);
+    const none = await (await call('POST', '/device', { userId: 'nobody', endpoint: 'x' })).json();
+    ok('r134 /device reports an unknown device', none.ok && !none.known && none.scheduled === 0);
+    const putsBefore = ops.put;
+    await call('POST', '/device', { userId: 'dev1', endpoint: fresh.endpoint });
+    ok('r134 /device writes nothing', ops.put === putsBefore);
+  }
+
   env.VAPID_PUBLIC_KEY = env.VAPID_PUBLIC_KEY.slice(0, -4) + 'AAAA';
   const bad = await (await call('GET', '/status')).json();
   ok('/status detects a private/public key mismatch', bad.keys.privateMatchesPublic === false);
