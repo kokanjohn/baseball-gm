@@ -53,6 +53,7 @@ import {
   GAME_WEATHER,
   COMPOSE_REPLY,
   OFFSEASON_CARD_HOUR,
+  GAME_STATUS,
 } from '../data/constants.js';
 
 import {
@@ -231,11 +232,22 @@ export function checkAndDeliver(context) {
  * @param {String} choice  — 'yes' | 'no'
  * @returns {void}
  */
-export function resolve(instanceId, choice) {
-  const state    = StateManager.get();
-  const instance = (state.inbox || []).find(c => c.instanceId === instanceId);
+export function resolve(instanceId, choice, { pick = null } = {}) {
+  let state    = StateManager.get();
+  let instance = (state.inbox || []).find(c => c.instanceId === instanceId);
   if (!instance) throw new Error(`CardEngine.resolve: instance '${instanceId}' not found`);
   if (instance.resolved) return;
+  // §113 a card with choices (`_choices`): the one the GM tapped. The
+  // Completed tab shows it as the decision.
+  if (choice === 'yes' && pick != null && (instance._choices || []).some(c => c.key === pick)) {
+    const label = instance._choices.find(c => c.key === pick).label;
+    StateManager.mutate(s => {
+      const card = s.inbox.find(c => c.instanceId === instanceId);
+      if (card) { card._pick = pick; card.yesLabel = label; }
+    });
+    state = StateManager.get();
+    instance = state.inbox.find(c => c.instanceId === instanceId);
+  }
 
   const effects = choice === 'yes' ? (instance.yesEffect || {}) : (instance.noEffect || {});
 
@@ -627,16 +639,72 @@ function _act2Time(state, decidedAtMs, mriNow) {
   return t;
 }
 
-/** IL return decision — delivered the moment the player is cleared. */
+const _SLOT_WORDS = { C: 'catcher', '1B': 'first base', '2B': 'second base', '3B': 'third base', SS: 'shortstop', OF: 'the outfield', DH: 'designated hitter' };
+const _slotWords = (slot) => _SLOT_WORDS[slot] || slot;
+// "back {where}" and "{who} {played}"
+const _SLOT_WHERE  = { C: 'behind the plate', '1B': 'at first base', '2B': 'at second base', '3B': 'at third base', SS: 'at shortstop', OF: 'in the outfield', DH: 'at DH' };
+const _SLOT_PLAYED = { C: 'has caught', OF: 'has played the outfield', DH: 'has been the DH' };
+const _slotWhere  = (slot) => _SLOT_WHERE[slot] || `at ${slot}`;
+const _slotPlayed = (slot) => _SLOT_PLAYED[slot] || `has played ${_slotWords(slot)}`;
+
+/** §113 who has the returning player's spot now: the lineup slot he lost, or the rotation's weakest turn. */
+function _whoHasSpot(state, player) {
+  const u = state.userTeam, lost = player?._lostSlot;
+  if (!lost) return null;
+  if (lost.kind === 'lineup') {
+    const i = (u.lineupSlots || []).findIndex(sl => sl.slot === lost.slot && sl.playerId && sl.playerId !== player.id);
+    const p = i >= 0 ? state.players[u.lineupSlots[i].playerId] : null;
+    return p ? { kind: 'lineup', slot: lost.slot, index: i, player: p } : null;
+  }
+  const order = u.rotation?.order || [];
+  if (order.includes(player.id)) return null;
+  const weakest = order.map(id => state.players[id]).filter(Boolean).sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0];
+  return weakest ? { kind: 'rotation', index: order.indexOf(weakest.id), player: weakest } : null;
+}
+
+/** §113 put the returning player in `spot` (from _whoHasSpot); whoever had it goes to the bench. */
+function _restoreSpot(s, player, spot) {
+  const u = s.userTeam;
+  if (spot.kind === 'lineup') {
+    const sl = (u.lineupSlots || [])[spot.index];
+    if (!sl || sl.slot !== spot.slot) return false;
+    for (const x of u.lineupSlots) if (x.playerId === player.id) { x.playerId = null; }
+    sl.playerId = player.id; sl.emergency = false;
+    player.group = PLAYER_GROUP.BENCH_HITTERS;   // (lineupSlots is the source of truth for who starts)
+  } else {
+    const order = [...(u.rotation?.order || [])];
+    const i = order.indexOf(spot.player.id);
+    if (order.includes(player.id)) return true;
+    if (i >= 0) order[i] = player.id;
+    else if (order.length < 5) order.splice(Math.min(spot.index ?? order.length, order.length), 0, player.id);   // (the fill-in already left)
+    else return false;
+    u.rotation = { ...(u.rotation || {}), order };
+    player.group = PLAYER_GROUP.STARTING_PITCHERS;
+    if (s.players[spot.player.id]?.teamId === 'user') s.players[spot.player.id].group = PLAYER_GROUP.PITCHER_BENCH;
+  }
+  player._lostSlot = null;
+  return true;
+}
+
+/**
+ * IL return decision — delivered the moment the player is cleared (Team
+ * Physician). §113 with a full roster it asks who goes down to make room —
+ * up to three choices, the recommended one first: the fill-in who has the
+ * returning player's spot (then the returning player takes it straight
+ * back), and the weakest reserves on the same side.
+ */
 function _deliverILReturnCard(playerId, atMs) {
   const state  = StateManager.get();
   const player = state.players[playerId];
   if (!player || !(state.ilReturnQueue || []).includes(playerId)) return null;
   const isSpring = state.phase === PHASE.SPRING_TRAINING;
   const full     = rosterIsFull(state, 'user', sideOf(player));   // his side's spots (§76)
-  const drop     = full ? _dropCandidate(state, playerId) : null;
   const deadline = decisionDeadlineAfter(state, atMs);
   const ref      = `${player.name}${_hand(player)} (${player.pos})`;
+  const spot     = _whoHasSpot(state, player);
+  const choices  = full ? _sendDownChoices(state, player, spot) : [];
+  const where    = (c) => `${c.name} (${c.nativePos || c.pos}, OVR ${c.ovr})`;
+  const what     = spot ? (spot.kind === 'lineup' ? `${_slotWords(spot.slot)}` : 'a turn in the rotation') : null;
 
   const card = _rosterCard(state, {
     cardId:   'il_return',
@@ -644,21 +712,64 @@ function _deliverILReturnCard(playerId, atMs) {
     sender:   'Team Physician',
     _rosterKey: `ilreturn:${playerId}`,
     _targetPlayerId: playerId,
-    _dropId:  drop?.id || null,
+    _dropId:  choices[0]?.key || null,
+    _choices: choices.length ? choices : null,
     subject:  `${player.name} cleared to return`,
-    preview:  `${ref} has been cleared — roster decision needed.`,
+    preview:  choices.length ? `${ref} is cleared. Who goes down to make room?` : `${ref} has been cleared — roster decision needed.`,
     body:     `${ref} has completed the recovery and is cleared for game action.`
-            + (drop ? ` The active roster is full, so activating ${player.name} means a corresponding move: ${drop.name} (${drop.nativePos || drop.pos}, OVR ${drop.ovr}) is the player who'd be ${isSpring ? 'optioned to the farm' : 'placed on waivers'}.`
-                    : ' There is room on the active roster.')
-            + (deadline ? ` If we haven't decided by ${_clock(deadline)} (${_day(deadline)}), ${_managerName(state)} will make the activation.` : ''),
-    yesLabel: drop ? `Activate ${player.name} — ${isSpring ? 'option' : 'waive'} ${drop.name}` : `Activate ${player.name}`,
+            + (spot ? ` While ${player.name} was out, ${where(spot.player)} took over ${what}.` : '')
+            + (choices.length
+                ? ` The active roster is full, so activating ${player.name} means sending someone down to the farm. `
+                  + (choices[0].replacement
+                      ? `Sending ${choices[0].name} down puts ${player.name} straight back ${spot.kind === 'lineup' ? _slotWhere(spot.slot) : 'in the rotation'}.`
+                      : `The obvious candidate is ${choices[0].name}, the weakest reserve ${sideOf(player) === 'pitcher' ? 'arm' : 'bat'} we have.`)
+                : ' There is room on the active roster.')
+            + (deadline ? ` If we haven't decided by ${_clock(deadline)} (${_day(deadline)}), ${_managerName(state)} will make the activation${choices.length ? ` and send ${choices[0].name} down` : ''}.` : ''),
+    yesLabel: choices.length ? choices[0].label : `Activate ${player.name}`,
     noLabel:  isSpring ? `Send ${player.name} to the farm` : `Place ${player.name} on waivers`,
     type:     'urgent',
     expiresAtMs: deadline,
     _raw: { onYes: 'il_return_activate', onNo: isSpring ? 'il_return_farm' : 'il_return_waive', onAuto: 'il_return_activate' },
-    _autoLabel: `No decision — ${_managerName(state)} made the activation`,
+    _autoLabel: `No decision — ${_managerName(state)} made the activation${choices.length ? ` and sent ${choices[0].name} down` : ''}`,
   });
   return _deliverAt(card, atMs);
+}
+
+/**
+ * §113 who could go down for a returning player: the fill-in who has his
+ * spot (recommended when the returning player is at least as good), then the
+ * weakest reserves on his side — never another starter or a rotation arm.
+ */
+function _sendDownChoices(state, player, spot) {
+  const t = state.userTeam;
+  const side = sideOf(player);
+  const locked = new Set([...(t.lineupSlots || []).map(s => s.playerId).filter(Boolean), ...(t.rotation?.order || [])]);
+  const reserves = (t.rosterIds || []).map(id => state.players[id]).filter(p =>
+    p && p.id !== player.id && p.group !== PLAYER_GROUP.IL && !p.isInjured && !locked.has(p.id) && sideOf(p) === side)
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0));
+  const out = [];
+  const fill = spot?.player;
+  // Recommend sending the fill-in down when that's what a club would do: a
+  // call-up brought in for the absence, or no better than the weakest reserve
+  // (a useful player keeps a bench job); and never when the fill-in outplays
+  // the returning player.
+  const lostAt = player._lostSlot?.atMs ?? player.injury?.injuredAt ?? 0;
+  const calledUp = fill && (state.transactions || []).some(t => t.kind === 'arrival' && t.playerId === fill.id
+    && t.teamId === 'user' && t.reason === 'callup' && (t.createdAt || 0) >= lostAt - 60_000);
+  const fillFirst = fill && (player.ovr || 0) >= (fill.ovr || 0) - 1
+    && (calledUp || !reserves.length || (fill.ovr || 0) <= (reserves[0].ovr || 0) + 3);
+  const mk = (p, replacement) => ({
+    key: p.id, name: p.name, replacement,
+    label: `Activate ${player.name} — send down ${p.name}`,
+    sub: replacement
+      ? `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr}) has had ${spot.kind === 'lineup' ? _slotWords(spot.slot) : 'the rotation turn'}; ${player.name} takes it back`
+      : `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr}), ${sideOf(p) === 'pitcher' ? (p.pos === 'SP' ? 'a spare starter' : 'from the bullpen') : 'off the bench'}`,
+  });
+  if (fill && fillFirst) out.push(mk(fill, true));
+  const room = fill && !fillFirst ? 2 : 3;   // the fill-in is always one of the choices
+  for (const p of reserves) { if (out.length >= room) break; out.push(mk(p, false)); }
+  if (fill && !fillFirst) out.push(mk(fill, true));
+  return out;
 }
 
 /** The lowest-value droppable active player (never a lineup starter or rotation arm). */
@@ -671,6 +782,106 @@ function _dropCandidate(state, exceptId) {
     p && p.id !== exceptId && p.group !== PLAYER_GROUP.IL && !p.isInjured && !locked.has(p.id));
   // Same side of the roster first (a returning pitcher replaces a pitcher).
   return pool.sort((a, b) => (samSide(b) - samSide(a)) || ((a.ovr || 0) - (b.ovr || 0)))[0] || null;
+}
+
+// ── §113 Back from an injury, but not back in the lineup ──────────────────
+
+const _f3 = (x) => x.toFixed(3).replace(/^0/, '');
+/** A season line in a few words ("hitting .281/.344/.455" / "a 3.88 ERA in 64 innings"). */
+function _lineNow(p) {
+  const s = p?.stats || {};
+  if (['SP', 'RP'].includes(p?.pos)) return s.ip >= 5 ? `a ${(9 * (s.er || 0) / s.ip).toFixed(2)} ERA in ${Math.round(s.ip)} innings` : null;
+  if (!(s.ab >= 20)) return null;
+  const pa = s.ab + (s.bb || 0) + (s.hbp || 0);
+  return `hitting ${_f3((s.h || 0) / s.ab)}/${_f3(((s.h || 0) + (s.bb || 0) + (s.hbp || 0)) / pa)}/${_f3((s.tb || 0) / s.ab)}`;
+}
+
+/** Our next game that hasn't started, after `t` (its first pitch is when the lineup locks). */
+function _nextUserGame(state, t) {
+  return (state.schedule || []).find(g => !g._committed && !g.cancelled && Number.isFinite(g.gameTime) && g.gameTime > t
+    && (g.status === GAME_STATUS.SCHEDULED || g.status === GAME_STATUS.PRE_GAME_WATCH)) || null;
+}
+
+const _nudgeEpisode = (p) => p?._lostSlot?.atMs ?? p?.injury?.injuredAt ?? 0;
+
+/**
+ * The coaching staff asks about putting a player back in the spot an injury
+ * took (`_lostSlot`): the hitting coach for a bat, the pitching coach for a
+ * starter (the manager when the chair is empty), before our next game. A
+ * second ask (n = 2) comes from the manager after that game if nothing
+ * changed; then the staff lets it be.
+ */
+function _deliverLineupNudge(state, player, n, atMs) {
+  const spot = _whoHasSpot(state, player);
+  if (!spot) return null;
+  const game = _nextUserGame(state, atMs + 10 * 60_000);
+  if (!game) return null;
+  const staff = state.userTeam.coachingStaff || {};
+  const coach = staff[spot.kind === 'lineup' ? 'hittingCoach' : 'pitchingCoach'];
+  const mgr = _managerName(state);
+  const sender = n > 1 || !coach || coach.vacant ? mgr : coach.name;
+  const X = player, Y = spot.player;
+  const diff = (X.ovr || 0) - (Y.ovr || 0);
+  const xLine = _lineNow(X), yLine = _lineNow(Y);
+  const where = spot.kind === 'lineup' ? _slotWhere(spot.slot) : 'in the rotation';
+  const vote = diff >= -1
+    ? `My vote: ${X.name} back ${where}, ${Y.name} to the ${spot.kind === 'lineup' ? 'bench' : 'bullpen'}.`
+    : `Honestly, ${Y.name} has earned a longer look. ${X.name} can work back in ${spot.kind === 'lineup' ? 'off the bench' : 'out of the bullpen'} until the job opens up again.`;
+  const when = `${_day(game.gameTime)} at ${_clock(game.gameTime)}`;
+  const opener = n > 1
+    ? (spot.kind === 'lineup' ? `${X.name} (OVR ${X.ovr}) sat again while ${Y.name} (OVR ${Y.ovr}) played ${where.replace(/^(at|in|behind) /, '')}.`
+                              : `${X.name} (OVR ${X.ovr}) is still out of the rotation while ${Y.name} (OVR ${Y.ovr}) keeps taking a turn.`)
+    : (spot.kind === 'lineup' ? `${X.name} is back to full strength and took a full round of batting practice today, no restrictions. The timing's there.`
+                              : `${X.name} threw a full bullpen session today and is ready to take the ball every fifth day again.`);
+  const card = _rosterCard(state, {
+    cardId: 'lineup_return', tag: 'LINEUP', sender, avatar: spot.kind === 'lineup' ? '🏏' : '⚾', type: 'normal',
+    _rosterKey: `lineup:${X.id}:${_nudgeEpisode(X)}:${n}`, _targetPlayerId: X.id, _spotKind: spot.kind, _nudge: n,
+    subject: n > 1 ? `${X.name} is still on the bench` : `Get ${X.name} back ${where}?`,
+    preview: spot.kind === 'lineup'
+      ? `${Y.name} ${_slotPlayed(spot.slot)} since ${X.name} went down.`
+      : `${Y.name} has the weakest turn in the rotation.`,
+    body: `${opener} `
+        + (n > 1 ? '' : spot.kind === 'lineup'
+            ? `${Y.name} (OVR ${Y.ovr}${yLine ? `, ${yLine}` : ''}) ${_slotPlayed(spot.slot)} since ${X.name} (OVR ${X.ovr}${xLine ? `, ${xLine}` : ''}) went down.`
+            : `${Y.name} (OVR ${Y.ovr}${yLine ? `, ${yLine}` : ''}) has the weakest turn in the rotation; ${X.name} is OVR ${X.ovr}${xLine ? `, with ${xLine}` : ''}.`)
+        + ` ${vote} Your call. ${spot.kind === 'lineup' ? `The lineup for ${when} locks at first pitch.` : `Our next game is ${when}.`}`,
+    yesLabel: `Put ${X.name} back ${where}`,
+    noLabel: `Keep ${Y.name} ${where}`,
+    expiresAtMs: game.gameTime,
+    _raw: { onYes: 'lineup_restore', onNo: 'lineup_keep', onAuto: 'lineup_auto' },
+    _autoLabel: `No answer — ${Y.name} stayed ${where}`,
+  });
+  return _deliverAt(card, atMs);
+}
+
+/** Players back from an injury who haven't got their spot back, and haven't been asked twice. */
+function _lineupNudges(atMs) {
+  let state = StateManager.get();
+  let delivered = 0;
+  const u = state.userTeam;
+  const seated = new Set([...(u.lineupSlots || []).map(sl => sl.playerId).filter(Boolean), ...(u.rotation?.order || [])]);
+  const queue = new Set(state.ilReturnQueue || []);
+  for (const id of u.rosterIds || []) {
+    const p = state.players[id];
+    if (!p?._lostSlot || seated.has(id) || queue.has(id) || !isAvailable(p) || p.group === PLAYER_GROUP.IL) continue;
+    const prefix = `lineup:${id}:${_nudgeEpisode(p)}:`;
+    const mine = [...(state.inbox || []), ...(state.scheduledCards || [])].filter(c => (c._rosterKey || '').startsWith(prefix));
+    if (mine.some(c => !c.resolved) || mine.length >= 2) continue;
+    const prev = mine[0];
+    let at;
+    if (!prev) {
+      // A little after the news, and well before our next first pitch.
+      const g = _nextUserGame(state, atMs);
+      at = atMs + _randBetween(20, 50) * 60_000;
+      if (g && at > g.gameTime - 30 * 60_000) at = Math.max(atMs, g.gameTime - 30 * 60_000);
+    } else {
+      if (prev.choice !== 'auto') continue;   // answered: the GM decided
+      at = Math.max(atMs, (prev.expiresAtMs || atMs) + _randBetween(200, 260) * 60_000);   // after that game
+    }
+    if (_deliverLineupNudge(state, p, mine.length + 1, at)) delivered++;
+    state = StateManager.get();
+  }
+  return delivered;
 }
 
 /** Open roster spot — one card per open spot, tied to the current deadline. */
@@ -789,6 +1000,9 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     if (_deliverILReturnCard(id, Number.isFinite(at) ? Math.min(at, atMs) : atMs)) delivered++;
   }
 
+  // §113 back from an injury but not back in the lineup → the staff asks.
+  delivered += _lineupNudges(atMs);
+
   // Open roster spots → one card per spot, keyed to the current deadline.
   state = StateManager.get();
   const needs = getRosterNeeds(state, 'user');
@@ -838,6 +1052,11 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
       return !p || !(state.userTeam.rosterIds || []).includes(p.id) || p.injury?.status !== 'evaluating';
     }
     if (key.startsWith('ilreturn:')) return !queue.has(c._targetPlayerId);
+    if (key.startsWith('lineup:')) {   // §113 back in the spot, hurt again, gone, or the GM already decided
+      const p = players[c._targetPlayerId], u = state.userTeam;
+      const seatedNow = (u.lineupSlots || []).some(sl => sl.playerId === p?.id) || (u.rotation?.order || []).includes(p?.id);
+      return !p || p.teamId !== 'user' || !p._lostSlot || seatedNow || !isAvailable(p) || !_whoHasSpot(state, p);
+    }
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
     // §70: a free agent who signed elsewhere (or left); a re-sign card for a
     // player no longer ours (retired, traded).
@@ -3893,6 +4112,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'lt_offer_send', 'lt_pass', 'lt_scout', 'lt_find_rp', 'lt_watch',
   'fin_call_club',
   'il_return_activate',
+  'lineup_restore', 'lineup_keep', 'lineup_auto',
   'il_return_waive',
   'il_return_farm',
   'trade_execute',
@@ -4018,26 +4238,48 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
       const st = StateManager.get();
       const player = st.players[playerId];
       if (!player || !(st.ilReturnQueue || []).includes(playerId)) break;
-      // A full active roster needs a corresponding move (Section 9.7: waivers
-      // in season, the farm in spring).
-      const isSpring = st.phase === PHASE.SPRING_TRAINING;
+      // A full active roster needs a corresponding move: §113 the player the
+      // GM picked on the card (or the recommended one) is sent down to the
+      // farm, as with a call-up or a trade.
+      const spot = _whoHasSpot(st, player);
+      let sentDown = null;
       if (rosterIsFull(st, 'user', sideOf(player))) {
-        const planned = st.players[instance._dropId];
+        const pickId = instance._pick || instance._dropId;
+        const planned = st.players[pickId];
         const drop = planned && planned.teamId === 'user' && planned.group !== PLAYER_GROUP.IL
           && (st.userTeam.rosterIds || []).includes(planned.id) ? planned : _dropCandidate(st, playerId);
         if (drop) {
-          const mut = isSpring ? sendToFarm(st, drop.id, 'user') : placeOnWaivers(st, drop.id);
-          StateManager.mutate(s => applyRosterMutation(s, mut));
+          StateManager.mutate(s => applyRosterMutation(s, sendToFarm(s, drop.id, 'user')));
+          sentDown = drop.id;
         }
       }
       const act = activateFromIL(StateManager.get(), playerId, defaultActiveGroup(player));
       StateManager.mutate(s => {
         applyRosterMutation(s, act);
         Object.assign(s.players[playerId], clearInjuryUpdate());
+        // The fill-in went down: the returning player takes the spot straight back.
+        if (spot && sentDown === spot.player.id) _restoreSpot(s, s.players[playerId], spot);
       });
       reconcileUser();
       break;
     }
+
+    // ── §113 back in the lineup ─────────────────────────────────
+    case 'lineup_restore': {
+      const st = StateManager.get();
+      const p = st.players[playerId];
+      if (!p || p.teamId !== 'user' || !isAvailable(p)) break;
+      const spot = _whoHasSpot(st, p);
+      if (!spot) break;
+      StateManager.mutate(s => _restoreSpot(s, s.players[playerId], spot));
+      reconcileUser();
+      break;
+    }
+    case 'lineup_keep':
+      StateManager.mutate(s => { if (s.players[playerId]) s.players[playerId]._lostSlot = null; });   // the GM decided: no more asking
+      break;
+    case 'lineup_auto':
+      break;   // nothing changes; the manager asks once more after the game
 
     case 'il_return_waive': {
       if (!playerId) break;

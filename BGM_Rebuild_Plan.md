@@ -9065,3 +9065,41 @@ Coaches renew silently, and only matter as a relationship nudge to development p
   - `multi-season.mjs`, 4 seasons each: contender, ember and empire (seed 2) and lab (seed 9, south, managed). All 77 checks pass in each.
   - `sim-season.js` seeds 3, 5 and 7 and ember 11 pass.
   - `check-contracts` 11, `check-frontoffice` 17 and `check-coaches` 14 pass.
+
+## 113. Back from an injury: who goes down, and getting the lineup back (r131)
+**The problem (§112.6).** A starter who comes back from the IL goes to the bench, and the fill-in keeps the job until the GM changes the lineup by hand. A GM who doesn't notice watches the club decay; in the harness, unmanaged lineups cost a contender 40 wins. The user asked for a realistic nudge: the right staff member reaching out through the inbox, alongside the return notice, which should ask who goes down to make room.
+
+- **The roster remembers the lost spot** (`RosterEngine.reconcileRoster`, user club only).
+  - When our lineup starter is vacated because they're hurt (injured, or on the IL), they get `_lostSlot = { kind: 'lineup', slot, atMs }`.
+  - A rotation starter dropped from the order while hurt gets `{ kind: 'rotation', atMs }`.
+  - It's forgotten when the player is back in the lineup or rotation, or no longer on our active roster, and for everyone when a new season opens (`openNewSeason`).
+  - Day-to-day absences count too: a DTD starter who lost the spot gets the same treatment.
+- **The return card asks who goes down** (Team Physician, `il_return`; same deadline and auto-activation as before).
+  - With a full roster on the player's side it offers up to three choices (`_choices`): the weakest reserves on that side, and always the fill-in who has the player's spot. No other starter or rotation arm is offered.
+  - The fill-in is recommended (listed first) when that's what a club would do: a call-up brought in for the absence, or no better than the weakest reserve plus 3. Never when the fill-in outplays the returning player by more than one point. Otherwise the weakest reserve is recommended: a useful fill-in keeps a bench job.
+  - Sending the fill-in down puts the returning player straight back in the spot (`_restoreSpot`).
+  - The corresponding move is now **sent down to the farm** (`sendToFarm`) in season too, matching call-up cards and trades. It used to be waivers.
+  - The other button is unchanged: the returning player to waivers (to the farm in spring).
+  - With no answer by the deadline, the manager activates the player and sends the recommended one down.
+- **A card with choices** (new, generic):
+  - `card._choices = [{ key, label, sub }]` renders as stacked buttons, the first marked "Recommended", with the no option below.
+  - `CardEngine.resolve(id, 'yes', { pick })` records `_pick` and makes the chosen label the card's decision in the Completed tab.
+  - InboxScreen passes `data-pick`; CSS is `.msg-choices` / `.msg-choice`.
+- **The staff's nudge** (`lineup_return`; `_lineupNudges`, run from `syncRosterCards`).
+  - **When:** a player with `_lostSlot` who is healthy and active but not back in the lineup or rotation gets a card 20–50 minutes later, at least 30 minutes before our next first pitch.
+  - **Who:** the hitting coach for a bat; the pitching coach for a starter (or the manager when that chair is empty).
+  - **What it says:** what the player did today ("took a full round of batting practice, no restrictions" / "threw a full bullpen session"), who has the spot and how they've done, the OVRs, and a vote. Usually the returning player back; when the fill-in is more than a point better, the coach says the fill-in has earned a longer look.
+  - **Yes** puts the player back: the lineup slot (the fill-in to the bench), or the rotation's weakest turn (that starter to the pitcher bench).
+  - **No** keeps the fill-in and ends the asking.
+  - **No answer** by first pitch (the card's deadline): nothing changes, and the manager asks once more after that game ("Alcantara (OVR 59) sat again while Alarcon (OVR 48) played the outfield…"). After that the staff lets it be.
+  - A card is withdrawn when the situation is gone: the player is back in the spot, hurt again, or no longer ours.
+  - Relievers get no card: the bullpen's roles (closer, setup) follow value automatically (`PitchingEngine.bullpenRoles`).
+- **Tests.** `tools/harness/check-il-return.mjs` (21):
+  - a starter on the IL remembers the spot and a fill-in takes it;
+  - the Team Physician offers up to three choices on the right side, the fill-in always among them, recommended per the rule;
+  - picking the fill-in puts the starter straight back and sends the fill-in to the farm, and the Completed tab shows the choice; no nudge follows;
+  - a reserve going down instead brings the hitting coach's nudge before the next game, which names the fill-in and the spot; yes restores the lineup;
+  - unanswered, nothing changes at first pitch and the manager asks once more after the game; "keep" ends it;
+  - a starting pitcher: the choices are pitchers, the pitching coach asks, and yes takes the weakest rotation turn;
+  - all of it gender-neutral.
+  - The check plays the clock forward by marking games final as it passes them, because the roster clock waits at an unplayed game's first pitch.

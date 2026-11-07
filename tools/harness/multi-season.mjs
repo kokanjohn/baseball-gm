@@ -209,7 +209,10 @@ function checkTurn(prev, os, label) {
   const active = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && p.group !== PLAYER_GROUP.IL);
   check(`${label}: our roster is legal (${(u.rosterIds || []).length} active)`, (u.rosterIds || []).length <= ROSTER_LIMITS.SPRING_TOTAL && active.length >= 24);
   check(`${label}: nine in the lineup`, (u.lineupSlots || []).filter(sl => st.players[sl.playerId]).length === 9);
-  check(`${label}: five in the rotation`, (u.rotation?.order || []).filter(id => st.players[id]).length === 5);
+  // Five turns — or every healthy starter we have, when the GM let it get thinner than five.
+  const healthySP = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && p.pos === 'SP' && !p.isInjured && p.group !== PLAYER_GROUP.IL).length;
+  const rot = (u.rotation?.order || []).filter(id => st.players[id]).length;
+  check(`${label}: five in the rotation (or every healthy starter: ${rot} of ${healthySP})`, rot === Math.min(5, healthySP));
   const expired = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && (p.contractExpiry ?? 99) <= N);
   check(`${label}: nobody on our roster is playing on an expired deal`, expired.length === 0, expired.map(p => `${p.name} ${p.contractExpiry}`).join(','));
   const staff = u.coachingStaff || {};
@@ -297,6 +300,6 @@ say(`  strength (best 26): ${trend.map(t => `${t.label}: us ${t.user.toFixed(1)}
   check(`the league's talent holds across ${SEASONS} seasons (league ${a.avg.toFixed(1)} → ${z.avg.toFixed(1)})`, Math.abs(z.avg - a.avg) <= 4);
   check(`no league club falls apart (weakest ${z.min.toFixed(1)}, league ${z.avg.toFixed(1)})`, z.avg - z.min <= 8);
 }
-say(`  card answers: ${Object.entries(tally).filter(([k]) => /^(os_|fo_)/.test(k)).map(([k, v]) => `${k} ${v.yes}/${v.no}/${v.left}`).join(', ')}`);
+say(`  card answers: ${Object.entries(tally).filter(([k]) => /^(os_|fo_|il_return|lineup_return)/.test(k)).map(([k, v]) => `${k} ${v.yes}/${v.no}/${v.left}`).join(', ')}`);
 say(`\n${pass}/${pass + fail} checks passed${fail ? ` — FAILED: ${[...new Set(fails)].join(' | ')}` : ''}`);
 process.exit(fail ? 1 : 0);

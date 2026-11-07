@@ -621,6 +621,10 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   // ── Vacate invalid occupants (injured/departed/wrong-group/dup/ineligible).
   // An emergency (out-of-position) occupant is always re-evaluated, so a real
   // option takes the slot the moment one is on the bench.
+  // §113 our starter who leaves the lineup hurt remembers the spot
+  // (`_lostSlot`), so the staff can ask about putting him back when he's
+  // healthy; it's forgotten once he's back in the lineup.
+  const hurt = (id) => rosterIds.includes(id) && (players[id]?.isInjured || groupOf(id) === PLAYER_GROUP.IL);
   const seen = new Set();
   for (const s of slots) {
     const id = s.playerId;
@@ -630,7 +634,10 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
       && groupOf(id) === PLAYER_GROUP.BENCH_HITTERS
       && !seen.has(id)
       && eligibleSlotsFor(players[id]).includes(s.slot);
-    if (ok) { seen.add(id); } else { s.playerId = null; }
+    if (ok) { seen.add(id); } else {
+      if (isUserTeam && hurt(id) && !players[id]?._lostSlot) setPatch(id, { _lostSlot: { kind: 'lineup', slot: s.slot, atMs: options.atMs ?? null } });
+      s.playerId = null;
+    }
   }
 
   // ── Fill vacant slots (manager domain) ─────────────────────────────────
@@ -679,6 +686,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   const inOrder = new Set();
   for (const id of (oldRotation.order || [])) {
     if (validSP(id) && !inOrder.has(id)) { order.push(id); inOrder.add(id); }
+    else if (isUserTeam && hurt(id) && !players[id]?._lostSlot) setPatch(id, { _lostSlot: { kind: 'rotation', atMs: options.atMs ?? null } });   // §113
   }
   // §112.6 five turns, no more: the rotation keeps its own order first; a new
   // starter (a signing, a trade, an extension) joins only a turn that's open,
@@ -797,6 +805,15 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
         surplusCount = count - activeCap;
         pendingSurplus = _droppable(rosterIds, order, slots, groupOf, isHealthy, players);
       }
+    }
+  }
+
+  // §113 back in the lineup or the rotation (or no longer ours): the lost
+  // spot is forgotten.
+  if (isUserTeam) {
+    const working = new Set([...slots.map(sl => sl.playerId).filter(Boolean), ...order]);
+    for (const id of new Set([...(team.rosterIds || []), ...rosterIds])) {
+      if (players[id]?._lostSlot && (working.has(id) || !rosterIds.includes(id))) setPatch(id, { _lostSlot: null });
     }
   }
 

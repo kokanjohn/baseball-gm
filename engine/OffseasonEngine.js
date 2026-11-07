@@ -1080,6 +1080,8 @@ export function openNewSeason(draft, atMs) {
   for (const p of freeAgents(draft)) events.push(departLeague(draft, p.id, atMs, 'unsigned'));
   _settleStaff(draft);
   for (const t of _allTeams(draft)) events.push(..._signProspects(draft, t, atMs));
+  // §113 a new season, a new lineup: nobody is owed last year's spot.
+  for (const p of Object.values(draft.players || {})) if (p?._lostSlot) p._lostSlot = null;
 
   // Anyone who joined a club after contract day (a waiver claim, a late
   // outright) with his deal up signs on for a year at market — the club

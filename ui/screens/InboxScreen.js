@@ -337,6 +337,16 @@ function _renderCard(card, gameIdx) {
     <div class="msg-body open">
       ${Number.isFinite(card.arrivedAtMs) ? `<div class="msg-received">Received ${_longWhen(card.arrivedAtMs)}</div>` : ''}
       <div class="msg-body-text">${_escape(card.body || '')}</div>
+      ${card._choices?.length ? `
+      <div class="msg-choices">
+        ${card._choices.map((c, i) => `
+        <button class="msg-choice${i === 0 ? ' recommended' : ''}" data-resolve="${card.instanceId}" data-choice="yes" data-pick="${_escape(c.key)}">
+          <span class="mc-label">${_escape(c.label)}${i === 0 ? ' <span class="mc-rec">Recommended</span>' : ''}</span>
+          ${c.sub ? `<span class="mc-sub">${_escape(c.sub)}</span>` : ''}
+        </button>`).join('')}
+        ${card.noLabel ? `<button class="msg-choice alt" data-resolve="${card.instanceId}" data-choice="no">
+          <span class="mc-label">${_escape(card.noLabel)}</span></button>` : ''}
+      </div>` : `
       <div class="msg-actions" style="${isSingleAction ? 'justify-content:center' : ''}">
         <button class="btn-yes" ${isSingleAction ? 'style="max-width:280px;flex:0 1 auto;"' : ''}
           data-resolve="${card.instanceId}" data-choice="yes">
@@ -345,7 +355,7 @@ function _renderCard(card, gameIdx) {
         ${!isSingleAction ? `<button class="btn-no" data-resolve="${card.instanceId}" data-choice="no">
           ${_escape(card.noLabel)}
         </button>` : ''}
-      </div>
+      </div>`}
       ${card._reviseOffer ? `<button class="btn-revise" data-revise="${card.instanceId}">${card._reviseLabel || (card._ideaOffer ? 'Adjust the Offer' : 'Make a New Offer')}</button>` : ''}
     </div>
   ` : '';
@@ -616,7 +626,7 @@ function _attachTabListeners(state) {
       e.stopPropagation();
       const instanceId = btn.dataset.resolve;
       const choice     = btn.dataset.choice;
-      await _resolveCard(instanceId, choice);
+      await _resolveCard(instanceId, choice, btn.dataset.pick ?? null);
     });
   });
 
@@ -688,7 +698,7 @@ function _attachTabListeners(state) {
  * exist, so only long cards (which then opened in a sheet) could be decided.
  * Since §92 every card expands inline.
  */
-async function _resolveCard(instanceId, choice) {
+async function _resolveCard(instanceId, choice, pick = null) {
   try {
     const card = getInbox().find(c => c.instanceId === instanceId);
     if (!card) {
@@ -700,7 +710,7 @@ async function _resolveCard(instanceId, choice) {
     }
     const { resolve } = await import('../../engine/CardEngine.js');
     const before = snapshotMetrics(StateManager.get());
-    resolve(instanceId, choice);
+    resolve(instanceId, choice, { pick });
     const after  = snapshotMetrics(StateManager.get());
     EventBus.emit('card:resolved', { instanceId, choice });
     if (card._rosterKey || card._tradeOffer) {
@@ -713,8 +723,9 @@ async function _resolveCard(instanceId, choice) {
     // Outcome line ("Upgrades complete. Players will notice.") as the headline,
     // with animated bars for every metric the decision moved (§63). Falls back
     // to a plain toast when nothing measurable changed.
+    const picked = pick != null ? card?._choices?.find(c => c.key === pick)?.label : null;
     const msg   = (choice === 'yes' ? card?.yesMsg : card?.noMsg)
-               || (choice === 'yes' ? (card?.yesLabel || 'Decision made.') : (card?.noLabel || 'Declined.'));
+               || (choice === 'yes' ? (picked || card?.yesLabel || 'Decision made.') : (card?.noLabel || 'Declined.'));
     const shown = App.showDecisionEffects({ title: msg, before, after, positive: choice === 'yes' });
     if (!shown) App.showToast(msg, choice === 'yes' ? 'positive' : 'neutral', 3500);
     App.updateHeader(StateManager.get());   // budget in the header
