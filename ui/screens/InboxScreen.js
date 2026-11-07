@@ -1,25 +1,31 @@
 /**
  * ui/screens/InboxScreen.js
- * Inbox tab rendered into #inbox-content.
+ * Messages (the bottom nav's Messages tab) rendered into #inbox-content.
  *
- * Three internal tabs (Section 1.14 — LOCKED):
- *   To Do     — unresolved cards requiring GM decision
- *   Completed — resolved cards (last 20, newest first)
+ * Three internal tabs (Section 1.14 — LOCKED; §115 renamed):
+ *   Inbox     — unresolved cards requiring GM decision
+ *   Completed — resolved cards (newest decision first)
  *   Compose   — initiate conversations with staff/departments
+ *
+ * §115 it reads like a mail app (Gmail / Outlook on a phone): a list of rows
+ * (initials, sender, time, subject, a line of preview, labels; bold until
+ * opened), with what's due soon under "Important"; tapping a row opens the
+ * message full-screen (back to the list with "‹ Inbox"), the decision at the
+ * bottom like a reply. A completed message opens as its thread: the message,
+ * your reply (the decision), and how it turned out.
  *
  * Rules:
  *   - Card resolution calls CardEngine.resolve() — never direct state writes.
  *   - Compose channels use composeCooldowns from state to prevent repeat use.
- *   - Urgent cards (type === 'urgent') shown with red left-border indicator.
- *   - Cards expand inline on tap — no modal, matching v1 behavior.
- *   - To Do tab shows unread badge count matching the nav badge.
+ *   - Urgent cards (type === 'urgent') carry an "Urgent" label and sit under Important.
+ *   - Inbox tab shows the count of messages waiting, matching the nav badge.
  *   - Compose tab respects Section 8.12 channel map (LOCKED).
  */
 
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
-import { getInbox, getHistory, clearHistory, restoreHistory } from '../../engine/CardEngine.js';
+import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../formatters.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -28,7 +34,8 @@ import { snapshotMetrics } from '../formatters.js';
 
 let _activeTab      = 'todo';   // 'todo' | 'completed' | 'compose'
 let _undoCleared    = null;     // instanceIds from the last Delete / Delete All (session only)
-let _expandedCard   = null;     // instanceId of expanded card
+let _openCard       = null;     // §115 instanceId of the message open in the reading view
+let _listScroll     = 0;        // the list's scroll position, restored on the way back
 let _composeChannel = null;     // currently selected compose channel id
 let _composeTopic   = null;     // currently selected compose topic id
 let _mounted      = false;
@@ -186,7 +193,7 @@ export function mount() {
   _injectCSS();
 
   App.registerTabReset('decisions', () => {
-    _expandedCard = null;
+    _openCard = null;
     refresh();
   });
 
@@ -224,20 +231,31 @@ export function refresh() {
   const inbox     = getInbox();
   const todoCount = inbox.length;
 
+  // §115 a message open full-screen (it may have been withdrawn or decided meanwhile).
+  if (_openCard) {
+    const open = _activeTab === 'completed' ? getHistory(100).find(c => c.instanceId === _openCard)
+                                            : inbox.find(c => c.instanceId === _openCard);
+    if (open) {
+      container.innerHTML = _activeTab === 'completed' ? _renderThread(open, state) : _renderReading(open, inbox, state);
+      _attachTabListeners(state);
+      return;
+    }
+    _openCard = null;
+  }
+
+  const unread = inbox.filter(c => !c._readAt).length;
   container.innerHTML = `
     <div class="section-pad" style="padding-bottom:0;">
       <div class="inbox-header">
         <div>
-          <div class="section-title">Inbox</div>
+          <div class="section-title">Messages</div>
         </div>
-        <div class="inbox-count ${todoCount > 0 ? 'has-mail' : ''}" id="inbox-count">
-          ${todoCount} message${todoCount !== 1 ? 's' : ''}
-        </div>
+        ${unread > 0 ? `<div class="inbox-count has-mail" id="inbox-count">${unread} unread</div>` : ''}
       </div>
 
       <div class="inbox-tabs">
         <div class="inbox-tab ${_activeTab === 'todo'      ? 'active' : ''}" id="itab-todo">
-          To Do
+          Inbox
           ${todoCount > 0 ? `<span class="tab-badge">${Math.min(todoCount,99)}</span>` : ''}
         </div>
         <div class="inbox-tab ${_activeTab === 'completed' ? 'active' : ''}" id="itab-completed">
@@ -267,32 +285,33 @@ function _renderTabBody(state, inbox) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// TO DO TAB
+// INBOX TAB — the list (§115)
 // ─────────────────────────────────────────────────────────────
+
+/** Important: urgent, a franchise moment, or due within six hours (Gmail's Priority Inbox, more or less). */
+function _isImportant(card) {
+  if (card.type === 'urgent' || card._prominent) return true;
+  return Number.isFinite(card.expiresAtMs) && card.autoResolve !== 'skip' && card.expiresAtMs - Date.now() < 6 * 3600_000;
+}
+
+/** The inbox newest first, Important on top. */
+function _inboxOrder(inbox) {
+  const newest = (a, b) => (b.arrivedAtMs || b.deliveredAt || 0) - (a.arrivedAtMs || a.deliveredAt || 0);
+  return [...inbox.filter(_isImportant).sort(newest), ...inbox.filter(c => !_isImportant(c)).sort(newest)];
+}
 
 function _renderToDo(inbox, state) {
   if (inbox.length === 0) {
-    return `<div class="empty-inbox">
-      <div class="big">📭</div>
-      <div>No decisions waiting</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px;">Check back after the next game</div>
+    return `<div class="ml-empty">
+      <div class="ml-empty-h">You're all caught up</div>
+      <div class="ml-empty-s">New messages arrive as the season moves. Check back after the next game.</div>
     </div>`;
   }
-
-  // Sort: urgent first, then by deliveredAt descending
-  const sorted = [...inbox].sort((a, b) => {
-    const priority = { urgent: 0, normal: 1, good: 2 };
-    const pa = priority[a.type] ?? 1;
-    const pb = priority[b.type] ?? 1;
-    if (pa !== pb) return pa - pb;
-    return (b.deliveredAt || 0) - (a.deliveredAt || 0);
-  });
-
-  const gameIdx = state.currentGameIndex || 0;
-
-  const cards = sorted.map(card => _renderCard(card, gameIdx)).join('');
-
-  return `<div style="padding:0 16px 16px;">${cards}</div>`;
+  const ordered = _inboxOrder(inbox);
+  const important = ordered.filter(_isImportant), rest = ordered.filter(c => !_isImportant(c));
+  const section = (title, cards) => cards.length
+    ? `${important.length && rest.length ? `<div class="ml-section">${title}</div>` : ''}${cards.map(c => _renderRow(c)).join('')}` : '';
+  return `<div class="ml-list">${section('Important', important)}${section('Everything else', rest)}</div>`;
 }
 
 // §94 when a message reached the inbox: the time today, "Yesterday", the
@@ -313,35 +332,100 @@ function _longWhen(ms) {
   return `${new Date(ms).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${_clock(ms)}`;
 }
 
-function _renderCard(card, gameIdx) {
-  const isExpanded  = _expandedCard === card.instanceId;
-  const isUrgent    = card.type === 'urgent';
-  const isGood      = card.type === 'good';
-  const typeClass   = isUrgent ? 'unread type-urgent' : isGood ? 'unread type-good' : 'unread type-normal';
-  const avatarClass = isUrgent ? 'av-urgent' : isGood ? 'av-good' : 'av-normal';
-  const tagClass    = isUrgent ? 'tag-urgent' : isGood ? 'tag-good' : 'tag-normal';
-  const tagLabel    = card._prominent ? 'ALL-STAR' : isUrgent ? 'URGENT' : isGood ? 'GOOD' : card.tag || 'INFO';
-  // §17.2 / §75: a franchise moment (hosting the All-Star Game) reads as one.
-  const prominent   = card._prominent
-    ? ' style="margin-top:10px;border:1px solid #c9971c;border-left:4px solid #c9971c;background:linear-gradient(100deg,rgba(201,151,28,.16),transparent 70%);"'
-    : ' style="margin-top:10px;"';
+// §115 a sender's initials in a colored circle (text, not an icon): the same
+// sender is always the same color.
+const _AV_COLORS = ['#3B6FD6', '#2E9E6A', '#B5562B', '#7A55C7', '#C23F6A', '#2D8C9E', '#8A7A1E', '#5B6B82'];
+function _initials(sender) {
+  const words = String(sender || '?').replace(/'s\b/g, '').split(/[\s&/-]+/).filter(w => /^[A-Za-z]/.test(w));
+  const caps = words.filter(w => /^[A-Z]/.test(w));
+  const use = (caps.length ? caps : words).slice(0, 2);
+  return use.map(w => w[0].toUpperCase()).join('') || '?';
+}
+function _avatar(sender, cls = 'ml-av', { me = false } = {}) {
+  let h = 2166136261;                                      // FNV-1a: a better spread of colors
+  for (const ch of String(sender || '')) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
+  const bg = me ? '#1F8A5B' : _AV_COLORS[h % _AV_COLORS.length];   // (your own replies: one fixed color)
+  return `<div class="${cls}" style="background:${bg}">${_escape(_initials(sender))}</div>`;
+}
 
-  // TTL countdown
-  const ttlHtml = _renderTTL(card, gameIdx);
+/** The message's labels (Gmail's chips): its kind, urgent / good news / All-Star, and a deadline. */
+function _labels(card, { withDue = true } = {}) {
+  const out = [];
+  if (card._prominent) out.push(['All-Star', 'lbl-gold']);
+  else if (card.type === 'urgent') out.push(['Urgent', 'lbl-red']);
+  else if (card.type === 'good') out.push(['Good news', 'lbl-green']);
+  if (card.tag && !['INFO'].includes(card.tag)) {
+    const t = String(card.tag).replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).replace(/\bIl\b/, 'IL');
+    out.push([t, 'lbl-plain']);
+  }
+  const due = withDue ? _dueText(card) : null;
+  if (due) out.push([due.text, due.soon ? 'lbl-red' : 'lbl-amber']);
+  return out.map(([t, c]) => `<span class="ml-label ${c}">${_escape(t)}</span>`).join('');
+}
 
-  // One button only when there is one choice. (A card that goes through by
-  // default if unanswered — autoResolve 'yes' — still offers both, §92.)
+/**
+ * A real-time deadline on a decision (roster decisions §65, pre-game cards §74,
+ * All-Star week §75, the offseason §70): "Due 7:05 PM" / "Due Tue 7:05 PM".
+ * A notice (nothing to decide) just leaves when it's stale: no label.
+ */
+function _dueText(card) {
+  if (Number.isFinite(card.expiresAtMs) && card.autoResolve !== 'skip') {
+    const left = card.expiresAtMs - Date.now();
+    const d    = new Date(card.expiresAtMs);
+    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const at   = left > 20 * 3600_000 ? `${d.toLocaleDateString([], { weekday: 'short' })} ${time}` : time;
+    return { text: `Due ${at}`, soon: left < 3 * 3600_000 };
+  }
+  if (!card.expiresAt) return null;
+  const gamesLeft = card.expiresAt - (StateManager.get()?.currentGameIndex || 0);
+  if (gamesLeft <= 0) return { text: 'Due now', soon: true };
+  if (gamesLeft <= 2) return { text: `Due in ${gamesLeft} game${gamesLeft === 1 ? '' : 's'}`, soon: gamesLeft <= 1 };
+  return null;
+}
+
+function _renderRow(card) {
+  const unread = !card._readAt;
+  const when = Number.isFinite(card.arrivedAtMs) ? _shortWhen(card.arrivedAtMs) : '';
+  const labels = _labels(card);
+  return `
+    <div class="ml-row${unread ? ' unread' : ''}" data-open="${card.instanceId}" id="card-${card.instanceId}">
+      ${_avatar(card.sender)}
+      <div class="ml-main">
+        <div class="ml-top">
+          <span class="ml-from">${_escape(card.sender || '')}</span>
+          <span class="ml-time">${when}</span>
+        </div>
+        <div class="ml-subj">${_escape(card.subject || '')}</div>
+        <div class="ml-snip">${_escape(card.preview || '')}</div>
+        ${labels ? `<div class="ml-labels">${labels}</div>` : ''}
+      </div>
+      ${unread ? '<div class="ml-dot" aria-label="Unread"></div>' : ''}
+    </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// READING VIEW (§115)
+// ─────────────────────────────────────────────────────────────
+
+/** The body as paragraphs (a blank line, or a long run of sentences split near its middle). */
+function _paragraphs(text) {
+  const blocks = String(text || '').split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
+  return blocks.map(b => `<p>${_escape(b).replace(/\n/g, '<br>')}</p>`).join('');
+}
+
+function _renderReading(card, inbox, state) {
+  const list = _inboxOrder(inbox);
+  const i = list.findIndex(c => c.instanceId === card.instanceId);
+  const newer = i > 0 ? list[i - 1] : null, older = i >= 0 && i < list.length - 1 ? list[i + 1] : null;
   const isSingleAction = !card.noLabel || card.noLabel === card.yesLabel;
+  const due = _dueText(card);
+  const prominent = card._prominent ? ' mr-prominent' : '';
 
-  const bodyHtml = isExpanded ? `
-    <div class="msg-body open">
-      ${Number.isFinite(card.arrivedAtMs) ? `<div class="msg-received">Received ${_longWhen(card.arrivedAtMs)}</div>` : ''}
-      <div class="msg-body-text">${_escape(card.body || '')}</div>
-      ${card._choices?.length ? `
+  const reply = card._choices?.length ? `
       <div class="msg-choices">
-        ${card._choices.map((c, i) => `
-        <button class="msg-choice${i === 0 ? ' recommended' : ''}" data-resolve="${card.instanceId}" data-choice="yes" data-pick="${_escape(c.key)}">
-          <span class="mc-label">${_escape(c.label)}${i === 0 ? ' <span class="mc-rec">Recommended</span>' : ''}</span>
+        ${card._choices.map((c, k) => `
+        <button class="msg-choice${k === 0 ? ' recommended' : ''}" data-resolve="${card.instanceId}" data-choice="yes" data-pick="${_escape(c.key)}">
+          <span class="mc-label">${_escape(c.label)}${k === 0 ? ' <span class="mc-rec">Recommended</span>' : ''}</span>
           ${c.sub ? `<span class="mc-sub">${_escape(c.sub)}</span>` : ''}
         </button>`).join('')}
         ${card.noLabel ? `<button class="msg-choice alt" data-resolve="${card.instanceId}" data-choice="no">
@@ -349,128 +433,147 @@ function _renderCard(card, gameIdx) {
       </div>` : `
       <div class="msg-actions" style="${isSingleAction ? 'justify-content:center' : ''}">
         <button class="btn-yes" ${isSingleAction ? 'style="max-width:280px;flex:0 1 auto;"' : ''}
-          data-resolve="${card.instanceId}" data-choice="yes">
-          ${_escape(card.yesLabel || 'Accept')}
-        </button>
-        ${!isSingleAction ? `<button class="btn-no" data-resolve="${card.instanceId}" data-choice="no">
-          ${_escape(card.noLabel)}
-        </button>` : ''}
-      </div>`}
-      ${card._reviseOffer ? `<button class="btn-revise" data-revise="${card.instanceId}">${card._reviseLabel || (card._ideaOffer ? 'Adjust the Offer' : 'Make a New Offer')}</button>` : ''}
-    </div>
-  ` : '';
+          data-resolve="${card.instanceId}" data-choice="yes">${_escape(card.yesLabel || 'Accept')}</button>
+        ${!isSingleAction ? `<button class="btn-no" data-resolve="${card.instanceId}" data-choice="no">${_escape(card.noLabel)}</button>` : ''}
+      </div>`;
 
   return `
-    <div class="msg-card ${typeClass}" id="card-${card.instanceId}"${prominent}>
-      <div class="msg-header" data-expand="${card.instanceId}">
-        <div class="msg-avatar ${avatarClass}">${card.avatar || '📋'}</div>
-        <div class="msg-meta">
-          <div class="msg-from">
-            ${_escape(card.sender || '')}
-            <span class="msg-from-tag ${tagClass}">${tagLabel}</span>
-            ${ttlHtml}
-          </div>
-          <div class="msg-subject">${_escape(card.subject || '')}</div>
-          <div class="msg-preview">${_escape(card.preview || '')}</div>
-        </div>
-        <div class="msg-side">
-          ${Number.isFinite(card.arrivedAtMs) ? `<div class="msg-time">${_shortWhen(card.arrivedAtMs)}</div>` : ''}
-          <div class="unread-dot"></div>
+    <div class="mr${prominent}">
+      <div class="mr-bar">
+        <button class="mr-back" id="mr-back">‹ Inbox</button>
+        <div class="mr-nav">
+          <button class="mr-step" ${newer ? `data-goto="${newer.instanceId}"` : 'disabled'}>Newer</button>
+          <span class="mr-pos">${i + 1} of ${list.length}</span>
+          <button class="mr-step" ${older ? `data-goto="${older.instanceId}"` : 'disabled'}>Older</button>
         </div>
       </div>
-      ${bodyHtml}
-    </div>
-  `;
-}
-
-function _renderTTL(card, gameIdx) {
-  // A real-time deadline on a decision (roster decisions §65, pre-game cards
-  // §74, All-Star week §75): show the clock time it's due. A notice (nothing
-  // to decide) just leaves the inbox when it's stale — no chip.
-  if (Number.isFinite(card.expiresAtMs) && card.autoResolve !== 'skip') {
-    const left = card.expiresAtMs - Date.now();
-    // A deadline more than a day out names its day (offseason decisions, §70).
-    const d    = new Date(card.expiresAtMs);
-    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const at   = left > 20 * 3600_000 ? `${d.toLocaleDateString([], { weekday: 'short' })} ${time}` : time;
-    const cls  = left < 3 * 3600_000 ? 'ttl-badge ttl-warn' : 'ttl-badge';
-    return `<span class="${cls}">⏰ by ${at}</span>`;
-  }
-  if (!card.expiresAt) return '';
-  const gamesLeft = card.expiresAt - gameIdx;
-  if (gamesLeft <= 0) return `<span class="ttl-badge">⏰ Expiring</span>`;
-  if (gamesLeft <= 1) return `<span class="ttl-badge ttl-warn">⏰ 1g left</span>`;
-  if (gamesLeft <= 2) return `<span class="ttl-badge ttl-warn">⏰ ${gamesLeft}g</span>`;
-  return '';
+      <div class="mr-head">
+        <h2 class="mr-subject">${_escape(card.subject || '')}</h2>
+        <div class="mr-labels">${_labels(card, { withDue: false })}</div>
+      </div>
+      <div class="mr-sender">
+        ${_avatar(card.sender, 'mr-av')}
+        <div class="mr-who">
+          <div class="mr-name">${_escape(card.sender || '')}</div>
+          <div class="mr-to">to me${Number.isFinite(card.arrivedAtMs) ? ` · ${_longWhen(card.arrivedAtMs)}` : ''}</div>
+        </div>
+      </div>
+      <div class="mr-body">${_paragraphs(card.body || card.preview || '')}</div>
+      <div class="mr-reply">
+        <div class="mr-reply-h">
+          <span>Your decision</span>
+          ${due ? `<span class="ml-label ${due.soon ? 'lbl-red' : 'lbl-amber'}">${_escape(due.text)}</span>` : ''}
+        </div>
+        ${reply}
+        ${card._reviseOffer ? `<button class="btn-revise" data-revise="${card.instanceId}">${card._reviseLabel || (card._ideaOffer ? 'Adjust the Offer' : 'Make a New Offer')}</button>` : ''}
+      </div>
+    </div>`;
 }
 
 // ─────────────────────────────────────────────────────────────
 // COMPLETED TAB
 // ─────────────────────────────────────────────────────────────
 
+/** What the GM decided, in words (and whether it was by default). */
+function _decision(card) {
+  const auto = card.choice === 'auto';
+  const autoPick = card.autoChoice || null;
+  const text = card.choice === 'yes' ? (card.yesLabel || 'Accepted')
+             : card.choice === 'no'  ? (card.noLabel  || 'Declined')
+             : auto ? (card._autoLabel || (autoPick === 'yes' ? card.yesLabel : autoPick === 'no' ? card.noLabel : null) || 'Decided by default')
+             : (card.yesLabel || 'Read');
+  const outcome = card.choice === 'yes' ? card.yesMsg
+                : card.choice === 'no'  ? card.noMsg
+                : auto ? (card.expireMsg || (autoPick === 'yes' ? card.yesMsg : autoPick === 'no' ? card.noMsg : null))
+                : null;
+  return { text, outcome, auto, read: card.choice === 'skip' };
+}
+
 function _renderCompleted(state) {
   const history = getHistory(100);
-
-  // Undo (left) appears after a delete; Delete All (right) when there is history.
-  const undoBtn = _undoCleared?.length
-    ? `<button class="completed-tool" id="completed-undo">↩ Undo</button>` : '<span></span>';
+  const undoBtn = _undoCleared?.length ? `<button class="completed-tool" id="completed-undo">Undo delete</button>` : '<span></span>';
   const toolbar = (history.length || _undoCleared?.length) ? `
     <div class="completed-toolbar">
       ${undoBtn}
-      ${history.length ? `<button class="completed-tool muted" id="completed-delete-all">Delete All</button>` : ''}
+      ${history.length ? `<button class="completed-tool muted" id="completed-delete-all">Delete all</button>` : ''}
     </div>` : '';
 
   if (history.length === 0) {
     return `<div style="padding:8px 16px 0;">${toolbar}</div>
-    <div class="empty-completed">
-      <div style="font-size:40px;margin-bottom:10px;">✅</div>
-      <div style="font-size:14px;color:var(--muted);">No completed messages</div>
+    <div class="ml-empty">
+      <div class="ml-empty-h">Nothing here yet</div>
+      <div class="ml-empty-s">Messages you've decided on are kept here, with what you chose and how it turned out.</div>
     </div>`;
   }
 
-  // §95 each decided message in full: who sent it and when, the whole
-  // message, the decision, and how it turned out.
-  const cards = history.map(card => {
-    const auto = card.choice === 'auto';
-    const autoPick = card.autoChoice || null;
-    const decision = card.choice === 'yes' ? (card.yesLabel || 'Accepted')
-                   : card.choice === 'no'  ? (card.noLabel  || 'Declined')
-                   : auto ? (card._autoLabel || (autoPick === 'yes' ? card.yesLabel : autoPick === 'no' ? card.noLabel : null) || 'Decided by default')
-                   : (card.yesLabel || 'Read');
-    const choiceCls = card.choice === 'yes' ? 'yes' : card.choice === 'no' ? 'no' : 'dismissed';
-    const outcome = card.choice === 'yes' ? card.yesMsg
-                  : card.choice === 'no'  ? card.noMsg
-                  : auto ? (card.expireMsg || (autoPick === 'yes' ? card.yesMsg : autoPick === 'no' ? card.noMsg : null))
-                  : null;
-    const decidedLine = card.choice === 'skip' ? 'Read' : auto ? 'No answer in time — decided by default' : 'Your decision';
-    const when = [
-      Number.isFinite(card.arrivedAtMs)  ? `Received ${_longWhen(card.arrivedAtMs)}` : '',
-      Number.isFinite(card.resolvedAtMs) ? `${card.choice === 'skip' ? 'Read' : 'Decided'} ${_longWhen(card.resolvedAtMs)}` : '',
-    ].filter(Boolean).join(' · ');
-    const tagLabel = card.tag || 'INFO';
-
+  const rows = history.map(card => {
+    const d = _decision(card);
+    const when = Number.isFinite(card.resolvedAtMs) ? _shortWhen(card.resolvedAtMs) : Number.isFinite(card.arrivedAtMs) ? _shortWhen(card.arrivedAtMs) : '';
+    const who = d.read ? 'Read' : d.auto ? 'By default' : 'You';
     return `
-      <div class="completed-card completed-full">
-        <div class="completed-head">
-          <div class="completed-avatar">${card.avatar || '📋'}</div>
-          <div class="completed-meta">
-            <div class="completed-from">${_escape(card.sender || '')} <span class="msg-from-tag tag-normal">${_escape(tagLabel)}</span></div>
-            <div class="completed-subject">${_escape(card.subject || '')}</div>
+      <div class="ml-row" data-open="${card.instanceId}">
+        ${_avatar(card.sender)}
+        <div class="ml-main">
+          <div class="ml-top">
+            <span class="ml-from">${_escape(card.sender || '')}</span>
+            <span class="ml-time">${when}</span>
           </div>
-          <button class="completed-del" data-clear="${card.instanceId}" title="Delete" aria-label="Delete">×</button>
+          <div class="ml-subj">${_escape(card.subject || '')}</div>
+          <div class="ml-snip"><span class="ml-you${d.auto ? ' auto' : ''}">${who}:</span> ${_escape(d.read ? (card.preview || '') : d.text)}</div>
         </div>
-        ${when ? `<div class="completed-when">${when}</div>` : ''}
-        <div class="completed-body">${_escape(card.body || card.preview || '')}</div>
-        <div class="completed-decision">
-          <div class="completed-decision-label">${decidedLine}</div>
-          ${card.choice === 'skip' ? '' : `<span class="completed-action ${choiceCls}">${_escape(decision)}</span>`}
-          ${outcome ? `<div class="completed-outcome">${_escape(outcome)}</div>` : ''}
-        </div>
-      </div>
-    `;
+      </div>`;
   }).join('');
 
-  return `<div style="padding:8px 16px 16px;">${toolbar}${cards}</div>`;
+  return `<div style="padding:0 16px;">${toolbar}</div><div class="ml-list">${rows}</div>`;
+}
+
+/** §115 a completed message as its thread: the message, your reply (the decision), how it turned out. */
+function _renderThread(card, state) {
+  const d = _decision(card);
+  const gm = state.userTeam?.gmName || 'You';
+  return `
+    <div class="mr">
+      <div class="mr-bar">
+        <button class="mr-back" id="mr-back">‹ Completed</button>
+        <button class="mr-step danger" data-clear="${card.instanceId}">Delete</button>
+      </div>
+      <div class="mr-head">
+        <h2 class="mr-subject">${_escape(card.subject || '')}</h2>
+        <div class="mr-labels">${_labels(card, { withDue: false })}</div>
+      </div>
+      <div class="mt-msg">
+        <div class="mr-sender">
+          ${_avatar(card.sender, 'mr-av')}
+          <div class="mr-who">
+            <div class="mr-name">${_escape(card.sender || '')}</div>
+            <div class="mr-to">to me${Number.isFinite(card.arrivedAtMs) ? ` · ${_longWhen(card.arrivedAtMs)}` : ''}</div>
+          </div>
+        </div>
+        <div class="mr-body">${_paragraphs(card.body || card.preview || '')}</div>
+      </div>
+      ${d.read ? '' : `
+      <div class="mt-msg mt-reply${d.auto ? ' auto' : ''}">
+        <div class="mr-sender">
+          ${d.auto ? _avatar(state.userTeam?.coachingStaff?.manager?.name || 'Manager', 'mr-av') : _avatar(gm, 'mr-av', { me: true })}
+          <div class="mr-who">
+            <div class="mr-name">${d.auto ? 'No reply in time' : `${_escape(gm)} (me)`}</div>
+            <div class="mr-to">${d.auto ? 'decided by default' : `to ${_escape(card.sender || '')}`}${Number.isFinite(card.resolvedAtMs) ? ` · ${_longWhen(card.resolvedAtMs)}` : ''}</div>
+          </div>
+        </div>
+        <div class="mt-decision">${_escape(d.text)}</div>
+      </div>`}
+      ${d.outcome ? `
+      <div class="mt-msg">
+        <div class="mr-sender">
+          ${_avatar(card.sender, 'mr-av')}
+          <div class="mr-who">
+            <div class="mr-name">${_escape(card.sender || '')}</div>
+            <div class="mr-to">to me</div>
+          </div>
+        </div>
+        <div class="mr-body"><p>${_escape(d.outcome)}</p></div>
+      </div>` : ''}
+    </div>`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -591,20 +694,23 @@ function _attachTabListeners(state) {
         _composeChannel = null;
         _composeTopic   = null;
       }
-      _activeTab    = tab;
-      _expandedCard = null;
+      _activeTab = tab;
+      _openCard  = null;
       refresh();
     });
   }
 
-  // Card expand/collapse
-  document.querySelectorAll('[data-expand]').forEach(el => {
-    el.addEventListener('click', () => {
-      const id   = el.dataset.expand;
-      // §92 every card expands in place, whatever its length.
-      _expandedCard = _expandedCard === id ? null : id;
-      refresh();
-    });
+  // §115 open a message (the reading view), back to the list, newer / older
+  document.querySelectorAll('[data-open]').forEach(el => {
+    el.addEventListener('click', () => _openMessage(el.dataset.open));
+  });
+  document.querySelectorAll('[data-goto]').forEach(el => {
+    el.addEventListener('click', () => _openMessage(el.dataset.goto, { keepScroll: true }));
+  });
+  document.getElementById('mr-back')?.addEventListener('click', () => {
+    _openCard = null;
+    refresh();
+    window.scrollTo(0, _listScroll);
   });
 
   // §85 a counter we want to answer with our own revised offer
@@ -635,6 +741,7 @@ function _attachTabListeners(state) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       _undoCleared = clearHistory([btn.dataset.clear]);
+      _openCard = null;
       refresh();
     });
   });
@@ -691,6 +798,16 @@ function _attachTabListeners(state) {
 }
 
 
+/** §115 open a message full-screen: marked read, the list's place remembered. */
+function _openMessage(instanceId, { keepScroll = false } = {}) {
+  if (!keepScroll && !_openCard) _listScroll = window.scrollY || 0;
+  _openCard = instanceId;
+  if (_activeTab !== 'completed') markRead(instanceId);
+  refresh();
+  window.scrollTo(0, 0);
+  if (_activeTab !== 'completed') App.updateHeader?.(StateManager.get());
+}
+
 /**
  * _resolveCard(instanceId, choice)
  * The ONE path that resolves an inbox decision — the inline Yes/No buttons
@@ -704,7 +821,7 @@ async function _resolveCard(instanceId, choice, pick = null) {
     if (!card) {
       // Withdrawn while open — its situation was already handled (§65).
       App.showToast('That message is no longer needed — it was already taken care of.', 'neutral', 3000);
-      _expandedCard = null;
+      _openCard = null;
       refresh();
       return;
     }
@@ -719,7 +836,7 @@ async function _resolveCard(instanceId, choice, pick = null) {
       advanceClock(Date.now());
       EventBus.emit('roster:changed', { source: 'inbox', instanceId });
     }
-    _expandedCard = null;
+    _openCard = null;
     // Outcome line ("Upgrades complete. Players will notice.") as the headline,
     // with animated bars for every metric the decision moved (§63). Falls back
     // to a plain toast when nothing measurable changed.

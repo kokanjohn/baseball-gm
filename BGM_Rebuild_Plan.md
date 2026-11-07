@@ -9136,3 +9136,33 @@ The user's direction on r131:
 - **Spring camp holds 38, always** (`GameEngine._addSpringInvitees`): invitees fill what's left of the 38. Before, it was always ten, so a club ending the winter at 29 (a player who rejoined from the IL over the winter: day 1 heals everyone and the IL ends with the season) reached 39. The multi-season check caught it once the IL stopped auto-activating.
 - **The harness GMs answer every return card** (it has no deadline now): mostly the recommended send-down, sometimes another choice, now and then waivers. The owner-review check now accepts the §112.6 wording ("A .500 club…", "A losing record…").
 - **Results.** `check-il-return` 27/27; `sim-season` seeds 3, 5, 7 and ember 11 all pass; `multi-season` contender, ember, empire and lab: 77/77 each, with every spring roster legal.
+
+## 115. Messages: an inbox that reads like mail (r133)
+
+- **Names.** The bottom-nav button is now **Messages**. Its tabs are **Inbox** (was "To Do", with an unread badge), **Completed** and **Compose**. The header shows "N unread".
+- **Inbox list (Gmail/Outlook style).** Each row shows:
+  - a round initials avatar, colored by the sender;
+  - the sender, bold while unread;
+  - the time;
+  - the subject;
+  - a one-line snippet;
+  - label chips: Urgent, Good news, All-Star, the card's tag and a due label (amber when it's close);
+  - a blue unread dot.
+- **List sections.** **Important** comes first: urgent cards, prominent cards and anything due within 6 hours. **Everything else** follows. Both sections are sorted newest first.
+- **Reading a message.** Tapping a row opens a full reading view:
+  - a sticky bar with "‹ Inbox", Newer / "i of n" / Older;
+  - the subject as the headline, then the labels;
+  - the sender row: avatar, name, "to me · date";
+  - the body in paragraphs;
+  - a **Your decision** panel holding the choices, or yes/no plus revise.
+- **Read state.** Opening a message marks it read (`CardEngine.markRead` sets `card._readAt`). Back returns to the same list scroll position. A decision returns to the list.
+- **Completed.** Rows read like sent mail: "You: …" for a decision, "By default: …" for a default (amber). Tapping a row opens a thread:
+  - the original message;
+  - the GM's reply as a "GM (me)" bubble with a green rule ("No reply in time" with an amber rule for a default);
+  - the outcome as a reply from the sender.
+  
+  The thread has a Delete button. The list's Undo delete / Delete all buttons work as before.
+- **Styling.**
+  - New `--link` token (#6EA8FF dark / #1F5FD1 light) for the back link, the unread dot and the active tab underline. The team accent is too dark to read on the dark theme.
+  - Avatar colors use an FNV hash over a fixed palette; "me" is always green.
+  - No changes to dashboard colors.

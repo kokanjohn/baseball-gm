@@ -2003,6 +2003,20 @@ export function getInbox() {
  * @param {Number} [limit]
  * @returns {Object[]}
  */
+/**
+ * markRead(instanceId) — §115 the GM opened the message (Messages screen):
+ * it reads as read from now on (the list's bold sender and unread dot).
+ */
+export function markRead(instanceId, atMs = Date.now()) {
+  const card = (StateManager.get().inbox || []).find(c => c.instanceId === instanceId);
+  if (!card || card._readAt) return false;
+  StateManager.mutate(s => {
+    const c = (s.inbox || []).find(x => x.instanceId === instanceId);
+    if (c && !c._readAt) c._readAt = atMs;
+  });
+  return true;
+}
+
 export function getHistory(limit = 20) {
   const state = StateManager.get();
   return (state.inbox || [])
