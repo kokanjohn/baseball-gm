@@ -30,6 +30,7 @@ import {
   FARM_PITCHER_MIN_RP,
 } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
+import { reliefValue } from './PitchingEngine.js';
 import { payrollOf } from './FinanceEngine.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -344,6 +345,16 @@ export function defaultActiveGroup(player) {
   if (player?.pos === 'SP') return PLAYER_GROUP.PITCHER_BENCH;
   if (player?.pos === 'RP') return PLAYER_GROUP.BULLPEN;
   return PLAYER_GROUP.BENCH_HITTERS;
+}
+
+/**
+ * reserveGroup(player) — §114 where a player back from the IL waits: the
+ * bench for a hitter, the pitcher bench for any pitcher. Nobody walks back
+ * into the lineup, the rotation or the bullpen; the GM puts them there (the
+ * staff asks — CardEngine), or the manager does when a spot is open.
+ */
+export function reserveGroup(player) {
+  return ['SP', 'RP'].includes(player?.pos) ? PLAYER_GROUP.PITCHER_BENCH : PLAYER_GROUP.BENCH_HITTERS;
 }
 
 /**
@@ -737,6 +748,45 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   const rotationShort = Math.max(0, REQUIRED_SP_COUNT - order.length);
   const currentIndex = order.length ? (oldRotation.currentIndex || 0) % order.length : 0;
 
+  // ── §114 The bullpen: five arms, kept like the lineup ─────────────────
+  // The BULLPEN group is the club's relief corps (the closer, the setup men,
+  // the middle relievers — PitchingEngine.bullpenRoles); the pitcher bench
+  // holds the reserves. A pen arm who gets hurt leaves the pen (ours
+  // remembers it, `_lostSlot`); an open spot is filled by the best healthy
+  // reliever on the pitcher bench (manager domain, every club — as a vacant
+  // lineup slot is); a pen over five sends its weakest to the bench. A CPU
+  // manager also keeps its best five (a clearly better bench reliever takes
+  // the weakest spot), as it plays its best nine.
+  const PEN = ROSTER_LIMITS.BULLPEN;
+  const penIds = () => rosterIds.filter(id => groupOf(id) === PLAYER_GROUP.BULLPEN);
+  for (const id of penIds()) {
+    if (isHealthy(id)) continue;
+    if (groupOf(id) === PLAYER_GROUP.IL) continue;
+    if (isUserTeam && hurt(id) && !players[id]?._lostSlot) setPatch(id, { _lostSlot: { kind: 'bullpen', atMs: options.atMs ?? null } });
+    setPatch(id, { group: PLAYER_GROUP.PITCHER_BENCH });
+  }
+  const benchRP = () => rosterIds.map(id => players[id])
+    .filter(p => p && p.pos === 'RP' && isHealthy(p.id) && groupOf(p.id) === PLAYER_GROUP.PITCHER_BENCH)
+    .sort((a, b) => reliefValue(b) - reliefValue(a));
+  for (let pen = penIds().filter(isHealthy); pen.length < PEN; pen = penIds().filter(isHealthy)) {
+    const up = benchRP()[0];
+    if (!up) break;
+    setPatch(up.id, { group: PLAYER_GROUP.BULLPEN });
+  }
+  {
+    const pen = penIds().filter(isHealthy).map(id => players[id]).sort((a, b) => reliefValue(a) - reliefValue(b));
+    while (pen.length > PEN) setPatch(pen.shift().id, { group: PLAYER_GROUP.PITCHER_BENCH });
+  }
+  if (!isUserTeam) {
+    for (let guard = 0; guard < PEN; guard++) {
+      const up = benchRP()[0];
+      const weak = penIds().filter(isHealthy).map(id => players[id]).sort((a, b) => reliefValue(a) - reliefValue(b))[0];
+      if (!up || !weak || reliefValue(up) < reliefValue(weak) + CPU_ROTATION_UPGRADE_MARGIN) break;
+      setPatch(weak.id, { group: PLAYER_GROUP.PITCHER_BENCH });
+      setPatch(up.id, { group: PLAYER_GROUP.BULLPEN });
+    }
+  }
+
   // ── Active-count invariant (GM domain; not in spring) ─────────────────
   let pendingSurplus = null;
   let pendingCallups = null;
@@ -811,7 +861,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   // §113 back in the lineup or the rotation (or no longer ours): the lost
   // spot is forgotten.
   if (isUserTeam) {
-    const working = new Set([...slots.map(sl => sl.playerId).filter(Boolean), ...order]);
+    const working = new Set([...slots.map(sl => sl.playerId).filter(Boolean), ...order, ...penIds()]);
     for (const id of new Set([...(team.rosterIds || []), ...rosterIds])) {
       if (players[id]?._lostSlot && (working.has(id) || !rosterIds.includes(id))) setPatch(id, { _lostSlot: null });
     }

@@ -9103,3 +9103,36 @@ Coaches renew silently, and only matter as a relationship nudge to development p
   - a starting pitcher: the choices are pitchers, the pitching coach asks, and yes takes the weakest rotation turn;
   - all of it gender-neutral.
   - The check plays the clock forward by marking games final as it passes them, because the roster clock waits at an unplayed game's first pitch.
+
+## 114. Returning players, revised: the lowest-rated go down, nobody over 28, pitchers like hitters (r132)
+The user's direction on r131:
+1. Don't recommend sending down the fill-in (often a good player); recommend the lowest-rated.
+2. Every roster move is careful, and a roster is never over its limit: an injured player can't rejoin until the GM chooses who goes down.
+3. Returning pitchers aren't put back as a starter or in the bullpen automatically; treat hitters and pitchers the same.
+
+- **The return card** (Team Physician, `il_return`):
+  - **Choices:** our three lowest-rated reserves on the player's side, lowest first and recommended. For a hitter, bench bats; for a pitcher, pitcher-bench arms. Never a lineup starter, a rotation arm or a bullpen arm, and the fill-in only if among the lowest. Each choice shows the player's line.
+  - **No deadline, no auto-activation:** without an answer the player stays on the IL (`expiresAtMs: null`, no `onAuto`). The card reads "…stays on the injured list until you choose."
+  - **Activation (`il_return_activate`):** only with a valid pick, which goes down to the farm first. If the pick is no longer possible (traded, hurt, already moved), nobody moves and the card comes back with today's choices. If the side is still full after the send-down, the player stays on the IL.
+  - **A side over its 14:** the card says so ("We're carrying 15 pitchers, more than the 14 a roster carries…") and comes back until there's room.
+  - **Nobody can go down:** a single-button card (`il_return_wait`), asked again 12 hours later.
+  - The other button is unchanged: the player to waivers (to the farm in spring).
+- **Everyone rejoins as a reserve** (`RosterEngine.reserveGroup`): a hitter on the bench, any pitcher on the pitcher bench. The lineup, the rotation and the bullpen are the GM's call. The manager fills only a spot that's actually open (a short rotation, a pen under five, an empty lineup slot), as before.
+- **The bullpen is a real five, like the lineup's nine** (`reconcileRoster`, every club):
+  - A hurt pen arm leaves the BULLPEN group for the pitcher bench, and ours remembers the spot (`_lostSlot.kind = 'bullpen'`; `InjuryEngine.placeOnILUpdate` records it for a straight-to-IL placement).
+  - An open pen spot is filled by the best healthy reliever on the pitcher bench (by relief value); a pen over five sends its weakest to the bench.
+  - A CPU manager also keeps its best five: a bench reliever 3+ better in relief value takes the weakest spot.
+  - **`PitchingEngine.bullpenRoles`**: the closer, setup and middle roles go to the bullpen group's arms first. Pitcher-bench relievers come after the middle men (used when the pen is spent), and pitcher-bench starters stay the long men. Before this the group was cosmetic: any active reliever could close, so a returning closer took the ninth back automatically.
+- **The staff's nudge covers all three spots:** the hitting coach for a lineup spot, the pitching coach for a rotation turn, and the bullpen coach for the pen ("…threw a clean side session today, no restrictions, and is ready to pitch out of the pen again. Sadler (OVR 60) is the weakest arm in the bullpen right now…"). Yes puts the player back in place of the weakest arm, who goes to the pitcher bench.
+- **Tests.** `check-il-return.mjs` (27), on a balanced 28 (14/14, a spare starter, three reserve relievers):
+  - the choices are the three lowest on the side, recommended lowest, the fill-in not offered;
+  - there's no deadline: a day later the player is still on the IL with the roster at 28;
+  - an impossible pick leaves the player on the IL and the card returns;
+  - the chosen player goes down and the returning player joins the bench at 28;
+  - the hitting coach's nudge, the manager's one follow-up, and "keep" ending it;
+  - a starter rejoins on the pitcher bench (not the rotation) and the pitching coach asks;
+  - the pen refills to five, the reliever rejoins on the pitcher bench, a reserve arm doesn't close, and the bullpen coach's yes restores the pen and the closer;
+  - never more than 28 active at any step.
+- **Spring camp holds 38, always** (`GameEngine._addSpringInvitees`): invitees fill what's left of the 38. Before, it was always ten, so a club ending the winter at 29 (a player who rejoined from the IL over the winter: day 1 heals everyone and the IL ends with the season) reached 39. The multi-season check caught it once the IL stopped auto-activating.
+- **The harness GMs answer every return card** (it has no deadline now): mostly the recommended send-down, sometimes another choice, now and then waivers. The owner-review check now accepts the §112.6 wording ("A .500 club…", "A losing record…").
+- **Results.** `check-il-return` 27/27; `sim-season` seeds 3, 5, 7 and ember 11 all pass; `multi-season` contender, ember, empire and lab: 77/77 each, with every spring roster legal.

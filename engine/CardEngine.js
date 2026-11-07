@@ -61,7 +61,8 @@ import {
   clearInjuryUpdate, ilMinDays,
 } from './InjuryEngine.js';
 import {
-  activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation,
+  activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation, reserveGroup,
+  HITTER_TARGET, PITCHER_TARGET,
   defaultActiveGroup, nextCalendarDay, computePayroll,
 } from './RosterEngine.js';
 import { evaluateTrade, queueTrade, generateCPUCashSale, tradeWindow, tradeBlockers, startCooldown, busyWithUs, evaluateForUser, evaluateForClub, clubBar } from './TradeEngine.js';
@@ -90,7 +91,7 @@ import * as LeagueTrades from './LeagueTrades.js';
 import { buildActivityFeedEntry, pruneActivityFeed } from './SeasonEngine.js';
 const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
-import { starterRested } from './PitchingEngine.js';
+import { starterRested, reliefValue } from './PitchingEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -656,6 +657,12 @@ function _whoHasSpot(state, player) {
     const p = i >= 0 ? state.players[u.lineupSlots[i].playerId] : null;
     return p ? { kind: 'lineup', slot: lost.slot, index: i, player: p } : null;
   }
+  if (lost.kind === 'bullpen') {
+    if (player.group === PLAYER_GROUP.BULLPEN) return null;
+    const pen = (u.rosterIds || []).map(id => state.players[id]).filter(p => p && p.group === PLAYER_GROUP.BULLPEN && isAvailable(p));
+    const weakest = pen.sort((a, b) => reliefValue(a) - reliefValue(b))[0];
+    return weakest ? { kind: 'bullpen', player: weakest } : null;
+  }
   const order = u.rotation?.order || [];
   if (order.includes(player.id)) return null;
   const weakest = order.map(id => state.players[id]).filter(Boolean).sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0];
@@ -671,6 +678,9 @@ function _restoreSpot(s, player, spot) {
     for (const x of u.lineupSlots) if (x.playerId === player.id) { x.playerId = null; }
     sl.playerId = player.id; sl.emergency = false;
     player.group = PLAYER_GROUP.BENCH_HITTERS;   // (lineupSlots is the source of truth for who starts)
+  } else if (spot.kind === 'bullpen') {
+    if (s.players[spot.player.id]?.teamId === 'user') s.players[spot.player.id].group = PLAYER_GROUP.PITCHER_BENCH;
+    player.group = PLAYER_GROUP.BULLPEN;
   } else {
     const order = [...(u.rotation?.order || [])];
     const i = order.indexOf(spot.player.id);
@@ -688,10 +698,12 @@ function _restoreSpot(s, player, spot) {
 
 /**
  * IL return decision — delivered the moment the player is cleared (Team
- * Physician). §113 with a full roster it asks who goes down to make room —
- * up to three choices, the recommended one first: the fill-in who has the
- * returning player's spot (then the returning player takes it straight
- * back), and the weakest reserves on the same side.
+ * Physician). §114 with a full roster on the player's side, someone has to go
+ * down first: the card offers our three lowest-rated reserves on that side
+ * (never a starter, a rotation arm or a bullpen arm), the lowest recommended.
+ * Nobody rejoins the roster until the GM picks — no answer, no deadline: the
+ * player stays on the IL until then. The other choice is unchanged (the
+ * player to waivers; to the farm in spring).
  */
 function _deliverILReturnCard(playerId, atMs) {
   const state  = StateManager.get();
@@ -699,12 +711,13 @@ function _deliverILReturnCard(playerId, atMs) {
   if (!player || !(state.ilReturnQueue || []).includes(playerId)) return null;
   const isSpring = state.phase === PHASE.SPRING_TRAINING;
   const full     = rosterIsFull(state, 'user', sideOf(player));   // his side's spots (§76)
-  const deadline = decisionDeadlineAfter(state, atMs);
   const ref      = `${player.name}${_hand(player)} (${player.pos})`;
   const spot     = _whoHasSpot(state, player);
-  const choices  = full ? _sendDownChoices(state, player, spot) : [];
+  const choices  = full ? _sendDownChoices(state, player) : [];
   const where    = (c) => `${c.name} (${c.nativePos || c.pos}, OVR ${c.ovr})`;
-  const what     = spot ? (spot.kind === 'lineup' ? `${_slotWords(spot.slot)}` : 'a turn in the rotation') : null;
+  const what     = !spot ? null : spot.kind === 'lineup' ? _slotWhere(spot.slot) : spot.kind === 'bullpen' ? 'in the bullpen' : 'a turn in the rotation';
+  const reserve  = sideOf(player) === 'pitcher' ? 'the pitcher bench' : 'the bench';
+  const stuck    = full && !choices.length;   // (nobody who could go down: rare — the card waits)
 
   const card = _rosterCard(state, {
     cardId:   'il_return',
@@ -712,64 +725,59 @@ function _deliverILReturnCard(playerId, atMs) {
     sender:   'Team Physician',
     _rosterKey: `ilreturn:${playerId}`,
     _targetPlayerId: playerId,
-    _dropId:  choices[0]?.key || null,
     _choices: choices.length ? choices : null,
+    _needsRoom: full,
     subject:  `${player.name} cleared to return`,
-    preview:  choices.length ? `${ref} is cleared. Who goes down to make room?` : `${ref} has been cleared — roster decision needed.`,
+    preview:  full ? `${ref} is cleared. Who goes down to make room?` : `${ref} has been cleared — roster decision needed.`,
     body:     `${ref} has completed the recovery and is cleared for game action.`
-            + (spot ? ` While ${player.name} was out, ${where(spot.player)} took over ${what}.` : '')
-            + (choices.length
-                ? ` The active roster is full, so activating ${player.name} means sending someone down to the farm. `
-                  + (choices[0].replacement
-                      ? `Sending ${choices[0].name} down puts ${player.name} straight back ${spot.kind === 'lineup' ? _slotWhere(spot.slot) : 'in the rotation'}.`
-                      : `The obvious candidate is ${choices[0].name}, the weakest reserve ${sideOf(player) === 'pitcher' ? 'arm' : 'bat'} we have.`)
+            + (spot ? ` While ${player.name} was out, ${where(spot.player)} ${spot.kind === 'rotation' ? `took ${what}` : `took over ${what}`}.` : '')
+            + (full
+                ? (_overSide(state, player)
+                    ? ` We're carrying ${_overSide(state, player)} ${sideOf(player) === 'pitcher' ? 'pitchers' : 'position players'}, more than the 14 a roster carries, so ${sideOf(player) === 'pitcher' ? 'pitchers' : 'position players'} have to go down to the farm before ${player.name} can be activated (one at a time; this message comes back until there's room).`
+                    : ` The active roster is full, so someone has to go down to the farm before ${player.name} can be activated.`)
+                  + (choices.length ? ` These are our lowest-rated ${sideOf(player) === 'pitcher' ? 'arms' : 'bats'} off ${reserve}.` : ` Nobody on ${reserve} can go down right now.`)
+                  + ` ${player.name} stays on the injured list until you choose.`
                 : ' There is room on the active roster.')
-            + (deadline ? ` If we haven't decided by ${_clock(deadline)} (${_day(deadline)}), ${_managerName(state)} will make the activation${choices.length ? ` and send ${choices[0].name} down` : ''}.` : ''),
-    yesLabel: choices.length ? choices[0].label : `Activate ${player.name}`,
+            + ` ${player.name} rejoins on ${reserve}; ${sideOf(player) === 'pitcher'
+                ? `a return to ${player.pos === 'SP' ? 'the rotation' : 'the bullpen'} is your call.`
+                : 'a return to the lineup is your call.'}`,
+    yesLabel: choices.length ? choices[0].label : stuck ? 'Understood' : `Activate ${player.name}`,
     noLabel:  isSpring ? `Send ${player.name} to the farm` : `Place ${player.name} on waivers`,
     type:     'urgent',
-    expiresAtMs: deadline,
-    _raw: { onYes: 'il_return_activate', onNo: isSpring ? 'il_return_farm' : 'il_return_waive', onAuto: 'il_return_activate' },
-    _autoLabel: `No decision — ${_managerName(state)} made the activation${choices.length ? ` and sent ${choices[0].name} down` : ''}`,
+    expiresAtMs: null,
+    _raw: { onYes: stuck ? 'il_return_wait' : 'il_return_activate', onNo: isSpring ? 'il_return_farm' : 'il_return_waive', onAuto: null },
   });
   return _deliverAt(card, atMs);
 }
 
+/** §114 the active players on the returning player's side, when it's past its 14 even after one goes down (else 0). */
+function _overSide(state, player) {
+  const side = sideOf(player);
+  const n = (state.userTeam.rosterIds || []).map(id => state.players[id])
+    .filter(p => p && p.group !== PLAYER_GROUP.IL && p.id !== player.id && sideOf(p) === side).length;
+  return n - 1 >= (side === 'pitcher' ? PITCHER_TARGET : HITTER_TARGET) ? n : 0;
+}
+
 /**
- * §113 who could go down for a returning player: the fill-in who has his
- * spot (recommended when the returning player is at least as good), then the
- * weakest reserves on his side — never another starter or a rotation arm.
+ * §114 who could go down for a returning player: our three lowest-rated
+ * reserves on that side — bench hitters for a hitter; pitcher-bench arms for a
+ * pitcher — never a lineup starter, a rotation arm or a bullpen arm. The
+ * lowest-rated is recommended (listed first).
  */
-function _sendDownChoices(state, player, spot) {
+function _sendDownChoices(state, player) {
   const t = state.userTeam;
   const side = sideOf(player);
-  const locked = new Set([...(t.lineupSlots || []).map(s => s.playerId).filter(Boolean), ...(t.rotation?.order || [])]);
-  const reserves = (t.rosterIds || []).map(id => state.players[id]).filter(p =>
-    p && p.id !== player.id && p.group !== PLAYER_GROUP.IL && !p.isInjured && !locked.has(p.id) && sideOf(p) === side)
-    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0));
-  const out = [];
-  const fill = spot?.player;
-  // Recommend sending the fill-in down when that's what a club would do: a
-  // call-up brought in for the absence, or no better than the weakest reserve
-  // (a useful player keeps a bench job); and never when the fill-in outplays
-  // the returning player.
-  const lostAt = player._lostSlot?.atMs ?? player.injury?.injuredAt ?? 0;
-  const calledUp = fill && (state.transactions || []).some(t => t.kind === 'arrival' && t.playerId === fill.id
-    && t.teamId === 'user' && t.reason === 'callup' && (t.createdAt || 0) >= lostAt - 60_000);
-  const fillFirst = fill && (player.ovr || 0) >= (fill.ovr || 0) - 1
-    && (calledUp || !reserves.length || (fill.ovr || 0) <= (reserves[0].ovr || 0) + 3);
-  const mk = (p, replacement) => ({
-    key: p.id, name: p.name, replacement,
-    label: `Activate ${player.name} — send down ${p.name}`,
-    sub: replacement
-      ? `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr}) has had ${spot.kind === 'lineup' ? _slotWords(spot.slot) : 'the rotation turn'}; ${player.name} takes it back`
-      : `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr}), ${sideOf(p) === 'pitcher' ? (p.pos === 'SP' ? 'a spare starter' : 'from the bullpen') : 'off the bench'}`,
-  });
-  if (fill && fillFirst) out.push(mk(fill, true));
-  const room = fill && !fillFirst ? 2 : 3;   // the fill-in is always one of the choices
-  for (const p of reserves) { if (out.length >= room) break; out.push(mk(p, false)); }
-  if (fill && !fillFirst) out.push(mk(fill, true));
-  return out;
+  const pen = new Set((t.rosterIds || []).filter(id => state.players[id]?.group === PLAYER_GROUP.BULLPEN));
+  const locked = new Set([...(t.lineupSlots || []).map(s => s.playerId).filter(Boolean), ...(t.rotation?.order || []), ...pen]);
+  return (t.rosterIds || []).map(id => state.players[id])
+    .filter(p => p && p.id !== player.id && p.group !== PLAYER_GROUP.IL && !p.isInjured && !locked.has(p.id) && sideOf(p) === side)
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))
+    .slice(0, 3)
+    .map(p => ({
+      key: p.id, name: p.name,
+      label: `Activate ${player.name} — send down ${p.name}`,
+      sub: `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})${_lineNow(p) ? `, ${_lineNow(p)}` : ''}`,
+    }));
 }
 
 /** The lowest-value droppable active player (never a lineup starter or rotation arm). */
@@ -817,39 +825,44 @@ function _deliverLineupNudge(state, player, n, atMs) {
   const game = _nextUserGame(state, atMs + 10 * 60_000);
   if (!game) return null;
   const staff = state.userTeam.coachingStaff || {};
-  const coach = staff[spot.kind === 'lineup' ? 'hittingCoach' : 'pitchingCoach'];
+  const coach = staff[{ lineup: 'hittingCoach', rotation: 'pitchingCoach', bullpen: 'bullpenCoach' }[spot.kind]];
   const mgr = _managerName(state);
   const sender = n > 1 || !coach || coach.vacant ? mgr : coach.name;
   const X = player, Y = spot.player;
   const diff = (X.ovr || 0) - (Y.ovr || 0);
   const xLine = _lineNow(X), yLine = _lineNow(Y);
-  const where = spot.kind === 'lineup' ? _slotWhere(spot.slot) : 'in the rotation';
+  const K = {
+    lineup:   { where: _slotWhere(spot.slot), bench: 'the bench',
+                ready: `${X.name} is back to full strength and took a full round of batting practice today, no restrictions. The timing's there.`,
+                has: `${_slotPlayed(spot.slot)} since ${X.name} went down`,
+                still: `sat again while ${Y.name} (OVR ${Y.ovr}) played ${_slotWhere(spot.slot).replace(/^(at|in|behind) /, '')}` },
+    rotation: { where: 'in the rotation', bench: 'the pitcher bench',
+                ready: `${X.name} threw a full bullpen session today and is ready to take the ball every fifth day again.`,
+                has: 'has the weakest turn in the rotation',
+                still: `is still out of the rotation while ${Y.name} (OVR ${Y.ovr}) keeps taking a turn` },
+    bullpen:  { where: 'in the bullpen', bench: 'the pitcher bench',
+                ready: `${X.name} threw a clean side session today, no restrictions, and is ready to pitch out of the pen again.`,
+                has: 'is the weakest arm in the bullpen right now',
+                still: `is still on the pitcher bench while ${Y.name} (OVR ${Y.ovr}) pitches out of the pen` },
+  }[spot.kind];
   const vote = diff >= -1
-    ? `My vote: ${X.name} back ${where}, ${Y.name} to the ${spot.kind === 'lineup' ? 'bench' : 'bullpen'}.`
-    : `Honestly, ${Y.name} has earned a longer look. ${X.name} can work back in ${spot.kind === 'lineup' ? 'off the bench' : 'out of the bullpen'} until the job opens up again.`;
+    ? `My vote: ${X.name} back ${K.where}, ${Y.name} to ${K.bench}.`
+    : `Honestly, ${Y.name} has earned a longer look. ${X.name} can wait on ${K.bench} until the job opens up again.`;
   const when = `${_day(game.gameTime)} at ${_clock(game.gameTime)}`;
-  const opener = n > 1
-    ? (spot.kind === 'lineup' ? `${X.name} (OVR ${X.ovr}) sat again while ${Y.name} (OVR ${Y.ovr}) played ${where.replace(/^(at|in|behind) /, '')}.`
-                              : `${X.name} (OVR ${X.ovr}) is still out of the rotation while ${Y.name} (OVR ${Y.ovr}) keeps taking a turn.`)
-    : (spot.kind === 'lineup' ? `${X.name} is back to full strength and took a full round of batting practice today, no restrictions. The timing's there.`
-                              : `${X.name} threw a full bullpen session today and is ready to take the ball every fifth day again.`);
   const card = _rosterCard(state, {
     cardId: 'lineup_return', tag: 'LINEUP', sender, avatar: spot.kind === 'lineup' ? '🏏' : '⚾', type: 'normal',
     _rosterKey: `lineup:${X.id}:${_nudgeEpisode(X)}:${n}`, _targetPlayerId: X.id, _spotKind: spot.kind, _nudge: n,
-    subject: n > 1 ? `${X.name} is still on the bench` : `Get ${X.name} back ${where}?`,
-    preview: spot.kind === 'lineup'
-      ? `${Y.name} ${_slotPlayed(spot.slot)} since ${X.name} went down.`
-      : `${Y.name} has the weakest turn in the rotation.`,
-    body: `${opener} `
-        + (n > 1 ? '' : spot.kind === 'lineup'
-            ? `${Y.name} (OVR ${Y.ovr}${yLine ? `, ${yLine}` : ''}) ${_slotPlayed(spot.slot)} since ${X.name} (OVR ${X.ovr}${xLine ? `, ${xLine}` : ''}) went down.`
-            : `${Y.name} (OVR ${Y.ovr}${yLine ? `, ${yLine}` : ''}) has the weakest turn in the rotation; ${X.name} is OVR ${X.ovr}${xLine ? `, with ${xLine}` : ''}.`)
+    subject: n > 1 ? `${X.name} is still waiting` : `Get ${X.name} back ${K.where}?`,
+    preview: `${Y.name} ${K.has}.`,
+    body: (n > 1
+            ? `${X.name} (OVR ${X.ovr}) ${K.still}.`
+            : `${K.ready} ${Y.name} (OVR ${Y.ovr}${yLine ? `, ${yLine}` : ''}) ${K.has}; ${X.name} is OVR ${X.ovr}${xLine ? `, ${xLine}` : ''}.`)
         + ` ${vote} Your call. ${spot.kind === 'lineup' ? `The lineup for ${when} locks at first pitch.` : `Our next game is ${when}.`}`,
-    yesLabel: `Put ${X.name} back ${where}`,
-    noLabel: `Keep ${Y.name} ${where}`,
+    yesLabel: `Put ${X.name} back ${K.where}`,
+    noLabel: `Keep ${Y.name} ${K.where}`,
     expiresAtMs: game.gameTime,
     _raw: { onYes: 'lineup_restore', onNo: 'lineup_keep', onAuto: 'lineup_auto' },
-    _autoLabel: `No answer — ${Y.name} stayed ${where}`,
+    _autoLabel: `No answer — ${Y.name} stayed ${K.where}`,
   });
   return _deliverAt(card, atMs);
 }
@@ -859,7 +872,8 @@ function _lineupNudges(atMs) {
   let state = StateManager.get();
   let delivered = 0;
   const u = state.userTeam;
-  const seated = new Set([...(u.lineupSlots || []).map(sl => sl.playerId).filter(Boolean), ...(u.rotation?.order || [])]);
+  const seated = new Set([...(u.lineupSlots || []).map(sl => sl.playerId).filter(Boolean), ...(u.rotation?.order || []),
+                          ...(u.rosterIds || []).filter(id => state.players[id]?.group === PLAYER_GROUP.BULLPEN)]);
   const queue = new Set(state.ilReturnQueue || []);
   for (const id of u.rosterIds || []) {
     const p = state.players[id];
@@ -996,6 +1010,7 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
 
   // IL clearances → decision cards (at the moment of clearance).
   for (const id of state.ilReturnQueue || []) {
+    if ((state.players[id]?._ilAskAfter || 0) > atMs) continue;
     const at = state.players[id]?.injury?.eligibleAt;
     if (_deliverILReturnCard(id, Number.isFinite(at) ? Math.min(at, atMs) : atMs)) delivered++;
   }
@@ -1054,7 +1069,8 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     if (key.startsWith('ilreturn:')) return !queue.has(c._targetPlayerId);
     if (key.startsWith('lineup:')) {   // §113 back in the spot, hurt again, gone, or the GM already decided
       const p = players[c._targetPlayerId], u = state.userTeam;
-      const seatedNow = (u.lineupSlots || []).some(sl => sl.playerId === p?.id) || (u.rotation?.order || []).includes(p?.id);
+      const seatedNow = (u.lineupSlots || []).some(sl => sl.playerId === p?.id) || (u.rotation?.order || []).includes(p?.id)
+        || (p?._lostSlot?.kind === 'bullpen' && p.group === PLAYER_GROUP.BULLPEN);
       return !p || p.teamId !== 'user' || !p._lostSlot || seatedNow || !isAvailable(p) || !_whoHasSpot(state, p);
     }
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
@@ -4112,7 +4128,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'lt_offer_send', 'lt_pass', 'lt_scout', 'lt_find_rp', 'lt_watch',
   'fin_call_club',
   'il_return_activate',
-  'lineup_restore', 'lineup_keep', 'lineup_auto',
+  'lineup_restore', 'lineup_keep', 'lineup_auto', 'il_return_wait',
   'il_return_waive',
   'il_return_farm',
   'trade_execute',
@@ -4238,31 +4254,29 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
       const st = StateManager.get();
       const player = st.players[playerId];
       if (!player || !(st.ilReturnQueue || []).includes(playerId)) break;
-      // A full active roster needs a corresponding move: §113 the player the
-      // GM picked on the card (or the recommended one) is sent down to the
-      // farm, as with a call-up or a trade.
-      const spot = _whoHasSpot(st, player);
-      let sentDown = null;
+      // §114 a full roster: the player the GM picked goes down to the farm
+      // first, or nobody comes off the IL. (A pick that's no longer possible —
+      // traded, hurt, moved — leaves the player on the IL; the card comes
+      // back with today's choices.)
       if (rosterIsFull(st, 'user', sideOf(player))) {
-        const pickId = instance._pick || instance._dropId;
-        const planned = st.players[pickId];
-        const drop = planned && planned.teamId === 'user' && planned.group !== PLAYER_GROUP.IL
-          && (st.userTeam.rosterIds || []).includes(planned.id) ? planned : _dropCandidate(st, playerId);
-        if (drop) {
-          StateManager.mutate(s => applyRosterMutation(s, sendToFarm(s, drop.id, 'user')));
-          sentDown = drop.id;
-        }
+        const ok = (id) => { const d = st.players[id]; return !!d && d.teamId === 'user' && d.group !== PLAYER_GROUP.IL && !d.isInjured
+          && (st.userTeam.rosterIds || []).includes(id) && _sendDownChoices(st, player).some(c => c.key === id); };
+        const pick = instance._pick || (instance._choices?.length === 1 ? instance._choices[0].key : null);
+        if (!pick || !ok(pick)) break;
+        StateManager.mutate(s => applyRosterMutation(s, sendToFarm(s, pick, 'user')));
+        if (rosterIsFull(StateManager.get(), 'user', sideOf(player))) break;   // (still no room: stays on the IL)
       }
-      const act = activateFromIL(StateManager.get(), playerId, defaultActiveGroup(player));
+      const act = activateFromIL(StateManager.get(), playerId, reserveGroup(player));
       StateManager.mutate(s => {
         applyRosterMutation(s, act);
         Object.assign(s.players[playerId], clearInjuryUpdate());
-        // The fill-in went down: the returning player takes the spot straight back.
-        if (spot && sentDown === spot.player.id) _restoreSpot(s, s.players[playerId], spot);
       });
       reconcileUser();
       break;
     }
+    case 'il_return_wait':   // nobody could go down: ask again in half a day
+      StateManager.mutate(s => { if (s.players[playerId]) s.players[playerId]._ilAskAfter = atMs + 12 * 3600_000; });
+      break;
 
     // ── §113 back in the lineup ─────────────────────────────────
     case 'lineup_restore': {

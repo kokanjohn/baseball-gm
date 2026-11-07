@@ -189,6 +189,10 @@ export function placeOnILUpdate(player) {
     group:  PLAYER_GROUP.IL,
     isInjured: true,
     injury: { ...inj, status: 'il', diagnosed: true, eligibleAt: (inj.injuredAt || 0) + days * MS_PER_DAY, returnAt: null },
+    // §114 a bullpen arm's spot is the group itself: remember it on the way to
+    // the IL (a lineup slot or a rotation turn is remembered by reconcileRoster).
+    ...(player.group === PLAYER_GROUP.BULLPEN && player.teamId === 'user' && !player._lostSlot
+      ? { _lostSlot: { kind: 'bullpen', atMs: inj.injuredAt ?? null } } : {}),
   };
 }
 

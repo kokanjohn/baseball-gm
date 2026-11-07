@@ -56,13 +56,20 @@ export function reliefValue(p) {
  * The club's relief corps (bullpen + pitcher bench, healthy) as the manager
  * would line it up. Long men: the spare starters (most stamina first); without
  * any, the highest-stamina arm of the lesser half. Of the rest, by relief value:
- * the closer, two setup men, then the middle relievers.
+ * the closer, two setup men, then the middle relievers — §114 the bullpen
+ * group's arms first, the pitcher bench's relievers after them.
  */
 export function bullpenRoles(team, players) {
   const pool = (team?.rosterIds || []).map(id => players[id])
     .filter(p => p && isAvailable(p) && (p.group === PLAYER_GROUP.BULLPEN || p.group === PLAYER_GROUP.PITCHER_BENCH));
   let long = pool.filter(p => p.pos === 'SP').sort((a, b) => stamina(b) - stamina(a));
-  let rest = pool.filter(p => p.pos !== 'SP').sort((a, b) => reliefValue(b) - reliefValue(a));
+  // §114 the bullpen (the BULLPEN group, five arms) holds the roles; relievers
+  // on the pitcher bench are reserves — after the middle men, used when the
+  // pen is spent — as bench hitters are behind the nine.
+  const byValue = (a, b) => reliefValue(b) - reliefValue(a);
+  const relievers = pool.filter(p => p.pos !== 'SP');
+  let rest = [...relievers.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort(byValue),
+              ...relievers.filter(p => p.group !== PLAYER_GROUP.BULLPEN).sort(byValue)];
   if (!long.length && rest.length > 4) {
     const lesser = rest.slice(Math.ceil(rest.length / 2)).sort((a, b) => stamina(b) - stamina(a));
     long = [lesser[0]];

@@ -45,10 +45,13 @@ function gmActs() {
     if (!c) break;
     seen.add(c.instanceId);
     const r = Math.random();
-    const ans = r < 0.45 ? 'yes' : r < 0.78 ? 'no' : null;   // ~1 in 5 left for the deadline
+    let ans = r < 0.45 ? 'yes' : r < 0.78 ? 'no' : null;   // ~1 in 5 left for the deadline
+    let pick = null;
+    // §114 a return card has no deadline: always answered (the recommended send-down, mostly).
+    if (c.cardId === 'il_return') { ans = r < 0.9 ? 'yes' : 'no'; pick = c._choices?.[r < 0.7 ? 0 : Math.floor(Math.random() * c._choices.length)]?.key ?? null; }
     tally[c.cardId] = tally[c.cardId] || { yes: 0, no: 0, left: 0 };
     tally[c.cardId][ans || 'left']++;
-    if (ans) resolveCard(c.instanceId, ans);
+    if (ans) resolveCard(c.instanceId, ans, { pick });
   }
 }
 

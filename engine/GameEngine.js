@@ -290,8 +290,12 @@ function _addSpringInvitees(s) {
       return sd !== 0 ? sd : b.ovr - a.ovr;
     });
 
-  const inviteeHitters  = farmHitters.slice(0, ROSTER_LIMITS.SPRING_INVITEE_HITTERS);
-  const inviteePitchers = farmPitchers.slice(0, ROSTER_LIMITS.SPRING_INVITEE_PITCHERS);
+  // §114 camp holds 38: invitees fill what's left of it (a club that ends the
+  // winter with more than 28 — a player back from the IL — invites fewer).
+  const room = Math.max(0, ROSTER_LIMITS.SPRING_TOTAL - rosterIds.length);
+  const hitRoom = Math.min(ROSTER_LIMITS.SPRING_INVITEE_HITTERS, Math.ceil(room / 2));
+  const inviteeHitters  = farmHitters.slice(0, hitRoom);
+  const inviteePitchers = farmPitchers.slice(0, Math.min(ROSTER_LIMITS.SPRING_INVITEE_PITCHERS, room - inviteeHitters.length));
   const allInvitees     = [...inviteeHitters, ...inviteePitchers];
 
   if (!allInvitees.length) return;

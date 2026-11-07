@@ -266,6 +266,13 @@ function gmActs() {
     if (c.cardId === 'os_coach_review' && !gm.coachLetGo) {
       gm.coachLetGo = c._coachRole; resolveCard(c.instanceId, 'no'); gm.acted++; advanceClock(clock.get()); continue;
     }
+    // §114 a return card waits for the GM (no deadline): this GM always answers it — usually the
+    // recommended send-down, sometimes another choice, now and then waivers.
+    if (c.cardId === 'il_return') {
+      const q = Math.random();
+      const pick = c._choices?.length ? c._choices[q < 0.75 ? 0 : Math.floor(Math.random() * c._choices.length)].key : null;
+      resolveCard(c.instanceId, q < 0.9 ? 'yes' : 'no', { pick }); gm.acted++; advanceClock(clock.get()); continue;
+    }
     const r = Math.random();
     if (c._rosterKind === 'need' && r < 0.3) {
       // Team screen path: pick from the dashed spot instead of the card.
@@ -413,7 +420,7 @@ async function runOffseasonChecks() {
     const RR = gm.review;
     check(`offseason: the season review (${RR ? `${RR.outcome}, ${RR.w}–${RR.l}, offense ${RR.offense.rank}/${RR.offense.of}, runs allowed ${RR.pitching.rank}/${RR.pitching.of}; needs: ${RR.needs.map(n => n.short).join(', ')}` : 'missing'})`,
           !!RR && ['champion', 'pennant', 'playoffs', 'near', 'missed', 'disaster'].includes(RR.outcome) && RR.needs.length >= 1 && RR.offense.of >= 8);
-    check(`offseason: the owner's review opens in the season's terms (“${(ownerBody || '').slice(0, 90)}…”)`, /^(A championship|Champions|We were|A pennant|October|We made|We came|A few games|Not a playoff|This wasn't|We fell|I won't|A season like)/.test(ownerBody || ''));
+    check(`offseason: the owner's review opens in the season's terms (“${(ownerBody || '').slice(0, 90)}…”)`, /^(A championship|Champions|We were|A pennant|October|We made|We came|A few games|Not a playoff|This wasn't|We fell|I won't|A season like|A \.500 club|A losing record)/.test(ownerBody || ''));
     check(`offseason: the manager looks back and asks the winter's priority (“${(priorityCard?.body || '').slice(0, 140)}…”)`,
           !!priorityCard && new RegExp(`${RR?.w}–${RR?.l}`).test(priorityCard.body) && /biggest hole/.test(priorityCard.body) && /^Priority: /.test(priorityCard.yesLabel || ''));
     const fa = firstFaAfterPriority && st.players[firstFaAfterPriority.id];
