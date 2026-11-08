@@ -31,6 +31,7 @@
  *   - All times are real ms. Callers pass them in; nothing here reads Date.now().
  */
 
+import { dice, diceSeed, diceId } from './Dice.js';
 import {
   PLAYER_GROUP,
   PHASE,
@@ -803,7 +804,7 @@ function _maintainFarmDepth(draft, atMs, events) {
       if (!want) break;
 
       const sign = pool().filter(want).sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0]
-        || _depthSigning(draft, want, missing ? missing[1][0] : null);
+        || _depthSigning(draft, want, missing ? missing[1][0] : null, dice(diceSeed(draft), 'farm-sign', teamId, atMs, guard));
       if (!sign) break;
       draft.freeAgentPool = (draft.freeAgentPool || []).filter(id => id !== sign.id);
       team.farmIds = [...(team.farmIds || []), sign.id];
@@ -824,20 +825,21 @@ function _maintainFarmDepth(draft, atMs, events) {
 // released veterans are always available on minor-league terms. When the
 // pool has nobody of the needed type, one of them is created (low OVR).
 const DEPTH_POSITIONS = Object.freeze(['C', '1B', '2B', '3B', 'SS', 'OF', 'OF', '2B/SS', '1B/3B']);
-function _depthSigning(draft, want, pos) {
+function _depthSigning(draft, want, pos, rand) {
   const probe = (p) => want({ pos: p, nativePos: p });
   const choices = pos ? [pos] : [...DEPTH_POSITIONS, 'SP', 'RP'].filter(probe);
-  const position = choices[Math.floor(Math.random() * choices.length)];
+  const position = choices[Math.floor(rand() * choices.length)];
   if (!position || !probe(position)) return null;
-  const name = newPlayerName(draft.players);   // §82
+  const name = newPlayerName(draft.players, rand);   // §82
   const p = createPlayer({
-    id:        crypto.randomUUID(),
+    id:        diceId(rand),
     name,
     pos:       position,
     group:     PLAYER_GROUP.PRACTICE_SQUAD,
-    hand:      ['SP', 'RP'].includes(position) ? (Math.random() < 0.28 ? 'L' : 'R') : null,
+    hand:      ['SP', 'RP'].includes(position) ? (rand() < 0.28 ? 'L' : 'R') : null,
     // Independent-league talent sits below the league's level (§69).
-    targetOvr: 42 + (draft.leagueTalentOffset || 0) + Math.floor(Math.random() * 9),
+    targetOvr: 42 + (draft.leagueTalentOffset || 0) + Math.floor(rand() * 9),
+    rand,
     ageMin:    24,
     ageMax:    31,
     seasonNum: draft.seasonNum || 1,

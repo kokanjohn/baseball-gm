@@ -27,6 +27,7 @@ import {
 } from './TradeEngine.js';
 import { deliverTalkReply, withdrawTalkCards } from './CardEngine.js';
 import { formatK } from './CardTokens.js';
+import { clockNow } from './Clock.js';
 
 const H = 3_600_000;
 
@@ -59,7 +60,7 @@ export function ourSideBlocker(state, offer) {
  * proposeTrade(teamId, offer, atMs, { round }) — send an offer. Returns
  * { ok, reason, replyAtMs }. One talk per club; a revised offer continues it.
  */
-export function proposeTrade(teamId, offer, atMs = Date.now(), { round = null } = {}) {
+export function proposeTrade(teamId, offer, atMs = clockNow(), { round = null } = {}) {
   const state = StateManager.get();
   const clean = {
     incomingIds: [...new Set(offer.incomingIds || [])],
@@ -144,7 +145,7 @@ export function callOff(teamId, atMs) {
  *   'ask'         — after a pass: what would it take?
  *   'move_on'     — after a pass
  */
-export function act(teamId, action, atMs = Date.now()) {
+export function act(teamId, action, atMs = clockNow()) {
   const state = StateManager.get();
   const talk = talkWith(state, teamId);
   if (!talk) return { ok: false };

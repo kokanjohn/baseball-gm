@@ -148,6 +148,8 @@ import {
   GAME_WEATHER,
   FIN_WEATHER,
 } from '../data/constants.js';
+import { clockNow } from './Clock.js';
+import { dice, diceSeed } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
 // DEV LIVE-SPEED (Developer Menu only)
@@ -543,7 +545,7 @@ export async function startNewGame(config) {
 
     // §100 The franchise's weather: its seed, the save's clock, and where real
     // time falls on the baseball calendar.
-    s.weatherSeed     = newWeatherSeed([config.city, config.nickname, config.region, Date.now()]);
+    s.weatherSeed     = newWeatherSeed([config.city, config.nickname, config.region, clockNow()]);
     s.weatherTzMin    = -new Date().getTimezoneOffset();
     s.weatherCalendar = [];
     addCalendarEntry(s, calendarAnchor(schedule, 1, s.weatherTzMin));
@@ -557,7 +559,7 @@ export async function startNewGame(config) {
       winPct:          (s.userTeam._ownerWinTarget || 66) / REGULAR_SEASON_GAME_COUNT,
     });
     s.userTeam.finances.payroll = Finance.payrollOf(s, 'user');
-    recordRating(s, Date.now());   // §95 the rating the day the GM takes over
+    recordRating(s, clockNow());   // §95 the rating the day the GM takes over
     // §78.5 every CPU club keeps books of its own.
     for (const t of s.leagueTeams || []) Finance.initClubBooks(s, t.id);
 
@@ -583,7 +585,7 @@ export async function startNewGame(config) {
     CardEngine.deliverSeedTradeOffer(ctx);
     // §86 the Recent list starts the day the club does.
     StateManager.mutate(s => {
-      const at = Date.now();
+      const at = clockNow();
       s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
         buildActivityFeedEntry('milestone', s.userTeam.abbr, `${s.userTeam.gmName || 'A new GM'} takes over the ${s.userTeam.city} ${s.userTeam.nickname}`.trim(), at),
         buildActivityFeedEntry('milestone', s.userTeam.abbr, `Spring training opens — Season ${s.seasonNum || 1}`, at + 1)]);
@@ -629,7 +631,7 @@ export function tick() {
   // roster deadline due before this moment — and never past the first pitch
   // of a game not yet played — so the game below starts with the roster it
   // really has.
-  advanceClock(Date.now());
+  advanceClock(clockNow());
   // §80: a game day nobody planned yet (a save from before r74) gets its inbox.
   planCardsForNextGame();
 
@@ -641,7 +643,7 @@ export function tick() {
   // §102.3 the weather's say about our game. (The league clock holds at our
   // first pitch, so what happens at or after it is decided here.)
   {
-    const now = Date.now();
+    const now = clockNow();
     const ref = { user: true, i: game.index };
     // A start the weather is holding up — then calls off.
     if (_WX_OPEN.has(game.status) && game.wx?.outcome === PLAN_OUTCOME.POSTPONED && !game.wx.resumption) {
@@ -665,7 +667,7 @@ export function tick() {
 
   // Check if it's time to activate a scheduled game
   if (game.status === GAME_STATUS.SCHEDULED || game.status === GAME_STATUS.PRE_GAME_WATCH) {
-    const now = Date.now();
+    const now = clockNow();
     if (game.gameTime && now >= game.gameTime) {
       if (_wxHoldForClubs({ user: true, i: game.index }, game.gameTime)) return null;   // §102.3 game two waits for game one
       _activateGame(game);
@@ -684,7 +686,7 @@ export function tick() {
   // No plays generated yet (shouldn't happen after _activateGame, but guard anyway)
   if (!game.plays || game.plays.length === 0) return null;
 
-  const now          = Date.now();
+  const now          = clockNow();
   const nextPlayIdx  = game.livePlayIndex || 0;
   const nextPlay     = game.plays[nextPlayIdx];
 
@@ -758,7 +760,7 @@ export function tick() {
  */
 function _activateGame(game) {
   const state       = StateManager.get();
-  const now         = Date.now();
+  const now         = clockNow();
   const MAX_LIVE_WINDOW_MS = 4 * 60 * 60 * 1000; // 4 hours
 
   // If the game time was more than 4 hours ago the user wasn't watching.
@@ -803,7 +805,7 @@ function _activateGame(game) {
     players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
       norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff) }
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true) }
   );
 
   // Write plays to state and transition to LIVE
@@ -820,7 +822,7 @@ function _activateGame(game) {
     g.liveLineups          = liveLineups;
     // §78: the crowd is in the seats at first pitch (the gate is banked at the final).
     if (g.isHome && !isSpring && !g.attendance) {
-      const crowd = Finance.crowdFor(s, 'user', { atMs: g.gameTime || Date.now(), playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true) });
+      const crowd = Finance.crowdFor(s, 'user', { atMs: g.gameTime || clockNow(), playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true) });
       if (crowd) { g.attendance = crowd.attendance; g.gateK = crowd.gateK; g.sellout = crowd.sellout; }
     }
   });
@@ -861,7 +863,7 @@ function _silentlyCommitGame(game) {
     wx ? { ...game, ...wx.record } : game, userTeam, opponentTeam, players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
       norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff) }
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true) }
   );
 
   // Suspended by the weather: it stands where it stopped, to be finished another day.
@@ -878,7 +880,7 @@ function _silentlyCommitGame(game) {
       g._precomputedBoxScore = boxScore;
       g.liveLineups = liveLineups;
     });
-    _suspendGame({ user: true, i: game.index }, sp?._timestamp ?? Date.now());
+    _suspendGame({ user: true, i: game.index }, sp?._timestamp ?? clockNow());
     return;
   }
 
@@ -956,7 +958,7 @@ export async function commitGame(gameIndex) {
   // The moment this game ended on the real clock (§65). For a game the GM
   // watched it is ~now; for one simulated while the app was closed it is in
   // the past, so everything it triggers is dated when it really happened.
-  const endMs = Math.min(Date.now(), _gameEndMs(game));
+  const endMs = Math.min(clockNow(), _gameEndMs(game));
 
   StateManager.mutate(s => {
     const g = s.schedule[gameIndex];
@@ -1120,7 +1122,7 @@ export async function commitGame(gameIndex) {
     // (play._statDeltas handles this via accumulateStats — log appended here)
     // IMPEngine.appendGameLog called per player by accumulateStats caller
     // Full IMP recompute happens below after all mutations are applied.    // ── Step 7: the rating's history (§95) ────────────────
-    recordRating(s, Date.now());
+    recordRating(s, clockNow());
 
     // ── Step 8: Strip per-game play data (§8.1) ────────────
     // All play-dependent processing is done; game.boxScore holds the
@@ -1184,7 +1186,7 @@ export async function commitGame(gameIndex) {
   let injuryEvents = [];
   if (game.status !== GAME_STATUS.POSTPONED) {
     const st  = StateManager.get();
-    const inj = rollGameInjuries(st, _appearances(st, gameIndex), endMs);
+    const inj = rollGameInjuries(st, _appearances(st, gameIndex), endMs, _gameKey(st, game, true));
     if (Object.keys(inj.players).length) {
       StateManager.mutate(s => {
         for (const [id, upd] of Object.entries(inj.players)) Object.assign(s.players[id], upd);
@@ -1661,10 +1663,10 @@ export function buildCardContext() {
     prevGame.isHome !== nextGame.isHome;
 
   const daysUntilNextGame = nextGame
-    ? Math.max(0, Math.round((nextGame.gameTime - Date.now()) / 86_400_000))
+    ? Math.max(0, Math.round((nextGame.gameTime - clockNow()) / 86_400_000))
     : 0;
   const daysSinceLastGame = prevGame
-    ? Math.max(0, Math.round((Date.now() - prevGame.gameTime) / 86_400_000))
+    ? Math.max(0, Math.round((clockNow() - prevGame.gameTime) / 86_400_000))
     : 0;
 
   // Division opponent check
@@ -2165,6 +2167,7 @@ function _resumeGame(ref, atMs) {
       resumeState: g.resumeState, partOne: g.plays, liveLineups: g.liveLineups || {}, phase: st.phase, isSpring: !!g.isSpring,
       norms: leagueNorms([st.userTeam, ...(st.leagueTeams || [])], st.players),
       staff: Coach.staffEffects(st.userTeam?.coachingStaff),
+      rand: _gameDice(st, g, isUser, 'resume'),
     });
     rest = sim.plays; box = sim.boxScore; lineups = sim.liveLineups;
   }
@@ -2275,7 +2278,7 @@ function _startLeagueGame(date, i) {
     home, away, state.players,
     { phase: state.phase, isSpring: !!cg.isSpring,
       norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff) }
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, cg, false) }
   );
   StateManager.mutate(s => {
     const g = s.leagueSchedule.dayMap[date][i];
@@ -2368,7 +2371,7 @@ function _finishLeagueGame(date, i) {
   const side = (teamId, b) => ({ teamId, hitterIds: b.hitters.map(h => h.id),
                                  starterId: b.pitchers[0]?.id || null,
                                  relieverIds: b.pitchers.slice(1).map(p => p.id) });
-  const inj = rollGameInjuries(st, [side(g.homeId, box.home), side(g.awayId, box.away)], endMs);
+  const inj = rollGameInjuries(st, [side(g.homeId, box.home), side(g.awayId, box.away)], endMs, _gameKey(st, g, false));
   if (Object.keys(inj.players).length) {
     StateManager.mutate(s => {
       for (const [id, upd] of Object.entries(inj.players)) Object.assign(s.players[id], upd);
@@ -2560,7 +2563,7 @@ function _startAllStarGame(date, i) {
     home, away, state.players,
     { phase: state.phase, isSpring: false, exhibition: true,
       norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff) }
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, cg, false) }
   );
   StateManager.mutate(s => {
     const g = s.leagueSchedule.dayMap[date][i];
@@ -2847,7 +2850,7 @@ function _queueSeriesMilestone(res) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * advanceClock(nowMs = Date.now(), { events, reconcileAll })
+ * advanceClock(nowMs = clockNow(), { events, reconcileAll })
  * Moves the league's roster clock forward to min(nowMs, first pitch of the
  * next unplayed game) and makes everything due by then happen, in order:
  *   1. roster cards past their deadline auto-resolve (at their deadline);
@@ -2862,7 +2865,7 @@ function _queueSeriesMilestone(res) {
  * @param {Boolean}  [opts.reconcileAll] reconcile every team (commit)
  * @returns {{ changed: Boolean, events: Object[], clockMs: Number }}
  */
-export function advanceClock(nowMs = Date.now(), opts = {}) {
+export function advanceClock(nowMs = clockNow(), opts = {}) {
   const state = StateManager.get();
   if (!state?.userTeam) return { changed: false, events: [], clockMs: nowMs };
   const clockMs = rosterClock(state, nowMs);
@@ -2883,7 +2886,7 @@ export function advanceClock(nowMs = Date.now(), opts = {}) {
     });
   }
   // §90 the league's trade desk: one moment a day when CPU clubs make deals.
-  if (!state.tradeDesk?.nextAtMs) StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: LeagueTrades.nextDeskAt(clockMs) }; });
+  if (!state.tradeDesk?.nextAtMs) StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: LeagueTrades.nextDeskAt(clockMs, diceSeed(state)) }; });
   for (let guard = 0; guard < 12000; guard++) {
     _ensureWeatherPlans(clockMs);   // §102.3 every game's weather, a few hours ahead
     _wxUserCards(clockMs);          // §102.5 the manager's question when rain threatens our game
@@ -3154,7 +3157,7 @@ const _clubAbbr = (st, id) => id === 'user' ? st.userTeam.abbr : ((st.leagueTeam
  * waits for our answer. The next desk is tomorrow.
  */
 function _runTradeDesk(atMs, { extra = false } = {}) {
-  const found = LeagueTrades.findLeagueTrades(StateManager.get(), atMs);
+  const found = LeagueTrades.findLeagueTrades(StateManager.get(), atMs, dice(diceSeed(StateManager.get()), 'desk', atMs));
   const deals = found.filter(d => !d.call);
   for (const d of found.filter(x => x.call)) CardEngine.deliverTradeCall(d, atMs);
   CardEngine.runWatches(atMs);   // §99 searches Pro Scouting is keeping an eye on
@@ -3167,7 +3170,7 @@ function _runTradeDesk(atMs, { extra = false } = {}) {
       last[d.a] = atMs; last[d.b] = atMs;
     }
     // (extra: §112.5 a second desk at the winter meetings — the day's own desk still opens.)
-    s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: extra ? s.tradeDesk?.nextAtMs : LeagueTrades.nextDeskAt(atMs), lastTradeMs: last };
+    s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: extra ? s.tradeDesk?.nextAtMs : LeagueTrades.nextDeskAt(atMs, diceSeed(s)), lastTradeMs: last };
   });
   // §90 as the deadline nears, Pro Scouting's best target for our biggest need.
   const g = regularIndex(StateManager.get());
@@ -3275,7 +3278,7 @@ function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
  * roster clock withdraws whatever inbox card was asking for that spot.
  * @returns {{ ok: Boolean, error?: String, tx?: Object }}
  */
-export function gmCallUp(playerId, nowMs = Date.now()) {
+export function gmCallUp(playerId, nowMs = clockNow()) {
   let res = { ok: false, error: 'No team loaded.' };
   if (!StateManager.get()?.userTeam) return res;
   StateManager.mutate(s => { res = callUp(s, playerId, 'user', nowMs, 'gm'); });
@@ -3293,7 +3296,7 @@ export function gmCallUp(playerId, nowMs = Date.now()) {
  * choice) goes down first. With games on he reports the next day.
  * Returns { ok, reason }.
  */
-export function gmSignFreeAgent(playerId, dropId = null, nowMs = Date.now()) {
+export function gmSignFreeAgent(playerId, dropId = null, nowMs = clockNow()) {
   const st = StateManager.get();
   if (!st?.userTeam) return { ok: false, reason: 'no team loaded' };
   const why = FreeAgency.signBlocker(st, playerId, dropId);
@@ -3315,7 +3318,7 @@ export function gmSignFreeAgent(playerId, dropId = null, nowMs = Date.now()) {
  * claim. It is decided when the 72-hour window closes, in claiming order; if
  * it's ours and his side is full then, `dropId` goes down. Returns { ok, reason }.
  */
-export function gmClaimOffWaivers(playerId, dropId = null, nowMs = Date.now()) {
+export function gmClaimOffWaivers(playerId, dropId = null, nowMs = clockNow()) {
   const st = StateManager.get();
   if (!st?.userTeam) return { ok: false, reason: 'no team loaded' };
   const why = FreeAgency.claimBlocker(st, playerId, dropId, nowMs);
@@ -3335,11 +3338,11 @@ export function gmWithdrawClaim(playerId) {
  * Injures a user player through the real path: 'evaluating' now, Act 1 in
  * the inbox right away, then the normal two-act flow and roster clock.
  */
-export function debugInjure(playerId, nowMs = Date.now()) {
+export function debugInjure(playerId, nowMs = clockNow()) {
   const st = StateManager.get();
   const p  = st?.players?.[playerId];
   if (!p || p.injury || p.teamId !== 'user') return false;
-  StateManager.mutate(s => Object.assign(s.players[playerId], beginInjury(p, nowMs)));
+  StateManager.mutate(s => Object.assign(s.players[playerId], beginInjury(p, nowMs, null, dice(diceSeed(st), 'debug-injury', playerId, nowMs))));
   const rec = reconcileRoster(StateManager.get(), 'user');
   StateManager.mutate(s => applyRosterMutation(s, rec));
   // Event dated 20 minutes back so Act 1 (5–20 min after the injury) is due now.
@@ -3351,7 +3354,7 @@ export function debugInjure(playerId, nowMs = Date.now()) {
 function _gameEndMs(game) {
   const last = game?.plays?.[game.plays.length - 1];
   if (last && Number.isFinite(last._timestamp)) return last._timestamp;
-  return (game?.gameTime || Date.now()) + GAME_DURATION_FALLBACK_MS;
+  return (game?.gameTime || clockNow()) + GAME_DURATION_FALLBACK_MS;
 }
 
 /**
@@ -3361,6 +3364,19 @@ function _gameEndMs(game) {
  * other CPU teams playing that date from their active lineup, today's
  * starter and a few relievers (their games have no box score).
  */
+/**
+ * _gameKey(state, g, isUser) — §118 a game's identity for its dice: ours by
+ * season and schedule slot, the league's by id; with its first pitch, so a
+ * game moved to another day is a new event with its own dice.
+ */
+function _gameKey(state, g, isUser) {
+  return `${isUser ? `u${state.seasonNum || 1}:${g.index}` : g.id}@${g.gameTime}`;
+}
+/** The dice a game is played with (`part`: 'play', or 'resume' for the rest of a suspended game). */
+function _gameDice(state, g, isUser, part = 'play') {
+  return dice(diceSeed(state), 'game', _gameKey(state, g, isUser), part);
+}
+
 function _appearances(state, gameIndex) {
   const g   = state.schedule[gameIndex];
   const out = [];

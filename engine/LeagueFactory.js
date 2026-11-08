@@ -243,6 +243,7 @@ function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playe
       targetOvr, ageMin, ageMax,
       seasonNum, seasonYear, teamId: teamDef.id,
       leagueLevel: leagueOffset,
+      rand: Math.random,   // §118 league setup happens once and is never replayed
     });
     playersOut[id] = p;
     return id;
@@ -396,6 +397,7 @@ export function buildUserRoster(archetypeId, userNames, farmNames, seasonNum, uu
       targetOvr, ageMin, ageMax,
       seasonNum, seasonYear,
       contractLengthOverride,
+      rand: Math.random,   // §118 league setup happens once and is never replayed
       teamId: 'user',
     });
     players[id] = p;

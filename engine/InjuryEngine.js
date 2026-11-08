@@ -64,6 +64,8 @@ import {
 } from '../data/constants.js';
 
 import { computeAge, computeOVR, baseballYear } from './PlayerFactory.js';
+import { dice, diceSeed } from './Dice.js';
+import { clockNow } from './Clock.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -72,7 +74,7 @@ const MS_PER_DAY = 86_400_000;
 // ─────────────────────────────────────────────────────────────
 
 /**
- * rollGameInjuries(state, appearances, nowMs)
+ * rollGameInjuries(state, appearances, nowMs, gameKey)
  * Rolls injuries for the players who actually took the field in a game day.
  * Same probability model for all ten teams — no hidden invincibility.
  *
@@ -84,10 +86,14 @@ const MS_PER_DAY = 86_400_000;
  * @param {Object}   state
  * @param {Object[]} appearances — [{ teamId, hitterIds, starterId, relieverIds }]
  * @param {Number}   nowMs       — the moment of injury (end of the game)
+ * @param {String}   gameKey     — §118 the game's identity: each player's roll
+ *                                 comes from dice(seed, 'injury', gameKey, id)
  * @returns {{ players: Object, events: Object[] }}
  *          events: [{ type: 'INJURY', teamId, playerId }]
  */
-export function rollGameInjuries(state, appearances, nowMs) {
+export function rollGameInjuries(state, appearances, nowMs, gameKey) {
+  if (!gameKey) throw new Error('InjuryEngine.rollGameInjuries: gameKey is required (§118 seeded dice)');
+  const seed    = diceSeed(state);
   const players = {};
   const events  = [];
 
@@ -104,9 +110,10 @@ export function rollGameInjuries(state, appearances, nowMs) {
       const player = state.players[playerId];
       if (!player || player.isInjured || player.injury) continue;
       if (player.group === PLAYER_GROUP.IL) continue;
-      if (Math.random() >= _injuryProbability(player, role, baseballYear(state))) continue;
+      const rand = dice(seed, 'injury', gameKey, playerId);
+      if (rand() >= _injuryProbability(player, role, baseballYear(state))) continue;
 
-      const begun = beginInjury(player, nowMs);
+      const begun = beginInjury(player, nowMs, null, rand);
       players[playerId] = app.teamId === 'user'
         ? begun
         : { ...begun, ..._cpuDisposition({ ...player, ...begun }) };
@@ -117,21 +124,23 @@ export function rollGameInjuries(state, appearances, nowMs) {
 }
 
 /**
- * beginInjury(player, nowMs, severityOverride?)
+ * beginInjury(player, nowMs, severityOverride?, rand)
  * The moment a player gets hurt: unavailable at once, still occupying his
  * active-roster spot until the GM decides (status 'evaluating').
+ * @param {Function} rand — §118 the injury's Dice stream (severity, type, days, how Act 2 turns out)
  * @returns {Object} partial player update
  */
-export function beginInjury(player, nowMs, severityOverride = null) {
-  const severity   = severityOverride || _rollSeverity();
-  const injuryType = _pickInjuryType(player);
-  const days       = _rollILDays(severity);
+export function beginInjury(player, nowMs, severityOverride = null, rand) {
+  if (typeof rand !== 'function') throw new Error('InjuryEngine.beginInjury: rand (a Dice stream) is required');
+  const severity   = severityOverride || _rollSeverity(rand);
+  const injuryType = _pickInjuryType(player, rand);
+  const days       = _rollILDays(severity, rand);
   return {
     isInjured:      true,
     isResting:      false,
     injuryPenalty:  { subRating: injuryType.affectedSR, amount: _penaltyForSeverity(severity) },
     injuryReport:   _generateInjuryReport(player, injuryType, severity, days, nowMs),
-    _act2Variance:  _rollAct2Variance(severity),
+    _act2Variance:  _rollAct2Variance(severity, rand),
     _pendingILReturn: false,
     injury: {
       status:     'evaluating',
@@ -231,10 +240,10 @@ function _cpuDisposition(player) {
  * @param {Object} player
  * @param {String} requestingTeamId  — 'user' or a CPU team ID
  * @param {Number} gmRelationship    — 0-100
- * @param {Number} now               — Unix ms (defaults to Date.now())
+ * @param {Number} now               — Unix ms (defaults to clockNow())
  * @returns {Object} { text, isStale, staleDays }
  */
-export function getInjuryReport(player, requestingTeamId, gmRelationship = 50, now = Date.now()) {
+export function getInjuryReport(player, requestingTeamId, gmRelationship = 50, now = clockNow()) {
   // User always gets full detail for their own players
   if (requestingTeamId === 'user' && player.teamId === 'user') {
     return {
@@ -345,7 +354,7 @@ export function processRetirements(state) {
  * @param {Number} now    — Unix ms
  * @returns {Object} player mutation
  */
-export function assignFarmArc(player, now = Date.now()) {
+export function assignFarmArc(player, now = clockNow()) {
   const age = computeAge(player.dob);
 
   let motivationProb = FARM_ARC_MOTIVATION_PROB_BASE;
@@ -389,7 +398,7 @@ export function assignFarmArc(player, now = Date.now()) {
  * @param {Number} now
  * @returns {Object} { mutations, events }
  */
-export function processFarmArcs(state, now = Date.now()) {
+export function processFarmArcs(state, now = clockNow()) {
   const playerMutations = {};
   const events          = [];
   const allFarmIds      = [
@@ -468,8 +477,8 @@ function _injuryProbability(player, role, seasonYear) {
   return Math.min(base, 0.10); // hard cap at 10% per game
 }
 
-function _rollSeverity() {
-  const r = Math.random();
+function _rollSeverity(rand) {
+  const r = rand();
   if (r < INJURY_SEVERITY_MINOR_PROB)                                     return 'minor';
   if (r < INJURY_SEVERITY_MINOR_PROB + INJURY_SEVERITY_MODERATE_PROB)    return 'moderate';
   if (r < INJURY_SEVERITY_MINOR_PROB + INJURY_SEVERITY_MODERATE_PROB
@@ -477,7 +486,7 @@ function _rollSeverity() {
   return 'season';
 }
 
-function _pickInjuryType(player) {
+function _pickInjuryType(player, rand) {
   const isPitcher = ['SP','RP'].includes(player.pos);
   const isRP      = player.pos === 'RP';
   const group     = isRP ? 'reliever' : isPitcher ? 'pitcher' : 'hitter';
@@ -485,10 +494,10 @@ function _pickInjuryType(player) {
   const eligible = INJURY_TYPES.filter(t =>
     t.group === group || (group === 'reliever' && t.group === 'pitcher')
   );
-  return eligible[Math.floor(Math.random() * eligible.length)] || INJURY_TYPES[0];
+  return eligible[Math.floor(rand() * eligible.length)] || INJURY_TYPES[0];
 }
 
-function _rollILDays(severity) {
+function _rollILDays(severity, rand) {
   const ranges = {
     minor:       INJURY_IL_DAYS_MINOR,
     moderate:    INJURY_IL_DAYS_MODERATE,
@@ -503,7 +512,7 @@ function _rollILDays(severity) {
   };
   if (severity === 'season') return INJURY_SEASON_ENDING_DAYS;
   const [min, max] = ranges[severity] || INJURY_IL_DAYS_MINOR;
-  return _rng(min, max);
+  return min + Math.floor(rand() * (max - min + 1));
 }
 
 function _penaltyForSeverity(severity) {
@@ -516,9 +525,9 @@ function _penaltyForSeverity(severity) {
   return penalties[severity] || INJURY_SR_PENALTY_MINOR;
 }
 
-function _rollAct2Variance(severity) {
+function _rollAct2Variance(severity, rand) {
   // Sometimes better (sprain not a tear), sometimes worse (stress fracture found)
-  const r = Math.random();
+  const r = rand();
   if (r < 0.25) return 'better';     // 25%: better than Act 1 feared
   if (r < 0.55) return 'confirmed';  // 30%: exactly as feared
   return 'worse';                    // 45%: worse than Act 1 feared
@@ -558,8 +567,4 @@ function _prognosisText(severity) {
 
 function _rollFloat(min, max) {
   return min + Math.random() * (max - min);
-}
-
-function _rng(lo, hi) {
-  return lo + Math.floor(Math.random() * (hi - lo + 1));
 }

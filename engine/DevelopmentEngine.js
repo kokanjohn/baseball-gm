@@ -26,6 +26,7 @@
  * passes (inside StateManager.mutate) and return events.
  */
 
+import { dice, diceSeed, diceId } from './Dice.js';
 import {
   PLAYER_GROUP,
   SUB_RATING_MIN,
@@ -97,15 +98,18 @@ export function startPlan(draft, playerId, { gain, focus = null, source = 'card'
   // One plan per skill at a time: overlapping work has diminishing returns.
   let planned = gain * gainMultiplier(draft, p) * (active.length ? 0.5 : 1);
 
+  // §118 how the plan goes is its own draw (the player, the moment, what started it).
+  const rand = dice(diceSeed(draft), 'dev-plan', playerId, atMs, source);
+  const _between = (lo, hi) => lo + rand() * (hi - lo);
   const volatile = p.trait === 'volatile', steady = p.trait === 'consistent';
-  let profile = _pick(DEV_PROFILES);
+  let profile = _pick(DEV_PROFILES, rand);
   if (steady && profile === 'flop') profile = 'gradual';
   let realized = planned * (volatile ? _between(0.5, 1.6) : steady ? _between(0.9, 1.1) : _between(0.75, 1.25));
   if (profile === 'flop') realized = planned * _between(0, 0.25);
 
-  const steps = _schedule(profile, realized, atMs);
+  const steps = _schedule(profile, realized, atMs, rand);
   const plan = {
-    id: _uuid(), playerId, source, keys, profile,
+    id: diceId(rand), playerId, source, keys, profile,
     planned: _round1(planned), realized: _round1(realized), applied: 0,
     steps, createdAt: atMs, status: 'active', pausedSince: null,
     gamesAtStart: _gamesPlayed(p), teamGamesAtStart: _teamGames(draft, p.teamId),
@@ -115,20 +119,20 @@ export function startPlan(draft, playerId, { gain, focus = null, source = 'card'
   return plan;
 }
 
-function _schedule(profile, total, atMs) {
+function _schedule(profile, total, atMs, rand) {
   const steps = [];
   const add = (at, amt) => steps.push({ atMs: Math.round(at), amount: amt });
   if (profile === 'quick') {
-    add(atMs + _between(0.6, 1.2) * DAY, total * 0.6);
-    const n = 2 + Math.floor(Math.random() * 3);
+    add(atMs + _btw(rand, 0.6, 1.2) * DAY, total * 0.6);
+    const n = 2 + Math.floor(rand() * 3);
     for (let i = 1; i <= n; i++) add(atMs + (1 + i * 6 / n) * DAY, total * 0.4 / n);
   } else if (profile === 'slow') {
-    const start = atMs + _between(10, 20) * DAY;
-    const n = 4 + Math.floor(Math.random() * 4);
+    const start = atMs + _btw(rand, 10, 20) * DAY;
+    const n = 4 + Math.floor(rand() * 4);
     for (let i = 0; i < n; i++) add(start + i * (14 / n) * DAY, total / n);
   } else {
-    const span = _between(7, 21);
-    const n = 5 + Math.floor(Math.random() * 6);
+    const span = _btw(rand, 7, 21);
+    const n = 5 + Math.floor(rand() * 6);
     for (let i = 1; i <= n; i++) add(atMs + i * (span / n) * DAY, total / n);
   }
   return steps;
@@ -306,11 +310,10 @@ export function countGame(draft, teamId) {
 // UTILITIES
 // ─────────────────────────────────────────────────────────────
 
-function _pick(profiles) {
-  let r = Math.random();
+function _pick(profiles, rand) {
+  let r = rand();
   for (const x of profiles) { if ((r -= x.p) < 0) return x.id; }
   return profiles[profiles.length - 1].id;
 }
-function _between(lo, hi) { return lo + Math.random() * (hi - lo); }
+function _btw(rand, lo, hi) { return lo + rand() * (hi - lo); }
 function _round1(x) { return Math.round(x * 10) / 10; }
-function _uuid() { return crypto.randomUUID(); }

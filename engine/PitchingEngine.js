@@ -167,7 +167,7 @@ export function tireAfterBF(player, isStarter, carriedTired = false) {
 }
 
 /** Innings the manager wants from a reliever in this role. */
-export function reliefInnings(role, rand = Math.random) {
+export function reliefInnings(role, rand) {
   if (role === ROLE.LONG) return PITCH_LONG_INNINGS.min + Math.floor(rand() * (PITCH_LONG_INNINGS.max - PITCH_LONG_INNINGS.min + 1));
   return 1;
 }

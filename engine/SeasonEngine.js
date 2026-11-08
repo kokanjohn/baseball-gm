@@ -31,6 +31,7 @@ import {
 } from '../data/constants.js';
 
 import { LEAGUE_TEAMS } from './LeagueFactory.js';
+import { clockNow } from './Clock.js';
 
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -475,7 +476,7 @@ export function getNextPhase(currentPhase, scheduleIndex, standings, userInPlayo
  * @param {String} text
  * @returns {Object} feed entry
  */
-export function buildActivityFeedEntry(type, teamAbbr, text, atMs = Date.now()) {
+export function buildActivityFeedEntry(type, teamAbbr, text, atMs = clockNow()) {
   return {
     type,
     teamAbbr,
@@ -492,7 +493,7 @@ export function buildActivityFeedEntry(type, teamAbbr, text, atMs = Date.now()) 
  * @returns {Object[]} pruned feed
  */
 export function pruneActivityFeed(feed) {
-  const cutoff = Date.now() - (ACTIVITY_FEED_RETENTION_HOURS * MS_PER_HOUR);
+  const cutoff = clockNow() - (ACTIVITY_FEED_RETENTION_HOURS * MS_PER_HOUR);
   return feed.filter(e => e.timestamp >= cutoff);
 }
 

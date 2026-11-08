@@ -28,6 +28,7 @@
  * GM's cards through the apply* functions here.
  */
 
+import { dice, diceSeed, diceId } from './Dice.js';
 import {
   PLAYER_GROUP,
   ROSTER_LIMITS,
@@ -82,6 +83,7 @@ import * as Finance from './FinanceEngine.js';
 import * as Coach from './CoachEngine.js';
 import { trainingWinterBonus } from './FrontOffice.js';
 import { fillsNeed } from './LeagueTrades.js';
+import { clockNow } from './Clock.js';
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
 
@@ -146,7 +148,7 @@ export function dueSteps(state, atMs) {
 }
 
 /** The offseason day (1–10) at `nowMs`, or 0 before day 1 / outside the offseason. */
-export function offseasonDay(state, nowMs = Date.now()) {
+export function offseasonDay(state, nowMs = clockNow()) {
   const os = state?.offseason;
   if (!os) return 0;
   let day = 0;
@@ -1131,12 +1133,14 @@ function _signProspects(draft, team, atMs) {
     const hitters = farm.filter(p => !isPitcher(p)).length;
     const pitchers = farm.length - hitters;
     const wantPitcher = pitchers / ROSTER_LIMITS.FARM_PITCHER_MAX < hitters / ROSTER_LIMITS.FARM_HITTER_MAX;
-    const pos = wantPitcher ? (Math.random() < 0.5 ? 'SP' : 'RP') : HITTER_POS[Math.floor(Math.random() * HITTER_POS.length)];
-    const name = _newName(used);   // §82 (added to `used`)
+    const rand = dice(diceSeed(draft), 'prospect', draft.seasonNum || 1, team.id, i);   // §118
+    const pos = wantPitcher ? (rand() < 0.5 ? 'SP' : 'RP') : HITTER_POS[Math.floor(rand() * HITTER_POS.length)];
+    const name = _newName(used, rand);   // §82 (added to `used`)
     const p = createPlayer({
-      id: _uuid(), name, pos, group: PLAYER_GROUP.PRACTICE_SQUAD,
-      hand: wantPitcher ? (Math.random() < 0.28 ? 'L' : 'R') : null,
-      targetOvr: level + PROSPECT_OVR_MIN + Math.floor(Math.random() * (PROSPECT_OVR_MAX - PROSPECT_OVR_MIN + 1)),
+      id: diceId(rand), name, pos, group: PLAYER_GROUP.PRACTICE_SQUAD,
+      hand: wantPitcher ? (rand() < 0.28 ? 'L' : 'R') : null,
+      targetOvr: level + PROSPECT_OVR_MIN + Math.floor(rand() * (PROSPECT_OVR_MAX - PROSPECT_OVR_MIN + 1)),
+      rand,
       ageMin: PROSPECT_AGE_MIN, ageMax: PROSPECT_AGE_MAX,
       seasonNum: (draft.seasonNum || 1) + 1, seasonYear: baseballYear(draft) + 1,
       contractLengthOverride: 4, teamId: team.id, leagueLevel: level,
@@ -1179,11 +1183,11 @@ function _enforceFarmCaps(draft, team, atMs) {
 // ─────────────────────────────────────────────────────────────
 
 /** §82 a new player's name: a last name nobody in `used` wears, else an initialed one. */
-function _newName(used) {
+function _newName(used, rand) {
   const taken = new Set([...used].map(surnameOf));
   const free = PLAYER_SURNAMES.filter(s => !taken.has(s));
   const pool = free.length ? free : PLAYER_SURNAMES;
-  return uniqueName(pool[Math.floor(Math.random() * pool.length)], used);
+  return uniqueName(pool[Math.floor(rand() * pool.length)], used, rand);
 }
 
 function _shuffle(arr) {

@@ -9247,3 +9247,46 @@ The user's direction on r131:
 - `test-notices-ui.mjs` (new): the real app, dark and light — the call-up message with Keep / Send back, the inbox without the news, Recent with it.
 - `sim-season.js`: the "we hear why" All-Star check now reads our Recent news (noted as it comes, since Recent keeps 72 hours). 142 games, seed 3: 3644/3644 (r134: 3653 with one failure). The count differs because the news no longer passes through Messages, so the harness GM's path through the season changes; r133's "nobody plays before reporting" failure didn't come up on this path, which is not the same as fixed.
 - `check-refs`, `check-il-return` (27), `check-frontoffice` (17), `check-contracts` (11), `check-coaches` (14), `check-compose-replies` (14), `check-push-client` (18) pass.
+
+## 118. Knowing our game ahead: seeded dice and the look-ahead (r136 — phase 1, step 1)
+
+**The goal (GM, Nov 7–8).** Real-time pushes with the app closed — a rain delay, play resuming, a postponement, one of our players hurt during the game, the final — without deciding anything on stale information. The GM chose option A (§117 follow-up): make the world reproducible, then look ahead.
+
+**Options considered.**
+- **A. Seeded dice + look-ahead (chosen).** Every random event draws from its own stream (the franchise seed + what the event is), as the weather has since §102. A look-ahead plays the real engine forward on a scratch copy; the real run later rolls the same dice, so they agree whatever order things are computed in.
+- **B. Decide our game only once its inputs are settled** — too narrow (only days the app was opened after midnight).
+- **C. Run the world on the Cloudflare worker** — fully live, but needs the paid plan (~$5/month; the free plan's 10 ms CPU and 1,000 KV writes a day are far too little), a bundled engine, a handoff protocol and two copies of the truth.
+- **D. Decide at close with fresh dice** — rejected: stale.
+
+**A correction found while designing.** Arrivals report at the next local midnight (§65), but a trade between two CPU clubs takes its players off their old rosters at once (TransactionEngine: trades execute at effectiveAt). A 3 PM league trade can take a player out of our opponent's lineup that night, and the day's desk depends on the day's CPU-game injuries. So exactness for our game needs everything upstream of first pitch reproducible, not just our game. **Phases re-cut:** phase 1 = everything that can touch a roster before our first pitch, plus our game and the game pushes; phase 2 = messages and the offseason (every message pushable; trade offers to us — decision #3).
+
+**What was measured** (`tools/harness/trace-draws.mjs`, every `Math.random()` over eight game days by caller; `measure-forward-run.mjs`): the sim and relief innings; injuries (the roll, severity, type, days, how Act 2 turns out); the trade desk (call order, who shops) and its daily hour; CPU depth signings (new players: position, name, ratings, id); development plans; card text and selection; the random part of a card's OVR effect. Cost on this machine: copying the 850 KB save ~6 ms, a full world day 80–180 ms, our game ~2 ms.
+
+**Built (step 1):**
+- **`engine/Dice.js`** (pure): `diceSeed(state)` (the weather seed's sibling, fixed for the franchise), `dice(seed, ...keys)` → a stream in [0, 1) (cyrb128 → sfc32), `diceId(rand)` (an id drawn from a stream, v4-shaped), `randInt`. Keys name an event, never a moment of computing it.
+- **`engine/Clock.js`**: `clockNow()` — every engine reads the time through it (77 `Date.now()` calls replaced); `runAt(ms, fn)` / `setClock(ms)` move it for a look-ahead. The harness's moved `Date.now` still works (clockNow follows it).
+- **`StateManager.speculate(fn)`**: runs synchronous engine code against a `structuredClone` of the save; nothing saved; the real state restored even on a throw. (No engine keeps module-level memory outside the save except pure weather caches and per-game sim scratch — checked.)
+- **Seeded, each with a required stream (a missing one throws — no silent fallback):**
+  - `SimEngine.generatePlays` / `generateResumption` — `context.rand`; a game's dice are `dice(seed, 'game', key, 'play'|'resume')`, key = ours `u{season}:{index}@{firstPitch}`, the league's `{id}@{firstPitch}` (a moved game is a new event).
+  - `PitchingEngine.reliefInnings(role, rand)`.
+  - `InjuryEngine.rollGameInjuries(state, apps, nowMs, gameKey)` — per player `dice(seed, 'injury', gameKey, playerId)`; `beginInjury(…, rand)` draws severity, type, days and the Act 2 turn from the same stream.
+  - `LeagueTrades.findLeagueTrades(state, atMs, rand)` — `dice(seed, 'desk', atMs)`; `nextDeskAt(afterMs, seed)` — that day's own draw.
+  - `PlayerFactory.createPlayer({ …, rand })`; `Names.newPlayerName / uniqueName(…, rand)`; `MarketEngine.generateMarketPlayer / marketCandidate({ …, rand })`; CPU depth signings `dice(seed, 'farm-sign', teamId, atMs, n)` with `diceId` ids; offseason prospects `dice(seed, 'prospect', season, teamId, i)`.
+  - `DevelopmentEngine.startPlan` — `dice(seed, 'dev-plan', playerId, atMs, source)`.
+  - A card's OVR effect — `dice(seed, 'card-ovr', instanceId, choice)`.
+  - Explicitly not replayed, so `Math.random` is passed visibly: league setup (`LeagueFactory`), the one-time name migration, and card tokens (`CardTokens` — phase 2).
+- **`engine/LookAhead.js`** — `lookAhead(nowMs)`: on a scratch copy, the real `GameEngine.tick()` at our first pitch (the roster clock runs up to it and holds, §65); returns the game's status, plays, weather plan and result, and box score. Nothing is scheduled from it yet (step 3).
+
+**Proof — `tools/harness/check-lookahead.mjs`.** For each of our games: look ahead from a random moment before it (the evening before to an hour before), **scramble the global random source** (any draw still unseeded changes the real run), then play the real day three ways — app open (5-minute steps to first pitch), reopened during the game (one catch-up jump), reopened the next morning (the silent catch-up path). The committed box must equal the foreseen box in every mode, and the play-by-play must match play for play wherever it's visible (plays are dropped at commit, §8.1). East, seed 1, 30 games: 30/30, including a rainout called at the foreseen moment. West, seed 2, 60 games: 60/60.
+In Chromium (fresh save): the real save is byte-for-byte unchanged after a look-ahead, a second look-ahead gives the same game, and it takes 30–70 ms warm (220 ms the first time, desktop) — a phone perhaps 3–5 times that.
+
+**Harness updates.** Direct sim calls pass their own dice (`check-game-sim-weather`, `measure-forward-run`). `check-coaches` now gives every staff the same dice game by game (common random numbers), so only the coach differs: with independent streams its "command coach cuts walks" comparison was at the mercy of sample noise (it flipped, 2.88 vs 2.83, when the streams changed).
+
+- `sw.js` precaches the three new modules (the season harness's "precaches every app module" caught the omission).
+- `sim-season.js` "a release leaves the money owed": it recognised an offset only while the released player was still with the club that signed him; it now reads the entry's own `offset` flag (Finance.offsetDead). The new dice took the harness down a path where the player signed elsewhere (at 895K, leaving 359K of 1,254K owed) and then moved on — the engine was right, the check too narrow.
+
+**Regression.** `sim-season.js` 142 games, seed 3: 3638/3638 (the count moves with the dice — different games, different paths). `check-refs`, `check-coaches` (14), `check-game-sim-weather` (19), `check-il-return` (27), `check-frontoffice` (17), `check-contracts` (11), `check-manager-fill` (18), `check-push-client` (18), `check-compose-replies` (14), and the notices and push-settings UI tests pass.
+
+**Fresh team:** not needed for r136 — no stored data changed, and old saves keep working (they already carry a weather seed). Games simply roll new dice from here on.
+
+**Next.** Step 2: injuries during the game (on a play, the manager's substitution, the trainer's first message at that moment; CPU games too; the season rate held where it is). Step 3: the game pushes from the look-ahead, each with its own Settings toggle, all on by default (GM, Nov 8): rain delay, play resumes, postponed, suspended, one of our players hurt, the final score.

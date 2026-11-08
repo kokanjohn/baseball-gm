@@ -29,6 +29,7 @@ import {
 } from '../data/constants.js';
 import { STAFF_NAMES, PERSON_NAMES } from '../data/player-names.js';
 import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
+// §118 phase 2 seeds card creation (the tokens' draws, the market players they name).
 import { marketCandidate, signingTerms, rentalTarget, prospectToSend } from './MarketEngine.js';
 import { eligibleSlotsFor } from './RosterEngine.js';
 import {
@@ -447,12 +448,12 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       .map(sl => ({ slot: sl.slot, p: state.players?.[sl.playerId] })).filter(x => x.p)
       .sort((a, b) => (a.p.ovr || 0) - (b.p.ovr || 0))[0];
     if (weakest) {
-      const vet = take('acq_hitter', marketCandidate(state, { kind: spec.kind, side: 'hitter', pos: weakest.slot, minOvr: (weakest.p.ovr || 0) + 2 }));
+      const vet = take('acq_hitter', marketCandidate(state, { kind: spec.kind, side: 'hitter', pos: weakest.slot, minOvr: (weakest.p.ovr || 0) + 2, rand: Math.random }));
       if (vet) { vet._startAt = weakest.slot; money('sign_cost', signingTerms(state, vet).salary); }
       out.players.replaced_starter = weakest.p.id;
     }
   } else if (spec.kind && !spec.nri && !spec.intl && !spec.indie) {
-    const pros = take(side === 'pitcher' ? 'acq_pitcher' : 'acq_hitter', marketCandidate(state, { kind: spec.kind, side }));
+    const pros = take(side === 'pitcher' ? 'acq_pitcher' : 'acq_hitter', marketCandidate(state, { kind: spec.kind, side, rand: Math.random }));
     if (pros) money('sign_cost', signingTerms(state, pros).bonus || signingTerms(state, pros).salary);
   } else if (spec.pool === 'waivers') {
     const w = (state.waiverPool || []).map(id => state.players?.[id])
@@ -492,7 +493,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       out.offer = { incomingIds: [target.player.id], outgoingIds: [prospect.id], proposingTeamId: target.team.id };
     }
   } else if (spec.nri) {
-    const vet = take('nri', marketCandidate(state, { kind: 'veteran', side }));
+    const vet = take('nri', marketCandidate(state, { kind: 'veteran', side, rand: Math.random }));
     if (vet) {
       const pos = values.nri_pos;
       values.nri_subject = `Non-roster invitee ${vet.name} is turning heads`;
@@ -501,7 +502,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
         + `A camp spot costs ${values.nri_cost}, with a real shot at an Opening Day job.`;
     }
   } else if (spec.intl) {
-    const pl = take('intl_player', marketCandidate(state, { kind: 'intl', side }, new Set(state.freeAgentPool || [])));
+    const pl = take('intl_player', marketCandidate(state, { kind: 'intl', side, rand: Math.random }, new Set(state.freeAgentPool || [])));
     if (pl) {
       values.intl_player_type = ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-hander' : 'right-hander')
         : ({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder');
@@ -511,7 +512,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       money('sign_cost', signingTerms(state, pl).bonus);
     }
   } else if (spec.indie) {
-    const pl = take('indie_player', marketCandidate(state, { kind: 'indie', side }, new Set(state.freeAgentPool || [])));
+    const pl = take('indie_player', marketCandidate(state, { kind: 'indie', side, rand: Math.random }, new Set(state.freeAgentPool || [])));
     if (pl) {
       values.college_pos = ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-handed pitcher' : 'right-handed pitcher')
         : `${({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder')}`;

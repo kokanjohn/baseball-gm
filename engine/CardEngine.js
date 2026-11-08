@@ -92,6 +92,8 @@ import { buildActivityFeedEntry, pruneActivityFeed } from './SeasonEngine.js';
 const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
 import { starterRested, reliefValue } from './PitchingEngine.js';
+import { clockNow } from './Clock.js';
+import { dice, diceSeed } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -266,7 +268,7 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
       card.resolved    = true;
       card.resolvedAt  = s.currentGameIndex || 0;
       card.choice      = choice;
-      card.resolvedAtMs = Date.now();   // §95 when the decision was made (Completed tab)
+      card.resolvedAtMs = clockNow();   // §95 when the decision was made (Completed tab)
     }
 
     // Apply soft metric effects
@@ -322,8 +324,8 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
   });
 
   // Handle roster actions
-  _applyRosterAction(instance, choice, StateManager.get(), { atMs: Date.now(), feasible: actionOk });
-  _maybeChainFollowup(instance, choice, Date.now());
+  _applyRosterAction(instance, choice, StateManager.get(), { atMs: clockNow(), feasible: actionOk });
+  _maybeChainFollowup(instance, choice, clockNow());
 }
 
 /**
@@ -345,7 +347,7 @@ function _maybeChainFollowup(instance, choice, atMs) {
 }
 
 /**
- * expire(instanceId, atMs = Date.now())
+ * expire(instanceId, atMs = clockNow())
  * Auto-resolves a card with its auto-resolve path and penalty. A roster card
  * (autoResolve 'roster', §65) runs its `_raw.onAuto` roster action at `atMs`
  * — the roster-clock moment of the deadline, which during catch-up is in the
@@ -355,7 +357,7 @@ function _maybeChainFollowup(instance, choice, atMs) {
  * @param {String} instanceId
  * @param {Number} [atMs]
  */
-export function expire(instanceId, atMs = Date.now()) {
+export function expire(instanceId, atMs = clockNow()) {
   let state    = StateManager.get();
   let instance = (state.inbox || []).find(c => c.instanceId === instanceId);
   if (!instance) {
@@ -425,9 +427,9 @@ function _applyChoiceMoney(s, instance, choice) {
   const costK = choice === 'yes' ? _resolveBudgetCost(instance._budgetCost)
               : choice === 'no'  ? _resolveBudgetCost(instance._budgetCostNo)
               : 0;
-  if (costK) Finance.post(s.userTeam.finances, -costK, 'cards', instance.subject || 'Front-office decision', Date.now());
+  if (costK) Finance.post(s.userTeam.finances, -costK, 'cards', instance.subject || 'Front-office decision', clockNow());
   if (choice === 'yes' && instance._revenueK) {
-    Finance.post(s.userTeam.finances, instance._revenueK, 'cards', instance.subject || 'Deal', Date.now());
+    Finance.post(s.userTeam.finances, instance._revenueK, 'cards', instance.subject || 'Deal', clockNow());
   }
 }
 
@@ -516,7 +518,7 @@ function _needFor(player) {
  * before midnight reports tomorrow. Waiting means the morning exam — free,
  * but the replacement can't report until the day after.
  */
-export function deliverInjuryAct1(playerId, atMs = Date.now()) {
+export function deliverInjuryAct1(playerId, atMs = clockNow()) {
   const state  = StateManager.get();
   const player = state.players[playerId];
   if (!player || player.injury?.status !== 'evaluating') return null;
@@ -549,7 +551,7 @@ export function deliverInjuryAct1(playerId, atMs = Date.now()) {
  * next roster deadline; if nobody answers, he goes on the IL and the
  * manager makes the call-up.
  */
-export function deliverInjuryAct2(playerId, atMs = Date.now()) {
+export function deliverInjuryAct2(playerId, atMs = clockNow()) {
   let state = StateManager.get();
   const p0  = state.players[playerId];
   if (!p0 || p0.injury?.status !== 'evaluating') return null;
@@ -948,7 +950,7 @@ function _deliverNotice(key, fields, atMs) {
  */
 function _ourNews(text, atMs) {
   StateManager.mutate(s => {
-    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('ours', s.userTeam.abbr, text, Math.min(atMs, Date.now()))]);
+    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('ours', s.userTeam.abbr, text, Math.min(atMs, clockNow()))]);
   });
 }
 
@@ -1007,7 +1009,7 @@ function _deliverManagerFillCard(ev) {
  *     ghost messages, whichever screen the GM acted on).
  * @returns {{ delivered: Number, withdrawn: Number }}
  */
-export function syncRosterCards(events = [], atMs = Date.now()) {
+export function syncRosterCards(events = [], atMs = clockNow()) {
   let delivered = 0;
   for (const ev of events) {
     if (ev.type === 'INJURY' && ev.teamId === 'user') {
@@ -1137,7 +1139,7 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
 }
 
 /** §91 the offer can still be made: the window, every player where the deal needs him (roster or farm), healthy, settled. */
-function _tradeStillValid(state, card, atMs = Date.now()) {
+function _tradeStillValid(state, card, atMs = clockNow()) {
   const team = (state.leagueTeams || []).find(t => t.id === card._proposingTeamId);
   return !!team && !tradeBlockers(card._tradeOffer || {}, state, Math.max(atMs, card.deliverAtMs || 0), card._proposingTeamId);
 }
@@ -1309,7 +1311,7 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
   const deal = kind === 'sale'
     ? `${teamName} need to move salary and will sell ${inRef} to us outright.`
     : `The deal: we send ${outRef} and get ${inRef}.`;
-  const when = atMs ?? Date.now();
+  const when = atMs ?? clockNow();
 
   const instance = _rosterCard(state, {
     cardId:          `trade_${proposingTeamId}`,
@@ -1395,7 +1397,7 @@ function _nextGameTime(state, nowMs) {
  */
 function _scheduleCards(instances, state, game = null) {
   if (!instances?.length) return;
-  const nowMs = Date.now();
+  const nowMs = clockNow();
   // §74/§80: pre-game cards arrive in the hours before THIS game's first
   // pitch, in-game cards while it is being played; a moment that has already
   // passed (planned late, e.g. the app was closed) is dropped, not delivered
@@ -1581,19 +1583,19 @@ export function deliverMomentCard(moment, context, game = null, timing = 'soon')
   const scheduled = (StateManager.get().scheduledCards || []).some(c => c.instanceId === instance.instanceId);
   if (!scheduled) return false;    // the moment had already passed (planned too late)
   StateManager.mutate(s => {
-    s.momentsDone = { ...(s.momentsDone || {}), [doneKey]: { cardId: pick.id, atMs: Date.now() } };
+    s.momentsDone = { ...(s.momentsDone || {}), [doneKey]: { cardId: pick.id, atMs: clockNow() } };
   });
   _rememberMoment(pick.id);
   return true;
 }
 
 /**
- * releaseDueCards(nowMs = Date.now())
+ * releaseDueCards(nowMs = clockNow())
  * Moves every scheduled card whose time has come into the inbox.
  * Called on every app tick (and by the harness after every tick).
  * @returns {Object[]} the cards released (empty array if none)
  */
-export function releaseDueCards(nowMs = Date.now()) {
+export function releaseDueCards(nowMs = clockNow()) {
   const state = StateManager.get();
   let due = (state?.scheduledCards || []).filter(c => c.deliverAtMs <= nowMs);
   if (!due.length) return [];
@@ -1619,11 +1621,11 @@ export function releaseDueCards(nowMs = Date.now()) {
 const COMPOSE_LOG_MAX = 80;
 
 /**
- * getPushSchedule(state, nowMs = Date.now())
+ * getPushSchedule(state, nowMs = clockNow())
  * The scheduled cards, shaped for the push worker's /register endpoint.
  * Seed cards are never included.
  */
-export function getPushSchedule(state, nowMs = Date.now()) {
+export function getPushSchedule(state, nowMs = clockNow()) {
   const qs = state?.push?.quietStart, qe = state?.push?.quietEnd;
   const cards = (state?.scheduledCards || [])
     .filter(c => !c._seed)
@@ -1648,7 +1650,7 @@ export function getPushSchedule(state, nowMs = Date.now()) {
  * on the inbox before the game. A push only, never an inbox card; none inside
  * quiet hours (moved later it would land after first pitch); off in Settings.
  */
-export function gameReminders(state, nowMs = Date.now()) {
+export function gameReminders(state, nowMs = clockNow()) {
   if (state?.push?.gameReminder === false || !state?.userTeam) return [];
   const qs = state.push?.quietStart, qe = state.push?.quietEnd;
   const out = [];
@@ -1690,7 +1692,7 @@ function _tradeWindowOpen(state, context) {
  */
 function _maybeDeliverCashSale(state, context) {
   if (!_tradeWindowOpen(state, context)) return false;
-  const now = Date.now();
+  const now = clockNow();
   const teams = (state.leagueTeams || [])
     .filter(t => !busyWithUs(state, t.id, now))
     .map(t => ({ t, r: Math.random() }))
@@ -1740,7 +1742,7 @@ const _tradeSalaryOk = (state, offer, cpuId = null) => {
  */
 export function deliverSeedTradeOffer(context) {
   const st = StateManager.get();
-  const atMs = Date.now();
+  const atMs = clockNow();
   if (!tradeWindow(st).open) return false;
   const shuffle = (xs) => xs.map(x => ({ x, r: Math.random() })).sort((a, b) => a.r - b.r).map(o => o.x);
   const tryCall = () => {
@@ -1820,7 +1822,7 @@ export function deliverSeedCards(cardIds, context) {
 
   if (instances.length === 0) return 0;
 
-  const arrivedAtMs = Date.now();
+  const arrivedAtMs = clockNow();
   StateManager.mutate(s => {
     s.inbox = [...(s.inbox || []), ...instances.map(c => ({ ...c, arrivedAtMs }))];
     _sortInbox(s.inbox);
@@ -1873,7 +1875,7 @@ export function deliverCardById(cardId) {
   if (!instance) return;
 
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), { ...instance, _debugInjected: true, arrivedAtMs: Date.now() }];
+    s.inbox = [...(s.inbox || []), { ...instance, _debugInjected: true, arrivedAtMs: clockNow() }];
     _sortInbox(s.inbox);
   });
 }
@@ -1888,7 +1890,7 @@ export function deliverCardById(cardId) {
  * @param {String} topicId    — e.g. 'gk_field', 'mgr_morale'
  * @param {String} channelId  — e.g. 'groundskeeper', 'manager'
  */
-export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs = Date.now() } = {}) {
+export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs = clockNow() } = {}) {
   const state   = StateManager.get();
   const cardDef = COMPOSE_RESPONSE_POOL[topicId];
 
@@ -2051,7 +2053,7 @@ export function getInbox() {
  * markRead(instanceId) — §115 the GM opened the message (Messages screen):
  * it reads as read from now on (the list's bold sender and unread dot).
  */
-export function markRead(instanceId, atMs = Date.now()) {
+export function markRead(instanceId, atMs = clockNow()) {
   const card = (StateManager.get().inbox || []).find(c => c.instanceId === instanceId);
   if (!card || card._readAt) return false;
   StateManager.mutate(s => {
@@ -2228,7 +2230,7 @@ function _filterEligible(pool, context, state) {
     // §73: follow-up cards are only ever delivered about the player they follow.
     if (card._intlFollowupOnly) return false;
     // §74: with the scouting budget cut (or the staff on a media tour) the leads dry up.
-    if (card.tag === 'SCOUTING' && (state.userTeam?.scoutingQuietUntil || 0) > Date.now()) return false;
+    if (card.tag === 'SCOUTING' && (state.userTeam?.scoutingQuietUntil || 0) > clockNow()) return false;
     // §73: "the bullpen ERA is catastrophic" only when it is.
     if (card._requiresBullpenERA && bullpenRecentERA(state) < card._requiresBullpenERA) return false;
     if (card._requiresTargetCoverage && !_hasPositionCoverage(state)) return false;
@@ -2415,7 +2417,7 @@ function _createInstance(cardDef, context, state) {
         freeAgentPool: [...(probe.freeAgentPool || []), ...newPlayers.map(p => p.id)] }
     : probe;
   if (!cardFeasible(world, instance)) return null;
-  if ((newPlayers || []).length) StateManager.mutate(s => { for (const p of newPlayers) addToMarket(s, p, Date.now()); });
+  if ((newPlayers || []).length) StateManager.mutate(s => { for (const p of newPlayers) addToMarket(s, p, clockNow()); });
   return instance;
 }
 
@@ -2456,7 +2458,7 @@ function _applySoftEffects(state, effects, choice, instance) {
   // never applied — both now move Club Funds.
   const fundsK = (effects.funds ?? 0) + (effects.budget !== undefined ? effects.budget * 1000 : 0);
   if (fundsK && state.userTeam.finances) {
-    Finance.post(state.userTeam.finances, fundsK, 'cards', instance?.subject || 'Front-office decision', Date.now());
+    Finance.post(state.userTeam.finances, fundsK, 'cards', instance?.subject || 'Front-office decision', clockNow());
   }
   // §78.8 decisions that move the economy itself, not just a payment:
   //   target — the owner loosens / tightens this season's payroll target (share)
@@ -2474,13 +2476,15 @@ function _applySoftEffects(state, effects, choice, instance) {
   // dip in condition (playing hurt / out of sorts) for a few games.
   if (effects.ovr !== undefined && effects.ovr !== 0) {
     const rosterIds = state.userTeam.rosterIds || [];
+    // §118 who it lands on and for how long: this answer's own draw.
+    const rand = dice(diceSeed(state), 'card-ovr', instance?.instanceId || instance?.cardId || 'card', choice);
     const targetId = (instance?._targetPlayerId && rosterIds.includes(instance._targetPlayerId))
       ? instance._targetPlayerId
-      : rosterIds[Math.floor(Math.random() * rosterIds.length)];
+      : rosterIds[Math.floor(rand() * rosterIds.length)];
     if (targetId) {
-      const atMs = Date.now();
+      const atMs = clockNow();
       if (effects.ovr > 0) Development.startPlan(state, targetId, { gain: effects.ovr, source: instance?.cardId || 'card' }, atMs);
-      else Development.setCondition(state, targetId, { amount: Math.abs(effects.ovr) * 2, games: 2 + Math.floor(Math.random() * 4), reason: instance?.cardId || 'card' });
+      else Development.setCondition(state, targetId, { amount: Math.abs(effects.ovr) * 2, games: 2 + Math.floor(rand() * 4), reason: instance?.cardId || 'card' });
     }
   }
 }
@@ -2650,7 +2654,7 @@ export function deliverAllStarMvpCard(playerId, atMs) {
  */
 export function deliverAllStarTradeOffer(context) {
   const st = StateManager.get();
-  const atMs = Date.now();
+  const atMs = clockNow();
   if (!tradeWindow(st).open) return false;
   const season = st.seasonNum || 1;
   const cands = [];
@@ -4215,7 +4219,7 @@ function _cardActionsHandled(card) {
  * (deadline). `atMs` is the moment of the decision — real time for a GM tap,
  * the deadline for an auto-resolve — and dates every transaction it creates.
  */
-function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasible = null } = {}) {
+function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasible = null } = {}) {
   const raw    = instance._raw || {};
   const action = choice === 'yes' ? raw.onYes : choice === 'no' ? raw.onNo : choice === 'auto' ? raw.onAuto : null;
   if (!action) return;
@@ -4431,7 +4435,7 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
 
 function _expireCards(state, context) {
   const gameIdx  = state.currentGameIndex || 0;
-  const now      = Date.now();
+  const now      = clockNow();
   const toExpire = (state.inbox || []).filter(c => {
     if (c.resolved) return false;
     if (c.autoResolve === 'roster') return false;   // roster clock (§65)

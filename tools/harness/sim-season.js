@@ -547,8 +547,10 @@ async function runOffseasonChecks() {
       const R = gm.released, q = st.players[R.id];
       const fin = st.userTeam.finances;
       const owedNow = [...(fin.dead || []), ...(fin.deadFuture || [])].filter(d => d.playerId === R.id);
-      const offset = q?.teamId && q.teamId !== 'user';
-      check(`contracts: a release leaves the money owed, season by season (${q?.name}, ${R.salary}K through ${R.expiry - 1}; now owed ${owedNow.map(d => `${d.salary}K${d.season ? ` s${d.season}` : ''}`).join(', ') || 'nothing'}${offset ? `, signed by ${q.teamId} — offset` : ''})`,
+      // Offset: another club signed the player (Finance.offsetDead marks the entry) — whether or not
+      // the player is still there now.
+      const offset = owedNow.some(d => d.offset);
+      check(`contracts: a release leaves the money owed, season by season (${q?.name}, ${R.salary}K through ${R.expiry - 1}; now owed ${owedNow.map(d => `${d.salary}K${d.season ? ` s${d.season}` : ''}`).join(', ') || 'nothing'}${offset ? ', offset by a signing elsewhere' : ''})`,
             q && q.teamId !== 'user' && owedNow.length === R.expiry - 2 && (offset ? owedNow.some(d => d.salary < R.salary) && owedNow.every(d => d.salary <= R.salary) : owedNow.every(d => d.salary === R.salary)));
       check(`contracts: released money still counts against payroll room (room ${Math.round(R.room0)}K → ${Math.round(R.room1)}K, dead ahead ${Math.round(R.dead1)}K)`,
             R.dead1 >= R.salary && R.room1 <= R.room0 + R.salary * 0.5);

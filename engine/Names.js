@@ -34,7 +34,8 @@ export function surnameOf(name) {
  * any initialed form of it); otherwise the surname with a first initial no
  * one has. Adds the result to `used`.
  */
-export function uniqueName(surname, used, rand = Math.random) {
+export function uniqueName(surname, used, rand) {
+  if (typeof rand !== 'function') throw new Error('Names.uniqueName: rand is required');
   const clash = [...used].some(n => surnameOf(n) === surname);
   let name = surname;
   if (clash) {
@@ -51,7 +52,7 @@ export function uniqueName(surname, used, rand = Math.random) {
  * newPlayerName(players, rand) — a name for a new player: a last name no
  * one in the league wears when there is one left, else an initialed one.
  */
-export function newPlayerName(players, rand = Math.random) {
+export function newPlayerName(players, rand) {
   const used = namesInUse(players);
   const surnames = new Set([...used].map(surnameOf));
   const free = PLAYER_SURNAMES.filter(s => !surnames.has(s));
@@ -81,7 +82,7 @@ export function renameLeague(players) {
   const all = Object.values(players || {}).filter(p => p?.name)
     .sort((a, b) => (_isActive(b) - _isActive(a)) || String(a.id).localeCompare(String(b.id)));
   for (const p of all) {
-    const next = uniqueName(lastNameOnly(p.name), used);
+    const next = uniqueName(lastNameOnly(p.name), used, Math.random);   // a one-time migration of old saves, not replayed
     if (next !== p.name) { p.name = next; n++; }
   }
   return n;

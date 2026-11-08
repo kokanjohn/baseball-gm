@@ -32,6 +32,7 @@ import {
 import { isAvailable } from './PlayerFactory.js';
 import { reliefValue } from './PitchingEngine.js';
 import { payrollOf } from './FinanceEngine.js';
+import { clockNow } from './Clock.js';
 
 // ─────────────────────────────────────────────────────────────
 // POSITION COMPATIBILITY MAP
@@ -177,7 +178,7 @@ export function activateFromIL(state, playerId, targetGroup) {
  * @param {String} playerId
  * @returns {Object} mutations
  */
-export function placeOnWaivers(state, playerId, { atMs = Date.now(), reason = null } = {}) {
+export function placeOnWaivers(state, playerId, { atMs = clockNow(), reason = null } = {}) {
   _assertPlayerExists(state, playerId);
   const player = state.players[playerId];
   const teamId = player.teamId;
@@ -841,7 +842,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
           waived.push(id);
           setPatch(id, {
             group: 'waivers', tier: 'waivers', onWaivers: true,
-            waiverStartTime: atMs ?? Date.now(), _pendingILReturn: false, teamId: null,
+            waiverStartTime: atMs ?? clockNow(), _pendingILReturn: false, teamId: null,
             _waivedBy: tid, _waiveReason: null,
           });
         }

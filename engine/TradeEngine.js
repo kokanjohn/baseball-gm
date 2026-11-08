@@ -32,6 +32,7 @@ import {
 
 import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import * as Finance from './FinanceEngine.js';
+import { clockNow } from './Clock.js';
 
 // ─────────────────────────────────────────────────────────────
 // TRADE VALUE CALCULATION
@@ -285,7 +286,7 @@ export function generateCPUCashSale(teamId, state, context = {}) {
   const team = _club(state, teamId);
   if (!team || clubMode(state, teamId) !== 'seller') return null;
   if (!context.force && Math.random() > 0.04) return null;
-  const now = context.atMs || Date.now();
+  const now = context.atMs || clockNow();
   const pool = (team.rosterIds || []).map(id => state.players[id])
     .filter(p => p && isAvailable(p) && !p.isInjured && !contractRunOut(p, state) && !_isKey(p, state, teamId)
               && !(p._acquiredAtMs && now - p._acquiredAtMs < TRADE.noFlipMs) && wouldStart(p, state, 'user'));
@@ -452,7 +453,7 @@ export function talkWith(state, teamId) {
  * Are we in talks with this club right now — waiting to hear back, or
  * holding an answer we haven't acted on?
  */
-export function talkIsOpen(state, teamId, nowMs = Date.now()) {
+export function talkIsOpen(state, teamId, nowMs = clockNow()) {
   const t = talkWith(state, teamId);
   if (!t) return false;
   if ((t.replyAtMs || 0) > nowMs) return true;                    // their answer hasn't reached us yet
@@ -676,7 +677,7 @@ export function tradeBlockers(offer, state, atMs, teamId) {
  * for cash or another piece, or keeping salary) until TRADE.maxRounds, when
  * talks fizzle. Far off, it declines — a lowball if very far.
  */
-export function cpuRespond(offer, state, teamId, { round = 1, atMs = Date.now() } = {}) {
+export function cpuRespond(offer, state, teamId, { round = 1, atMs = clockNow() } = {}) {
   const blocked = tradeBlockers(offer, state, atMs, teamId);
   if (blocked) return { decision: 'decline', reason: blocked };
   const ev = evaluateForClub(offer, state, teamId);
@@ -720,7 +721,7 @@ export function buildCounter(offer, state, teamId, gap, ev = evaluateForClub(off
     const u = state.userTeam;
     const pool = [...(u.farmIds || []), ...(u.rosterIds || [])].map(id => state.players[id])
       .filter(p => p && !next.outgoingIds.includes(p.id) && !_isKey(p, state, 'user') && !p.isInjured && p.group !== PLAYER_GROUP.IN_TRANSIT && !contractRunOut(p, state)
-                && !(p._acquiredAtMs && Date.now() - p._acquiredAtMs < TRADE.noFlipMs));
+                && !(p._acquiredAtMs && clockNow() - p._acquiredAtMs < TRADE.noFlipMs));
     for (const p of pool) {
       const add = valueToClub(p, state, teamId, true);
       if (add >= gap) options.push({ kind: 'player', over: add - gap, id: p.id, apply: (o) => { o.outgoingIds.push(p.id); } });

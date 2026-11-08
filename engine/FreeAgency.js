@@ -14,6 +14,7 @@ import * as Finance from './FinanceEngine.js';
 import { signingTerms, signToClub } from './MarketEngine.js';
 import { marketTerms, hasRoomFor, signFreeAgent } from './OffseasonEngine.js';
 import { rosterIsFull, sideOf } from './TransactionEngine.js';
+import { clockNow } from './Clock.js';
 
 const isP = (p) => ['SP', 'RP'].includes(p?.pos);
 const REGULAR = new Set([PHASE.REGULAR_SEASON, PHASE.ALL_STAR_BREAK, PHASE.TRADE_DEADLINE]);
@@ -105,7 +106,7 @@ export function signBlocker(state, playerId, dropId = null) {
 }
 
 /** Why we can't put in a claim on this player (null when we can). */
-export function claimBlocker(state, playerId, dropId = null, nowMs = Date.now()) {
+export function claimBlocker(state, playerId, dropId = null, nowMs = clockNow()) {
   const p = state.players[playerId];
   if (!p || !p.onWaivers || !(state.waiverPool || []).includes(playerId)) return 'no longer on waivers';
   if (p._waivedBy === 'user') return 'we put this player on waivers';

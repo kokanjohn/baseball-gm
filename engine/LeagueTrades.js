@@ -34,6 +34,8 @@ import {
 } from './TradeEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { isAvailable } from './PlayerFactory.js';
+import { clockNow } from './Clock.js';
+import { dice } from './Dice.js';
 
 const _club = (state, id) => (id === 'user' ? state.userTeam : (state.leagueTeams || []).find(t => t.id === id) || null);
 const _isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
@@ -206,7 +208,7 @@ export function leagueTradeTx(deal, atMs) {
  * Returns a deal, or null when nothing works.
  */
 export function buildPackage(state, buyerId, sellerId, targetIds, opts = {}) {
-  const atMs = opts.atMs ?? Date.now();
+  const atMs = opts.atMs ?? clockNow();
   const sellerBar = opts.sellerBar ?? 0;
   const targets = targetIds.map(id => state.players[id]).filter(Boolean);
   if (!targets.length || targets.some(p => !movable(p, atMs, state))) return null;
@@ -300,8 +302,10 @@ function _dailyChance(state) {
 /**
  * findLeagueTrades(state, atMs, rand) — the trades CPU clubs make today
  * (each club in at most one). Returns deals with `why`: { need, mode }.
+ * rand: §118 this desk's Dice stream (who calls first, who's shopping today).
  */
-export function findLeagueTrades(state, atMs, rand = Math.random) {
+export function findLeagueTrades(state, atMs, rand) {
+  if (typeof rand !== 'function') throw new Error('LeagueTrades.findLeagueTrades: rand (the desk\'s Dice stream) is required');
   if (!tradeWindow(state).open) return [];
   const desk = state.tradeDesk || {};
   const clubs = (state.leagueTeams || []).filter(t => !(atMs - (desk.lastTradeMs?.[t.id] || -Infinity) < LEAGUE_TRADES.clubRestMs));
@@ -432,10 +436,18 @@ export function askingOffer(state, sellerId, playerId, atMs, { premium = true, s
   return { deal: ask, room: !!fair && _ourNet(state, fair) > _ourNet(state, ask) + 2 };
 }
 
-/** When the trade desk next opens (one moment a day, late morning to evening). */
-export function nextDeskAt(afterMs, rand = Math.random) {
+/**
+ * When the trade desk next opens (one moment a day, late morning to evening).
+ * §118 the hour is that day's own draw (seed + the day), so it's the same
+ * whenever and however often it's worked out.
+ * @param {Number} afterMs
+ * @param {String} seed — Dice.diceSeed(state)
+ */
+export function nextDeskAt(afterMs, seed) {
+  if (seed == null) throw new Error('LeagueTrades.nextDeskAt: seed is required');
   const d = new Date(afterMs);
   d.setHours(24, 0, 0, 0);                       // the next calendar day
+  const rand = dice(seed, 'desk-at', `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`);
   d.setHours(10 + Math.floor(rand() * 8), Math.floor(rand() * 60), 0, 0);
   return d.getTime();
 }

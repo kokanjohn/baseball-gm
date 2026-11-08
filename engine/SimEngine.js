@@ -164,6 +164,21 @@ export function computeWinProbability(userRoster, opponentTeam, players, context
  * @returns {Object} { plays, boxScore }
  */
 export function generatePlays(game, userTeam, opponentTeam, players, context) {
+  return _withDice(context, 'generatePlays', () => _generatePlays(game, userTeam, opponentTeam, players, context));
+}
+
+// §118 Every draw in a game comes from that game's own stream (Dice.dice — the
+// caller names it), so the same game plays out the same way whenever it's
+// simulated: the look-ahead and the real first pitch agree.
+let _rand = null;
+function _withDice(context, who, fn) {
+  if (typeof context?.rand !== 'function') throw new Error(`SimEngine.${who}: context.rand (the game's Dice stream) is required`);
+  const prev = _rand;
+  _rand = context.rand;
+  try { return fn(); } finally { _rand = prev; }
+}
+
+function _generatePlays(game, userTeam, opponentTeam, players, context) {
   const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false, scout = null, staff = null } = context;
   // §102.2 the weather this game is played in: its plan (GameWeather.gameWeatherPlan)
   // and the park report through it (GameWeather.gameConditions). Optional.
@@ -351,6 +366,10 @@ export function resumeMinutesLeft(R) {
  *     puts them on the day's clock), boxScore (the whole game), liveLineups }
  */
 export function generateResumption(game, userTeam, opponentTeam, players, context) {
+  return _withDice(context, 'generateResumption', () => _generateResumption(game, userTeam, opponentTeam, players, context));
+}
+
+function _generateResumption(game, userTeam, opponentTeam, players, context) {
   const { resumeState: R, partOne = [], liveLineups = {}, phase = PHASE.REGULAR_SEASON, isSpring = false, norms = null, staff = null } = context;
   const effOpp = opponentTeam || _buildSyntheticCPUTeam(players);
   const clubs = { user: userTeam, opp: effOpp };
@@ -1095,7 +1114,7 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   if (r >= pos + adjHitProb) {
     // Out — groundout vs flyout split
     const groundoutProb = 0.55; // slight groundout lean
-    return { type: Math.random() < groundoutProb ? 'groundout' : 'flyout' };
+    return { type: _roll() < groundoutProb ? 'groundout' : 'flyout' };
   }
 
   // 5. Hit type: HR / triple / double / single — power sets the extra-base share
@@ -1813,7 +1832,7 @@ function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, 
   gs[`${side}Used`].add(reliever.id);
   const rp = players[reliever.id];
   gs[`${side}TireAt`] = gs.exhibition ? Infinity : tireAfterBF(rp, false, carriedTired);
-  gs[`${side}Target`] = gs.exhibition ? _pitcherTargetInnings(rp, gs) : reliefInnings(role);
+  gs[`${side}Target`] = gs.exhibition ? _pitcherTargetInnings(rp, gs) : reliefInnings(role, _roll);
 
   // The first play of the half the new pitcher works: nobody out, bases empty.
   const prev = plays[plays.length - 1];
@@ -2759,11 +2778,11 @@ function _isOut(type) {
 }
 
 function _roll() {
-  return Math.random();
+  return _rand();
 }
 
 function _rng(lo, hi) {
-  return lo + Math.floor(Math.random() * (hi - lo + 1));
+  return lo + Math.floor(_rand() * (hi - lo + 1));
 }
 
 function _clamp(val, min, max) {

@@ -16,6 +16,7 @@
  * Pure: never imports StateManager.
  */
 
+import { diceId } from './Dice.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../data/constants.js';
 import { createPlayer, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor } from './OffseasonEngine.js';
@@ -41,7 +42,7 @@ export const MARKET_KINDS = Object.freeze({
  * state — the caller adds it with addToMarket() if the card is delivered).
  * @returns {{ player, generated: Boolean }|null}
  */
-export function marketCandidate(state, { kind = 'depth', side = 'hitter', pos = null, minOvr = 0 } = {}, exclude = new Set()) {
+export function marketCandidate(state, { kind = 'depth', side = 'hitter', pos = null, minOvr = 0, rand } = {}, exclude = new Set()) {
   const level = state.leagueTalentOffset || 0;
   const prof = MARKET_KINDS[kind] || MARKET_KINDS.depth;
   const year = baseballYear(state);
@@ -53,23 +54,25 @@ export function marketCandidate(state, { kind = 'depth', side = 'hitter', pos = 
   const pool = (state.freeAgentPool || []).map(id => state.players[id]).filter(fits)
     .sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
   if (pool.length) return { player: pool[0], generated: false };
-  const player = generateMarketPlayer(state, { kind, side, pos, minOvr });
+  const player = generateMarketPlayer(state, { kind, side, pos, minOvr, rand });
   return player ? { player, generated: true } : null;
 }
 
 /** A new player at the league's level (not added to state). */
-export function generateMarketPlayer(state, { kind = 'depth', side = 'hitter', pos = null, minOvr = 0 } = {}) {
+export function generateMarketPlayer(state, { kind = 'depth', side = 'hitter', pos = null, minOvr = 0, rand } = {}) {
+  if (typeof rand !== 'function') throw new Error('MarketEngine.generateMarketPlayer: rand is required');
   const level = state.leagueTalentOffset || 0;
   const prof = MARKET_KINDS[kind] || MARKET_KINDS.depth;
-  const name = _newName(state);
+  const name = newPlayerName(state.players, rand);   // §82
   if (!name) return null;
-  const position = side === 'pitcher' ? (pos === 'SP' || pos === 'RP' ? pos : (Math.random() < 0.5 ? 'SP' : 'RP'))
-    : (pos && pos !== 'DH' ? pos : HITTER_POS[Math.floor(Math.random() * HITTER_POS.length)]);
+  const position = side === 'pitcher' ? (pos === 'SP' || pos === 'RP' ? pos : (rand() < 0.5 ? 'SP' : 'RP'))
+    : (pos && pos !== 'DH' ? pos : HITTER_POS[Math.floor(rand() * HITTER_POS.length)]);
   const p = createPlayer({
-    id: crypto.randomUUID(), name, pos: position,
+    id: diceId(rand), name, pos: position,
     group: PLAYER_GROUP.FREE_AGENT,
-    hand: side === 'pitcher' ? (Math.random() < 0.28 ? 'L' : 'R') : null,
-    targetOvr: Math.max(minOvr, level + prof.ovrMin + Math.floor(Math.random() * (prof.ovrMax - prof.ovrMin + 1))),
+    hand: side === 'pitcher' ? (rand() < 0.28 ? 'L' : 'R') : null,
+    targetOvr: Math.max(minOvr, level + prof.ovrMin + Math.floor(rand() * (prof.ovrMax - prof.ovrMin + 1))),
+    rand,
     ageMin: prof.ageMin, ageMax: prof.ageMax,
     seasonNum: state.seasonNum || 1, seasonYear: baseballYear(state),
     contractLengthOverride: 1, teamId: null, leagueLevel: level,
@@ -211,7 +214,4 @@ function _inSeason(draft) {
   return ![PHASE.OFFSEASON, PHASE.SEASON_SUMMARY].includes(draft.phase);
 }
 
-/** §82 */
-function _newName(state) {
-  return newPlayerName(state.players);
-}
+

@@ -39,6 +39,7 @@ let _state      = null;   // The active game state object in memory
 let _activeSlotId = null; // The slotId of the currently loaded slot
 let _saveTimer  = null;   // Debounce handle for auto-save
 let _isPremium  = false;  // Premium flag — set by app bootstrap
+let _speculating = false; // §118 inside speculate(): a scratch copy, never saved
 
 const SAVE_DEBOUNCE_MS = 2000; // Auto-save delay after last mutation
 
@@ -148,8 +149,38 @@ export function set(path, value) {
 export function mutate(fn) {
   _assertLoaded();
   fn(_state);
-  _scheduleSave();
+  if (!_speculating) _scheduleSave();
 }
+
+/**
+ * speculate(fn)
+ * §118 The look-ahead: run engine code against a scratch copy of the active
+ * state. Inside fn, get() and mutate() see and change only the copy; nothing
+ * is saved; the real state is back untouched afterwards (even on a throw).
+ * fn must be synchronous — an await inside would let the app run against the
+ * copy. Returns fn's result (which must not hold references into the copy
+ * that the caller then mutates).
+ * @param {Function} fn — () => any
+ * @returns {any}
+ */
+export function speculate(fn) {
+  _assertLoaded();
+  if (_speculating) throw new Error('StateManager.speculate: already speculating');
+  const real = _state;
+  _state = structuredClone(real);
+  _speculating = true;
+  try {
+    const out = fn();
+    if (out && typeof out.then === 'function') throw new Error('StateManager.speculate: fn must be synchronous');
+    return out;
+  } finally {
+    _state = real;
+    _speculating = false;
+  }
+}
+
+/** Is a look-ahead running? (engines don't need to ask; the app's guards do) */
+export function isSpeculating() { return _speculating; }
 
 // ─────────────────────────────────────────────────────────────
 // PERSISTENCE
@@ -163,6 +194,7 @@ export function mutate(fn) {
  */
 export async function save() {
   _assertLoaded();
+  if (_speculating) return;            // §118 a scratch copy is never saved
   _cancelScheduledSave();
 
   _state._savedAt = Date.now();

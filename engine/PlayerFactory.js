@@ -95,6 +95,16 @@ export function computeOVR(subRatings, injuryPenalty = null) {
  * @returns {Object} Complete PlayerObject
  */
 export function createPlayer(config) {
+  // §118 every draw for a new player comes from the caller's stream.
+  if (typeof config?.rand !== 'function') throw new Error('PlayerFactory.createPlayer: config.rand is required');
+  const prev = _rand;
+  _rand = config.rand;
+  try { return _createPlayer(config); } finally { _rand = prev; }
+}
+
+let _rand = null;
+
+function _createPlayer(config) {
   const {
     id,
     name,
@@ -315,12 +325,12 @@ function _freshCareerStats(isPitcher, ovr, seasonNum) {
 // ─────────────────────────────────────────────────────────────
 
 function _generateTrait(age, ovr) {
-  if (Math.random() > 0.40) return null;
+  if (_rand() > 0.40) return null;
 
   if (age >= 32) return 'veteran';
   if (age <= 23) return 'youngGun';
 
-  const r = Math.random();
+  const r = _rand();
   if (ovr >= 70 && r < 0.25) return 'clubhouseLeader';
   if (r < 0.20) return 'volatile';
   if (age >= 26 && r < 0.50) return 'consistent';
@@ -332,7 +342,7 @@ function _generateTrait(age, ovr) {
 // ─────────────────────────────────────────────────────────────
 
 function _generateContractLength(ovr, group) {
-  const r = Math.random();
+  const r = _rand();
   if (group === PLAYER_GROUP.PRACTICE_SQUAD) {
     // Farm players always get short deals
     return r < 0.6 ? 1 : 2;
@@ -422,7 +432,7 @@ function _isPitcherGroup(group) {
 
 /** Integer random inclusive [lo, hi] */
 function _rng(lo, hi) {
-  return lo + Math.floor(Math.random() * (hi - lo + 1));
+  return lo + Math.floor(_rand() * (hi - lo + 1));
 }
 
 export function clamp(val, min, max) {

@@ -42,6 +42,7 @@ import {
 import { eligibleSlotsFor } from './RosterEngine.js';
 import { isAvailable } from './PlayerFactory.js';
 import * as Finance from './FinanceEngine.js';
+import { clockNow } from './Clock.js';
 
 const SQUAD_IDS = new Set(Object.values(ALLSTAR_SQUAD_IDS));
 const HOST_TIER  = [2, 3, 5];                 // prestige tier for 1st / 2nd / 3rd+ hosting
@@ -239,7 +240,7 @@ function _hostingPayoff(draft) {
   const scale = clamp(0.5 * (atmo / 100) + 0.5 * (tier / 5), 0, 1);
   const share = ALLSTAR_HOSTING_REVENUE_SHARE_MIN + (ALLSTAR_HOSTING_REVENUE_SHARE_MAX - ALLSTAR_HOSTING_REVENUE_SHARE_MIN) * scale;
   const bonus = Math.round((u.finances?.payrollTarget || 0) * share / 10) * 10;
-  Finance.post(u.finances, bonus, 'allstar', "All-Star Game — the host's share", Date.now());   // §78
+  Finance.post(u.finances, bonus, 'allstar', "All-Star Game — the host's share", clockNow());   // §78
   u.atmosphere = clamp(atmo + ALLSTAR_HOSTING_ATMOS_BUMP, 0, 100);
   u.ownerTrust = clamp((u.ownerTrust ?? 60) + ALLSTAR_HOSTING_OWNER_TRUST_BUMP, 0, 100);
   const rels = { ...(u.gmRelationships || {}) };
@@ -475,7 +476,7 @@ export const userSelections = _userSelections;
  */
 export function prepareForGame(draft) {
   const s = seasonOf(draft);
-  if (!s.squads) selectSquads(draft, Date.now());
+  if (!s.squads) selectSquads(draft, clockNow());
   const n = _norms(draft);
   const out = [];
   // Still a big-leaguer and able to play (a player traded this week, between
