@@ -43,6 +43,7 @@ import { eligibleSlotsFor } from './RosterEngine.js';
 import { isAvailable } from './PlayerFactory.js';
 import * as Finance from './FinanceEngine.js';
 import { clockNow } from './Clock.js';
+import { eventRand } from './Dice.js';
 
 const SQUAD_IDS = new Set(Object.values(ALLSTAR_SQUAD_IDS));
 const HOST_TIER  = [2, 3, 5];                 // prestige tier for 1st / 2nd / 3rd+ hosting
@@ -65,7 +66,7 @@ const ERA_PRIOR_IP = 30;
 const PLAYING_TIME_FLOOR = 0.5;
 const playingTime = (share) => PLAYING_TIME_FLOOR + (1 - PLAYING_TIME_FLOOR) * clamp(share, 0, 1);
 
-const rnd   = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
+const rnd   = (lo, hi) => lo + Math.floor(eventRand() * (hi - lo + 1));
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // ─────────────────────────────────────────────────────────────
@@ -92,7 +93,7 @@ export function newSeason(seasonNum) {
  */
 export function createAllStarState(state, baseYear) {
   const ids = (state.leagueTeams || []).map(t => t.id);
-  for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }
+  for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(eventRand() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }
   return {
     hostingScore: 0, hostedCount: 0, lastHostedSeason: null,
     hosts: ids.map((teamId, i) => ({ year: baseYear - ids.length + i, seasonNum: null, teamId })),
@@ -213,7 +214,7 @@ export function nameHost(draft, atMs) {
     for (const h of draft.allStar.hosts || []) if (last.has(h.teamId)) last.set(h.teamId, Math.max(last.get(h.teamId), h.year));
     const oldest = Math.min(...last.values());
     const pool = [...last.entries()].filter(([, y]) => y === oldest).map(([id]) => id);
-    hostId = pool[Math.floor(Math.random() * pool.length)];
+    hostId = pool[Math.floor(eventRand() * pool.length)];
   }
   s.hostId = hostId;
   s.announcedAtMs = atMs;
@@ -517,7 +518,7 @@ export function prepareForGame(draft) {
       const can = (st) => !subs[st.id] && (st.slot === 'DH' || eligibleSlotsFor(rp).includes(st.slot));
       const st = openStarters.find(can) || openStarters.find(x => !subs[x.id] && x.slot === 'DH')
               || openStarters.find(x => !subs[x.id]);
-      if (st) subs[st.id] = { inId: r.id, inning: ALLSTAR_SUBS_FROM_INNING + Math.floor(Math.random() * 3) };
+      if (st) subs[st.id] = { inId: r.id, inning: ALLSTAR_SUBS_FROM_INNING + Math.floor(eventRand() * 3) };
     }
     sq.simSubs = subs;
     const staff = [...sq.sp, ...sq.rp].filter(x => fit(x.id));
@@ -525,7 +526,7 @@ export function prepareForGame(draft) {
     sq.simStarter = starter?.id || null;
     const closer = [...sq.rp].filter(x => fit(x.id)).sort((a, b) => (draft.players[b.id]?.stats?.sv || 0) - (draft.players[a.id]?.stats?.sv || 0))[0];
     const rest = staff.filter(x => x.id !== sq.simStarter && x.id !== closer?.id).map(x => x.id);
-    for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
+    for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(eventRand() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
     sq.simBullpen = [...rest.slice(0, 7), ...(closer ? [closer.id] : []), ...rest.slice(7)];
     sq.simBench = sq.reserves.filter(r => fit(r.id)).map(r => r.id);
   }

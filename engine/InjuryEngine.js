@@ -65,7 +65,7 @@ import {
 } from '../data/constants.js';
 
 import { computeAge, computeOVR, baseballYear } from './PlayerFactory.js';
-import { dice, diceSeed } from './Dice.js';
+import { dice, diceSeed, eventRand } from './Dice.js';
 import { clockNow } from './Clock.js';
 
 const MS_PER_DAY = 86_400_000;
@@ -318,12 +318,12 @@ export function processRetirements(state) {
     // Soft retirement — age + OVR threshold
     if (!retires && age >= RETIREMENT_AGE_SOFT && player.ovr < RETIREMENT_OVR_SOFT) {
       // 60% chance of retiring at soft threshold
-      retires = Math.random() < 0.60;
+      retires = eventRand() < 0.60;
     }
 
     // Farm retirement — low OVR + extended farm time
     if (!retires && player.tier === 'farm' && player.ovr < RETIREMENT_OVR_FARM) {
-      retires = Math.random() < 0.25;
+      retires = eventRand() < 0.25;
     }
 
     if (!retires) continue;
@@ -384,7 +384,7 @@ export function assignFarmArc(player, now = clockNow()) {
 
   // Normalize
   const total   = motivationProb + declineProb + FARM_ARC_STABLE_PROB_BASE;
-  const r       = Math.random() * total;
+  const r       = eventRand() * total;
   const arc     = r < motivationProb ? 'motivation'
     : r < motivationProb + declineProb ? 'decline'
     : 'stable';
@@ -574,5 +574,5 @@ function _prognosisText(severity) {
 }
 
 function _rollFloat(min, max) {
-  return min + Math.random() * (max - min);
+  return min + eventRand() * (max - min);
 }

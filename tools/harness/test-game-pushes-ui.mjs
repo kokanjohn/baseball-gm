@@ -98,11 +98,15 @@ const swapped = await page.evaluate(async () => {
   return { dh: SM.get().userTeam.lineupSlots.find(x => x.slot === 'DH')?.playerId, bench: bench?.id, idx: SM.get().currentGameIndex, status: SM.get().schedule[SM.get().currentGameIndex]?.status };
 });
 console.log('    the change:', JSON.stringify(swapped));
-await page.waitForTimeout(2500);
-const after = gameItems(regs.at(-1)), exp2 = await expected();
+// r139 worked out again in the look-ahead's worker a moment after the change (up to 10 s here).
+const exp2 = await expected();
+const t2 = Date.now();
+for (let k = 0; k < 40 && !same(gameItems(regs.at(-1)), exp2); k++) await page.waitForTimeout(250);
+const after = gameItems(regs.at(-1));
+console.log(`    re-sent ${((Date.now() - t2) / 1000).toFixed(1)} s after the change`);
 console.log(`    after the change: ${after.map(i => i.title).join(' | ')} (expected: ${exp2.map(i => i.title).join(' | ')})${same(after, first) ? ' (the game goes the same way)' : ''}`);
 check('after a GM change the registered pushes match the game as it now will go', same(after, exp2), JSON.stringify(after).slice(0, 200));
-check('…sent at once (no one-minute wait)', regs.length > n0 || same(exp2, first));
+check('…within seconds (the worker, not a one-minute wait)', (regs.length > n0 || same(exp2, first)) && Date.now() - t2 < 10_000);
 
 // 3. Settings.
 await page.click('#settings-btn');

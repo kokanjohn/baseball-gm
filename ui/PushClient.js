@@ -32,14 +32,25 @@
  * just running, and at once when it matters: going to the background (the
  * last word before the app closes), a GM decision, a roster move.
  *
+ * r139 (§121) the schedule also carries every message through the next 24
+ * hours as the world will make it with the app closed (LookAhead.foresee: the
+ * trade desk's offers, the trainer's reports, IL returns, open spots, the
+ * offseason's decisions). The foresight is kept until something only the GM
+ * can change changes (StateManager.inputRevision — an answer, a roster move, a
+ * setting; the world moving on doesn't count, it's what the look-ahead
+ * played), the next game changes, or four hours pass. It's recomputed in a
+ * worker (ui/ForesightWorker.js) a moment after an input, so the page never
+ * stutters; on the page only if the app is closing before that's done.
+ *
  * Browser-only module (navigator / fetch). Not imported by engines or the harness.
  */
 
 import { PUSH_WORKER_URL } from '../data/constants.js';
 import * as StateManager from '../store/StateManager.js';
 import { getPushSchedule } from '../engine/CardEngine.js';
-import { lookAhead } from '../engine/LookAhead.js';
+import { foresee } from '../engine/LookAhead.js';
 import { getNextGame } from '../engine/GameEngine.js';
+import { seenMoments } from '../engine/CardEngine.js';
 
 export const NOTIF_PREF_KEY = 'bgm_notif_enabled';
 const DEVICE_ID_KEY  = 'bgm_push_device_id';
@@ -52,10 +63,15 @@ const META_DB = 'bgm-push', META_STORE = 'meta';
 let _syncTimer = null;
 let _syncFresh = false;   // r138 a pending sync must rerun the look-ahead
 let _lastSyncSignature = '';
-// r138 the look-ahead, kept until the save changes (StateManager.revision).
-const AHEAD_THROTTLE_MS = 60_000;          // while the app just runs (the world's clock changes the save often)
-const AHEAD_HORIZON_MS  = 36 * 3600_000;   // further out, the next visit will look again
-let _ahead = { rev: -1, at: 0, L: null };
+// r139 §121 the foresight: our next game and the next day's messages.
+const GAME_HORIZON_MS   = 36 * 3600_000;   // our next game, if it's this close (else the next visit looks)
+const MESSAGES_AHEAD_MS = 24 * 3600_000;   // every message through the next day
+const REFRESH_AFTER_MS  = 4 * 3600_000;    // looked again while the app is open, before the horizon runs down
+const SETTLE_MS         = 1500;            // after an input, before looking again (taps come in runs)
+let _fs = null;            // { inputRev, at, nextGameTime, game, foreseen }
+let _fsJob = null;         // { id, inputRev } — a worker run in flight
+let _fsTimer = null;
+let _worker, _workerSeq = 0;
 
 export function pushSupported() {
   return typeof window !== 'undefined'
@@ -80,7 +96,7 @@ export async function enablePush() {
   localStorage.setItem(NOTIF_PREF_KEY, 'true');
   try {
     const sub = await _getSubscription({ create: true });
-    await _register(_currentSchedule(), sub);
+    await _register(_currentSchedule({ fresh: true }), sub);
     _lastSyncSignature = '';
     return 'granted';
   } catch (err) {
@@ -97,7 +113,7 @@ export async function enablePush() {
 export function syncPushSchedule({ immediate = false, fresh = false } = {}) {
   if (!pushSupported() || Notification.permission !== 'granted') return;
   clearTimeout(_syncTimer);
-  _syncFresh = _syncFresh || fresh || immediate;
+  _syncFresh = _syncFresh || fresh;   // r139 only a closing app works the foresight out on the page
   const run = () => {
     const f = _syncFresh; _syncFresh = false;
     _syncNow({ fresh: f }).catch(err => console.warn('[PushClient] sync failed:', err.message));
@@ -147,7 +163,7 @@ export async function sendTestPush() {
     tag:       'bgm-test-closed',
   };
   try { localStorage.setItem(TEST_ITEM_KEY, JSON.stringify(later)); } catch { /* private mode */ }
-  try { await _register(_currentSchedule(), sub); } catch { /* reported via result */ }
+  try { await _register(_currentSchedule({ fresh: true }), sub); } catch { /* reported via result */ }
   _lastSyncSignature = '';
   return result;
 }
@@ -169,7 +185,7 @@ export async function deviceStatus() {
   if (pushPaused()) return { state: 'paused' };
   let sub;
   try {
-    await _syncNow();
+    await _syncNow({ fresh: false });
     sub = await _getSubscription({ create: false });
   } catch (err) {
     return { state: err?.code === 'unreachable' ? 'unreachable' : 'unregistered' };
@@ -195,32 +211,93 @@ export async function deviceStatus() {
 // INTERNALS
 // ─────────────────────────────────────────────────────────────
 
-function _currentSchedule({ fresh = true } = {}) {
+/**
+ * foresightStatus() — r139 what the push schedule's look-ahead holds now (for
+ * diagnostics and the harness): when it was worked out, where, how long it
+ * took, how many messages and whether our next game is in it.
+ */
+export function foresightStatus() {
+  return _fs ? { at: _fs.at, where: _fs.where || 'page', ms: _fs.ms ?? null, valid: _foresightValid(),
+                 messages: _fs.foreseen?.messages?.length ?? 0, untilMs: _fs.foreseen?.untilMs ?? null, game: !!_fs.game,
+                 inputRev: _fs.inputRev, pending: !!_fsJob } : { pending: !!_fsJob };
+}
+
+/**
+ * The schedule to send now, or null when the foresight is stale and being
+ * worked out (the worker's answer syncs). `fresh`: the app may be about to
+ * close — work it out here, now, if it isn't ready.
+ */
+function _currentSchedule({ fresh = false } = {}) {
   if (pushPaused()) return [];
   const state = StateManager.get();
-  const items = state ? getPushSchedule(state, Date.now(), _lookAheadFor(state, fresh)) : [];
+  if (!state) return [];
+  let fs = _foresightValid() ? _fs : null;
+  if (!fs && fresh) fs = _foreseeHere();
+  if (!fs) { _foreseeSoon(); return null; }
+  const items = getPushSchedule(state, Date.now(), fs.game, fs.foreseen);
   const test = _pendingTestItem();
   return test ? [test, ...items].sort((a, b) => a.deliverAt - b.deliverAt) : items;
 }
 
-/**
- * r138 our next game as it will happen (null when there's none soon). Rerun
- * when the save changed since — at once when `fresh`, else at most once a
- * minute. A failure leaves the game's pushes out rather than guessing.
- */
-function _lookAheadFor(state, fresh) {
-  const rev = StateManager.revision(), now = Date.now();
-  if (rev === _ahead.rev) return _ahead.L;
-  if (!fresh && now - _ahead.at < AHEAD_THROTTLE_MS) return _ahead.L;
-  let L = null;
+/** Still what the world will do: no input since, the same next game, and not too old. */
+function _foresightValid() {
+  if (!_fs) return false;
+  if (_fs.inputRev !== StateManager.inputRevision()) return false;
+  if (Date.now() - _fs.at > REFRESH_AFTER_MS) return false;
+  return (getNextGame()?.gameTime ?? null) === _fs.nextGameTime;
+}
+
+/** On the page (no worker, or the app is closing). A failure leaves the foresight out rather than guessing. */
+function _foreseeHere() {
+  const now = Date.now(), inputRev = StateManager.inputRevision();
   try {
-    const g = getNextGame();
-    if (g && Number.isFinite(g.gameTime) && g.gameTime - now <= AHEAD_HORIZON_MS) L = lookAhead(now);
+    const t0 = performance.now();
+    const out = foresee(now, now + MESSAGES_AHEAD_MS, GAME_HORIZON_MS);
+    _fs = { inputRev, at: now, ...out, where: 'page', ms: Math.round(performance.now() - t0) };
   } catch (err) {
     console.warn('[PushClient] look-ahead failed:', err?.message);
+    _fs = { inputRev, at: now, nextGameTime: getNextGame()?.gameTime ?? null, game: null, foreseen: null };
   }
-  _ahead = { rev, at: now, L };
-  return L;
+  return _fs;
+}
+
+/** In the worker, a moment from now (a run of taps settles first); its answer syncs. */
+function _foreseeSoon() {
+  if (_fsTimer) return;
+  _fsTimer = setTimeout(() => {
+    _fsTimer = null;
+    if (_foresightValid() || _fsJob?.inputRev === StateManager.inputRevision()) return;
+    const w = _getWorker();
+    if (!w) { _foreseeHere(); _syncNow({ fresh: false }).catch(() => {}); return; }
+    const now = Date.now(), id = ++_workerSeq, inputRev = StateManager.inputRevision();
+    _fsJob = { id, inputRev };
+    let state;
+    try { state = StateManager.get(); } catch { return; }
+    w.postMessage({ id, state, nowMs: now, untilMs: now + MESSAGES_AHEAD_MS, gameHorizonMs: GAME_HORIZON_MS, seenMoments: seenMoments() });
+    _fsJob.at = now;
+  }, SETTLE_MS);
+}
+
+function _getWorker() {
+  if (_worker !== undefined) return _worker;
+  try {
+    _worker = new Worker(new URL('./ForesightWorker.js', import.meta.url), { type: 'module' });
+    _worker.onmessage = (e) => {
+      const d = e.data || {};
+      const job = _fsJob;
+      if (!job || d.id !== job.id) return;
+      _fsJob = null;
+      if (d.error) { console.warn('[PushClient] look-ahead (worker) failed:', d.error); return; }
+      // An input while it ran: it's already stale — look again.
+      if (job.inputRev !== StateManager.inputRevision()) { _foreseeSoon(); return; }
+      _fs = { inputRev: job.inputRev, at: job.at, nextGameTime: d.nextGameTime, game: d.game, foreseen: d.foreseen, where: 'worker', ms: d.ms };
+      _syncNow({ fresh: false }).catch(err => console.warn('[PushClient] sync failed:', err.message));
+    };
+    _worker.onerror = (e) => { console.warn('[PushClient] look-ahead worker unavailable:', e?.message); _worker = null; _fsJob = null; };
+  } catch {
+    _worker = null;   // no module workers here: the page does it
+  }
+  return _worker;
 }
 
 /** Send Test's closed-app item while it's still due to send (r134). */
@@ -237,14 +314,22 @@ function _pendingTestItem() {
  * place the app asks), so a missing or wrong-key subscription is a fault to
  * repair here — never a reason to stop syncing.
  */
-async function _syncNow({ fresh = true } = {}) {
+async function _syncNow({ fresh = false } = {}) {
   const sub       = await _getSubscription({ create: true });
   const schedule  = _currentSchedule({ fresh });
+  if (!schedule) {
+    // r139 being worked out (the worker's answer syncs the schedule). The device is
+    // registered meanwhile — the worker keeps the schedule it has (no `schedule` field).
+    if (_registeredEndpoint !== sub.endpoint) { await _register(undefined, sub); _registeredEndpoint = sub.endpoint; }
+    return;
+  }
   const signature = JSON.stringify([sub.endpoint, schedule.map(i => [i.id, i.deliverAt, i.title, i.body])]);
   if (signature === _lastSyncSignature) return;
   await _register(schedule, sub);
   _lastSyncSignature = signature;
+  _registeredEndpoint = sub.endpoint;
 }
+let _registeredEndpoint = null;   // r139 this session registered this subscription with the worker
 
 async function _register(schedule, sub) {
   if (!sub) throw new Error('no push subscription');

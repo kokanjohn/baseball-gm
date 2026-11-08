@@ -32,6 +32,7 @@ import {
 
 import { LEAGUE_TEAMS } from './LeagueFactory.js';
 import { clockNow } from './Clock.js';
+import { eventRand } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -95,7 +96,7 @@ export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride
   while (played < SPRING_TRAINING_GAME_COUNT) {
     if (!SPRING_OFF_DAYS.has(offset)) {
       for (const [a, b] of springRounds[played % springRounds.length]) {
-        const home = Math.random() < 0.5;
+        const home = eventRand() < 0.5;
         put(offset, { homeId: home ? a : b, awayId: home ? b : a, isSpring: true,
                       seriesId: `st-${played}-${a}-${b}`, seriesGame: 1, seriesLength: 1 });
       }
@@ -116,7 +117,7 @@ export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride
     const stagger = r % 2 === 1;  // every other round: half the pairs start a day later
     pairs.forEach(([a, b], k) => {
       const key  = a < b ? `${a}|${b}` : `${b}|${a}`;
-      let host   = homeNext.get(key) || (Math.random() < 0.5 ? a : b);
+      let host   = homeNext.get(key) || (eventRand() < 0.5 ? a : b);
       homeNext.set(key, host === a ? b : a);
       const away = host === a ? b : a;
       const shift = stagger && k % 2 === 1 ? 1 : 0;
@@ -147,7 +148,7 @@ export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride
     for (const g of byOffset.get(off)) {
       const times    = off === firstSpringDay ? [SPRING_TRAINING_FIRST_GAME_TIME]
                      : (GAME_TIMES_BY_DOW[dow] || ['7:05 PM']);
-      const gameTime = _parseGameTime(times[Math.floor(Math.random() * times.length)], realDate);
+      const gameTime = _parseGameTime(times[Math.floor(eventRand() * times.length)], realDate);
       const userSide = g.homeId === 'user' ? 'home' : g.awayId === 'user' ? 'away' : null;
       if (userSide) {
         const oppId = userSide === 'home' ? g.awayId : g.homeId;
@@ -579,7 +580,7 @@ function _parseGameTime(timeStr, date) {
 
 function _shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(eventRand() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
 }

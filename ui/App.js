@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r138';
+export const APP_VERSION = 'tfo-v2-r139';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -271,11 +271,14 @@ export async function init() {
   EventBus.on('card:resolved',       () => _updateInboxBadge());
   EventBus.on('game:committed',      (payload) => _onGameCommitted(payload));
   // A commit schedules the next stretch of cards — send the schedule to the push worker.
-  EventBus.on('game:committed',      () => _syncPush({ fresh: true }));
-  // r138 §120 a GM decision or roster move can change how our next game goes:
-  // rerun the look-ahead behind its pushes now, not up to a minute later.
-  EventBus.on('card:resolved',       () => _syncPush({ fresh: true }));
-  EventBus.on('roster:changed',      (p) => { if (p?.source !== 'clock') _syncPush({ fresh: true }); });
+  EventBus.on('game:committed',      () => _syncPush());
+  // r138 §120 a GM decision or roster move can change how the world goes: the
+  // push schedule's look-ahead is worked out again (r139: in its worker, a moment later).
+  // r139 §121 and an input's consequences (a trade accepted, a player activated) happen at
+  // the moment of the input — the clock runs now, not at the next tick — so they're dated
+  // the same whether the app stays open or closes right after.
+  EventBus.on('card:resolved',       () => { _runTick({ quiet: true }).finally(() => _syncPush()); });
+  EventBus.on('roster:changed',      (p) => { if (p?.source !== 'clock') _runTick({ quiet: true }).finally(() => _syncPush()); });
 
   // Messages from the service worker (push arrived / notification tapped)
   if (!_swMessagesWired) {
@@ -729,8 +732,10 @@ let _swMessagesWired = false;
  */
 async function _releaseDueCards({ quiet = false } = {}) {
   if (!StateManager.get()) return [];
-  const { releaseDueCards } = await import('../engine/CardEngine.js');
-  const released = releaseDueCards();
+  const { releaseDueCards, takeReleased } = await import('../engine/CardEngine.js');
+  StateManager.world(() => releaseDueCards());   // r139 the world's own work (§121)
+  // r139 everything that arrived since the last look — here, or inside the clock before an event.
+  const released = takeReleased();
   if (!released.length) return released;
   EventBus.emit('card:delivered', { cards: released, source: 'scheduled' });
   if (!quiet && _activeTab !== 'decisions' && document.visibilityState === 'visible') {
@@ -751,11 +756,11 @@ async function _releaseDueCards({ quiet = false } = {}) {
 async function _advanceRosterClock() {
   if (!StateManager.get()) return;
   const { advanceClock, checkMilestone } = await import('../engine/GameEngine.js');
-  const res = advanceClock(Date.now());
+  const res = StateManager.world(() => advanceClock(Date.now()));   // r139 the world's own work (§121)
   // Milestones queued by league events (playoff rounds, series results) —
   // shown one per tick so they never stack.
   if (!_milestoneActive) {
-    const m = checkMilestone();
+    const m = StateManager.world(() => checkMilestone());
     if (m) showMilestone(m);
   }
   if (!res.changed) return;
@@ -799,25 +804,35 @@ async function _runTick({ quiet = false } = {}) {
   if (_tickBusy) return;
   _tickBusy = true;
   try {
-    const { tick, commitGame } = await import('../engine/GameEngine.js');
-    const state   = StateManager.get();
-    if (!state) return;
-
+    if (!StateManager.get()) return;
+    // r139 §121 our game, then the clock (which releases the cards due before each event, in
+    // time order), then what came due after — the same order as LookAhead.catchUp.
+    await _tickGame();
     await _advanceRosterClock();
     await _releaseDueCards({ quiet });
+  } finally {
+    _tickBusy = false;
+  }
+}
 
+/** Our game: reveal what's due; commit it once final (world work, dated at the final out). */
+async function _tickGame() {
+  {
+    const { tick, commitGameNow } = await import('../engine/GameEngine.js');
     const gameIdx = StateManager.get()?.currentGameIndex ?? 0;
     const game    = StateManager.get()?.schedule?.[gameIdx];
     if (!game) return;
 
-    const play = tick();
+    const play = StateManager.world(() => tick());   // r139 the world's own work (§121)
     if (play) EventBus.emit('game:tick', { play, game: StateManager.get().schedule[gameIdx] });
 
     const freshGame = StateManager.get()?.schedule?.[gameIdx];
     // (A spring game the weather cancelled closes the same way — §102.3.)
     if ((freshGame?.status === GAME_STATUS.FINAL || (freshGame?.status === GAME_STATUS.POSTPONED && freshGame.cancelled)) && !freshGame._committed) {
       try {
-        const result = await commitGame(gameIdx);
+        // r139 committed synchronously as world work (dated at the final out), then saved.
+        const result = StateManager.world(() => commitGameNow(gameIdx));
+        await StateManager.save();
         EventBus.emit('game:committed', { result, gameIndex: gameIdx });
         // Auto phase transitions (Opening Day, All-Star, deadline, playoffs) fire
         // inside commitGame — notify the screens waiting on them (#5).
@@ -829,8 +844,6 @@ async function _runTick({ quiet = false } = {}) {
         console.error('App._runTick: auto-commit error:', err);
       }
     }
-  } finally {
-    _tickBusy = false;
   }
 }
 
@@ -866,7 +879,9 @@ document.addEventListener('visibilitychange', async () => {
     // latest schedule NOW: a sync still waiting on its debounce would never
     // run once the phone freezes the page (§94).
     _lastActiveTime = Date.now();
-    _syncPush({ immediate: true });
+    // r139 §121 the last word before the app closes: if the look-ahead is stale
+    // (an answer a moment ago), it's worked out here, now — never sent stale.
+    _syncPush({ immediate: true, fresh: true });
     return;
   }
 

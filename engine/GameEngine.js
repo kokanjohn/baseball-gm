@@ -147,9 +147,10 @@ import {
   LEAGUE_TRADES,
   GAME_WEATHER,
   FIN_WEATHER,
+  WAIVER_CLAIM_WINDOW_MS,
 } from '../data/constants.js';
-import { clockNow } from './Clock.js';
-import { dice, diceSeed } from './Dice.js';
+import { clockNow, runAt } from './Clock.js';
+import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
 // DEV LIVE-SPEED (Developer Menu only)
@@ -482,7 +483,7 @@ export async function startNewGame(config) {
     // Generate coaching staff names from the staff name pool.
     // Names are drawn sequentially without replacement for this franchise.
     // Contracts are set from schema defaults (already in state from schema.js).
-    const staffPool = [...STAFF_NAMES].sort(() => Math.random() - 0.5);
+    const staffPool = [...STAFF_NAMES].sort(() => eventRand() - 0.5);
     let staffIdx = 0;
     const pickStaffName = () => staffPool[staffIdx++] || 'Coach';
 
@@ -528,7 +529,7 @@ export async function startNewGame(config) {
     // §112.2 Each coach's quality and specialty, paid by quality; two of the
     // four on one-year deals (a real staff decision the first winter).
     Coach.ensureAbilities(s.userTeam.coachingStaff);
-    const oneYear = [...Coach.COACH_ROLES].sort(() => Math.random() - 0.5).slice(0, 2);
+    const oneYear = [...Coach.COACH_ROLES].sort(() => eventRand() - 0.5).slice(0, 2);
     for (const role of Coach.COACH_ROLES) {
       const c = s.userTeam.coachingStaff[role];
       c.salary = Coach.salaryFor(role, c.quality);
@@ -769,16 +770,21 @@ export function tick() {
  * @param {Object} game — game object from state.schedule
  */
 function _activateGame(game) {
+  return withDice(_gameDice(StateManager.get(), game, true, 'start'), () => _activateGameNow(game));
+}
+function _activateGameNow(game) {
   const state       = StateManager.get();
   const now         = clockNow();
   const MAX_LIVE_WINDOW_MS = 4 * 60 * 60 * 1000; // 4 hours
 
-  // If the game time was more than 4 hours ago the user wasn't watching.
-  // Silently simulate the result and commit without a live view.
-  if (now > (game.gameTime || 0) + MAX_LIVE_WINDOW_MS) {
-    _silentlyCommitGame(game);
-    return;
-  }
+  // r139 §121 a game first seen more than 4 hours after first pitch happens
+  // exactly as it would have live (the same plays, the same crowd at first
+  // pitch); tick() then reveals it to its final and it's committed like any
+  // other. Only the screens are told the GM didn't watch (`_silentlyCommitted`).
+  // (Before, it took a separate path that skipped first pitch's crowd, so the
+  // club's books — and the cards that read them — depended on whether the app
+  // was open.)
+  const unwatched = now > (game.gameTime || 0) + MAX_LIVE_WINDOW_MS;
 
   const userTeam    = state.userTeam;
   const players     = state.players;
@@ -830,96 +836,12 @@ function _activateGame(game) {
     // Pre-computed full-game box (promoted to g.boxScore at commit) + seed lineups.
     g._precomputedBoxScore = boxScore;
     g.liveLineups          = liveLineups;
+    if (unwatched) g._silentlyCommitted = true;   // the screens: a result the GM didn't watch
     // §78: the crowd is in the seats at first pitch (the gate is banked at the final).
     if (g.isHome && !isSpring && !g.attendance) {
       const crowd = Finance.crowdFor(s, 'user', { atMs: g.gameTime || clockNow(), playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true) });
       if (crowd) { g.attendance = crowd.attendance; g.gateK = crowd.gateK; g.sellout = crowd.sellout; }
     }
-  });
-}
-
-// ─────────────────────────────────────────────────────────────
-// SILENT COMMIT — missed game (played >4 hours ago)
-// ─────────────────────────────────────────────────────────────
-
-/**
- * _silentlyCommitGame(game)
- * Called when a game's window has passed without the user watching.
- * Generates plays, extracts the result, writes final fields, and
- * marks the game as committed — all without showing a live view.
- *
- * @param {Object} game
- */
-function _silentlyCommitGame(game) {
-  const state        = StateManager.get();
-  const userTeam     = state.userTeam;
-  const players      = state.players;
-  const opponentTeam = state.leagueTeams.find(t => t.name === game.opponent) || null;
-
-  const healthyIds = (userTeam.rosterIds || []).filter(id => {
-    const p = players[id];
-    return p && isAvailable(p);
-  });
-
-  const winProb = computeWinProbability(
-    healthyIds, opponentTeam, players,
-    { morale: userTeam.morale || 50, atmosphere: userTeam.atmosphere || 50,
-      game, phase: state.phase, region: state.settings?.region }
-  );
-
-  const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
-  const wx = _wxAtFirstPitch(state, game, true);   // §102.3
-  const { plays, boxScore, liveLineups, resumeState, weather } = generatePlays(
-    wx ? { ...game, ...wx.record } : game, userTeam, opponentTeam, players,
-    { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
-      norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true), injuryYear: baseballYear(state) }
-  );
-
-  // Suspended by the weather: it stands where it stopped, to be finished another day.
-  if (resumeState) {
-    const sp = plays[plays.length - 1];
-    StateManager.mutate(s => {
-      const g = s.schedule[game.index];
-      if (!g) return;
-      Object.assign(g, wx.record);
-      g.wx = wx.plan; g.wxResult = weather;
-      g.plays = plays; g.resumeState = resumeState; g.livePlayIndex = plays.length;
-      g.ourScore = sp?.cumOurScore ?? 0; g.theirScore = sp?.cumTheirScore ?? 0;
-      g.status = GAME_STATUS.LIVE;
-      g._precomputedBoxScore = boxScore;
-      g.liveLineups = liveLineups;
-    });
-    _suspendGame({ user: true, i: game.index }, sp?._timestamp ?? clockNow());
-    return;
-  }
-
-  // Extract final score from last play
-  const lastPlay   = plays[plays.length - 1];
-  const ourScore   = lastPlay?.cumOurScore   ?? 0;
-  const theirScore = lastPlay?.cumTheirScore ?? 0;
-  const outcome    = ourScore > theirScore ? 'win' : ourScore < theirScore ? 'loss' : 'tie';
-
-  StateManager.mutate(s => {
-    const g = s.schedule[game.index];
-    if (!g) return;
-    if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = weather; }
-    g.plays              = plays;
-    g.livePlayIndex      = plays.length; // all plays "revealed" — no live view
-    g.ourScore           = ourScore;
-    g.theirScore         = theirScore;
-    g.status             = GAME_STATUS.FINAL;
-    g._committed         = true;
-    g._silentlyCommitted = true;
-    g.result             = outcome;
-    g.score              = { us: ourScore, them: theirScore };
-    g._precomputedBoxScore = boxScore;
-    g.liveLineups          = liveLineups;
-  });
-
-  // Commit asynchronously — fire and forget from tick context
-  commitGame(game.index).catch(err => {
-    console.error('[GameEngine._silentlyCommitGame] commit failed:', err);
   });
 }
 
@@ -946,6 +868,29 @@ function _silentlyCommitGame(game) {
  * @returns {Promise<Object>} { phaseChanged, newPhase, milestone }
  */
 export async function commitGame(gameIndex) {
+  const result = commitGameNow(gameIndex);
+  await StateManager.save();
+  return result;
+}
+
+/**
+ * commitGameNow(gameIndex) — r139 §121 the commit itself, synchronous, so the
+ * look-ahead can play a game day through its final on a scratch copy. It runs
+ * at the moment the game ended (Clock.runAt): whatever it starts — the clock
+ * up to the final out, the next day's cards — is dated then, whether the GM
+ * watched the last out or the app caught the game up hours later. That is what
+ * lets the look-ahead and the real commit agree.
+ */
+export function commitGameNow(gameIndex) {
+  const game = StateManager.get().schedule[gameIndex];
+  if (!game) throw new Error(`GameEngine.commitGame: no game at index ${gameIndex}`);
+  const st = StateManager.get();
+  return runAt(Math.min(clockNow(), _gameEndMs(game)),
+               () => withDice(_gameDice(st, game, true, 'commit'), () => _commitAt(gameIndex)));
+}
+
+function _commitAt(gameIndex) {
+  CardEngine.releaseDueCards(clockNow());   // r139 §121 what was due by the final out arrived before it
   const state = StateManager.get();
   const game  = state.schedule[gameIndex];
 
@@ -1022,7 +967,7 @@ export async function commitGame(gameIndex) {
         _creditResult(oppRecordTeam, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', kind);
       }
       if (g.isPlayoff && s.playoffBracket) {
-        _pendingSeriesResults.push({ seriesId: g.seriesId, gameId: `u-${g.index}`,
+        (s.pendingSeriesResults ||= []).push({ seriesId: g.seriesId, gameId: `u-${g.index}`,
           homeId: g.isHome ? 'user' : g.opponentId, awayId: g.isHome ? g.opponentId : 'user',
           homeScore: g.isHome ? us : them, awayScore: g.isHome ? them : us, atMs: endMs });
       }
@@ -1185,7 +1130,7 @@ export async function commitGame(gameIndex) {
   newPhase = getNextPhase(currentPhase, gameIndex, state2.standings, true);
 
   if (newPhase) {
-    await advancePhase(newPhase);
+    _applyPhase(newPhase);
     result.phaseChanged = true;
     result.newPhase     = newPhase;
   }
@@ -1219,7 +1164,6 @@ export async function commitGame(gameIndex) {
 
   // (Rainouts are made up when they're called — §102.3 _postponeGame.)
 
-  await StateManager.save();
   return result;
 }
 
@@ -1249,6 +1193,11 @@ export function planCardsForNextGame() {
   if (!g || g._committed) return;
   const key = `${state.seasonNum ?? 1}|${g.index ?? ''}|${g.date ?? ''}`;
   if (state.cardPlanKey === key) return;
+  // r139 §121 the game day's plan draws from its own stream, whenever it's made.
+  withDice(dice(diceSeed(state), 'plan', key), () => _planCardsFor(state, g, key));
+}
+
+function _planCardsFor(state, g, key) {
   StateManager.mutate(s => { s.cardPlanKey = key; });
   const ctx = buildCardContext();
   CardEngine.checkAndDeliver(ctx);
@@ -1405,7 +1354,7 @@ function _applyPhase(newPhase) {
             ? `${losses - wins} games below .500`
             : 'exactly .500';
         s.history = [...(s.history || []), {
-          id:       crypto.randomUUID(),
+          id:       _worldId(),
           type:     'record',
           season:   s.seasonNum || 1,
           gameIdx:  s.currentGameIndex || 0,
@@ -1419,7 +1368,7 @@ function _applyPhase(newPhase) {
         // ── Franchise history: championship ────────────────────────────────
         if (wonChampionship) {
           s.history = [...s.history, {
-            id:       crypto.randomUUID(),
+            id:       _worldId(),
             type:     'championship',
             season:   s.seasonNum || 1,
             gameIdx:  s.currentGameIndex || 0,
@@ -1451,7 +1400,7 @@ function _applyPhase(newPhase) {
             // ── Franchise history: prestige tier advancement ───────────────
             if (event.type === 'PRESTIGE_TIER_ADVANCED') {
               s.history = [...(s.history || []), {
-                id:       crypto.randomUUID(),
+                id:       _worldId(),
                 type:     'prestige',
                 season:   s.seasonNum || 1,
                 gameIdx:  s.currentGameIndex || 0,
@@ -1466,7 +1415,7 @@ function _applyPhase(newPhase) {
             // ── Franchise history: Franchise Legend ───────────────────────
             if (event.type === 'FRANCHISE_LEGEND') {
               s.history = [...(s.history || []), {
-                id:       crypto.randomUUID(),
+                id:       _worldId(),
                 type:     'milestone',
                 season:   s.seasonNum || 1,
                 gameIdx:  s.currentGameIndex || 0,
@@ -1871,6 +1820,9 @@ function _playsEndMs(game) {
 // ─────────────────────────────────────────────────────────────
 
 const _WX_PLAN_AHEAD_MS = GAME_WEATHER.PLAN_AHEAD_MIN * 60_000;
+/** r139 an id for something the world records (inside an event: from its stream). */
+function _worldId() { return inEvent() ? diceId(eventRand) : crypto.randomUUID(); }
+
 const _WX_OPEN = new Set([GAME_STATUS.SCHEDULED, GAME_STATUS.PRE_GAME_WATCH, GAME_STATUS.DELAYED]);
 
 /** A game ref: ours by schedule position, the league's by id. → { g, isUser, date, i } */
@@ -1950,6 +1902,19 @@ function _ensureWeatherPlans(clockMs) {
  * likely during the game, the manager asks about the starter: the one in turn
  * as planned, or hold that pitcher a day and start the next one who's rested.
  */
+/** r139 §121 when the manager next asks about rain (first pitch minus the lead), if by `uptoMs`. */
+function _wxNextAsk(st, uptoMs) {
+  const sched = st.schedule || [];
+  const lead = GAME_WEATHER.START_CARD_LEAD_MIN * 60_000;
+  for (let i = st.currentGameIndex || 0; i < sched.length; i++) {
+    const g = sched[i];
+    if (!Number.isFinite(g.gameTime) || g.gameTime - lead > uptoMs) return null;
+    if (g._committed || g.isSpring || g.cancelled || g.wxStartAsked === g.gameTime || g.status !== GAME_STATUS.SCHEDULED || g.plays?.length) continue;
+    return g.gameTime - lead;
+  }
+  return null;
+}
+
 function _wxUserCards(clockMs) {
   const st = StateManager.get();
   const sched = st.schedule || [];
@@ -2360,7 +2325,7 @@ function _finishLeagueGame(date, i) {
     _creditResult(home, outcome, kind);
     _creditResult(away, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', kind);
     if (g.isPlayoff) {
-      _pendingSeriesResults.push({ seriesId: g.seriesId, gameId: g.id, homeId: g.homeId, awayId: g.awayId,
+      (s.pendingSeriesResults ||= []).push({ seriesId: g.seriesId, gameId: g.id, homeId: g.homeId, awayId: g.awayId,
                                    homeScore, awayScore, atMs: endMs });
     }
     _advanceRotation(home);
@@ -2536,7 +2501,7 @@ function _allStarProgress(game, endMs) {
         buildActivityFeedEntry('milestone', host?.abbr || 'LG', `${host?.name || 'A club'} will host the All-Star Game`)]);
       if (named.hostId === 'user') {
         // A post-break trade target who fell for the place during the week.
-        AllStar.seasonOf(s).glowTradeAfterGame = ALL_STAR_BREAK_AFTER_GAME + 1 + Math.floor(Math.random() * 10);
+        AllStar.seasonOf(s).glowTradeAfterGame = ALL_STAR_BREAK_AFTER_GAME + 1 + Math.floor(eventRand() * 10);
       }
     });
     CardEngine.deliverAllStarHostCard(named, endMs + _rng(10, 40) * 60_000);
@@ -2648,8 +2613,9 @@ function _finishAllStarGame(date, i) {
 // ─────────────────────────────────────────────────────────────
 
 // Playoff finals waiting to be applied to the bracket (filled inside commit /
-// CPU-finish mutations, drained by _seasonProgress in time order).
-const _pendingSeriesResults = [];
+// CPU-finish mutations, drained by _seasonProgress in time order) live in the
+// save, `state.pendingSeriesResults` — r139 §121: a module-level queue would
+// carry a look-ahead's results into the real season.
 
 const REGULAR_PHASES = new Set([PHASE.REGULAR_SEASON, PHASE.ALL_STAR_BREAK, PHASE.TRADE_DEADLINE]);
 
@@ -2675,8 +2641,9 @@ function _seasonProgress(atMs) {
   const events = [];
 
   // 1. Playoff results → bracket.
-  while (_pendingSeriesResults.length) {
-    const r = _pendingSeriesResults.shift();
+  while (StateManager.get().pendingSeriesResults?.length) {
+    let r = null;
+    StateManager.mutate(s => { r = s.pendingSeriesResults.shift(); });
     let res = null;
     StateManager.mutate(s => { if (s.playoffBracket) res = recordGame(s.playoffBracket, r.seriesId, r); });
     if (res?.clinched) {
@@ -2918,19 +2885,35 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
   }
   // §90 the league's trade desk: one moment a day when CPU clubs make deals.
   if (!state.tradeDesk?.nextAtMs) StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), nextAtMs: LeagueTrades.nextDeskAt(clockMs, diceSeed(state)) }; });
+  // r139 a save from before r139 has no roster-step mark: its roster clock counts from now on
+  // (rather than replaying every due moment since the save began as a new event).
+  if (state.rosterStepAt == null) StateManager.mutate(s => { s.rosterStepAt = clockMs; });
+  let overdueRun = false;
   for (let guard = 0; guard < 12000; guard++) {
     _ensureWeatherPlans(clockMs);   // §102.3 every game's weather, a few hours ahead
-    _wxUserCards(clockMs);          // §102.5 the manager's question when rain threatens our game
     const st   = StateManager.get();
     const game = [..._leagueGameEvents(st, clockMs), ..._userWeatherEvents(st, clockMs)].sort((a, b) => a.at - b.at)[0];
     const os   = Offseason.dueSteps(st, clockMs)[0];
     const fin  = clubIds.flatMap(id => Finance.dueSteps(st, clockMs, id)).sort((a, b) => a.at - b.at)[0];
     const desk = st.tradeDesk?.nextAtMs <= clockMs ? { kind: 'desk', at: st.tradeDesk.nextAtMs } : null;
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk].filter(Boolean);
+    // r139 §121 a roster change due (a move, a return, a deadline) is an event at its own moment.
+    const rAt = _nextRosterDue(st, clockMs, { overdue: !overdueRun });
+    const roster = rAt != null ? { kind: 'roster', at: rAt } : null;
+    if (rAt != null && rAt <= (st.rosterStepAt ?? -Infinity)) overdueRun = true;
+    // §102.5 the manager's question when rain threatens our game — at its own moment (r139: was
+    // asked only if the app happened to be open then; reopened later, "too late to ask").
+    const askAt = _wxNextAsk(st, clockMs);
+    const ask = askAt != null ? { kind: 'wxask', at: askAt } : null;
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
+    // r139 §121 the cards due by this moment arrive before it (a card the event withdraws, after it, never does).
+    CardEngine.releaseDueCards(next.at);
     const step = _rosterStep(next.at, {});
     events.push(...step.events);
+    // r139 §121 each event draws from its own stream (named for the event, never the moment it's computed).
+    withDice(dice(diceSeed(st), 'clock', next.kind, next.at, next.date ?? '', next.i ?? '', next.teamId ?? '', next.step ?? '',
+                  next.ref ? `${next.ref.user ? 'u' : next.ref.date}:${next.ref.i}` : ''), () => {
     if (next.kind === 'start') { if (!_wxHoldForClubs(next.ref, next.at)) _startLeagueGame(next.date, next.i); }
     else if (next.kind === 'final') events.push(..._finishLeagueGame(next.date, next.i));
     else if (next.kind === 'ppd') _postponeGame(next.ref, next.at);
@@ -2940,18 +2923,22 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, next.teamId); });
     else if (next.kind === 'fin:payday') events.push(...(next.teamId === 'user' ? _payday(next.i, next.at) : _cpuPayday(next.teamId, next.i, next.at)));
     else if (next.kind === 'desk') events.push(..._runTradeDesk(next.at));
+    else if (next.kind === 'roster') { /* the roster step above was the event */ }
+    else if (next.kind === 'wxask') _wxUserCards(next.at);
     else events.push(..._runOffseasonStep(next.step, next.at));
     events.push(..._seasonProgress(next.at));
+    });
+    // r139 what the event changed on the rosters is handled at its moment, not at the next computation.
+    if (next.kind !== 'roster') events.push(..._rosterStep(next.at, {}).events);
+    // r139 §121 an event that makes another game our next one (a postponement, a suspension, a new
+    // season's first game) plans that game day then — dated at the event, not when the app next looks.
+    runAt(next.at, () => planCardsForNextGame());
+    _ratingPoint(next.at);   // r139 dated at the event that changed it, not when the pass ends
     changed = true;
   }
   events.push(..._seasonProgress(clockMs));
   const step = _rosterStep(clockMs, { reconcileAll: !!opts.reconcileAll, events });
-  // §95 any move, injury, development or offseason step that changed the
-  // club's rating is a point on its history.
-  if (teamRating(StateManager.get(), 'user') !== (StateManager.get().ratingHistory || []).slice(-1)[0]?.r
-      || (StateManager.get().ratingHistory || []).slice(-1)[0]?.s !== (StateManager.get().seasonNum || 1)) {
-    StateManager.mutate(s => { recordRating(s, clockMs); });
-  }
+  _ratingPoint(clockMs);
   return { changed: changed || step.changed || events.some(e => e.type === 'PHASE'),
            events: [...events, ...step.events], clockMs };
 }
@@ -3019,7 +3006,7 @@ function _runOffseasonStep(step, atMs) {
       const c = st.userTeam.coachingStaff?.[role];
       if (!c || c.vacant) continue;
       const ev = Coach.evaluate(role, U);
-      const at = atMs + (25 + 40 * k + Math.floor(Math.random() * 20)) * 60_000;
+      const at = atMs + (25 + 40 * k + Math.floor(eventRand() * 20)) * 60_000;
       if (up.has(role) || ev.verdict === 'poor') {
         if (CardEngine.deliverCoachReviewCard(role, up.has(role) ? 'up' : 'poor', at, Offseason.dayStart(os, 5))) k++;
       } else if (ev.facts.length) {
@@ -3036,7 +3023,7 @@ function _runOffseasonStep(step, atMs) {
   if (step === 'day3') {
     // §112.2 candidates for every empty chair (a coach let go on day 2).
     for (const role of Offseason.coachVacancies(StateManager.get())) {
-      CardEngine.deliverCoachHireCard(role, atMs + Math.floor(Math.random() * 90) * 60_000, springAt);
+      CardEngine.deliverCoachHireCard(role, atMs + Math.floor(eventRand() * 90) * 60_000, springAt);
     }
     done();
     return events;
@@ -3053,9 +3040,9 @@ function _runOffseasonStep(step, atMs) {
     // through the afternoon; due when free agency opens.
     const faOpens = Offseason.dayStart(os, 5);
     Offseason.extensionCandidates(StateManager.get()).forEach((c, i) =>
-      CardEngine.deliverExtensionCard(c, cardAt(4, 12) + (i * 50 + Math.floor(Math.random() * 30)) * 60_000, faOpens));
+      CardEngine.deliverExtensionCard(c, cardAt(4, 12) + (i * 50 + Math.floor(eventRand() * 30)) * 60_000, faOpens));
     Offseason.releaseCandidates(StateManager.get()).forEach((c, i) =>
-      CardEngine.deliverReleaseCard(c, cardAt(4, 15) + (i * 50 + Math.floor(Math.random() * 30)) * 60_000, faOpens));
+      CardEngine.deliverReleaseCard(c, cardAt(4, 15) + (i * 50 + Math.floor(eventRand() * 30)) * 60_000, faOpens));
     done();
     return events;
   }
@@ -3069,14 +3056,14 @@ function _runOffseasonStep(step, atMs) {
       StateManager.mutate(s => { if (s.offseason) { s.offseason.meetings = true; s.offseason.meetingsAt = atMs; } });
       CardEngine.deliverMeetingsTargets(atMs);
     }
-    if (step === 'day6' || step === 'day7') events.push(..._runTradeDesk(atMs + Math.floor(Math.random() * 90) * 60_000, { extra: true }));
+    if (step === 'day6' || step === 'day7') events.push(..._runTradeDesk(atMs + Math.floor(eventRand() * 90) * 60_000, { extra: true }));
     if (step === 'day8') _meetingsWrap(atMs);
     if (step === 'day5') CardEngine.deliverFreeAgentCards(cardAt(5, OFFSEASON_FA_CARD_HOUR), springAt);
     if (step === 'day8') CardEngine.deliverFreeAgentCards(cardAt(8, OFFSEASON_FA_CARD_HOUR), springAt);
     if (step === 'day9') {
       CardEngine.deliverGateReminder(cardAt(9, OFFSEASON_CARD_HOUR), springAt);
       // §112.4 the front office: next season's tickets, a campaign, the ballpark, the fans.
-      const jit = () => Math.floor(Math.random() * 25) * 60_000;
+      const jit = () => Math.floor(eventRand() * 25) * 60_000;
       CardEngine.deliverTicketCard(cardAt(9, 10) + jit(), springAt);
       CardEngine.deliverCampaignCard(cardAt(9, 11) + jit(), springAt);
       CardEngine.deliverFacilityCard(cardAt(9, 13) + jit(), springAt);
@@ -3279,7 +3266,53 @@ function _scoutFor(state, game, opp, isSpring) {
 }
 
 /** One roster-clock step at `atMs`: deadlines, ledger, card sync. */
+/**
+ * _ratingPoint(atMs) — §95 any move, injury, development or offseason step that
+ * changed the club's rating is a point on its history, dated at that moment.
+ */
+function _ratingPoint(atMs) {
+  const st = StateManager.get(), last = (st.ratingHistory || []).slice(-1)[0];
+  if (teamRating(st, 'user') !== last?.r || last?.s !== (st.seasonNum || 1)) StateManager.mutate(s => { recordRating(s, atMs); });
+}
+
+/**
+ * _nextRosterDue(state, uptoMs) — r139 §121 the earliest moment after the
+ * last roster step (state.rosterStepAt) and by `uptoMs` when something on the
+ * rosters is due: a transaction, a waiver window closing, a player's return or
+ * IL clearance (and the IL card's next ask), a roster card's deadline, a
+ * development step, the open-spot deadline. Each is a clock event, so what it
+ * changes is handled — and its cards dated — at that moment, however the clock
+ * is stepped (5-second ticks with the app open, one jump when it reopens).
+ */
+function _nextRosterDue(state, uptoMs, { overdue = true } = {}) {
+  const after = state.rosterStepAt ?? -Infinity;
+  let best = null;
+  const take = (t) => { if (Number.isFinite(t) && t > after && t <= uptoMs && (best == null || t < best)) best = t; };
+  // A move already due but not yet made (the GM accepted a trade a moment ago): now, dated
+  // when it took effect. (Moves always happen once due, so this can't repeat — and it's
+  // offered once per pass of the clock in any case.)
+  const overdueAt = (t) => { if (overdue && Number.isFinite(t) && t <= after && t <= uptoMs && (best == null || t < best)) best = t; };
+  for (const t of state.transactions || []) if (t.status === 'pending') { take(t.effectiveAt); overdueAt(t.effectiveAt); }
+  for (const id of state.waiverPool || []) {
+    const p = state.players?.[id];
+    if (p?.onWaivers) { take(p.waiverStartTime + WAIVER_CLAIM_WINDOW_MS); overdueAt(p.waiverStartTime + WAIVER_CLAIM_WINDOW_MS); }
+  }
+  for (const p of Object.values(state.players || {})) {
+    const inj = p?.injury;
+    if (inj?.status === 'dtd') take(inj.returnAt);
+    if (inj?.status === 'il') take(inj.eligibleAt);
+    if (p?._ilAskAfter) take(p._ilAskAfter);
+  }
+  for (const c of [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])]) {
+    if (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER') take(c.expiresAtMs);
+  }
+  for (const x of state.developmentPlans || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);
+  take(state.userTeam?.vacancyDeadlineAt);
+  return best;
+}
+
 function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
+  if (!((StateManager.get().rosterStepAt ?? 0) >= atMs)) StateManager.mutate(s => { s.rosterStepAt = atMs; });
   const expired = CardEngine.expireDueRosterCards(atMs);
   let applied = { changed: false, events: [] };
   if (expired || reconcileAll || extra.length || hasDue(StateManager.get(), atMs)) {
@@ -3432,7 +3465,7 @@ function _countPlayoffRoundsWon(state) {
 }
 
 function _rng(lo, hi) {
-  return lo + Math.floor(Math.random() * (hi - lo + 1));
+  return lo + Math.floor(eventRand() * (hi - lo + 1));
 }
 
 // ─────────────────────────────────────────────────────────────

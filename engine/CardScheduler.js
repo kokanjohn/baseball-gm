@@ -10,6 +10,7 @@
  *
  * PURE: no StateManager, no Date.now() — the caller passes nowMs.
  */
+import { eventRand } from './Dice.js';
 
 export const DELIVERY_MIN_LEAD_MS   = 4 * 60 * 1000;         // never sooner than 4 min
 export const DELIVERY_DEFAULT_SPAN  = 18 * 60 * 60 * 1000;   // no next game → spread over 18h
@@ -28,7 +29,7 @@ export const DELIVERY_MIN_WINDOW_MS = 45 * 60 * 1000;        // next game too cl
  * @returns {Number[]} delivery times (ms), ascending
  */
 export function planDeliveryTimes(count, opts = {}) {
-  const rand  = opts.rand || Math.random;
+  const rand  = opts.rand || eventRand;
   const now   = opts.nowMs;
   const start = now + DELIVERY_MIN_LEAD_MS;
 
@@ -131,7 +132,7 @@ function _nextDay(dayMs) {
  *   opts: { nowMs, minMin, maxMin, quietStart, quietEnd, busy: [[startMs, endMs], …], rand }
  */
 export function replyTime(opts) {
-  const rand = opts.rand || Math.random;
+  const rand = opts.rand || eventRand;
   const minMs = (opts.minMin ?? 30) * 60_000, maxMs = Math.max(minMs, (opts.maxMin ?? 180) * 60_000);
   let t = opts.nowMs + minMs + (maxMs - minMs) * Math.pow(rand(), 1.6);
   // Busy (a game the person works): after it, once they're through with it.

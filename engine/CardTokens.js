@@ -37,6 +37,7 @@ import {
   CARD_TOKEN_MONEY,
   BROADCAST_MARKET_MULTIPLIER,
 } from '../data/card-tokens.js';
+import { eventRand } from './Dice.js';
 
 // Matches any {token}. Digits are allowed (e.g. {sp2_items}, {bg11_team}).
 export const TOKEN_PATTERN = /\{([a-z0-9_]+)\}/gi;
@@ -432,7 +433,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
   if (!spec) return out;
   out.needsPlayer = !spec.intlTrip;
   const u = state.userTeam || {};
-  const side = spec.side === 'any' ? (Math.random() < 0.5 ? 'pitcher' : 'hitter') : spec.side;
+  const side = spec.side === 'any' ? (eventRand() < 0.5 ? 'pitcher' : 'hitter') : spec.side;
   const take = (prefix, cand) => {
     if (!cand?.player) return null;
     _playerTokens(values, prefix, cand.player, state);
@@ -448,12 +449,12 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       .map(sl => ({ slot: sl.slot, p: state.players?.[sl.playerId] })).filter(x => x.p)
       .sort((a, b) => (a.p.ovr || 0) - (b.p.ovr || 0))[0];
     if (weakest) {
-      const vet = take('acq_hitter', marketCandidate(state, { kind: spec.kind, side: 'hitter', pos: weakest.slot, minOvr: (weakest.p.ovr || 0) + 2, rand: Math.random }));
+      const vet = take('acq_hitter', marketCandidate(state, { kind: spec.kind, side: 'hitter', pos: weakest.slot, minOvr: (weakest.p.ovr || 0) + 2, rand: eventRand }));
       if (vet) { vet._startAt = weakest.slot; money('sign_cost', signingTerms(state, vet).salary); }
       out.players.replaced_starter = weakest.p.id;
     }
   } else if (spec.kind && !spec.nri && !spec.intl && !spec.indie) {
-    const pros = take(side === 'pitcher' ? 'acq_pitcher' : 'acq_hitter', marketCandidate(state, { kind: spec.kind, side, rand: Math.random }));
+    const pros = take(side === 'pitcher' ? 'acq_pitcher' : 'acq_hitter', marketCandidate(state, { kind: spec.kind, side, rand: eventRand }));
     if (pros) money('sign_cost', signingTerms(state, pros).bonus || signingTerms(state, pros).salary);
   } else if (spec.pool === 'waivers') {
     const w = (state.waiverPool || []).map(id => state.players?.[id])
@@ -493,7 +494,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       out.offer = { incomingIds: [target.player.id], outgoingIds: [prospect.id], proposingTeamId: target.team.id };
     }
   } else if (spec.nri) {
-    const vet = take('nri', marketCandidate(state, { kind: 'veteran', side, rand: Math.random }));
+    const vet = take('nri', marketCandidate(state, { kind: 'veteran', side, rand: eventRand }));
     if (vet) {
       const pos = values.nri_pos;
       values.nri_subject = `Non-roster invitee ${vet.name} is turning heads`;
@@ -502,7 +503,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
         + `A camp spot costs ${values.nri_cost}, with a real shot at an Opening Day job.`;
     }
   } else if (spec.intl) {
-    const pl = take('intl_player', marketCandidate(state, { kind: 'intl', side, rand: Math.random }, new Set(state.freeAgentPool || [])));
+    const pl = take('intl_player', marketCandidate(state, { kind: 'intl', side, rand: eventRand }, new Set(state.freeAgentPool || [])));
     if (pl) {
       values.intl_player_type = ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-hander' : 'right-hander')
         : ({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder');
@@ -512,7 +513,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       money('sign_cost', signingTerms(state, pl).bonus);
     }
   } else if (spec.indie) {
-    const pl = take('indie_player', marketCandidate(state, { kind: 'indie', side, rand: Math.random }, new Set(state.freeAgentPool || [])));
+    const pl = take('indie_player', marketCandidate(state, { kind: 'indie', side, rand: eventRand }, new Set(state.freeAgentPool || [])));
     if (pl) {
       values.college_pos = ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-handed pitcher' : 'right-handed pitcher')
         : `${({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder')}`;
@@ -617,14 +618,14 @@ function _setHitter(values, prefix, p, fallback) {
 
 function _pick(arr) {
   if (!arr || arr.length === 0) return null;
-  return arr[Math.floor(Math.random() * arr.length)];
+  return arr[Math.floor(eventRand() * arr.length)];
 }
 function _shuffle(arr) {
-  return arr.map(v => [Math.random(), v]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
+  return arr.map(v => [eventRand(), v]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
 }
 function _randInt(min, max) {
-  return min + Math.floor(Math.random() * (max - min + 1));
+  return min + Math.floor(eventRand() * (max - min + 1));
 }
 function _randFloat(min, max) {
-  return min + Math.random() * (max - min);
+  return min + eventRand() * (max - min);
 }

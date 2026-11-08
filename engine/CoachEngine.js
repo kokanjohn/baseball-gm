@@ -30,6 +30,7 @@
 
 import { STAFF_NAMES } from '../data/player-names.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
+import { eventRand } from './Dice.js';
 
 export const COACH_ROLES = ['pitchingCoach', 'hittingCoach', 'bullpenCoach', 'benchCoach'];
 
@@ -86,7 +87,7 @@ export function salaryFor(role, q) {
 }
 
 /** A quality around `mean` (the sum of three rolls: most coaches are near it). */
-export function rollQuality(rand = Math.random, mean = 58, spread = 12) {
+export function rollQuality(rand = eventRand, mean = 58, spread = 12) {
   const r = (rand() + rand() + rand()) / 3 - 0.5;          // −0.5…0.5, bunched in the middle
   return Math.round(clamp(mean + r * 2 * spread * 1.5, QUALITY_MIN, QUALITY_MAX));
 }
@@ -94,7 +95,7 @@ export function rollQuality(rand = Math.random, mean = 58, spread = 12) {
 const _pick = (arr, rand) => arr[Math.floor(rand() * arr.length) % arr.length];
 
 /** Give every coach on the staff a quality and a specialty (new franchises; saves from before §112.2). */
-export function ensureAbilities(staff, rand = Math.random) {
+export function ensureAbilities(staff, rand = eventRand) {
   for (const role of COACH_ROLES) {
     const c = staff?.[role];
     if (!c || c.vacant) continue;
@@ -247,7 +248,7 @@ const BACKGROUNDS = {
  * second brings something else, usually for less. Either can be the better
  * coach: the qualities are rolled, not promised.
  */
-export function candidates(state, role, U, { rand = Math.random, taken = new Set() } = {}) {
+export function candidates(state, role, U, { rand = eventRand, taken = new Set() } = {}) {
   const info = ROLE_INFO[role];
   const need = neededSpecialty(role, U, state);
   const other = _pick(info.specialties.filter(s => s !== need), rand) || need;

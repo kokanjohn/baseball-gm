@@ -28,7 +28,7 @@
  * GM's cards through the apply* functions here.
  */
 
-import { dice, diceSeed, diceId } from './Dice.js';
+import { dice, diceId, diceSeed, eventRand, inEvent } from './Dice.js';
 import {
   PLAYER_GROUP,
   ROSTER_LIMITS,
@@ -540,8 +540,8 @@ function _retirements(draft, atMs, nextYear) {
     const age = computeAge(p.dob, nextYear);
     const rel = (p.ovr || 50) - level;
     let retire = age >= RETIREMENT_AGE_HARD;
-    if (!retire && age >= RETIREMENT_AGE_SOFT && rel < RETIREMENT_OVR_SOFT) retire = Math.random() < 0.6;
-    if (!retire && farmOf.has(p.id) && age >= 28 && rel < RETIREMENT_OVR_FARM) retire = Math.random() < 0.25;
+    if (!retire && age >= RETIREMENT_AGE_SOFT && rel < RETIREMENT_OVR_SOFT) retire = eventRand() < 0.6;
+    if (!retire && farmOf.has(p.id) && age >= 28 && rel < RETIREMENT_OVR_FARM) retire = eventRand() < 0.25;
     if (!retire) continue;
     const teamId = p.teamId || null;
     _detach(draft, p.id);
@@ -610,7 +610,7 @@ export function contractDay(draft, atMs) {
   for (const t of _allTeams(draft)) {
     for (const id of t?.farmIds || []) {
       const p = draft.players[id];
-      if (p && contractIsUp(p, season)) applyContract(draft, id, { salary: p.contractSalary || 50, years: 1 + (Math.random() < 0.5 ? 1 : 0) });
+      if (p && contractIsUp(p, season)) applyContract(draft, id, { salary: p.contractSalary || 50, years: 1 + (eventRand() < 0.5 ? 1 : 0) });
     }
   }
   for (const t of draft.leagueTeams || []) {
@@ -623,12 +623,12 @@ export function contractDay(draft, atMs) {
       if (age >= 34) pr *= CPU_RESIGN_AGE_34_MULT;
       // §78.5 his owner has to be able to carry the new deal (his old one comes off).
       const terms = marketTerms(draft, p);
-      if (Math.random() < pr && Finance.canAddSalary(draft, terms.salary, p.contractSalary || 0, t.id)) {
+      if (eventRand() < pr && Finance.canAddSalary(draft, terms.salary, p.contractSalary || 0, t.id)) {
         applyContract(draft, id, terms);
         events.push({ type: 'RESIGNED', playerId: id, teamId: t.id, atMs });
         continue;
       }
-      const abroad = Math.random() < (age >= 31 ? WALK_ABROAD_PROB_31_PLUS : WALK_ABROAD_PROB_UNDER_31);
+      const abroad = eventRand() < (age >= 31 ? WALK_ABROAD_PROB_31_PLUS : WALK_ABROAD_PROB_UNDER_31);
       events.push(abroad ? departLeague(draft, id, atMs, 'abroad') : releaseToFreeAgency(draft, id, atMs));
     }
   }
@@ -1125,7 +1125,7 @@ export function openNewSeason(draft, atMs) {
 function _signProspects(draft, team, atMs) {
   const events = [];
   const level = draft.leagueTalentOffset || 0;
-  const n = PROSPECTS_PER_TEAM_MIN + Math.floor(Math.random() * (PROSPECTS_PER_TEAM_MAX - PROSPECTS_PER_TEAM_MIN + 1));
+  const n = PROSPECTS_PER_TEAM_MIN + Math.floor(eventRand() * (PROSPECTS_PER_TEAM_MAX - PROSPECTS_PER_TEAM_MIN + 1));
   const used = namesInUse(draft.players);
   const HITTER_POS = ['C', 'SS', '2B', '3B', '1B', 'OF', 'OF', 'OF'];
   for (let i = 0; i < n; i++) {
@@ -1192,18 +1192,19 @@ function _newName(used, rand) {
 
 function _shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(eventRand() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
 }
 
 function _rng(lo, hi) {
-  return lo + Math.floor(Math.random() * (hi - lo + 1));
+  return lo + Math.floor(eventRand() * (hi - lo + 1));
 }
 
 function _uuid() {
-  return crypto.randomUUID();
+  // r139 §121 inside a world event, from its stream (the look-ahead and the real run make the same id).
+  return inEvent() ? diceId(eventRand) : crypto.randomUUID();
 }
 
 export { OFF_ROSTER };

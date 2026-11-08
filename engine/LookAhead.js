@@ -20,13 +20,21 @@
  * start the weather holds and then calls off, a game two that waits for game
  * one, and a suspension (and the day it resumes).
  *
+ * r139 (§121) also the messages: lookAheadMessages runs the world on through
+ * a horizon exactly as the app catches up when it reopens (the roster clock,
+ * due cards, our game revealed and committed — dated at its final out) and
+ * reports every message that reaches Messages on the way, with its moment.
+ * Every draw on that path comes from a seeded event stream (Dice.withDice),
+ * so the real catch-up makes the same messages at the same moments.
+ *
  * DOES NOT: change the real save, schedule anything, or send anything — the
- * push schedule reads its result (engine/GamePushes.js).
+ * push schedule reads its result (engine/GamePushes.js, CardEngine.getPushSchedule).
  */
 
 import * as StateManager from '../store/StateManager.js';
 import { clockNow, runAt, setClock } from './Clock.js';
-import { tick, getNextGame } from './GameEngine.js';
+import { tick, getNextGame, advanceClock, commitGameNow } from './GameEngine.js';
+import { releaseDueCards } from './CardEngine.js';
 import { GAME_STATUS } from '../data/constants.js';
 
 const MIN = 60_000;
@@ -126,4 +134,65 @@ function _postponedFrom(g, T0) {
   const list = g.postponements || [];
   for (let i = list.length - 1; i >= 0; i--) if (list[i].gameTime === T0) return list[i];
   return null;
+}
+
+/**
+ * lookAheadMessages(nowMs, untilMs)
+ * Every message that will reach Messages after `nowMs` and by `untilMs` if the
+ * app stays closed until then — computed on a scratch copy, the way the app
+ * catches up when it reopens at `untilMs`.
+ * @returns {{ untilMs: Number, messages: Array<{ instanceId, cardId, sender, subject, arrivedAtMs, expiresAtMs, targetId }> }}
+ */
+export function lookAheadMessages(nowMs = clockNow(), untilMs = nowMs + 24 * 3600_000) {
+  return StateManager.speculate(() => runAt(nowMs, () => {
+    const before = new Set((StateManager.get().inbox || []).map(c => c.instanceId));
+    setClock(untilMs);
+    catchUp(untilMs);
+    const messages = (StateManager.get().inbox || [])
+      .filter(c => !before.has(c.instanceId) && !c._seed && c.arrivedAtMs > nowMs && c.arrivedAtMs <= untilMs)
+      .map(c => ({ instanceId: c.instanceId, cardId: c.cardId, sender: c.sender || null, subject: c.subject || null,
+                   arrivedAtMs: c.arrivedAtMs, expiresAtMs: c.expiresAtMs ?? null, targetId: c._targetPlayerId ?? null }))
+      .sort((a, b) => a.arrivedAtMs - b.arrivedAtMs);
+    return { untilMs, messages };
+  }));
+}
+
+/**
+ * catchUp(atMs) — what the app does when it opens (or ticks) at `atMs`
+ * (App._runTick, repeated until the world stands still): our game (started,
+ * revealed, and committed once final), the roster clock, then the cards that
+ * came due. Exported for the harness, which plays the real world this way too.
+ */
+export function catchUp(atMs) {
+  for (let guard = 0; guard < 400; guard++) {
+    const before = _progressKey();
+    // Our game revealed and committed, the clock on to `atMs` (it releases the cards due before each
+    // event, in time order), then the cards due after the last event.
+    tick();
+    const st = StateManager.get();
+    const idx = st.currentGameIndex ?? 0, g = st.schedule?.[idx];
+    if (g && !g._committed && (g.status === GAME_STATUS.FINAL || (g.status === GAME_STATUS.POSTPONED && g.cancelled))) commitGameNow(idx);
+    advanceClock(atMs);
+    releaseDueCards(atMs);
+    if (_progressKey() === before) return;
+  }
+}
+
+function _progressKey() {
+  const st = StateManager.get();
+  const g = st.schedule?.[st.currentGameIndex ?? 0];
+  return `${st.currentGameIndex}|${g?.status}|${g?.livePlayIndex}|${g?._committed}|${(st.inbox || []).length}|${(st.scheduledCards || []).length}|${st.phase}|${st.rosterClockMs ?? ''}`;
+}
+
+/**
+ * foresee(nowMs, untilMs, gameHorizonMs) — r139 §121 both look-aheads the push
+ * schedule needs: our next game (if its first pitch is within
+ * `gameHorizonMs`) and every message through `untilMs`. Run in the page's
+ * worker (ui/ForesightWorker.js), or on the page when there is none.
+ * @returns {{ game: Object|null, foreseen: { untilMs, messages }, nextGameTime: Number|null }}
+ */
+export function foresee(nowMs, untilMs, gameHorizonMs) {
+  const g = getNextGame();
+  const game = g && Number.isFinite(g.gameTime) && g.gameTime - nowMs <= gameHorizonMs ? lookAhead(nowMs) : null;
+  return { game, foreseen: lookAheadMessages(nowMs, untilMs), nextGameTime: g?.gameTime ?? null };
 }

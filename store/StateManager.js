@@ -40,7 +40,9 @@ let _activeSlotId = null; // The slotId of the currently loaded slot
 let _saveTimer  = null;   // Debounce handle for auto-save
 let _isPremium  = false;  // Premium flag — set by app bootstrap
 let _speculating = false; // §118 inside speculate(): a scratch copy, never saved
-let _rev = 0;             // r138 bumped on every real change (the push look-ahead's cache key)
+let _rev = 0;             // r138 bumped on every real change
+let _inputRev = 0;        // r139 bumped only by changes from outside the world's clock: the GM's inputs (§121)
+let _world = 0;           // r139 inside world(): the clock, the game, due cards — what a look-ahead replays
 
 const SAVE_DEBOUNCE_MS = 2000; // Auto-save delay after last mutation
 
@@ -127,7 +129,7 @@ export function getActiveSlotId() {
 export function set(path, value) {
   _assertLoaded();
   _setPath(_state, path, value);
-  if (!_speculating) _rev++;
+  if (!_speculating) { _rev++; if (!_world) _inputRev++; }
   _scheduleSave();
 }
 
@@ -151,7 +153,7 @@ export function set(path, value) {
 export function mutate(fn) {
   _assertLoaded();
   fn(_state);
-  if (!_speculating) { _rev++; _scheduleSave(); }
+  if (!_speculating) { _rev++; if (!_world) _inputRev++; _scheduleSave(); }
 }
 
 /**
@@ -184,8 +186,38 @@ export function speculate(fn) {
 /** Is a look-ahead running? (engines don't need to ask; the app's guards do) */
 export function isSpeculating() { return _speculating; }
 
+/**
+ * adopt(state) — r139 §121 the look-ahead's worker holds a copy of the save
+ * the page sent it: it's the state here, never saved (only speculate() runs on it).
+ */
+export function adopt(state) {
+  _state = state; _activeSlotId = null; _rev++; _inputRev++;
+}
+
 /** r138 a number that changes whenever the real state does (loads included). */
 export function revision() { return _rev; }
+
+/**
+ * r139 §121 a number that changes only when something outside the world's own
+ * clock changes the save — a GM's answer, a roster move, a setting, a load.
+ * The world moving on (the clock, our game, cards coming due) is exactly what
+ * a look-ahead already played, so it leaves a look-ahead valid; an input doesn't.
+ */
+export function inputRevision() { return _inputRev; }
+
+/**
+ * world(fn) — r139 run the world's own work (GameEngine.advanceClock, tick,
+ * commitGameNow; CardEngine.releaseDueCards): its changes don't count as inputs.
+ * fn must be synchronous.
+ */
+export function world(fn) {
+  _world++;
+  try {
+    const out = fn();
+    if (out && typeof out.then === 'function') throw new Error('StateManager.world: fn must be synchronous');
+    return out;
+  } finally { _world--; }
+}
 
 // ─────────────────────────────────────────────────────────────
 // PERSISTENCE
@@ -240,7 +272,7 @@ export async function load(slotId) {
     await DB.saveSlot({ ...envelope, state: loadedState });
   }
 
-  _state        = loadedState; _rev++;
+  _state        = loadedState; _rev++; _inputRev++;
   _activeSlotId = slotId;
   localStorage.setItem(ACTIVE_SLOT_KEY, slotId);
 }
@@ -298,7 +330,7 @@ export async function createSlot(config = {}) {
   await DB.saveSlot(envelope);
 
   // Load the new slot as active
-  _state        = freshState; _rev++;
+  _state        = freshState; _rev++; _inputRev++;
   _activeSlotId = slotId;
   localStorage.setItem(ACTIVE_SLOT_KEY, slotId);
 
@@ -316,7 +348,7 @@ export async function deleteSlot(slotId) {
   await DB.deleteSlot(slotId);
 
   if (_activeSlotId === slotId) {
-    _state        = null; _rev++;
+    _state        = null; _rev++; _inputRev++;
     _activeSlotId = null;
     localStorage.removeItem(ACTIVE_SLOT_KEY);
     _cancelScheduledSave();
@@ -342,7 +374,7 @@ export async function reset() {
     bannerColor: _state.userTeam.bannerColor,
   };
 
-  _state = createGameState(config); _rev++;
+  _state = createGameState(config); _rev++; _inputRev++;
   await save();
 }
 

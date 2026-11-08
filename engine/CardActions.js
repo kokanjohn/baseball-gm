@@ -26,6 +26,7 @@ import * as Finance from './FinanceEngine.js';
 import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { queueTrade } from './TradeEngine.js';
+import { eventRand } from './Dice.js';
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -258,7 +259,7 @@ const affords = (st, addK, outId = null, side = null) => Finance.canAddSalary(st
 const spends = (st, k) => Finance.canSpend(st, k);
 const payBonus = (d, k, label, atMs) => { if (k) Finance.post(d.userTeam.finances, -k, 'bonus', label, atMs); };
 const fullFor = (st, side = null) => rosterIsFull(st, 'user', side);
-const between = (lo, hi) => lo + Math.random() * (hi - lo);
+const between = (lo, hi) => lo + eventRand() * (hi - lo);
 
 /** A veteran who wants to start: signs, takes the weak starter's spot; the weakest bench bat goes down. */
 const signStarter = {
@@ -346,7 +347,7 @@ const workout = {
     const id = role(c, 'intl_player');
     const p = d.players[id];
     const rel = (p.ovr || 45) - (d.leagueTalentOffset || 0);
-    const good = Math.random() < (rel >= 44 ? 0.7 : 0.35);
+    const good = eventRand() < (rel >= 44 ? 0.7 : 0.35);
     p._workout = good ? 'impressed' : 'disappointed';
     return [{ type: 'SCHEDULE_CARD', defId: good ? 'sc3_sign' : 'sc3_fail', preset: { intl_player: id }, atMs: atMs + between(3, 5) * DAY }];
   },
@@ -357,7 +358,7 @@ const intlTrip = {
   // A trip only makes sense if there'd be money left to fly a lead in and sign him.
   feasible: (st, c) => spends(st, (c._budgetCost || 0) + TRIP_FOLLOW_THROUGH_K),
   apply(d, c, atMs) {
-    const n = 1 + (Math.random() < 0.5 ? 1 : 0);
+    const n = 1 + (eventRand() < 0.5 ? 1 : 0);
     return Array.from({ length: n }, (_, i) => ({ type: 'SCHEDULE_CARD', defId: 'sc3', preset: { _country: c._intlCountry },
                                                   atMs: atMs + between(2 + i * 2, 4 + i * 2) * DAY }));
   },
@@ -399,7 +400,7 @@ const staffShort = (what) => ({
   feasible: () => true,
   apply(d) {
     const u = d.userTeam;
-    const roll = Math.random();
+    const roll = eventRand();
     const clamp = (v) => Math.max(0, Math.min(100, v));
     if (what === 'crew') {
       if (roll < 0.55) { u.groundskeeperRelationship = clamp((u.groundskeeperRelationship || 50) + 2); return [{ type: 'STAFF_NIGHT', what, ok: true }]; }

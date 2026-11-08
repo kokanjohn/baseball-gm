@@ -33,6 +33,7 @@ import {
 import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import * as Finance from './FinanceEngine.js';
 import { clockNow } from './Clock.js';
+import { eventRand } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
 // TRADE VALUE CALCULATION
@@ -285,7 +286,7 @@ function _payrollDelta(incoming, outgoing, retain = {}) {
 export function generateCPUCashSale(teamId, state, context = {}) {
   const team = _club(state, teamId);
   if (!team || clubMode(state, teamId) !== 'seller') return null;
-  if (!context.force && Math.random() > 0.04) return null;
+  if (!context.force && eventRand() > 0.04) return null;
   const now = context.atMs || clockNow();
   const pool = (team.rosterIds || []).map(id => state.players[id])
     .filter(p => p && isAvailable(p) && !p.isInjured && !contractRunOut(p, state) && !_isKey(p, state, teamId)

@@ -75,7 +75,7 @@ localStorage.setItem(P.NOTIF_PREF_KEY, 'true');
 
 // 1. The Nov 7 bug: permission granted, no subscription on the device.
 console.log('\nA missing subscription is repaired by the next sync');
-P.syncPushSchedule({ immediate: true }); await settle();
+P.syncPushSchedule({ immediate: true, fresh: true }); await settle();
 const r1 = registers().pop();
 check('the sync created a subscription with the worker\'s key', !!pm.sub
       && new Uint8Array(pm.sub.options.applicationServerKey).every((v, i) => v === KEY_NEW[i]));
@@ -86,13 +86,13 @@ check('the schedule carries the game reminders (it was never empty)',
 // 2. Unchanged → no network register; a new endpoint → registered again.
 console.log('\nOnly what changed is sent');
 let n = registers().length;
-P.syncPushSchedule({ immediate: true }); await settle();
+P.syncPushSchedule({ immediate: true, fresh: true }); await settle();
 check('an unchanged schedule and subscription is not re-sent', registers().length === n);
 
 // 3. A subscription made with the old (rotated) key is replaced.
 console.log('\nA subscription made with an old key is replaced');
 pm.sub = makeSub(KEY_OLD); const oldEndpoint = pm.sub.endpoint; unsubscribed = 0;
-P.syncPushSchedule({ immediate: true }); await settle();
+P.syncPushSchedule({ immediate: true, fresh: true }); await settle();
 const r3 = registers().pop();
 check('the old-key subscription was removed', unsubscribed === 1);
 check('a new one with the current key took its place and was registered',
@@ -101,7 +101,7 @@ check('a new one with the current key took its place and was registered',
 // 4. Android dropped the subscription since the last sync: the next sync notices.
 console.log('\nA subscription dropped since the last sync');
 pm.sub = null; n = registers().length;
-P.syncPushSchedule({ immediate: true }); await settle();
+P.syncPushSchedule({ immediate: true, fresh: true }); await settle();
 check('the next sync re-subscribes and registers (the endpoint is part of what changed)',
       registers().length === n + 1 && registers().pop().body.subscription.endpoint === pm.sub.endpoint);
 
@@ -132,19 +132,19 @@ const t = await P.sendTestPush();
 check('the immediate test reports success', t.ok === true);
 clock.advance(20_000);
 SM.mutate(s => { s.push = { ...(s.push || {}), gameReminder: false }; });   // the schedule changes
-P.syncPushSchedule({ immediate: true }); await settle();
+P.syncPushSchedule({ immediate: true, fresh: true }); await settle();
 const r6 = registers().pop();
 check('a later sync (going to the background) still carries the closed-app test',
       r6.body.schedule.some(i => i.id.startsWith('test-closed-')) && !r6.body.schedule.some(i => i.id.startsWith('game-reminder-')));
 clock.advance(5 * 60_000);
 SM.mutate(s => { s.push = { ...(s.push || {}), gameReminder: true }; });
-P.syncPushSchedule({ immediate: true }); await settle();
+P.syncPushSchedule({ immediate: true, fresh: true }); await settle();
 check('once it\'s long past due it leaves the schedule', !registers().pop().body.schedule.some(i => i.id.startsWith('test-closed-')));
 
 // 7. Permission never granted → nothing is created or sent.
 console.log('\nNo permission, no subscription');
 Notification.permission = 'default'; pm.sub = null; n = calls.length;
-P.syncPushSchedule({ immediate: true }); await settle();
+P.syncPushSchedule({ immediate: true, fresh: true }); await settle();
 check('without permission the sync does nothing', calls.length === n && !pm.sub);
 
 console.log(`\n${pass} passed, ${fail} failed`);

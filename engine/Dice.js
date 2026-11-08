@@ -17,7 +17,15 @@
  * identity and first pitch, an injury by the game and the player, the trade
  * desk by its day. Two different events must never share a key.
  *
- * DOES NOT: hold state, read the clock, or import StateManager.
+ * r139 (§121) event scopes: the world's work runs one event at a time (a
+ * commit, an offseason step, a day's trade desk, a league game…). The step
+ * that runs an event opens its stream (withDice), and the card, token,
+ * offseason and money code inside it draws with eventRand(). Outside any
+ * event — a GM's own tap, league setup — eventRand() is Math.random: those
+ * are inputs, never replayed (the look-ahead reruns after any of them).
+ *
+ * DOES NOT: read the clock or import StateManager. (Its only state is the
+ * stack of open event streams.)
  */
 
 /** The franchise's dice seed: fixed for the life of the save (the weather seed's sibling). */
@@ -53,6 +61,25 @@ export function diceId(rand) {
 export function randInt(rand, lo, hi) {
   return lo + Math.floor(rand() * (hi - lo + 1));
 }
+
+const _open = [];   // the event streams open now, innermost last
+
+/**
+ * withDice(rand, fn) — run fn with `rand` as the event stream (eventRand draws
+ * from it); the previous one is back afterwards, even on a throw.
+ */
+export function withDice(rand, fn) {
+  _open.push(rand);
+  try { return fn(); } finally { _open.pop(); }
+}
+
+/** A number in [0, 1) from the open event's stream (Math.random outside any event). */
+export function eventRand() {
+  return _open.length ? _open[_open.length - 1]() : Math.random();
+}
+
+/** Is an event stream open? (For code that must not draw outside one.) */
+export function inEvent() { return _open.length > 0; }
 
 // ── cyrb128 (string → 128-bit seed) and sfc32 (small fast counter PRNG) ──
 

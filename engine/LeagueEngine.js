@@ -34,6 +34,7 @@ import {
 
 import { computeOVR, isAvailable } from './PlayerFactory.js';
 import { canAddSalary } from './FinanceEngine.js';
+import { eventRand } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
 // CPU GAME SIMULATION
@@ -183,7 +184,7 @@ function _teamOvr(team, players) {
 }
 
 function _rng(lo, hi) {
-  return lo + Math.floor(Math.random() * (hi - lo + 1));
+  return lo + Math.floor(eventRand() * (hi - lo + 1));
 }
 
 function _clamp(val, min, max) {

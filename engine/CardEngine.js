@@ -94,7 +94,7 @@ import { computeOVR } from './PlayerFactory.js';
 import { starterRested, reliefValue } from './PitchingEngine.js';
 import { clockNow } from './Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
-import { dice, diceSeed } from './Dice.js';
+import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -188,10 +188,10 @@ export function checkAndDeliver(context) {
   const byMoment  = {};
   for (const name of poolNames) (byMoment[POOL_MOMENT[name] || 'between'] ||= []).push(name);
   const want = {
-    pregame: Math.random() < CARD_DAY.pregameChance ? 1 : 0,
-    ingame:  Math.random() < CARD_DAY.ingameChance  ? 1 : 0,
-    between: CARD_DAY.betweenMin + (Math.random() < CARD_DAY.betweenExtraChance ? 1 : 0),
-    leave:   Math.random() < CARD_DAY.leaveChance   ? 1 : 0,
+    pregame: eventRand() < CARD_DAY.pregameChance ? 1 : 0,
+    ingame:  eventRand() < CARD_DAY.ingameChance  ? 1 : 0,
+    between: CARD_DAY.betweenMin + (eventRand() < CARD_DAY.betweenExtraChance ? 1 : 0),
+    leave:   eventRand() < CARD_DAY.leaveChance   ? 1 : 0,
   };
   const delivered = [];
   const taken = new Set();
@@ -338,11 +338,11 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
  */
 function _maybeChainFollowup(instance, choice, atMs) {
   const f = instance._raw?._followup;
-  if (!f || (f.on && f.on !== choice) || Math.random() >= (f.chance ?? 1)) return;
+  if (!f || (f.on && f.on !== choice) || eventRand() >= (f.chance ?? 1)) return;
   const options = FOLLOWUP_POOL.filter(e => e?.type === instance.cardId && e.card && !e.card._retired);
   if (!options.length) return;
-  const pick = options[Math.floor(Math.random() * options.length)].card;
-  const days = (f.delayMin ?? 2) + Math.random() * Math.max(0, (f.delayMax ?? f.delayMin ?? 4) - (f.delayMin ?? 2));
+  const pick = options[Math.floor(eventRand() * options.length)].card;
+  const days = (f.delayMin ?? 2) + eventRand() * Math.max(0, (f.delayMax ?? f.delayMin ?? 4) - (f.delayMin ?? 2));
   const preset = Object.fromEntries(Object.entries(instance._tokenPlayers || {}).filter(([, id]) => id));
   _deliverFollowupDef(pick.id, preset, atMs + days * 86_400_000);
 }
@@ -450,7 +450,7 @@ function _applyChoiceMoney(s, instance, choice) {
 const _hand = (p) => (['SP', 'RP'].includes(p?.pos) ? ` ${PITCHER_HAND_DISPLAY[p.hand] || '(R)'}` : '');
 const _clock = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 const _day   = (ms) => new Date(ms).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-const _randBetween = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
+const _randBetween = (lo, hi) => lo + Math.floor(eventRand() * (hi - lo + 1));
 
 function _rosterCard(state, fields) {
   return {
@@ -481,9 +481,13 @@ function _cardsWithKey(state, key) {
 /** Park a roster card for delivery at `atMs` (push-synced like every card). */
 function _deliverAt(instance, atMs) {
   const state = StateManager.get();
-  if (_cardsWithKey(state, instance._rosterKey).some(c => !c.resolved)) return null;
+  const same = _cardsWithKey(state, instance._rosterKey);
+  if (same.some(c => !c.resolved)) return null;
+  // r139 §121 a roster card's id comes from what it is about (its key, and
+  // how many came before it), so the look-ahead and the real clock agree.
+  const instanceId = instance._rosterKey ? diceId(dice(diceSeed(state), 'roster-card', instance._rosterKey, same.length)) : instance.instanceId;
   StateManager.mutate(s => {
-    s.scheduledCards = [...(s.scheduledCards || []), { ...instance, deliverAtMs: atMs }]
+    s.scheduledCards = [...(s.scheduledCards || []), { ...instance, instanceId, deliverAtMs: atMs }]
       .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
   });
   return instance;
@@ -1017,8 +1021,23 @@ function _deliverManagerFillCard(ev) {
  * @returns {{ delivered: Number, withdrawn: Number }}
  */
 export function syncRosterCards(events = [], atMs = clockNow()) {
+  // r139 §121 the roster clock runs this at the moment of each change (GameEngine._rosterStep),
+  // so its draws are named for that moment.
+  return withDice(dice(diceSeed(StateManager.get()), 'roster', atMs), () => _syncRosterCards(events, atMs));
+}
+function _syncRosterCards(events, atMs) {
   let delivered = 0;
+  const seed = diceSeed(StateManager.get());
   for (const ev of events) {
+    // r139 §121 each event's draws are its own, whenever and in whatever batch it's handled.
+    delivered += withDice(dice(seed, 'roster-ev', ev.type, ev.teamId ?? '', ev.playerId ?? '', ev.atMs ?? '', ev.tx?.id ?? ''), () => _rosterEventCards(ev, atMs));
+  }
+  return _rosterConditionCards(delivered, atMs);
+}
+
+function _rosterEventCards(ev, atMs) {
+  let delivered = 0;
+  {
     if (ev.type === 'INJURY' && ev.teamId === 'user') {
       if (deliverInjuryAct1(ev.playerId, (ev.atMs ?? atMs) + _randBetween(5, 20) * 60_000)) delivered++;
     } else if (ev.type === 'MANAGER_FILL') {
@@ -1059,6 +1078,10 @@ export function syncRosterCards(events = [], atMs = clockNow()) {
     }
   }
 
+  return delivered;
+}
+
+function _rosterConditionCards(delivered, atMs) {
   let state = StateManager.get();
 
   // IL clearances → decision cards (at the moment of clearance).
@@ -1167,7 +1190,9 @@ export function expireDueRosterCards(atMs) {
     .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER')
                  && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
-  for (const c of due) expire(c.instanceId, c.expiresAtMs);
+  // r139 §121 what an unanswered card's deadline sets off draws from its own stream.
+  const seed = diceSeed(state);
+  for (const c of due) withDice(dice(seed, 'expire', c.instanceId, c.expiresAtMs), () => expire(c.instanceId, c.expiresAtMs));
   return due.length;
 }
 
@@ -1191,7 +1216,7 @@ export function expireDueRosterCards(atMs) {
 const _NOUN  = { C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder', DH: 'designated hitter' };
 const _SPOT  = { C: 'catcher', '1B': 'first base', '2B': 'second base', '3B': 'third base', SS: 'shortstop', OF: 'the outfield', DH: 'the DH spot' };
 const _an    = (w) => (/^[aeiou]/i.test(w) ? `an ${w}` : `a ${w}`);
-const _pick  = (xs) => xs[Math.floor(Math.random() * xs.length)];
+const _pick  = (xs) => xs[Math.floor(eventRand() * xs.length)];
 const _poss  = (name) => (/s$/.test(name) ? `${name}'` : `${name}'s`);
 const _and   = (xs) => xs.length <= 1 ? (xs[0] || '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
 
@@ -1264,7 +1289,7 @@ export function deliverTradeCall(deal, atMs, { seed = false } = {}) {
   if (!_offerCanGo(st, offer, deal.a, atMs)) return null;
   return deliverTradeOffer(offer, deal.a, {
     kind: 'call', room: !!deal.room, need: deal.why?.need || null, seed, openBy: deal.openBy || 0,
-    atMs: seed ? null : atMs + (10 + Math.random() * 80) * 60_000,
+    atMs: seed ? null : atMs + (10 + eventRand() * 80) * 60_000,
   });
 }
 
@@ -1415,13 +1440,13 @@ function _scheduleCards(instances, state, game = null) {
   for (const c of instances) {
     if (c._moment === 'soon') {
       // A milestone happening now (the GM takes over, camp opens): within the hour.
-      timed.push({ ...c, deliverAtMs: nowMs + lead + Math.random() * 30 * 60_000 });
+      timed.push({ ...c, deliverAtMs: nowMs + lead + eventRand() * 30 * 60_000 });
     } else if (c._moment === 'pregame' || (!c._moment && c._pool === 'PREGAME_POOL')) {
       if (!Number.isFinite(T) || T - nowMs < lead + 15 * 60_000) continue;
-      timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, T - (45 + Math.random() * 105) * 60_000), expiresAtMs: T });
+      timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, T - (45 + eventRand() * 105) * 60_000), expiresAtMs: T });
     } else if (c._moment === 'ingame' || (!c._moment && c._pool === 'INGAME_POOL')) {
       if (!Number.isFinite(T)) continue;
-      const at = Math.max(nowMs + lead, T + (20 + Math.random() * 100) * 60_000);
+      const at = Math.max(nowMs + lead, T + (20 + eventRand() * 100) * 60_000);
       if (at > T + CARD_DAY.ingameLastMs) continue;          // the game is over by then
       timed.push({ ...c, deliverAtMs: at, expiresAtMs: T + CARD_DAY.ingameExpireMs });
     } else loose.push(c);
@@ -1441,7 +1466,7 @@ function _scheduleCards(instances, state, game = null) {
   });
   // planDeliveryTimes returns ascending times; shuffle the pairing so card
   // order in the pool doesn't dictate arrival order.
-  const order = instances.map(c => ({ c, r: Math.random() })).sort((a, b) => a.r - b.r);
+  const order = instances.map(c => ({ c, r: eventRand() })).sort((a, b) => a.r - b.r);
   const scheduled = order.map(({ c }, i) => ({ ...c, deliverAtMs: times[i],
     ...(c._expiresAfterMs ? { expiresAtMs: times[i] + c._expiresAfterMs } : {}) }));
   StateManager.mutate(s => {
@@ -1512,8 +1537,15 @@ export function fitsSituation(w, sit) {
 
 const SEEN_MOMENTS_KEY = 'bgm_seenMoments';
 
+let _deviceSeen = null;   // r139 handed in where there's no localStorage (the look-ahead's worker)
+/** r139 §121 this device's memory of moment cards shown, for a context without localStorage. */
+export function setSeenMoments(list) { _deviceSeen = Array.isArray(list) ? [...list] : null; }
+/** This device's memory, to hand to the look-ahead's worker. */
+export function seenMoments() { return _seenMoments(); }
+
 /** Versions this device has shown, oldest first (across every team and season). */
 function _seenMoments() {
+  if (_deviceSeen) return [..._deviceSeen];
   try {
     const raw = globalThis.localStorage?.getItem(SEEN_MOMENTS_KEY);
     const list = raw ? JSON.parse(raw) : [];
@@ -1521,6 +1553,7 @@ function _seenMoments() {
   } catch { return []; }
 }
 function _rememberMoment(id) {
+  if (StateManager.isSpeculating()) return;   // r139 a look-ahead only imagines it
   try {
     const list = _seenMoments().filter(x => x !== id);
     list.push(id);
@@ -1578,7 +1611,7 @@ export function deliverMomentCard(moment, context, game = null, timing = 'soon')
   let pick;
   if (fresh.length) {
     const total = fresh.reduce((a, c) => a + weightOf(c), 0);
-    let r = Math.random() * total;
+    let r = eventRand() * total;
     pick = fresh.find(c => (r -= weightOf(c)) <= 0) || fresh[fresh.length - 1];
   } else {
     pick = [...versions].sort((a, b) => seen.indexOf(a.id) - seen.indexOf(b.id))[0];
@@ -1599,10 +1632,22 @@ export function deliverMomentCard(moment, context, game = null, timing = 'soon')
 /**
  * releaseDueCards(nowMs = clockNow())
  * Moves every scheduled card whose time has come into the inbox.
- * Called on every app tick (and by the harness after every tick).
+ * Called on every app tick (and by the harness after every tick) — and r139
+ * by the clock itself before each event and at a commit, so cards arrive in
+ * time order with the world's events however the clock is stepped (§121).
  * @returns {Object[]} the cards released (empty array if none)
  */
 export function releaseDueCards(nowMs = clockNow()) {
+  const out = _releaseDue(nowMs);
+  if (out.length && !StateManager.isSpeculating()) _released.push(...out);
+  return out;
+}
+
+const _released = [];   // r139 released since the app last looked (never by a look-ahead)
+/** r139 the cards released since the last call — by the app's tick or inside the clock — for the app to announce. */
+export function takeReleased() { return _released.splice(0, _released.length); }
+
+function _releaseDue(nowMs) {
   const state = StateManager.get();
   let due = (state?.scheduledCards || []).filter(c => c.deliverAtMs <= nowMs);
   if (!due.length) return [];
@@ -1628,20 +1673,33 @@ export function releaseDueCards(nowMs = clockNow()) {
 const COMPOSE_LOG_MAX = 80;
 
 /**
- * getPushSchedule(state, nowMs = clockNow(), ahead = null)
+ * getPushSchedule(state, nowMs = clockNow(), ahead = null, foreseen = null)
  * Everything the push worker should send this device, shaped for its
- * /register endpoint: the scheduled cards (seed cards never), the 30-minute
- * game reminders, and — r138 §120 — our next game as it will happen
- * (`ahead`, LookAhead.lookAhead's result: delays, a postponement, our injuries,
- * the final). Each kind is on unless the GM turned it off in Settings.
+ * /register endpoint: the messages, the 30-minute game reminders, and — r138
+ * §120 — our next game as it will happen (`ahead`, LookAhead.lookAhead's
+ * result: delays, a postponement, our injuries, the final). Each kind is on
+ * unless the GM turned it off in Settings.
+ *
+ * The messages: r139 §121 with `foreseen` (LookAhead.lookAheadMessages — every
+ * message that will reach Messages through its horizon, if the app stays
+ * closed), those are the ones pushed up to the horizon: the trade desk's
+ * offers, the trainer's and physician's reports, IL returns, open spots, the
+ * offseason's decisions — not only the cards already planned. (A planned card
+ * the world would withdraw first isn't pushed.) Beyond the horizon, the cards
+ * already planned. Without it, the planned cards (seed cards never).
  */
-export function getPushSchedule(state, nowMs = clockNow(), ahead = null) {
+export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foreseen = null) {
   const qs = state?.push?.quietStart, qe = state?.push?.quietEnd;
-  const cards = !alertOn(state, PUSH_ALERTS.messages) ? [] : (state?.scheduledCards || [])
-    .filter(c => !c._seed)
+  const horizon = foreseen && Number.isFinite(foreseen.untilMs) ? foreseen.untilMs : -Infinity;
+  const planned = (state?.scheduledCards || [])
+    .filter(c => !c._seed && c.deliverAtMs > horizon)
+    .map(c => ({ instanceId: c.instanceId, sender: c.sender, subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs }));
+  const coming = (foreseen?.messages || [])
+    .map(m => ({ instanceId: m.instanceId, sender: m.sender, subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs }));
+  const cards = !alertOn(state, PUSH_ALERTS.messages) ? [] : [...coming, ...planned]
     // Pool cards are already planned outside quiet hours; real-time roster
     // cards reach the inbox when they happen and only the alert waits (§65).
-    .map(c => ({ c, at: pushTimeFor(c.deliverAtMs, qs, qe) }))
+    .map(c => ({ c, at: pushTimeFor(c.at, qs, qe) }))
     // An alert that would sound after the card's deadline is pointless.
     .filter(({ c, at }) => at > nowMs - 60 * 1000 && !(Number.isFinite(c.expiresAtMs) && at >= c.expiresAtMs))
     .map(({ c, at }) => ({
@@ -1710,7 +1768,7 @@ function _maybeDeliverCashSale(state, context) {
   const now = clockNow();
   const teams = (state.leagueTeams || [])
     .filter(t => !busyWithUs(state, t.id, now))
-    .map(t => ({ t, r: Math.random() }))
+    .map(t => ({ t, r: eventRand() }))
     .sort((a, b) => a.r - b.r)
     .map(x => x.t);
   for (const team of teams) {
@@ -1759,7 +1817,7 @@ export function deliverSeedTradeOffer(context) {
   const st = StateManager.get();
   const atMs = clockNow();
   if (!tradeWindow(st).open) return false;
-  const shuffle = (xs) => xs.map(x => ({ x, r: Math.random() })).sort((a, b) => a.r - b.r).map(o => o.x);
+  const shuffle = (xs) => xs.map(x => ({ x, r: eventRand() })).sort((a, b) => a.r - b.r).map(o => o.x);
   const tryCall = () => {
     for (const t of shuffle(st.leagueTeams || [])) {
       for (const need of LeagueTrades.clubNeeds(st, t.id).slice(0, 2)) {
@@ -1796,7 +1854,7 @@ export function deliverSeedTradeOffer(context) {
     }
     return null;
   };
-  const order = Math.random() < 0.5 ? [tryCall, trySell] : [trySell, tryCall];
+  const order = eventRand() < 0.5 ? [tryCall, trySell] : [trySell, tryCall];
   return !!(order[0]() || order[1]());
 }
 
@@ -2299,7 +2357,7 @@ function _selectCards(eligible, context, state, maxCount) {
 
   for (let i = 0; i < Math.min(maxCount, pool.length); i++) {
     const total  = pool.reduce((s, item) => s + item.weight, 0);
-    let r        = Math.random() * total;
+    let r        = eventRand() * total;
     let idx      = 0;
     for (let j = 0; j < pool.length; j++) {
       r -= pool[j].weight;
@@ -2611,7 +2669,7 @@ export function deliverAllStarSelectionCard(selections, atMs) {
 /** All-Star week in our ballpark — three decisions while the league is in town. */
 export function scheduleAllStarWeekCards(dayStartMs, firstPitchMs) {
   const state = StateManager.get();
-  const K = (lo, hi) => Math.round((lo + Math.random() * (hi - lo)) / 5) * 5;
+  const K = (lo, hi) => Math.round((lo + eventRand() * (hi - lo)) / 5) * 5;
   const sponsorK = K(500, 900), clinicK = K(120, 220);
   const cards = [
     { h: 9, key: 'sponsor', fields: {
@@ -2691,7 +2749,7 @@ export function deliverAllStarTradeOffer(context) {
         `${p.name} spent All-Star week in our ballpark and has let ${t.name} know a move here would be welcome. ${t.name} are willing to listen.`,
         `After a week in our ballpark at the All-Star Game, ${p.name} asked ${t.name} about a move here — and they called us.`,
       ]),
-      atMs: atMs + (30 + Math.random() * 150) * 60_000,
+      atMs: atMs + (30 + eventRand() * 150) * 60_000,
     });
   }
   return false;
@@ -2758,7 +2816,7 @@ const OWNER_VOICE = {
 };
 const _voice = (state, stage) => {
   const lines = (OWNER_VOICE[state.archetype] || OWNER_VOICE.contender)[stage] || [];
-  return lines[Math.floor(Math.random() * lines.length)] || '';
+  return lines[Math.floor(eventRand() * lines.length)] || '';
 };
 
 /** What's worrying the owner, in words (payroll over target, red ink, cost per win). */
@@ -2994,7 +3052,7 @@ function _salaryCallOffer(st, team, atMs, { intro = null } = {}) {
     deliverTradeOffer(offer, team.id, {
       kind: 'sell', room: a.room, subject: `${team.name}: ${p.name} is available`,
       intro: intro || `${team.name} called back about the conversation we started: ${p.name} is available, and they need the payroll room.`,
-      atMs: atMs + (2 + Math.random() * 3) * 3600_000,
+      atMs: atMs + (2 + eventRand() * 3) * 3600_000,
     });
     return true;
   }
@@ -3283,7 +3341,7 @@ function _leagueTradeCards(tx, atMs) {
  */
 function _workThePhones({ key, spec, what, atMs, sender = 'Pro Scouting', subjectNone }) {
   const st = StateManager.get();
-  const at = atMs + Math.round((3 + Math.random() * 4) * 3600_000);
+  const at = atMs + Math.round((3 + eventRand() * 4) * 3600_000);
   const opt = LeagueTrades.bestOption(st, _fitsFor(spec, st), at, { excludeIds: new Set(spec.excludeId ? [spec.excludeId] : []) });
   if (!opt) {
     return _deliverWatchCard(`${key}:none`, {
@@ -3359,7 +3417,7 @@ export function deliverMeetingsTargets(atMs) {
   let n = 0;
   for (let i = 0; i < 2; i++) {
     const cur = StateManager.get();
-    const at = atMs + (40 + i * 75 + Math.floor(Math.random() * 30)) * 60_000;
+    const at = atMs + (40 + i * 75 + Math.floor(eventRand() * 30)) * 60_000;
     const opt = LeagueTrades.bestOption(cur, fits, at, { excludeTeams: used });
     if (!opt) break;
     used.add(opt.teamId);
@@ -3443,7 +3501,7 @@ export function runWatches(atMs) {
       if (opt) {
         const t = (cur.leagueTeams || []).find(x => x.id === opt.teamId), p = cur.players[opt.playerId];
         hit = !!_deliverIdea(cur, {
-          key: `${w.key}:found`, teamId: opt.teamId, deal: opt.deal, atMs: atMs + Math.round((1 + Math.random() * 3) * 3600_000), sender: w.sender || 'Pro Scouting',
+          key: `${w.key}:found`, teamId: opt.teamId, deal: opt.deal, atMs: atMs + Math.round((1 + eventRand() * 3) * 3600_000), sender: w.sender || 'Pro Scouting',
           subject: `Found: ${p.name}`,
           preview: `${_ref(p)} of ${t.name} — the fit we've been watching for.`,
           lead: `We've been watching for ${w.what}. ${_ref(p)} of ${t.name} now fits${isRental(p, cur) ? ', in the last year of the contract' : ''}.`,
@@ -3854,7 +3912,7 @@ function _hireCardAfter(role, atMs) {
   const os = st.offseason;
   if (!os) return null;
   const day3 = Offseason._atHour(Offseason.dayStart(os, 3), OFFSEASON_CARD_HOUR + 1);
-  const at = Math.max(day3, atMs + (2 + Math.random() * 3) * 3600_000);
+  const at = Math.max(day3, atMs + (2 + eventRand() * 3) * 3600_000);
   return deliverCoachHireCard(role, Math.min(at, os.springAt - 6 * 3600_000), os.springAt);
 }
 
@@ -4566,5 +4624,6 @@ function _resolveBudgetCost(costK) {
 // ─────────────────────────────────────────────────────────────
 
 function _uuid() {
-  return crypto.randomUUID();
+  // r139 §121 inside a world event, from its stream (the look-ahead and the real run make the same id).
+  return inEvent() ? diceId(eventRand) : crypto.randomUUID();
 }

@@ -50,6 +50,7 @@ import {
   FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER, FIN_CPU, FIN_MIN_MOVE_K, FIN_PRICE_ELASTICITY,
 } from '../data/constants.js';
 import { dayOf } from './PitchingEngine.js';
+import { eventRand } from './Dice.js';
 
 const DAY = 86_400_000;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -139,7 +140,7 @@ export function initClubBooks(draft, teamId) {
   const t = _club(draft, teamId);
   if (!t || teamId === 'user') return null;
   const types = Object.keys(OWNER_PROFILE);
-  t.ownerArchetype ||= types[Math.floor(Math.random() * types.length)];
+  t.ownerArchetype ||= types[Math.floor(eventRand() * types.length)];
   t.atmosphere     ??= Math.round(clamp(50 + ((t.str ?? 0.5) - 0.5) * 120, 35, 75));
   t._ownerWinTarget ??= Math.round(REGULAR_SEASON_GAME_COUNT * clamp(t.str ?? 0.5, 0.4, 0.6));
   const payroll = payrollOf(draft, teamId);
@@ -174,7 +175,7 @@ export function cpuTargetFloor(state) {
 /** Opening-funds share for an archetype (the Gambler's is a roll). */
 export function startFundsShareFor(archetypeId) {
   const sf = OWNER_PROFILE[archetypeId]?.startFunds ?? FIN_START_FUNDS_SHARE;
-  return Array.isArray(sf) ? sf[0] + Math.random() * (sf[1] - sf[0]) : sf;
+  return Array.isArray(sf) ? sf[0] + eventRand() * (sf[1] - sf[0]) : sf;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -440,7 +441,7 @@ export function crowdFor(state, teamId, { atMs, playoff = false, atmosphere = nu
   const form = w + l >= A.formAfterGames ? _formAt(w / (w + l)) : 1;
   const dow = new Date(atMs).getDay();
   const dayMult = (dow === 5 || dow === 6 || dow === 0) ? A.weekend : A.weekday;
-  const noise = expected ? 1 : 1 + (Math.random() * 2 - 1) * A.noise;
+  const noise = expected ? 1 : 1 + (eventRand() * 2 - 1) * A.noise;
   // §110 the weather on the demand, before the seats run out (a sellout's extra demand absorbs it).
   const wf = weather ? weatherDemand(weather, { playoff }).factor : 1;
   // §112.4 the winter's front-office decisions: the ticket price (demand
@@ -642,7 +643,7 @@ export function ownerReview(draft, atMs, teamId = 'user') {
   const u = _club(draft, teamId), fin = u.finances, o = fin.owner || (fin.owner = { stage: 'content', mood: 0, order: null, targetPenalty: 0 });
   const isUser = teamId === 'user';
   const prof = _profile(draft, teamId);
-  if (prof.moodStep) o.mood = clamp((o.mood || 0) + (Math.random() * 2 - 1) * prof.moodStep, -prof.moodMax, prof.moodMax);
+  if (prof.moodStep) o.mood = clamp((o.mood || 0) + (eventRand() * 2 - 1) * prof.moodStep, -prof.moodMax, prof.moodMax);
   let orderResult = null;
   if (o.order && atMs >= o.order.dueAt) {
     const cut = o.order.fromPayroll - payrollOf(draft, teamId);

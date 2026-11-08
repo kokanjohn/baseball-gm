@@ -28,12 +28,13 @@ import {
 import { deliverTalkReply, withdrawTalkCards } from './CardEngine.js';
 import { formatK } from './CardTokens.js';
 import { clockNow } from './Clock.js';
+import { eventRand } from './Dice.js';
 
 const H = 3_600_000;
 
 /** How long the other GM takes to answer: mostly within the day, sometimes longer. */
 function _replyDelayMs() {
-  return Math.round((2 + Math.pow(Math.random(), 1.6) * 34) * H);
+  return Math.round((2 + Math.pow(eventRand(), 1.6) * 34) * H);
 }
 
 // §91 the talk helpers live with the rest of the pure trade rules (the trade
