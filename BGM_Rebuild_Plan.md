@@ -9218,3 +9218,32 @@ The user's direction on r131:
 - `check-refs` passes. `sim-season` 142 games, seed 3: 3652/3653; the one failure ("nobody plays before reporting / after leaving", game 36) also fails on r133 at the same seed, and r134 changes no engine code.
 
 **Still open (designed next, §112 style check-in first):** cards the roster clock makes on catch-up when the app reopens (the trade desk, offseason days, roster and weather cards) don't exist while the app is closed, so they can't be pushed; only the pool cards planned at the last game commit and the game reminders can. Planning those ahead when the app goes to the background needs a design decision.
+
+## 117. What reaches Messages: decisions and consequences; news goes to Recent (r135)
+
+**Why now.** The push measurement (§116 follow-up, `tools/harness/measure-push-coverage.mjs`, two full contender seasons plus offseason) found about 45 messages a season that asked nothing — development updates, the manager's deadline call-ups, minor-league signings, retirements, claim results, All-Star news. They broke §1.1 (every card a decision), and as clock-made cards they could never be pushed anyway.
+
+**The rule (decided with the GM, Nov 7).** A message reaches Messages when it is a decision, or when it carries a consequence the GM must know about: it costs something, limits what the GM can do, leaves the roster needing a move, or says something the GM chose didn't happen. Everything else about our club is news and goes to Recent. Where a consequence has an honest choice, the message offers it. Where it has none, it keeps a single **Understood** button — a narrow, written exception to §1.1 for consequences the GM needs to know but can't act on.
+
+**Stays in Messages:**
+- The manager's call-ups at a missed open-spot deadline — **now a real choice** (below); "We're playing short" (no one to call up) with Understood.
+- Ownership on money: watching / concerned; the cut order met or missed; no club can take the contract.
+- A move that didn't happen: ownership blocked the trade; the deal is off; the offer couldn't go out; the trade was voided; no advance scout (funds); a waiver claim lost.
+- **A waiver claim won** and **our All-Stars named** (the GM's call, Nov 7).
+- The offseason "decisions due before spring" reminder; one of our players retiring (opens a spot); we're hosting the All-Star Game.
+
+**Moves to Recent** (feed entries of type `ours`, `CardEngine._ourNews`, never dated ahead of now): a development plan's result ("Acuna's development plan went better than we hoped — now OVR 74"); a minor-league signing; the All-Star MVP; the All-Star Game going to another city, with the league's main reason why not us.
+
+**The manager's call-ups (`manager_fill`).** The open-spot card still asks first (§65). When its deadline passes, the manager calls up and ownership's hit is taken (`MANAGER_FILL_PENALTY`). The call-ups report at midnight, so the message is a decision until then:
+- **Keep {name}** — they report.
+- **Send {name} back — I'll pick** — `TransactionEngine.cancelCallUps` cancels each pending call-up and returns the player to the farm; the vacancy clock opens the spot again with a new deadline (always ahead of now — the next game's), and the open-spot card asks. The ownership hit stands.
+- Unanswered, it settles as kept when they report ("No answer — {name} reported"); after that, nothing can be sent back.
+- All-or-nothing when the manager called up more than one (rare).
+
+**Considered and dropped: "Release him and eat the salary"** on "No club can take the contract." Releasing turns the salary into dead money that is still owed (§112.3), but the cut order is judged on `payrollOf` (roster + farm), which leaves dead money out. The button would have met the owner's cut without saving a dollar. **Open finding, not fixed here:** the same gap means any release made while a cut order is open counts toward it. The structural fix is to judge the order on payroll plus dead money owed (`payrollOf + deadAhead`) both when it's issued and when it comes due — to be decided with the GM.
+
+**Tests.**
+- `check-manager-fill.mjs` (new, 18): the open-spot card asks first; the manager's call-up arrives as a real choice with its cost; send back cancels the call-up, returns the player to the farm, keeps the ownership hit, and reopens the spot with a new deadline and card; the GM's own pick reports; keep; unanswered settles as kept at report time; no send-back after reporting; signings and development results reach Recent and not Messages, never dated ahead.
+- `test-notices-ui.mjs` (new): the real app, dark and light — the call-up message with Keep / Send back, the inbox without the news, Recent with it.
+- `sim-season.js`: the "we hear why" All-Star check now reads our Recent news (noted as it comes, since Recent keeps 72 hours). 142 games, seed 3: 3644/3644 (r134: 3653 with one failure). The count differs because the news no longer passes through Messages, so the harness GM's path through the season changes; r133's "nobody plays before reporting" failure didn't come up on this path, which is not the same as fixed.
+- `check-refs`, `check-il-return` (27), `check-frontoffice` (17), `check-contracts` (11), `check-coaches` (14), `check-compose-replies` (14), `check-push-client` (18) pass.

@@ -292,6 +292,29 @@ export function callUp(draft, playerId, teamId, atMs, by = 'gm') {
   return { ok: true, tx };
 }
 
+/**
+ * cancelCallUps(draft, playerIds, teamId, atMs)
+ * r135 The GM sends back the manager's deadline call-ups before they report:
+ * each pending call-up is cancelled and the player returns to the farm. The
+ * open spot is the vacancy clock's again (a new deadline, the open-spot card).
+ * A player who already reported, or whose call-up isn't pending, is left alone.
+ * @returns {String[]} the players sent back
+ */
+export function cancelCallUps(draft, playerIds, teamId, atMs) {
+  const back = [];
+  for (const id of playerIds || []) {
+    const tx = (draft.transactions || []).find(t => t.status === 'pending' && t.kind === 'arrival'
+      && t.reason === 'callup' && t.playerId === id && t.teamId === teamId);
+    if (!tx || draft.players[id]?.group !== PLAYER_GROUP.IN_TRANSIT) continue;
+    tx.status = 'cancelled';
+    tx.note   = 'sent back before reporting';
+    tx.doneAt = atMs;
+    applyRosterMutation(draft, sendToFarm(draft, id, teamId));
+    back.push(id);
+  }
+  return back;
+}
+
 // ─────────────────────────────────────────────────────────────
 // APPLY DUE — the clock processor
 // ─────────────────────────────────────────────────────────────

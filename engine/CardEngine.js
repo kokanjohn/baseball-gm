@@ -67,7 +67,7 @@ import {
 } from './RosterEngine.js';
 import { evaluateTrade, queueTrade, generateCPUCashSale, tradeWindow, tradeBlockers, startCooldown, busyWithUs, evaluateForUser, evaluateForClub, clubBar } from './TradeEngine.js';
 import {
-  getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull, sideOf,
+  getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull, sideOf, cancelCallUps,
 } from './TransactionEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
@@ -942,6 +942,63 @@ function _deliverNotice(key, fields, atMs) {
 }
 
 /**
+ * _ourNews(text, atMs) — r135 news about our club that needs no answer goes
+ * to the Recent feed, not Messages (every message is a decision, or a
+ * consequence the GM must know about — §117).
+ */
+function _ourNews(text, atMs) {
+  StateManager.mutate(s => {
+    s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('ours', s.userTeam.abbr, text, Math.min(atMs, Date.now()))]);
+  });
+}
+
+/**
+ * The open-spot deadline passed and the manager called players up (§65), at
+ * a cost with ownership. r135 the call-ups don't report until midnight, so
+ * the GM can keep them or send them back and pick — the spot opens again
+ * with a new deadline and the usual open-spot card. The ownership hit stands
+ * either way. Nobody to call up ("playing short"): the consequence alone.
+ */
+function _deliverManagerFillCard(ev) {
+  const st = StateManager.get();
+  const ids   = (ev.playerIds || []).filter(id => st.players[id]);
+  const names = ids.map(id => st.players[id].name);
+  const mgr   = _managerName(st);
+  const cost  = `Ownership noticed (Owner Trust ${ev.penalty?.ownerTrust ?? -2}, Atmosphere ${ev.penalty?.atmosphere ?? -1}).`;
+  if (!ids.length) {
+    return _deliverNotice(`managerfill:${ev.atMs}`, {
+      sender: mgr, type: 'urgent',
+      subject: 'We are playing short',
+      preview: 'Nobody made a move on the open roster spot before the deadline.',
+      body:    `Nobody made a move on the open roster spot before the deadline, and there's no one on the farm who can fill it. We'll play short until something changes — the waiver wire or a trade. ${cost}`,
+    }, ev.atMs);
+  }
+  const key = `managerfill:${ev.atMs}`;
+  if (_cardsWithKey(st, key).length) return null;
+  const reportAt = Math.min(...ids.map(id => (st.transactions || []).find(t => t.status === 'pending' && t.kind === 'arrival' && t.playerId === id)?.effectiveAt ?? nextCalendarDay(ev.atMs)));
+  const them  = _list(names);
+  const one   = ids.length === 1;
+  const card = _rosterCard(st, {
+    cardId:   'manager_fill',
+    tag:      'ROSTER',
+    sender:   mgr,
+    type:     'urgent',
+    _rosterKey: key,
+    _fillIds: ids,
+    subject:  `I called up ${them}`,
+    preview:  'No move was made before the deadline, so I made it.',
+    body:     `Nobody made a move on the open roster spot before the deadline, so I called up ${them}. ${cost} `
+            + `${one ? 'The call-up reports' : 'They report'} at midnight. If you'd rather pick, I can send ${one ? 'the call-up' : 'them'} back before then — the spot opens again, and you'll get the call to make before our next game.`,
+    yesLabel: `Keep ${one ? names[0] : 'them'}`,
+    noLabel:  `Send ${one ? names[0] : 'them'} back — I'll pick`,
+    expiresAtMs: reportAt,
+    _raw: { onYes: 'mfill_keep', onNo: 'mfill_sendback', onAuto: 'mfill_keep' },
+    _autoLabel: `No answer — ${them} reported`,
+  });
+  return _deliverAt(card, ev.atMs);
+}
+
+/**
  * syncRosterCards(events, atMs)
  * Brings the inbox in line with the roster, after every roster-clock step.
  *   - delivers cards for new situations (injuries, clearances, open spots,
@@ -956,25 +1013,12 @@ export function syncRosterCards(events = [], atMs = Date.now()) {
     if (ev.type === 'INJURY' && ev.teamId === 'user') {
       if (deliverInjuryAct1(ev.playerId, (ev.atMs ?? atMs) + _randBetween(5, 20) * 60_000)) delivered++;
     } else if (ev.type === 'MANAGER_FILL') {
-      const st = StateManager.get();
-      const names = (ev.playerIds || []).map(id => st.players[id]?.name).filter(Boolean);
-      if (_deliverNotice(`managerfill:${ev.atMs}`, {
-        sender:  _managerName(st),
-        subject: names.length ? `I called up ${names.join(' and ')}` : 'We are playing short',
-        preview: 'No move was made before the deadline, so I made it.',
-        body:    names.length
-          ? `Nobody made a move on the open roster spot before the deadline, so I called up ${names.join(' and ')}. ${names.length > 1 ? 'Both report' : 'The call-up reports'} tomorrow. Ownership noticed (Owner Trust ${ev.penalty?.ownerTrust ?? -2}, Atmosphere ${ev.penalty?.atmosphere ?? -1}).`
-          : `Nobody made a move on the open roster spot before the deadline, and there's no one on the farm who can fill it. We'll play short until something changes. Ownership noticed.`,
-      }, ev.atMs)) delivered++;
+      if (_deliverManagerFillCard(ev)) delivered++;
     } else if (ev.type === 'FARM_SIGNING' && ev.teamId === 'user') {
+      // r135 news, not a decision: the Recent feed.
       const st = StateManager.get();
       const p  = st.players[ev.playerId];
-      if (p && _deliverNotice(`farmsign:${ev.playerId}:${ev.atMs}`, {
-        sender:  'Farm Director',
-        subject: `Signed ${p.name} to a minor-league deal`,
-        preview: `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) joins the farm system.`,
-        body:    `Our farm system was getting thin, so I signed ${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}) to a minor-league deal — available as a call-up whenever we need one.`,
-      }, ev.atMs)) delivered++;
+      if (p) _ourNews(`Farm Director signed ${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr}) to a minor-league deal`, ev.atMs ?? atMs);
     } else if (ev.type === 'WAIVER_CLAIMED' && ev.userClaimed) {
       // §73: how our waiver claim came out.
       const st = StateManager.get();
@@ -2496,14 +2540,9 @@ export function deliverAllStarHostCard({ hostId, status }, atMs) {
            : p >= 0.5  ? 'our ballpark was in the conversation, but the facilities still lag the league\'s best'
            :             'our ballpark is not on the league\'s list yet — facilities and fan experience are what move it');
   }
-  return _deliverNotice(key, {
-    cardId: 'as_host_other', tag: 'OWNERSHIP', type: 'normal', avatar: '🏟️', sender: 'League Office',
-    subject: `All-Star Game awarded to ${city}`,
-    preview: `This year's All-Star Game will be played in ${city}.`,
-    body: `The league has awarded this season's All-Star Game to ${city}. `
-        + (why.length ? `From the league office: ${why.join('; ')}.` : ''),
-    expiresAtMs: atMs + 2 * 24 * 3600_000,
-  }, atMs);
+  // r135 news, not a decision: the Recent feed, with the league's main reason.
+  _ourNews(`All-Star Game awarded to ${city}${why.length ? ` — ${why[0]}` : ''}`, atMs);
+  return null;
 }
 
 /**
@@ -2599,13 +2638,9 @@ export function deliverAllStarMvpCard(playerId, atMs) {
   const p = state.players[playerId];
   if (!p) return null;
   const r = state.allStar?.season?.result;
-  return _deliverNotice(`allstar:mvp:${state.seasonNum}`, {
-    cardId: 'as_mvp', tag: 'ROSTER', type: 'good', avatar: '🏆', sender: _managerName(state),
-    subject: `${p.name} is the All-Star Game MVP`,
-    preview: `${p.name} took home the MVP trophy.`,
-    body: `${_who(p)} was named MVP of the All-Star Game${r ? ` (${r.homeScore}–${r.awayScore} final)` : ''}. The clubhouse gave ${p.name} a standing ovation on the way in.`,
-    expiresAtMs: atMs + 2 * 24 * 3600_000,
-  }, atMs);
+  // r135 news: the Recent feed.
+  _ourNews(`${p.name} is the All-Star Game MVP${r ? ` (${r.homeScore}–${r.awayScore} final)` : ''}`, atMs);
+  return null;
 }
 
 /**
@@ -4109,24 +4144,19 @@ function _deliverIndieReport(playerId, atMs) {
   return _deliverAt(card, atMs);
 }
 
-/** A development plan finished: the coach reports how it went. */
+/** A development plan finished: the coach's verdict — r135 news, the Recent feed. */
 function _deliverDevelopmentReport(ev, atMs) {
   const st = StateManager.get();
   const p  = st.players[ev.playerId];
   if (!p || ev.teamId !== 'user') return null;
-  const coach = st.userTeam.coachingStaff?.[['SP', 'RP'].includes(p.pos) ? 'pitchingCoach' : 'hittingCoach']?.name || 'Player Development';
   const r = ev.realized, plan = ev.planned;
-  const verdict = ev.profile === 'flop' || r < plan * 0.4 ? 'It didn\'t take the way we hoped'
-    : r >= plan * 1.15 ? 'It went better than we hoped'
-    : ev.profile === 'quick' ? 'It clicked right away'
-    : ev.profile === 'slow' ? 'It took a while, but it came'
-    : 'Steady progress, about what we expected';
-  return _deliverNotice(`dev:${ev.planId}`, {
-    sender: coach, avatar: '🏋️', tag: 'TRAINING', type: r >= plan * 0.8 ? 'good' : 'normal',
-    subject: `${p.name} — development update`,
-    preview: `${verdict}. Now OVR ${p.ovr}.`,
-    body: `${verdict} with ${_who(p)}. The work is done for now — OVR ${p.ovr}.`,
-  }, atMs);
+  const verdict = ev.profile === 'flop' || r < plan * 0.4 ? 'didn\'t take the way we hoped'
+    : r >= plan * 1.15 ? 'went better than we hoped'
+    : ev.profile === 'quick' ? 'clicked right away'
+    : ev.profile === 'slow' ? 'took a while, but it came'
+    : 'went about as expected';
+  _ourNews(`${p.name}'s development plan ${verdict} — now OVR ${p.ovr}`, atMs);
+  return null;
 }
 
 /**
@@ -4157,6 +4187,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'need_callup',
   'need_defer',
   'need_auto',
+  'mfill_keep', 'mfill_sendback',
   // §71–72 card actions (CardActions registry)
   ...Object.keys(CARD_ACTIONS),
   // §70 offseason
@@ -4262,6 +4293,16 @@ function _applyRosterAction(instance, choice, state, { atMs = Date.now(), feasib
     case 'need_defer':
     case 'need_auto':
       break;   // the roster clock owns the deadline
+
+    // ── r135 the manager's deadline call-ups ─────────────────────
+    case 'mfill_keep':
+      break;
+    case 'mfill_sendback':
+      // Back to the farm before they report; the vacancy clock opens the spot
+      // again with a new deadline (always ahead of now) and the open-spot card.
+      StateManager.mutate(s => { cancelCallUps(s, instance._fillIds || [], 'user', atMs); });
+      reconcileUser();
+      break;
 
     // ── IL return ───────────────────────────────────────────────
     case 'il_return_activate': {

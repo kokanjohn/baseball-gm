@@ -128,7 +128,7 @@ async function checkComposeTruth(st, at) {
 // the GM can read and answer roster cards in real time — sometimes in the
 // inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
-const gm = { review: null, milestones: [], talks: [], calls: [], offers: [], counters: [], cardIdsSeen: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
+const gm = { review: null, milestones: [], talks: [], calls: [], offers: [], counters: [], cardIdsSeen: new Set(), ourNews: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
   const needs = getRosterNeeds(st, 'user');
   const queue = new Set(st.ilReturnQueue || []);
@@ -193,6 +193,8 @@ function cardDidIt(action, c, st) {
 }
 function gmActs() {
   // Re-read the inbox after every action: one decision can withdraw others.
+  // r135 our club's news goes to Recent (kept 72 hours): note it as it comes.
+  for (const e of SM.get().activityFeed || []) if (e.type === 'ours') gm.ourNews.add(e.text);
   for (let guard = 0; guard < 50; guard++) {
     // (The seed trade offer is left alone: it is made at the harness's far-future
     //  anchor, before the season clock starts, so deciding it here would queue
@@ -782,7 +784,7 @@ async function runAllStarChecks() {
     for (const h of a.hosts.slice(0, -1)) if (last.has(h.teamId)) last.set(h.teamId, Math.max(last.get(h.teamId), h.year));
     check('all-star: an ineligible user club does not host; the longest-waiting club does, and we hear why',
           season.hostId !== 'user' && last.get(season.hostId) === Math.min(...last.values())
-          && cards.some(c => c.cardId === 'as_host_other'), `host ${season.hostId}`);
+          && [...gm.ourNews].some(t => t.startsWith('All-Star Game awarded to')), `host ${season.hostId}`);   // r135 Recent, not Messages
   }
 
   // The squads.
