@@ -24,12 +24,22 @@
  * (pushsubscriptionchange); deviceStatus() tells Settings what the worker
  * actually holds for this device.
  *
+ * r138 (§120) the schedule also carries our next game as it will happen —
+ * the look-ahead (engine/LookAhead.js) plays it forward on the same seeded
+ * dice, and GamePushes turns it into pushes: the start held, delays, play
+ * resuming, postponed, suspended, our player hurt, the final. The look-ahead
+ * is rerun whenever the save changed, at most once a minute while the app is
+ * just running, and at once when it matters: going to the background (the
+ * last word before the app closes), a GM decision, a roster move.
+ *
  * Browser-only module (navigator / fetch). Not imported by engines or the harness.
  */
 
 import { PUSH_WORKER_URL } from '../data/constants.js';
 import * as StateManager from '../store/StateManager.js';
 import { getPushSchedule } from '../engine/CardEngine.js';
+import { lookAhead } from '../engine/LookAhead.js';
+import { getNextGame } from '../engine/GameEngine.js';
 
 export const NOTIF_PREF_KEY = 'bgm_notif_enabled';
 const DEVICE_ID_KEY  = 'bgm_push_device_id';
@@ -40,7 +50,12 @@ const SYNC_DEBOUNCE  = 1500;
 const META_DB = 'bgm-push', META_STORE = 'meta';
 
 let _syncTimer = null;
+let _syncFresh = false;   // r138 a pending sync must rerun the look-ahead
 let _lastSyncSignature = '';
+// r138 the look-ahead, kept until the save changes (StateManager.revision).
+const AHEAD_THROTTLE_MS = 60_000;          // while the app just runs (the world's clock changes the save often)
+const AHEAD_HORIZON_MS  = 36 * 3600_000;   // further out, the next visit will look again
+let _ahead = { rev: -1, at: 0, L: null };
 
 export function pushSupported() {
   return typeof window !== 'undefined'
@@ -79,10 +94,14 @@ export async function enablePush() {
  * Debounced. Safe to call often (after every release, commit, resolve).
  * Skips the network call when nothing changed since the last sync.
  */
-export function syncPushSchedule({ immediate = false } = {}) {
+export function syncPushSchedule({ immediate = false, fresh = false } = {}) {
   if (!pushSupported() || Notification.permission !== 'granted') return;
   clearTimeout(_syncTimer);
-  const run = () => _syncNow().catch(err => console.warn('[PushClient] sync failed:', err.message));
+  _syncFresh = _syncFresh || fresh || immediate;
+  const run = () => {
+    const f = _syncFresh; _syncFresh = false;
+    _syncNow({ fresh: f }).catch(err => console.warn('[PushClient] sync failed:', err.message));
+  };
   if (immediate) run(); else _syncTimer = setTimeout(run, SYNC_DEBOUNCE);
 }
 
@@ -176,12 +195,32 @@ export async function deviceStatus() {
 // INTERNALS
 // ─────────────────────────────────────────────────────────────
 
-function _currentSchedule() {
+function _currentSchedule({ fresh = true } = {}) {
   if (pushPaused()) return [];
   const state = StateManager.get();
-  const items = state ? getPushSchedule(state) : [];
+  const items = state ? getPushSchedule(state, Date.now(), _lookAheadFor(state, fresh)) : [];
   const test = _pendingTestItem();
   return test ? [test, ...items].sort((a, b) => a.deliverAt - b.deliverAt) : items;
+}
+
+/**
+ * r138 our next game as it will happen (null when there's none soon). Rerun
+ * when the save changed since — at once when `fresh`, else at most once a
+ * minute. A failure leaves the game's pushes out rather than guessing.
+ */
+function _lookAheadFor(state, fresh) {
+  const rev = StateManager.revision(), now = Date.now();
+  if (rev === _ahead.rev) return _ahead.L;
+  if (!fresh && now - _ahead.at < AHEAD_THROTTLE_MS) return _ahead.L;
+  let L = null;
+  try {
+    const g = getNextGame();
+    if (g && Number.isFinite(g.gameTime) && g.gameTime - now <= AHEAD_HORIZON_MS) L = lookAhead(now);
+  } catch (err) {
+    console.warn('[PushClient] look-ahead failed:', err?.message);
+  }
+  _ahead = { rev, at: now, L };
+  return L;
 }
 
 /** Send Test's closed-app item while it's still due to send (r134). */
@@ -198,10 +237,10 @@ function _pendingTestItem() {
  * place the app asks), so a missing or wrong-key subscription is a fault to
  * repair here — never a reason to stop syncing.
  */
-async function _syncNow() {
+async function _syncNow({ fresh = true } = {}) {
   const sub       = await _getSubscription({ create: true });
-  const schedule  = _currentSchedule();
-  const signature = JSON.stringify([sub.endpoint, schedule.map(i => [i.id, i.deliverAt])]);
+  const schedule  = _currentSchedule({ fresh });
+  const signature = JSON.stringify([sub.endpoint, schedule.map(i => [i.id, i.deliverAt, i.title, i.body])]);
   if (signature === _lastSyncSignature) return;
   await _register(schedule, sub);
   _lastSyncSignature = signature;

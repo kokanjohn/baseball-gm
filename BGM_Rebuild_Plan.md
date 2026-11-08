@@ -9313,8 +9313,43 @@ In Chromium (fresh save): the real save is byte-for-byte unchanged after a look-
 **Tests.**
 - `check-game-injuries.mjs` (new, 7): 400 simulated games — a hurt player never bats, pitches or stands on a base again (a pitcher's runs from runners left on base and the end-of-game decisions are the only later stats); the replacement takes the spot and the base; a hurt pitcher is relieved at once; gender-neutral. Then a real day: the look-ahead foresees one of ours hurt; with the app open, the same player is hurt on the same play, under evaluation from that moment (not the final out), and the trainer's message arrives during the game, naming the inning.
 - `measure-injury-rate.mjs` (new): league-wide injuries over 60 of our games, 6 seeds. Before (rolled after the final out): 413 (hitters 197, starters 101, relievers 115). After (on the plays): 415 (hitters 184, starters 129, relievers 102). The total matches; the split moves about as much as the baseline does between seed sets (its starters ran 59 on seeds 1–3, 42 on 4–6), so the exposure constants stay as measured.
-- `test-game-injury-ui.mjs` (new): the real app with a fixed page clock — the look-ahead finds a game where one of ours gets hurt; the app opened 25 minutes after the play shows the line in the play-by-play and the trainer's message in Messages; dark and light.
+- `test-game-injury-ui.mjs` (new): the real app with a fixed page clock — the look-ahead finds a game where one of ours gets hurt; the app opened 3 minutes after the play shows the line in the play-by-play (25 minutes was past the final for an injury in the 8th or 9th), and 25 minutes after it the trainer's message is in Messages; dark and light.
 
 - **The box score notes who left hurt:** `accumulateBox` sets `hurt: true` on that player's hitter or pitcher line. A reliever hurt before facing anyone is a real box line with no outs (rule 5.10(g): the one-batter rule excuses injury); sim-season's "every pitcher faced a batter" checks exempt `hurt` lines.
 
 **Fresh team:** not needed — no stored data changed. (Step 1's note said step 2 would need one; it turned out not to.)
+
+## 120. Game pushes from the look-ahead (r138 — phase 1, step 3)
+
+**Decided (GM, Nov 8):** with the app closed, the phone hears about our game as it happens — a rain delay, play resuming, a postponement, a suspension, one of our players hurt, the final score — and never from stale data. Each kind has its own switch in Settings, all on unless the GM turns one off.
+
+**How it stays true.** The pushes are not guesses or a feed: they are our next game as it will actually be played. `LookAhead.lookAhead` plays the world forward on a scratch copy with the same seeded dice (§118), and the game it reports is the game the app later plays, play for play (with the app open, or catching up when it reopens). The app sends that schedule to the worker; the worker only keeps time. Anything the GM changes changes the look-ahead, and the app re-sends.
+
+**When the look-ahead reruns (`ui/PushClient.js`).** Kept until the save changes (`StateManager.revision()`, a counter every real `mutate`/`set`/load bumps; a speculation doesn't). Rerun at once when it matters: going to the background (the last word before the app closes — this was already an immediate sync, §94), opening the app, a GM decision (`card:resolved`), a roster move (`roster:changed` not from the clock), a commit, a Settings switch. Otherwise, while the app is just running (the world's clock changes the save often), at most once a minute. Only for a game within 36 hours; further out, the next visit looks again. About 40–300 ms in node (structuredClone of the save plus the world to first pitch). A look-ahead that fails leaves the game's pushes out rather than guessing.
+
+**What the look-ahead now reports (`engine/LookAhead.js`).** Besides the plays, the weather and the box: the game wherever the weather moves it (the schedule re-sorts on a move, so it is found by its original first pitch and opponent, not its index); `postponed` — when it was decided, why, by what (the forecast, the wait limit, the curfew), whether the start was held first, and the makeup date the schedule actually finds (or cancelled: spring); a start the weather holds then calls off is followed to the call; a game two that waits for game one is followed until it starts (up to 8 hours); `suspended` — when, and the day it resumes (followed to the suspension). Also `date`, `isHome`, `isSpring`, `isAllStar`.
+
+**The pushes (`engine/GamePushes.js`, pure).** Titles say what happened, the body the situation:
+- **Weather** (switch: Weather Delays): "Start delayed: vs Harborview Gulls"; "Under way: … — First pitch after a 45-minute delay."; "Rain delay / Lightning delay / Snow delay: … — The rain picks up — the tarp is coming out. Top 5th: Testers lead 7–0."; "Play resumes: … — Back on the field after a 55-minute delay. Top 5th: Testers lead 7–0." One notification tag per game, so a resume replaces its delay on the lock screen.
+- **Called off** (Postponed & Suspended): "Postponed: vs Seagrove Osprey — With rain in the forecast, today's game is off. Makeup: Wed, Jan 13, 7:05 PM." (or "…part of a doubleheader", "Spring games aren't made up."); "Suspended: … — [the ruling]. Testers lead 3–1. It resumes Wed, Jun 11, 1:05 PM, right where it stopped."
+- **Our injuries** (Our Injuries): "Injury: Barton — Barton came up hurt on the play and left the game. Pineda takes over for Barton. (Top 3rd, @ Reedmont Cranes.) The Head Trainer will report." The trainer's message itself is created when the play is revealed — with the app closed that's at the next open — so this push is the alert.
+- **The final** (Final Score): "Final: Testers 2, Sails 0 — Testers win vs Millbay Sails. W: Brewster · L: Lewis · S: Espinal" (a called game: "Called after 6 innings (rain).").
+- Item ids are stable (`g:{firstPitch}:{kind}…`), so a re-sent schedule that didn't change costs the worker no KV write (§98). Only items still to come are sent (one already due is the worker's to send, or past).
+- **Quiet hours:** a delay or a restart is news only as it happens, so inside quiet hours it isn't sent; a postponement, a suspension, an injury and the final still matter in the morning, so they wait until quiet hours end (as the inbox's alerts do). The Settings line now says so.
+- **The game reminder** (§99) is dropped for a game the look-ahead knows is already postponed by then.
+- **Messages** (the inbox's pushes) got their own switch too. The All-Star Game sends none (it isn't our game).
+
+**Settings → Notifications:** Game Reminder, then Messages, Weather Delays, Postponed & Suspended, Our Injuries, Final Score — each with a one-line description, stored in `state.push.alerts` (a kind missing is on, so saves from before r138 need nothing).
+
+**Limits, said plainly.**
+- The look-ahead covers the *next* game only. If the app stays closed through it, the game after that gets its reminder but no game pushes until the app is opened again. (The service worker can't run the engine to look further: a push wakes it for a few seconds, and the whole game state lives in the page's storage.)
+- The worker's cron runs each minute, so a push lands up to a minute after the moment.
+- A push already sent can't be taken back. If the GM changes something during the game (with the app open), the pushes still to come are re-sent to match; one that already went out stays.
+
+**Tests.**
+- `check-game-pushes.mjs` (new): for each of our games, the schedule built 10 hours ahead, then the real game played. Every game push must be a real event at its exact moment, and every real event must have had its push. Seeds 1–6 (70 + 5 × 130 games): finals, our injuries, rain delays and restarts, spring and regular-season postponements with the real makeup date — no stale or invented push. Settings switches; the reminder for a postponed game. Suspensions and held starts didn't come up in ~720 games, so a made-up game checks their pushes, the order, the resume day, and quiet hours (a delay inside them dropped, the suspension moved to morning).
+- `test-game-pushes-ui.mjs` (new): the real app against a fake worker: opened 10 hours ahead, it registers exactly the look-ahead's pushes; after the GM puts a bench bat at DH (5–1 became 6–2 in one run), it re-sends at once to match; the five switches; Final Score off removes the final; dark and light.
+- A defect caught by it before release: the quiet-hours rule wasn't applied to delays (`add()` computed the moved time only for the kinds that wait).
+
+**Fresh team:** not needed (old saves: all switches on).
+

@@ -40,6 +40,7 @@ let _activeSlotId = null; // The slotId of the currently loaded slot
 let _saveTimer  = null;   // Debounce handle for auto-save
 let _isPremium  = false;  // Premium flag — set by app bootstrap
 let _speculating = false; // §118 inside speculate(): a scratch copy, never saved
+let _rev = 0;             // r138 bumped on every real change (the push look-ahead's cache key)
 
 const SAVE_DEBOUNCE_MS = 2000; // Auto-save delay after last mutation
 
@@ -126,6 +127,7 @@ export function getActiveSlotId() {
 export function set(path, value) {
   _assertLoaded();
   _setPath(_state, path, value);
+  if (!_speculating) _rev++;
   _scheduleSave();
 }
 
@@ -149,7 +151,7 @@ export function set(path, value) {
 export function mutate(fn) {
   _assertLoaded();
   fn(_state);
-  if (!_speculating) _scheduleSave();
+  if (!_speculating) { _rev++; _scheduleSave(); }
 }
 
 /**
@@ -181,6 +183,9 @@ export function speculate(fn) {
 
 /** Is a look-ahead running? (engines don't need to ask; the app's guards do) */
 export function isSpeculating() { return _speculating; }
+
+/** r138 a number that changes whenever the real state does (loads included). */
+export function revision() { return _rev; }
 
 // ─────────────────────────────────────────────────────────────
 // PERSISTENCE
@@ -235,7 +240,7 @@ export async function load(slotId) {
     await DB.saveSlot({ ...envelope, state: loadedState });
   }
 
-  _state        = loadedState;
+  _state        = loadedState; _rev++;
   _activeSlotId = slotId;
   localStorage.setItem(ACTIVE_SLOT_KEY, slotId);
 }
@@ -293,7 +298,7 @@ export async function createSlot(config = {}) {
   await DB.saveSlot(envelope);
 
   // Load the new slot as active
-  _state        = freshState;
+  _state        = freshState; _rev++;
   _activeSlotId = slotId;
   localStorage.setItem(ACTIVE_SLOT_KEY, slotId);
 
@@ -311,7 +316,7 @@ export async function deleteSlot(slotId) {
   await DB.deleteSlot(slotId);
 
   if (_activeSlotId === slotId) {
-    _state        = null;
+    _state        = null; _rev++;
     _activeSlotId = null;
     localStorage.removeItem(ACTIVE_SLOT_KEY);
     _cancelScheduledSave();
@@ -337,7 +342,7 @@ export async function reset() {
     bannerColor: _state.userTeam.bannerColor,
   };
 
-  _state = createGameState(config);
+  _state = createGameState(config); _rev++;
   await save();
 }
 

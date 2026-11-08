@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r137';
+export const APP_VERSION = 'tfo-v2-r138';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -271,7 +271,11 @@ export async function init() {
   EventBus.on('card:resolved',       () => _updateInboxBadge());
   EventBus.on('game:committed',      (payload) => _onGameCommitted(payload));
   // A commit schedules the next stretch of cards — send the schedule to the push worker.
-  EventBus.on('game:committed',      () => _syncPush());
+  EventBus.on('game:committed',      () => _syncPush({ fresh: true }));
+  // r138 §120 a GM decision or roster move can change how our next game goes:
+  // rerun the look-ahead behind its pushes now, not up to a minute later.
+  EventBus.on('card:resolved',       () => _syncPush({ fresh: true }));
+  EventBus.on('roster:changed',      (p) => { if (p?.source !== 'clock') _syncPush({ fresh: true }); });
 
   // Messages from the service worker (push arrived / notification tapped)
   if (!_swMessagesWired) {
@@ -1168,6 +1172,8 @@ function _refreshSettingsSwatches() {
   if (qEnd)   qEnd.value   = _push.quietEnd   || '08:00';
   const gr = document.getElementById('game-reminder-toggle');
   if (gr) gr.checked = _push.gameReminder !== false;   // §99 on unless turned off
+  // r138 §120 each kind of push: on unless turned off.
+  document.querySelectorAll('.push-alert-toggle').forEach(el => { el.checked = _push.alerts?.[el.dataset.alert] !== false; });
 
   // Always reset to main view
   document.getElementById('settings-view-main')?.classList.remove('tdm-view-hidden');
@@ -1235,6 +1241,13 @@ function _initSettingsPickers() {
     StateManager.mutate(s => { s.push = { ...(s.push || {}), gameReminder: e.target.checked }; });
     _syncPush({ immediate: true });
   });
+  // r138 §120 which kinds of push this GM wants.
+  document.querySelectorAll('.push-alert-toggle').forEach(el => el.addEventListener('change', (e) => {
+    if (!StateManager.get()) return;
+    const kind = e.target.dataset.alert;
+    StateManager.mutate(s => { s.push = { ...(s.push || {}), alerts: { ...(s.push?.alerts || {}), [kind]: e.target.checked } }; });
+    _syncPush({ immediate: true });
+  }));
 
   // ── Team info edit ────────────────────────────────────────
   document.getElementById('settings-team-edit-btn')?.addEventListener('click', () => {

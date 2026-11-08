@@ -292,6 +292,9 @@ export function createGameState(config = {}) {
       quietStart: NOTIFICATION_QUIET_START_DEFAULT,
       quietEnd:   NOTIFICATION_QUIET_END_DEFAULT,
       gameReminder: true,   // §99 a push 30 minutes before each of our first pitches
+      // r138 §120 which pushes this GM wants (GamePushes.PUSH_ALERTS); a kind
+      // missing here is on (saves from before r138 have none).
+      alerts: { messages: true, weather: true, calledOff: true, injury: true, final: true },
     },
 
     // ── Settings (per-slot) ────────────────────────────────

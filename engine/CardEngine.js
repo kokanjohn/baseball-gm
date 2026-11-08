@@ -93,6 +93,7 @@ const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
 import { starterRested, reliefValue } from './PitchingEngine.js';
 import { clockNow } from './Clock.js';
+import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
 import { dice, diceSeed } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -1627,13 +1628,16 @@ export function releaseDueCards(nowMs = clockNow()) {
 const COMPOSE_LOG_MAX = 80;
 
 /**
- * getPushSchedule(state, nowMs = clockNow())
- * The scheduled cards, shaped for the push worker's /register endpoint.
- * Seed cards are never included.
+ * getPushSchedule(state, nowMs = clockNow(), ahead = null)
+ * Everything the push worker should send this device, shaped for its
+ * /register endpoint: the scheduled cards (seed cards never), the 30-minute
+ * game reminders, and — r138 §120 — our next game as it will happen
+ * (`ahead`, LookAhead.lookAhead's result: delays, a postponement, our injuries,
+ * the final). Each kind is on unless the GM turned it off in Settings.
  */
-export function getPushSchedule(state, nowMs = clockNow()) {
+export function getPushSchedule(state, nowMs = clockNow(), ahead = null) {
   const qs = state?.push?.quietStart, qe = state?.push?.quietEnd;
-  const cards = (state?.scheduledCards || [])
+  const cards = !alertOn(state, PUSH_ALERTS.messages) ? [] : (state?.scheduledCards || [])
     .filter(c => !c._seed)
     // Pool cards are already planned outside quiet hours; real-time roster
     // cards reach the inbox when they happen and only the alert waits (§65).
@@ -1646,17 +1650,20 @@ export function getPushSchedule(state, nowMs = clockNow()) {
       title:     c.sender  || 'The Front Office',
       body:      c.subject || 'New message in your inbox',
       tag:       c.instanceId,
+      kind:      PUSH_ALERTS.messages,
     }));
-  return [...cards, ...gameReminders(state, nowMs)].sort((a, b) => a.deliverAt - b.deliverAt);
+  return [...cards, ...gameReminders(state, nowMs, ahead), ...gamePushes(state, ahead, nowMs)]
+    .sort((a, b) => a.deliverAt - b.deliverAt);
 }
 
 /**
- * gameReminders(state, nowMs) — §99 a push 30 minutes before each of our next
+ * gameReminders(state, nowMs, ahead) — §99 a push 30 minutes before each of our next
  * first pitches (spring, season and postseason alike), so the GM can catch up
  * on the inbox before the game. A push only, never an inbox card; none inside
  * quiet hours (moved later it would land after first pitch); off in Settings.
+ * r138 none for a game the look-ahead knows is already called off by then.
  */
-export function gameReminders(state, nowMs = clockNow()) {
+export function gameReminders(state, nowMs = clockNow(), ahead = null) {
   if (state?.push?.gameReminder === false || !state?.userTeam) return [];
   const qs = state.push?.quietStart, qe = state.push?.quietEnd;
   const out = [];
@@ -1665,6 +1672,7 @@ export function gameReminders(state, nowMs = clockNow()) {
     if (!g || g._committed || !Number.isFinite(g.gameTime)) continue;
     const at = g.gameTime - GAME_REMINDER.leadMs;
     if (at <= nowMs - 60 * 1000 || pushTimeFor(at, qs, qe) !== at) continue;
+    if (reminderMoot(ahead, g.gameTime, at)) continue;
     const opp = g.opponent || g.opp || 'today\'s opponent';
     out.push({
       id:        `game-reminder-${g.gameTime}`,
@@ -1672,6 +1680,7 @@ export function gameReminders(state, nowMs = clockNow()) {
       title:     'First pitch in 30 minutes',
       body:      `${g.isHome ? 'vs' : '@'} ${opp} — a good time to catch up on the inbox before the game.`,
       tag:       `game-reminder-${g.gameTime}`,
+      kind:      'reminder',
     });
   }
   return out;

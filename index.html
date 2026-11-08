@@ -1188,10 +1188,60 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;
               <div class="toggle-track"><div class="toggle-thumb"></div></div>
             </label>
           </div>
+          <div class="settings-row" style="cursor:default;">
+            <div style="flex:1;">
+              <div class="settings-row-label">Messages</div>
+              <div class="settings-row-sub">Each new message in your inbox</div>
+            </div>
+            <label class="toggle-switch" aria-label="Toggle Messages notifications">
+              <input type="checkbox" class="push-alert-toggle" data-alert="messages">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </label>
+          </div>
+          <div class="settings-row" style="cursor:default;">
+            <div style="flex:1;">
+              <div class="settings-row-label">Weather Delays</div>
+              <div class="settings-row-sub">Our game’s start held, a rain or lightning delay, and play resuming</div>
+            </div>
+            <label class="toggle-switch" aria-label="Toggle Weather Delays notifications">
+              <input type="checkbox" class="push-alert-toggle" data-alert="weather">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </label>
+          </div>
+          <div class="settings-row" style="cursor:default;">
+            <div style="flex:1;">
+              <div class="settings-row-label">Postponed &amp; Suspended</div>
+              <div class="settings-row-sub">Our game called off, with the makeup date</div>
+            </div>
+            <label class="toggle-switch" aria-label="Toggle Postponed and Suspended notifications">
+              <input type="checkbox" class="push-alert-toggle" data-alert="calledOff">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </label>
+          </div>
+          <div class="settings-row" style="cursor:default;">
+            <div style="flex:1;">
+              <div class="settings-row-label">Our Injuries</div>
+              <div class="settings-row-sub">One of our players leaving a game hurt</div>
+            </div>
+            <label class="toggle-switch" aria-label="Toggle Our Injuries notifications">
+              <input type="checkbox" class="push-alert-toggle" data-alert="injury">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </label>
+          </div>
+          <div class="settings-row" style="cursor:default;">
+            <div style="flex:1;">
+              <div class="settings-row-label">Final Score</div>
+              <div class="settings-row-sub">When our game ends, with the decisions</div>
+            </div>
+            <label class="toggle-switch" aria-label="Toggle Final Score notifications">
+              <input type="checkbox" class="push-alert-toggle" data-alert="final">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </label>
+          </div>
           <div class="settings-row" id="quiet-hours-row" style="cursor:default;">
             <div style="width:100%;">
               <div class="settings-row-label">Quiet Hours</div>
-              <div class="settings-row-sub">No notifications during this window</div>
+              <div class="settings-row-sub">Nothing sounds in this window: a weather delay is skipped, everything else waits until it ends</div>
               <div class="settings-quiet-row">
                 <span class="settings-quiet-label">From</span>
                 <input type="time" class="settings-quiet-time" id="quiet-start" value="22:00">
