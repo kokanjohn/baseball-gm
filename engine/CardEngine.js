@@ -501,6 +501,10 @@ function _withdraw(pred) {
   return hit.length;
 }
 
+function _ordinalInning(n) {
+  return `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+}
+
 function _managerName(state) {
   return state.userTeam.coachingStaff?.manager?.name || 'The manager';
 }
@@ -523,6 +527,8 @@ export function deliverInjuryAct1(playerId, atMs = clockNow()) {
   const player = state.players[playerId];
   if (!player || player.injury?.status !== 'evaluating') return null;
   const label  = (player.injury.label || 'injury').toLowerCase();
+  // §118 hurt on a play: the inning they left in.
+  const inn    = Number.isFinite(player.injury.inning) ? ` in the ${_ordinalInning(player.injury.inning)}` : '';
   const card = _rosterCard(state, {
     cardId:   'injury_act1',
     tag:      'INJURY',
@@ -530,8 +536,8 @@ export function deliverInjuryAct1(playerId, atMs = clockNow()) {
     _rosterKey: `injury:${playerId}:act1`,
     _targetPlayerId: playerId,
     subject:  `${player.name} hurt — evaluation needed`,
-    preview:  `${player.name}${_hand(player)} came out of today's game with a possible ${label}.`,
-    body:     `${player.name}${_hand(player)} (${player.pos}) came out of today's game with what looks like a ${label}. ${player.name} is unavailable until we know more. An MRI now returns results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a call-up made tomorrow won't report until the day after.`,
+    preview:  `${player.name}${_hand(player)} came out of today's game${inn} with a possible ${label}.`,
+    body:     `${player.name}${_hand(player)} (${player.pos}) came out of today's game${inn} with what looks like ${/^[aeiou]/.test(label) ? 'an' : 'a'} ${label}. ${player.name} is unavailable until we know more. An MRI now returns results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a call-up made tomorrow won't report until the day after.`,
     yesLabel: `MRI Now (${'$'}${INJURY_MRI_COST_K}K)`,
     noLabel:  'Wait for the morning exam',
     _budgetCost: INJURY_MRI_COST_K,

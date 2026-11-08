@@ -193,7 +193,7 @@ function _viewerHtml(state, g, now = Date.now()) {
   const pbp = ls.revealed
     .filter(p => p.description && !['inning_end', 'game_end'].includes(p.type))
     .slice(-30).reverse()
-    .map(p => `<div class="lg-pbp${p.type === 'hr' ? ' hr' : ''}${p._wx || p.type === 'game_suspended' || p.type === 'game_resumed' ? ' wx' : ''}">
+    .map(p => `<div class="lg-pbp${p.type === 'hr' ? ' hr' : ''}${p._wx || p.type === 'game_suspended' || p.type === 'game_resumed' ? ' wx' : ''}${p.type === 'injury' ? ' hurt' : ''}">
         <span class="lg-pbp-inn">${p.half === 'TOP' ? '▲' : '▼'}${p.inning}</span>
         <span>${_esc(p.description)}</span></div>`).join('');
 
@@ -283,6 +283,7 @@ function _injectCSS() {
     .lg-wx{margin:0 16px 8px;font-size:11px;color:var(--soft);line-height:1.35;display:flex;align-items:center;justify-content:space-between;gap:10px;}
     .lg-radar-btn{flex-shrink:0;font:inherit;font-size:11px;font-weight:700;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;}
     .lg-pbp.wx span:last-child{color:#f97316;font-weight:600;}
+    .lg-pbp.hurt span:last-child{color:var(--danger);font-weight:600;}
     .lg-mini-wx{color:#f97316;font-weight:800;font-size:9px;letter-spacing:.5px;}
     .lg-inn{font-size:12px;font-weight:700;color:var(--text);}
     .lg-outs{display:flex;gap:3px;}

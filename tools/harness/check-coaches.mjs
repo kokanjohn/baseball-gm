@@ -6,6 +6,7 @@
 // save chances are recorded. Development and winter growth scale with quality.
 import { seedRandom } from './shims.js';            // MUST be first (installs globals)
 import { dice } from '../../engine/Dice.js';
+import { baseballYear } from '../../engine/PlayerFactory.js';
 import * as SM from '../../store/StateManager.js';
 import { startNewGame } from '../../engine/GameEngine.js';
 import { generatePlays, leagueNorms, accumulateBox } from '../../engine/SimEngine.js';
@@ -40,7 +41,7 @@ const run = (staff, label) => {
   for (let i = 0; i < N; i++) {
     const opp = st.leagueTeams[i % st.leagueTeams.length];
     const g = { isHome: i % 2 === 0, gameTime: T0 + i * 86_400_000, weather: null, fieldCondition: null };
-    const r = generatePlays(g, user, opp, players, { phase: st.phase, isSpring: false, norms, staff: staff && Coach.staffEffects(staff), rand: dice('check-coaches', i) });   // §118 the same dice for every staff, game by game: only the coach differs
+    const r = generatePlays(g, user, opp, players, { phase: st.phase, isSpring: false, norms, staff: staff && Coach.staffEffects(staff), rand: dice('check-coaches', i), injuryYear: baseballYear(st) });   // §118 the same dice for every staff, game by game: only the coach differs
     const end = r.plays.filter(p => p.cumOurScore != null).pop();
     t.us += end.cumOurScore; t.them += end.cumTheirScore; if (end.cumOurScore > end.cumTheirScore) t.w++;
     for (const p of r.plays) {

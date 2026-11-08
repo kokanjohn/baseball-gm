@@ -21,6 +21,7 @@ import {
   INJURY_AGE_MOD_32_34,
   INJURY_AGE_MOD_35_PLUS,
   INJURY_FATIGUE_MOD,
+  INJURY_EXPOSURE,
   INJURY_SEVERITY_MINOR_PROB,
   INJURY_SEVERITY_MODERATE_PROB,
   INJURY_SEVERITY_SIGNIFICANT_PROB,
@@ -74,53 +75,60 @@ const MS_PER_DAY = 86_400_000;
 // ─────────────────────────────────────────────────────────────
 
 /**
- * rollGameInjuries(state, appearances, nowMs, gameKey)
- * Rolls injuries for the players who actually took the field in a game day.
- * Same probability model for all ten teams — no hidden invincibility.
+ * injuriesFromPlays(state, plays, gameKey, { skip })
+ * §118 Injuries happen during a game, on a play (SimEngine writes an `injury`
+ * play with `_injury: { playerId }`): the player is hurt at that play's
+ * moment. The same model for all ten teams — no hidden invincibility.
  *
  *   USER players  → status 'evaluating' (still on the active roster, not
  *                   available to play). CardEngine runs the two-act flow:
  *                   Act 1 (exam choice) → Act 2 (diagnosis: IL or day-to-day).
  *   CPU players   → diagnosed at once; the CPU GM picks IL or day-to-day.
  *
+ * What the injury is (severity, type, days, how Act 2 turns out) comes from
+ * the player's own stream for that game: dice(seed, 'injury', gameKey, id).
+ *
  * @param {Object}   state
- * @param {Object[]} appearances — [{ teamId, hitterIds, starterId, relieverIds }]
- * @param {Number}   nowMs       — the moment of injury (end of the game)
- * @param {String}   gameKey     — §118 the game's identity: each player's roll
- *                                 comes from dice(seed, 'injury', gameKey, id)
+ * @param {Object[]} plays    — the game's plays (only `injury` plays count)
+ * @param {String}   gameKey  — the game's identity (GameEngine._gameKey)
+ * @param {Object}   [opts]   — { skip: Set of playerIds already applied }
  * @returns {{ players: Object, events: Object[] }}
- *          events: [{ type: 'INJURY', teamId, playerId }]
+ *          events: [{ type: 'INJURY', teamId, playerId, atMs }] — atMs: the play's moment
  */
-export function rollGameInjuries(state, appearances, nowMs, gameKey) {
-  if (!gameKey) throw new Error('InjuryEngine.rollGameInjuries: gameKey is required (§118 seeded dice)');
+export function injuriesFromPlays(state, plays, gameKey, { skip = new Set() } = {}) {
+  if (!gameKey) throw new Error('InjuryEngine.injuriesFromPlays: gameKey is required (§118 seeded dice)');
   const seed    = diceSeed(state);
   const players = {};
   const events  = [];
-
-  for (const app of appearances || []) {
-    const roles = [
-      ...(app.hitterIds   || []).map(id => [id, 'hitter']),
-      ...(app.starterId ? [[app.starterId, 'starter']] : []),
-      ...(app.relieverIds || []).map(id => [id, 'reliever']),
-    ];
-    const seen = new Set();
-    for (const [playerId, role] of roles) {
-      if (seen.has(playerId)) continue;
-      seen.add(playerId);
-      const player = state.players[playerId];
-      if (!player || player.isInjured || player.injury) continue;
-      if (player.group === PLAYER_GROUP.IL) continue;
-      const rand = dice(seed, 'injury', gameKey, playerId);
-      if (rand() >= _injuryProbability(player, role, baseballYear(state))) continue;
-
-      const begun = beginInjury(player, nowMs, null, rand);
-      players[playerId] = app.teamId === 'user'
-        ? begun
-        : { ...begun, ..._cpuDisposition({ ...player, ...begun }) };
-      events.push({ type: 'INJURY', teamId: app.teamId, playerId });
-    }
+  for (const play of plays || []) {
+    const id = play._injury?.playerId;
+    if (!id || skip.has(id) || players[id]) continue;
+    const player = state.players[id];
+    if (!player || player.isInjured || player.injury || player.group === PLAYER_GROUP.IL) continue;
+    const atMs  = play._timestamp;
+    const begun = beginInjury(player, atMs, null, dice(seed, 'injury', gameKey, id));
+    begun.injury = { ...begun.injury, inning: play.inning ?? null };   // when in the game (the trainer's report says)
+    players[id] = player.teamId === 'user' ? begun : { ...begun, ..._cpuDisposition({ ...player, ...begun }) };
+    events.push({ type: 'INJURY', teamId: player.teamId, playerId: id, atMs });
   }
   return { players, events };
+}
+
+/**
+ * injuryChancePerExposure(player, role, seasonYear, tired)
+ * §118 The chance of getting hurt on one plate appearance (a hitter) or one
+ * batter faced (a pitcher): the per-game chance spread over a typical game's
+ * exposure (INJURY_EXPOSURE), so a full game carries what it always did.
+ * @param {Object}  player
+ * @param {String}  role — 'hitter' | 'starter' | 'reliever'
+ * @param {Number}  seasonYear — for the player's age
+ * @param {Boolean} [tired] — a pitcher past his stamina
+ * @returns {Number}
+ */
+export function injuryChancePerExposure(player, role, seasonYear, tired = false) {
+  const p = _injuryProbability(player, role, seasonYear, tired);
+  const n = role === 'starter' ? INJURY_EXPOSURE.starterBF : role === 'reliever' ? INJURY_EXPOSURE.relieverBF : INJURY_EXPOSURE.hitterPA;
+  return 1 - Math.pow(1 - p, 1 / n);
 }
 
 /**
@@ -460,7 +468,7 @@ export function processFarmArcs(state, now = clockNow()) {
 // INTERNAL HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function _injuryProbability(player, role, seasonYear) {
+function _injuryProbability(player, role, seasonYear, tired = false) {
   const age = computeAge(player.dob, seasonYear);
 
   let base = role === 'starter'  ? INJURY_PROB_SP_PER_START
@@ -471,8 +479,8 @@ function _injuryProbability(player, role, seasonYear) {
   if (age >= 35) base += INJURY_AGE_MOD_35_PLUS;
   else if (age >= 32) base += INJURY_AGE_MOD_32_34;
 
-  // Fatigue modifier (SP only)
-  if (player._simFatigued) base += INJURY_FATIGUE_MOD;
+  // A pitcher working past his stamina
+  if (tired) base += INJURY_FATIGUE_MOD;
 
   return Math.min(base, 0.10); // hard cap at 10% per game
 }

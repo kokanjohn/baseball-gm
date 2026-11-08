@@ -71,6 +71,7 @@ import {
 } from '../data/constants.js';
 
 import { computeOVR, isAvailable } from './PlayerFactory.js';
+import { injuryChancePerExposure } from './InjuryEngine.js';
 import {
   ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, tireAfterBF, reliefInnings,
 } from './PitchingEngine.js';
@@ -180,6 +181,7 @@ function _withDice(context, who, fn) {
 
 function _generatePlays(game, userTeam, opponentTeam, players, context) {
   const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false, scout = null, staff = null } = context;
+  _requireInjuryYear(context, exhibition, 'generatePlays');
   // §102.2 the weather this game is played in: its plan (GameWeather.gameWeatherPlan)
   // and the park report through it (GameWeather.gameConditions). Optional.
   const wx = _weatherSetup(context.weather, game);
@@ -222,6 +224,7 @@ function _generatePlays(game, userTeam, opponentTeam, players, context) {
     userSP, oppSP,
     players,
     { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs, scout, wx, staff: exhibition ? null : staff,
+      injuryYear: exhibition ? null : context.injuryYear,
       // §75 All-Star Game: both starters work ALLSTAR_STARTER_INNINGS, every
       // other arm one inning; the reserves come in on the squads' plan.
       exhibition: exhibition ? { starterIds: new Set([userSP?.id, oppSP?.id].filter(Boolean)) } : null }
@@ -337,7 +340,7 @@ function _snapshotForResume(gs, plays, { isTop, outs, bases, halfRuns, userBatsB
   }
   return {
     v: 1, isTop, outs, bases: { ...bases }, halfRuns, fieldMod, gs: g, appeared,
-    slots: { user: slots.user.map(x => ({ id: x.id, subbed: !!x.subbed })), opp: slots.opp.map(x => ({ id: x.id, subbed: !!x.subbed })) },
+    slots: { user: slots.user.map(x => ({ id: x.id, subbed: !!x.subbed, sub: !!x.sub })), opp: slots.opp.map(x => ({ id: x.id, subbed: !!x.subbed, sub: !!x.sub })) },
   };
 }
 
@@ -370,6 +373,7 @@ export function generateResumption(game, userTeam, opponentTeam, players, contex
 }
 
 function _generateResumption(game, userTeam, opponentTeam, players, context) {
+  _requireInjuryYear(context, false, 'generateResumption');
   const { resumeState: R, partOne = [], liveLineups = {}, phase = PHASE.REGULAR_SEASON, isSpring = false, norms = null, staff = null } = context;
   const effOpp = opponentTeam || _buildSyntheticCPUTeam(players);
   const clubs = { user: userTeam, opp: effOpp };
@@ -401,7 +405,7 @@ function _generateResumption(game, userTeam, opponentTeam, players, context) {
         rbi: 0, isScoring: false, isBigPlay: false, outsAfter: R.outs, _basesAfter: { ...R.bases },
         cumOurScore: sp?.cumOurScore ?? 0, cumTheirScore: sp?.cumTheirScore ?? 0, _timestamp: 0, _statDeltas: {},
       });
-      sl.id = sub.id; sl.subbed = false;
+      sl.id = sub.id; sl.subbed = false; sl.sub = true;
     }
     lineups[side] = { slots, bench, bullpen: fresh[side].bullpen, roles: fresh[side].roles };
   }
@@ -410,6 +414,7 @@ function _generateResumption(game, userTeam, opponentTeam, players, context) {
   for (const b of ['first', 'second', 'third']) if (bases[b] && replaced[bases[b]]) bases[b] = replaced[bases[b]];
   const gameState = _simulateFullGame(lineups.user, lineups.opp, R.gs.userPitcher || null, R.gs.oppPitcher || null, players, {
     game, fieldMod: R.fieldMod ?? 1, isHome: game.isHome, phase, isSpring, norms, atMs: game.gameTime || 0, scout: null, wx: null, staff,
+    injuryYear: context.injuryYear,
     resume: { ...R, bases },
   });
   gameState.plays.forEach(p => { p._basesAfter ??= { first: null, second: null, third: null }; });
@@ -474,6 +479,9 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     userTarget: _pitcherTargetInnings(userSP && players[userSP.id], { exhibition }),
     oppTarget:  _pitcherTargetInnings(oppSP && players[oppSP.id], { exhibition }),
     userRuns: 0, oppRuns: 0,
+    // §118 injuries on the field: the season year (for age), and who has already left hurt.
+    injuryYear: ctx.injuryYear ?? null,
+    hurt: new Set(),
   };
 
   gs.wx       = wx || null;           // §102.2 the weather's plan for this game (null: none)
@@ -817,7 +825,12 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     // §7.4 / §76: past the batters his stamina carries (or already tired from
     // recent days), the pitcher is laboring until the manager gets him.
     const pSide = isUserBatting ? 'opp' : 'user';
-    const pitcherTired = gs[`${pSide}PitchCount`] >= gs[`${pSide}TireAt`];
+    let pitcherTired = gs[`${pSide}PitchCount`] >= gs[`${pSide}TireAt`];
+    // §118 the pitcher hurt on a pitch: the bullpen now, before this batter.
+    if (gs.injuryYear != null) {
+      const relief = _pitcherHurt(gs, players, plays, pitcher, pSide, pitcherTired, inning, outs, bases, halfKey);
+      if (relief) { pitcher = relief; pitcherTired = false; }
+    }
     const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
       { inning, isSpring, norms: gs.norms, pitcherTired,
         scoutHit: gs.scout ? (isUserBatting ? gs.scout.bat : gs.scout.pitch) : 1,
@@ -890,6 +903,11 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     // (Pitcher fatigue is evaluated per-inning in _simulateFullGame, keyed to
     // innings pitched rather than batters faced so the hook is independent of
     // how much offense a given game produces.)
+
+    // §118 an injury on the play: the batter leaves the game.
+    if (gs.injuryYear != null && !walkedOff) {
+      bases = _batterHurt(gs, players, plays, slots, bench, slotIdx, activeBatter, pitcher, outs, bases, halfKey);
+    }
   }
 
   // Inning end play
@@ -1512,6 +1530,7 @@ export function accumulateBox(plays, players, opts = {}) {
   const away = mkSide();
   const home = mkSide();
   const linescore = {};
+  const hurt = new Set();   // §118 left the game hurt (a box score notes it)
 
   const ensureHit = (side, id) => { if (!side.hit[id]) { side.hit[id] = HIT0(); side.hitSeen.push(id); } return side.hit[id]; };
   const ensurePit = (side, id) => { if (!side.pit[id]) { side.pit[id] = PIT0(); side.pitSeen.push(id); } return side.pit[id]; };
@@ -1528,6 +1547,12 @@ export function accumulateBox(plays, players, opts = {}) {
       const pid  = play.pitcherId;
       const side = sideFor(pid, home, away);
       ensurePit(side, pid);
+      continue;
+    }
+    // §118 the player who took a hurt hitter's place is in the box from that moment.
+    if (play.type === 'injury' && play._injury) {
+      hurt.add(play._injury.playerId);
+      if (play._injury.subId) ensureHit(play.half === 'TOP' ? away : home, play._injury.subId);
       continue;
     }
     if (!play._statDeltas) continue;
@@ -1584,13 +1609,13 @@ export function accumulateBox(plays, players, opts = {}) {
     const hitters = order.map(id => {
       const s = side.hit[id] || HIT0();
       const p = players[id] || {};
-      return { id, name: p.name || '—', pos: p.pos || p.nativePos || '', ...s };
+      return { id, name: p.name || '—', pos: p.pos || p.nativePos || '', ...s, ...(hurt.has(id) ? { hurt: true } : {}) };
     });
     const pitchers = side.pitSeen.map(id => {
       const s = side.pit[id];
       const p = players[id] || {};
       const dec = s.w ? 'W' : s.l ? 'L' : s.sv ? 'S' : s.hld ? 'H' : s.bs ? 'BS' : null;
-      return { id, name: p.name || '—', ip: ipFromOuts(s.outs), ipOuts: s.outs, h: s.h, er: s.er, bb: s.bb, k: s.k, hr: s.hr, dec };
+      return { id, name: p.name || '—', ip: ipFromOuts(s.outs), ipOuts: s.outs, h: s.h, er: s.er, bb: s.bb, k: s.k, hr: s.hr, dec, ...(hurt.has(id) ? { hurt: true } : {}) };
     });
     return {
       runs:   hitters.reduce((a, h) => a + h.r, 0),
@@ -1624,7 +1649,7 @@ function _plannedSubstitution(slots, slotIdx, batter, players, inning) {
   if (!slot?.subIn || inning < (slot.subInning || 99)) return null;
   const sub = players[slot.subIn];
   if (!sub || !isAvailable(sub)) return null;
-  slots[slotIdx] = { id: sub.id, subbed: false };
+  slots[slotIdx] = { id: sub.id, subbed: false, sub: true };
   return {
     playIndex: 0, batterId: sub.id, pitcherId: null, type: 'pinch_hit',
     description: `${sub.name} pinch hits for ${batter?.name || 'the starter'}`,
@@ -1673,10 +1698,12 @@ function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
   // Don't sub in extra innings — preserve lineup stability
   if (inning > 9) return null;
 
-  // Don't sub out a player who is already a sub (bench player already in)
+  // Don't sub out a player who is already a sub (bench player already in).
+  // r137 §118: the slot says so — every active hitter carries BENCH_HITTERS
+  // (lineupSlots decide who starts), so the group check never let anyone pinch-hit.
   const currentPlayer = players[slots[slotIdx].id];
   if (!currentPlayer) return null;
-  if (currentPlayer.group === PLAYER_GROUP.BENCH_HITTERS) return null;
+  if (slots[slotIdx].sub) return null;
 
   let shouldSub = false;
   let benchCandidate = null;
@@ -1722,7 +1749,7 @@ function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
   const subPlayer   = players[benchCandidate.id];
   const subName     = subPlayer?.name || 'Sub';
 
-  slots[slotIdx]    = { id: benchCandidate.id, subbed: false };
+  slots[slotIdx]    = { id: benchCandidate.id, subbed: false, sub: true };
   benchCandidate.used = true;
 
   // Return a pinch_hit play — displayed in PBP, no stat deltas
@@ -1741,6 +1768,102 @@ function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
     _timestamp:   0,
     _statDeltas:  {},
   };
+}
+
+// ─────────────────────────────────────────────────────────────
+// INJURIES ON THE FIELD (§118)
+// ─────────────────────────────────────────────────────────────
+
+function _requireInjuryYear(context, exhibition, who) {
+  if (!exhibition && !Number.isFinite(context?.injuryYear)) {
+    throw new Error(`SimEngine.${who}: context.injuryYear (the season year, for injuries on the field) is required`);
+  }
+}
+
+const _HURT_HITTER = [
+  'pulled up on the play and left the game with the trainer',
+  'was slow to get up after the play and left the game with the trainer',
+  'came up hurt on the play and left the game',
+];
+const _HURT_PITCHER = [
+  'called for the trainer after a pitch and left the game',
+  'grimaced after a pitch and walked off with the trainer',
+  'came out of the game after a visit from the trainer',
+];
+
+/** An injury play: who left, and (a hitter) who took the spot. Stamped like a substitution. */
+function _injuryPlay(halfKey, fields) {
+  return {
+    playIndex: 0, _halfInning: halfKey,
+    inning: parseInt(halfKey.split('_')[1]) || 1,
+    half: halfKey.startsWith('TOP') ? 'TOP' : 'BOT',
+    type: 'injury', rbi: 0, runs: 0, isScoring: false, isBigPlay: false,
+    cumOurScore: 0, cumTheirScore: 0, _timestamp: 0, _statDeltas: {},
+    ...fields,
+  };
+}
+
+/**
+ * The batter who just batted gets hurt on the play: a bench player takes the
+ * spot in the order (one at the same position if there is one) and, if the
+ * batter is on base, runs for them. With nobody left on the bench the batter
+ * stays in (no injury). Returns the bases.
+ */
+function _batterHurt(gs, players, plays, slots, bench, slotIdx, batter, pitcher, outs, bases, halfKey) {
+  if (gs.hurt.has(batter.id)) return bases;
+  if (_roll() >= injuryChancePerExposure(batter, 'hitter', gs.injuryYear)) return bases;
+  const pos = (p) => p?.nativePos || p?.pos;
+  const inGame = new Set(slots.map(s => s.id));
+  const avail = (bench || []).filter(b => !b.used && !inGame.has(b.id) && !gs.hurt.has(b.id) && players[b.id] && isAvailable(players[b.id]));
+  const sub = avail.find(b => pos(players[b.id]) === pos(batter)) || avail[0];
+  if (!sub) return bases;
+  const phrase = _HURT_HITTER[Math.floor(_roll() * _HURT_HITTER.length)];
+  gs.hurt.add(batter.id);
+  slots[slotIdx] = { id: sub.id, subbed: false, sub: true };
+  sub.used = true;
+  const onBase = ['first', 'second', 'third'].find(k => bases[k] === batter.id);
+  const next = { ...bases };
+  if (onBase && outs < 3) next[onBase] = sub.id;
+  const subName = players[sub.id].name;
+  plays.push(_injuryPlay(halfKey, {
+    batterId: batter.id, pitcherId: pitcher?.id || null,
+    description: `${batter.name} ${phrase}. ${subName} ${onBase && outs < 3 ? 'runs for' : 'takes over for'} ${batter.name}.`,
+    _injury: { playerId: batter.id, subId: sub.id, role: 'hitter' },
+    outsAfter: outs,
+    _basesAfter: outs >= 3 ? { first: null, second: null, third: null } : { ...next },
+  }));
+  return outs >= 3 ? bases : next;
+}
+
+/**
+ * The pitcher gets hurt on a pitch (checked as each batter steps in, so every
+ * batter faced carries the risk): the manager has to go to the bullpen now —
+ * a forced change. With nobody able to come in, the pitcher stays in (no
+ * injury). Returns the new pitcher, or null.
+ */
+function _pitcherHurt(gs, players, plays, pitcher, side, tired, inning, outs, bases, halfKey) {
+  if (!pitcher || gs.hurt.has(pitcher.id)) return null;
+  const role = gs[`${side}Role`] === ROLE.STARTER ? 'starter' : 'reliever';
+  if (_roll() >= injuryChancePerExposure(pitcher, role, gs.injuryYear, tired)) return null;
+  const phrase = _HURT_PITCHER[Math.floor(_roll() * _HURT_PITCHER.length)];
+  const was = { fatigued: gs[`${side}Fatigued`], mustGo: gs[`${side}MustGo`] };
+  gs[`${side}Fatigued`] = true;
+  gs[`${side}MustGo`]   = true;
+  const at = plays.length;
+  const half = halfKey.startsWith('TOP') ? 'TOP' : 'BOT';
+  if (!_midHalfChange(gs, players, side, plays, inning, half, outs, bases)) {
+    gs[`${side}Fatigued`] = was.fatigued;
+    gs[`${side}MustGo`]   = was.mustGo;
+    return null;
+  }
+  gs.hurt.add(pitcher.id);
+  plays.splice(at, 0, _injuryPlay(halfKey, {
+    batterId: null, pitcherId: pitcher.id,
+    description: `${pitcher.name} ${phrase}.`,
+    _injury: { playerId: pitcher.id, role },
+    outsAfter: outs, _basesAfter: { ...bases },
+  }));
+  return players[gs[`${side}Pitcher`].id] || null;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2397,12 +2520,18 @@ function _buildLineup(team, players, isCPU) {
     };
   }
 
+  // The bench: every available rostered hitter who isn't in today's nine.
+  // (r137 §118: lineupSlots decide who starts — every active hitter carries
+  // BENCH_HITTERS, the nine included — so the group alone put the starters on
+  // the bench too.)
+  const starting = new Set(orderedStarters.map(p => p.id));
   const bench = rosterIds
     .map(id => players[id])
     .filter(p =>
       p &&
       isAvailable(p) &&
-      p.group === PLAYER_GROUP.BENCH_HITTERS
+      p.group === PLAYER_GROUP.BENCH_HITTERS &&
+      !starting.has(p.id)
     )
     .sort((a, b) => b.ovr - a.ovr);
 

@@ -10,6 +10,7 @@
  */
 import { clock, seedRandom } from './shims.js';            // MUST be first (installs globals)
 import { dice } from '../../engine/Dice.js';
+import { baseballYear } from '../../engine/PlayerFactory.js';
 import * as SM from '../../store/StateManager.js';
 import { startNewGame, advanceClock, tick, commitGame } from '../../engine/GameEngine.js';
 import { releaseDueCards } from '../../engine/CardEngine.js';
@@ -44,7 +45,7 @@ for (let d = 0; d < DAYS; d++) {
   const s2 = SM.get();
   const opp = s2.leagueTeams.find(x => x.name === g.opponent) || null;
   t = T();
-  const out = generatePlays(g, s2.userTeam, opp, s2.players, { phase: s2.phase, isSpring: false, winProb: 0.5, rand: dice('measure', d) });
+  const out = generatePlays(g, s2.userTeam, opp, s2.players, { phase: s2.phase, isSpring: false, winProb: 0.5, rand: dice('measure', d), injuryYear: baseballYear(s2) });
   const tGame = ms(t);
   rows.push({ day: d + 1, tClone, tDay, tGame, plays: out.plays.length, cpuGames: (s2.leagueSchedule?.dayMap?.[g.date] || []).length });
   // play it for real and commit, to move on

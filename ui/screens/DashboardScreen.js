@@ -989,7 +989,7 @@ const _PBP_ICONS = {
   groundout:'▲', flyout:'▲',
   double_play:'▲▲', fielders_choice:'FC', sac_fly:'SF', sac_bunt:'SB',
   error:'E', stolen_base:'SB', caught_stealing:'CS',
-  pitching_change:'🔄', pinch_hit:'🔁',
+  pitching_change:'🔄', pinch_hit:'🔁', injury:'!',
   game_start: '⚾',
   weather_delay:'⏸', weather_resume:'▶', game_suspended:'⏸', game_resumed:'▶',
 };
@@ -1002,6 +1002,7 @@ function _pbpPlayHtml(play) {
              : play.type === 'pitching_change' || play.type === 'pinch_hit' ? 'pbp-play pbp-pitching'
              : play.type === 'game_start' ? 'pbp-play pbp-pitching'
              : ['weather_delay', 'weather_resume', 'game_suspended', 'game_resumed'].includes(play.type) ? 'pbp-play pbp-weather'
+             : play.type === 'injury' ? 'pbp-play pbp-hurt'   // §118 a player left the game hurt
              : 'pbp-play';
   return `<div class="${cls}" data-play-idx="${play.playIndex}">
     <div class="pbp-play-icon">${icon}</div>
@@ -1621,6 +1622,7 @@ function _injectCSS() {
     .pbp-play.pbp-homer .pbp-play-text{color:var(--text);font-weight:700;}
     .pbp-play.pbp-hit .pbp-play-text{color:var(--text);}
     .pbp-play.pbp-pitching .pbp-play-text{font-style:italic;}
+    .pbp-play.pbp-hurt .pbp-play-text,.pbp-play.pbp-hurt .pbp-play-icon{color:var(--danger);font-weight:600;}
     .live-box-wrap{padding:12px 16px;}
     .bs-section-label{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;}
     .bs-table-wrap{overflow-x:auto;}

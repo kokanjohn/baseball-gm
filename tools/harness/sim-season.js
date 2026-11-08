@@ -1830,8 +1830,9 @@ async function main() {
       check(`game ${idx}: both lineups seeded (>=9 hitters each)`,
             box.away.hitters.length >= 9 && box.home.hitters.length >= 9,
             `${box.away.hitters.length}/${box.home.hitters.length}`);
-      // A pitcher in the box faced someone (no reliever brought in for a half never played).
-      const phantom = [...box.away.pitchers, ...box.home.pitchers].filter(p => !(p.ipOuts || p.h || p.bb || p.er || p.k));
+      // A pitcher in the box faced someone (no reliever brought in for a half never played) —
+      // unless hurt before facing anyone (rule 5.10(g): the one-batter rule excuses injury).
+      const phantom = [...box.away.pitchers, ...box.home.pitchers].filter(p => !p.hurt && !(p.ipOuts || p.h || p.bb || p.er || p.k));
       check(`game ${idx}: every pitcher in the box faced a batter`, phantom.length === 0, phantom.map(p => p.name).join(','));
       // r51: bullpen usage — a full game should hook the starter for relief.
       const awayP = (box.away.pitchers || []).length;
@@ -2150,7 +2151,7 @@ async function main() {
     check(`league: every CPU game before the user's last game was played (${due.filter(g => g.played).length}/${due.length})`,
           due.every(g => g.played && (g.boxScore || g.cancelled)));   // (§102.3 a cancelled spring rainout has no box)
     const phantomCpu = games.filter(g => g.played && g.boxScore).flatMap(g => [...g.boxScore.away.pitchers, ...g.boxScore.home.pitchers])
-      .filter(p => !(p.ipOuts || p.h || p.bb || p.er || p.k));
+      .filter(p => !p.hurt && !(p.ipOuts || p.h || p.bb || p.er || p.k));
     check(`league: every pitcher in a CPU box score faced a batter`, phantomCpu.length === 0, `${phantomCpu.length} phantom appearances`);
     // Starts are recorded: two per game (one each side), quality starts among them.
     const startGames = games.filter(g => !g.isSpring && !g.isPlayoff && g.played).length

@@ -1308,6 +1308,11 @@ export const INJURY_PROB_SP_PER_START      = 0.023;  // 2.3% per start
 export const INJURY_PROB_RP_PER_APP        = 0.0095;  // 0.95% per appearance (r61: real CPU box scores add relief outings)
 
 // Age modifiers (additive)
+// §118 injuries happen during the game, on a play. The per-game chances above
+// are spread over a typical game's exposure — a hitter's plate appearances, a
+// pitcher's batters faced — so the season rate is what it was when they were
+// rolled after the final out. (Tuned against tools/harness/measure-injury-rate.mjs.)
+export const INJURY_EXPOSURE = Object.freeze({ hitterPA: 4.21, starterBF: 23.0, relieverBF: 5.17 });   // measured: the sim's averages per appearance
 export const INJURY_AGE_MOD_32_34          = 0.003;  // +0.3% age 32-34
 export const INJURY_AGE_MOD_35_PLUS        = 0.008;  // +0.8% age 35+
 

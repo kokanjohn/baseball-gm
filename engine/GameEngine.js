@@ -65,7 +65,7 @@ import {
   seedDivision, buildBracket, prepareRound, recordGame, roundComplete, roundSeries,
   roundForPhase, nextRound, seriesGames, ROUND_PHASE, ROUND_LABEL,
 } from './PlayoffEngine.js';
-import { rollGameInjuries, beginInjury, clearInjuryUpdate } from './InjuryEngine.js';
+import { injuriesFromPlays, beginInjury, clearInjuryUpdate } from './InjuryEngine.js';
 
 import { computeOVR, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { STAFF_NAMES } from '../data/player-names.js';
@@ -741,6 +741,16 @@ export function tick() {
     _suspendGame({ user: true, i: game.index }, game.plays[game.plays.length - 1]._timestamp);
   }
 
+  // §118 a player hurt on a play just revealed: hurt as of that play's moment,
+  // the roster brought in line, and the trainer's first message on its way.
+  // (The roster clock holds at our first pitch until the final — §65 — so
+  // nothing else in the world can happen in between: no ordering to get wrong.)
+  const hurt = game.plays.slice(startIdx, idx).filter(p => p._injury);
+  if (hurt.length) {
+    const events = _applyOurInjuries(game.index, hurt, game);
+    if (events.length) advanceClock(clockNow(), { events });
+  }
+
   return last;
 }
 
@@ -805,7 +815,7 @@ function _activateGame(game) {
     players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
       norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true) }
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true), injuryYear: baseballYear(state) }
   );
 
   // Write plays to state and transition to LIVE
@@ -863,7 +873,7 @@ function _silentlyCommitGame(game) {
     wx ? { ...game, ...wx.record } : game, userTeam, opponentTeam, players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
       norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true) }
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true), injuryYear: baseballYear(state) }
   );
 
   // Suspended by the weather: it stands where it stopped, to be finished another day.
@@ -940,6 +950,8 @@ export async function commitGame(gameIndex) {
   const game  = state.schedule[gameIndex];
 
   if (!game) throw new Error(`GameEngine.commitGame: no game at index ${gameIndex}`);
+  // §118 the game's injuries (plays are dropped below): any not applied as they were revealed.
+  const hurtPlays = (game.plays || []).filter(p => p._injury);
 
   const result = { phaseChanged: false, newPhase: null, milestone: null };
 
@@ -1185,14 +1197,10 @@ export async function commitGame(gameIndex) {
   // under the 28-man rule on the day they become legal rosters.
   let injuryEvents = [];
   if (game.status !== GAME_STATUS.POSTPONED) {
-    const st  = StateManager.get();
-    const inj = rollGameInjuries(st, _appearances(st, gameIndex), endMs, _gameKey(st, game, true));
-    if (Object.keys(inj.players).length) {
-      StateManager.mutate(s => {
-        for (const [id, upd] of Object.entries(inj.players)) Object.assign(s.players[id], upd);
-      });
-    }
-    injuryEvents = inj.events.map(e => ({ ...e, atMs: endMs }));
+    // §118 the injuries happened on their plays: those revealed live were
+    // applied then (tick); the rest happen here, at their own moments (a game
+    // played with the app closed).
+    injuryEvents = _applyOurInjuries(gameIndex, hurtPlays, game);
   }
   advanceClock(endMs, { events: injuryEvents, reconcileAll: true });
 
@@ -2002,6 +2010,32 @@ function _userWeatherEvents(state, clockMs) {
   return out;
 }
 
+/**
+ * _applyOurInjuries(i, plays, game) — §118 our players hurt on these plays,
+ * as of each play's moment: 'evaluating' (the two-act flow), the roster brought
+ * in line, and the INJURY events dated then (the trainer's first message follows).
+ * Applied once per player per game (game._hurtApplied).
+ */
+function _applyOurInjuries(i, plays, game) {
+  const st = StateManager.get();
+  const g  = st.schedule[i];
+  if (!g || !plays?.length) return [];
+  const inj = injuriesFromPlays(st, plays, _gameKey(st, game || g, true), { skip: new Set(g._hurtApplied || []) });
+  const ids = plays.map(p => p._injury?.playerId).filter(Boolean);
+  StateManager.mutate(s => {
+    for (const [id, upd] of Object.entries(inj.players)) Object.assign(s.players[id], upd);
+    const x = s.schedule[i];
+    if (x) x._hurtApplied = [...new Set([...(x._hurtApplied || []), ...ids])];
+    for (const teamId of new Set(inj.events.map(e => e.teamId))) {
+      if (teamId !== 'user') applyRosterMutation(s, reconcileRoster(s, teamId, { autoManage: true, atMs: inj.events[0].atMs }));
+    }
+  });
+  if (inj.events.some(e => e.teamId === 'user')) {
+    StateManager.mutate(s => applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: inj.events[0].atMs })));
+  }
+  return inj.events;
+}
+
 /** Our schedule in playing order after a game moved: unplayed games by first pitch, indexes and regular-season numbers renewed. */
 function _wxSortSchedule(s) {
   const split = Math.min(s.currentGameIndex || 0, s.schedule.length);
@@ -2167,7 +2201,7 @@ function _resumeGame(ref, atMs) {
       resumeState: g.resumeState, partOne: g.plays, liveLineups: g.liveLineups || {}, phase: st.phase, isSpring: !!g.isSpring,
       norms: leagueNorms([st.userTeam, ...(st.leagueTeams || [])], st.players),
       staff: Coach.staffEffects(st.userTeam?.coachingStaff),
-      rand: _gameDice(st, g, isUser, 'resume'),
+      rand: _gameDice(st, g, isUser, 'resume'), injuryYear: baseballYear(st),
     });
     rest = sim.plays; box = sim.boxScore; lineups = sim.liveLineups;
   }
@@ -2278,7 +2312,7 @@ function _startLeagueGame(date, i) {
     home, away, state.players,
     { phase: state.phase, isSpring: !!cg.isSpring,
       norms: leagueNorms([state.userTeam, ...state.leagueTeams], state.players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, cg, false) }
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, cg, false), injuryYear: baseballYear(state) }
   );
   StateManager.mutate(s => {
     const g = s.leagueSchedule.dayMap[date][i];
@@ -2303,6 +2337,7 @@ function _finishLeagueGame(date, i) {
   const cg0 = st0.leagueSchedule.dayMap[date][i];
   if (cg0.isAllStar) return _finishAllStarGame(date, i);
   const endMs = _playsEndMs(cg0);
+  const hurtPlays = cg0.plays.filter(p => p._injury);   // §118 (the plays are dropped below)
   const last  = cg0.plays[cg0.plays.length - 1];
   const homeScore = last?.cumOurScore ?? 0, awayScore = last?.cumTheirScore ?? 0;
   const statKey = cg0.isPlayoff ? 'postseasonStats' : cg0.isSpring ? 'springStats' : 'stats';
@@ -2363,15 +2398,11 @@ function _finishLeagueGame(date, i) {
     s.standings = computeFullStandings(s);
   });
 
-  // Injuries: the players who took the field.
+  // §118 injuries: the players who left hurt, at their plays' moments. The
+  // CPU GMs react at the final (IL / call-up through the ledger).
   const st  = StateManager.get();
   const g   = st.leagueSchedule.dayMap[date][i];
-  const box = g.boxScore;
-  if (!box) return [];
-  const side = (teamId, b) => ({ teamId, hitterIds: b.hitters.map(h => h.id),
-                                 starterId: b.pitchers[0]?.id || null,
-                                 relieverIds: b.pitchers.slice(1).map(p => p.id) });
-  const inj = rollGameInjuries(st, [side(g.homeId, box.home), side(g.awayId, box.away)], endMs, _gameKey(st, g, false));
+  const inj = injuriesFromPlays(st, hurtPlays, _gameKey(st, g, false));
   if (Object.keys(inj.players).length) {
     StateManager.mutate(s => {
       for (const [id, upd] of Object.entries(inj.players)) Object.assign(s.players[id], upd);
@@ -3358,13 +3389,6 @@ function _gameEndMs(game) {
 }
 
 /**
- * _appearances(state, gameIndex)
- * Who took the field on this game day, per team — the injury exposure.
- * User + opponent from the committed box score (actual appearances); the
- * other CPU teams playing that date from their active lineup, today's
- * starter and a few relievers (their games have no box score).
- */
-/**
  * _gameKey(state, g, isUser) — §118 a game's identity for its dice: ours by
  * season and schedule slot, the league's by id; with its first pitch, so a
  * game moved to another day is a new event with its own dice.
@@ -3375,25 +3399,6 @@ function _gameKey(state, g, isUser) {
 /** The dice a game is played with (`part`: 'play', or 'resume' for the rest of a suspended game). */
 function _gameDice(state, g, isUser, part = 'play') {
   return dice(diceSeed(state), 'game', _gameKey(state, g, isUser), part);
-}
-
-function _appearances(state, gameIndex) {
-  const g   = state.schedule[gameIndex];
-  const out = [];
-  const opp = (state.leagueTeams || []).find(t => t.name === g?.opponent) || null;
-  const box = g?.boxScore;
-  const fromBox = (teamId, side) => side && out.push({
-    teamId,
-    hitterIds:   (side.hitters  || []).map(h => h.id),
-    starterId:   side.pitchers?.[0]?.id || null,
-    relieverIds: (side.pitchers || []).slice(1).map(p => p.id),
-  });
-  if (box) {
-    fromBox('user', box.userIsHome ? box.home : box.away);
-    if (opp) fromBox(opp.id, box.userIsHome ? box.away : box.home);
-  }
-  // Other CPU clubs' injuries come from their own games (_finishLeagueGame).
-  return out;
 }
 
 function _userQualifiedForPlayoffs(state) {

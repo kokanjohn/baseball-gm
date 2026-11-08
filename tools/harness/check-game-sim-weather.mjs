@@ -4,6 +4,7 @@
 // hand-made ones for each situation, then real ones off the weather itself.
 import { seedRandom } from './shims.js';            // MUST be first (installs globals)
 import { dice } from '../../engine/Dice.js';
+import { baseballYear } from '../../engine/PlayerFactory.js';
 import * as SM from '../../store/StateManager.js';
 import { startNewGame } from '../../engine/GameEngine.js';
 import { generatePlays, generateResumption, accumulateBox, accumulateStats, leagueNorms, playRuns, weatherEnv } from '../../engine/SimEngine.js';
@@ -32,7 +33,7 @@ const T0 = st.schedule.find(g => !g.isSpring)?.gameTime || st.schedule[0].gameTi
 
 let _gameN = 0;   // §118 each simulated game its own dice
 const play = (game, weather) => generatePlays({ ...game, weather: null, fieldCondition: null, _tickOffset: 0 }, user, opp, players,
-                                              { phase: st.phase, isSpring: false, norms, weather, rand: dice('check-game-sim-weather', ++_gameN) });
+                                              { phase: st.phase, isSpring: false, norms, weather, rand: dice('check-game-sim-weather', ++_gameN), injuryYear: baseballYear(st) });
 const plan = (over) => ({ v: 1, venueId: 'user', gameTime: T0, outcome: 'played', decidedAt: null, calledBy: null, reason: null,
                           startAt: T0, delays: [], endT: null, stopAtPlayMin: null, playMin: GW.PLAY_MIN, ...over });
 const d = (atPlayMin, startMinAfterT0, mins, reason = 'rain') => ({ startT: T0 + startMinAfterT0 * MIN, endT: T0 + (startMinAfterT0 + mins) * MIN, atPlayMin, reason, mm: 5 });
@@ -134,7 +135,7 @@ console.log('\nCalled games');
       susp++;
       // §109 the rest is simulated when it resumes, from where it stopped.
       const rp = r.resumeState ? generateResumption({ isHome: true, gameTime: T0 }, user, opp, players,
-        { resumeState: r.resumeState, partOne: ps, liveLineups: r.liveLineups, phase: st.phase, norms, rand: dice('check-game-sim-weather', 'resume', _gameN) }).plays : [];
+        { resumeState: r.resumeState, partOne: ps, liveLineups: r.liveLineups, phase: st.phase, norms, rand: dice('check-game-sim-weather', 'resume', _gameN), injuryYear: baseballYear(st) }).plays : [];
       if (!r.resumeState) bad.push('suspended: no resume state');
       if (end.type !== 'game_suspended' || end._timestamp !== callT) bad.push('suspended: end');
       if (!rp.length || last(rp).type !== 'game_end' || rp.some(x => x._timestamp !== null) || !rp.every((x, i) => !i || x._resumeMin >= rp[i - 1]._resumeMin)) bad.push('suspended: resume plays');
@@ -154,8 +155,8 @@ console.log('\nCalled games');
   // Spring and postseason.
   const pc = plan({ outcome: 'called', calledBy: 'limit', reason: 'rain', decidedAt: T0 + 200 * MIN, stopAtPlayMin: 50,
                     delays: [{ startT: T0 + 50 * MIN, endT: T0 + 200 * MIN, atPlayMin: 50, reason: 'rain', mm: 30 }] });
-  const sp = generatePlays({ isHome: true, gameTime: T0, weather: null, fieldCondition: null }, user, opp, players, { isSpring: true, norms, weather: { plan: pc, conditions: [] }, rand: dice('check-game-sim-weather', 'spring') });
-  const po = generatePlays({ isHome: true, gameTime: T0, isPlayoff: true, weather: null, fieldCondition: null }, user, opp, players, { norms, weather: { plan: { ...pc, delays: [{ ...pc.delays[0], atPlayMin: 165, startT: T0 + 165 * MIN }], stopAtPlayMin: 165 }, conditions: [] }, rand: dice('check-game-sim-weather', 'post') });
+  const sp = generatePlays({ isHome: true, gameTime: T0, weather: null, fieldCondition: null }, user, opp, players, { isSpring: true, norms, weather: { plan: pc, conditions: [] }, rand: dice('check-game-sim-weather', 'spring'), injuryYear: baseballYear(st) });
+  const po = generatePlays({ isHome: true, gameTime: T0, isPlayoff: true, weather: null, fieldCondition: null }, user, opp, players, { norms, weather: { plan: { ...pc, delays: [{ ...pc.delays[0], atPlayMin: 165, startT: T0 + 165 * MIN }], stopAtPlayMin: 165 }, conditions: [] }, rand: dice('check-game-sim-weather', 'post'), injuryYear: baseballYear(st) });
   check(`spring games simply end; postseason games are never shortened (${sp.weather.ruling?.outcome}, ${po.weather.ruling?.outcome ?? 'over before the call'})`,
         sp.weather.ruling?.outcome === 'final' && (po.weather.ruling == null || po.weather.ruling.outcome === 'suspended'));
 }
@@ -176,7 +177,7 @@ console.log('\nA suspended game finished with the rosters of the day it resumes 
     const team = { ...user, rosterIds: user.rosterIds.filter(id => id !== goneId) };
     const pl = { ...players, [hurtId]: { ...players[hurtId], isInjured: true } };
     const res = generateResumption({ isHome: true, gameTime: T0 }, team, opp, pl,
-      { resumeState: r.resumeState, partOne: r.plays, liveLineups: r.liveLineups, phase: st.phase, norms, rand: dice('check-game-sim-weather', 'resume-roster') });
+      { resumeState: r.resumeState, partOne: r.plays, liveLineups: r.liveLineups, phase: st.phase, norms, rand: dice('check-game-sim-weather', 'resume-roster'), injuryYear: baseballYear(st) });
     const rest = res.plays, end = last(rest);
     const appearsAfter = rest.some(x => x.batterId === goneId || x.batterId === hurtId || Object.keys(x._statDeltas || {}).some(id => id === goneId || id === hurtId));
     const changes = rest.filter(x => x.type === 'lineup_change');

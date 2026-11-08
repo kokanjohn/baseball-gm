@@ -9290,3 +9290,31 @@ In Chromium (fresh save): the real save is byte-for-byte unchanged after a look-
 **Fresh team:** not needed for r136 — no stored data changed, and old saves keep working (they already carry a weather seed). Games simply roll new dice from here on.
 
 **Next.** Step 2: injuries during the game (on a play, the manager's substitution, the trainer's first message at that moment; CPU games too; the season rate held where it is). Step 3: the game pushes from the look-ahead, each with its own Settings toggle, all on by default (GM, Nov 8): rain delay, play resumes, postponed, suspended, one of our players hurt, the final score.
+
+## 119. Injuries during the game (r137 — phase 1, step 2)
+
+**Decided (GM, Nov 8):** injuries move from "rolled after the final out" into the plays, as §1.2's two-act design always intended: a player gets hurt on a specific play, leaves the game, the manager makes the substitution, and the trainer's first message arrives minutes later — during the game. The same for every club.
+
+**In the sim (`SimEngine`):**
+- **A batter** risks injury on each plate appearance (after the play). A bench player takes the spot in the order — one at the same position if there is one — and, if the batter reached base, runs for them. With nobody left on the bench the batter stays in (no injury).
+- **A pitcher** risks injury as each batter steps in ("hurt on a pitch"), so every batter faced carries the risk — checking after the play left out each inning's third out and ran pitcher injuries ~30% low. The manager goes to the bullpen at once: the forced mid-inning change the weather already uses (`_midHalfChange`). With nobody able to come in, the pitcher stays in.
+- **The play:** `type: 'injury'`, `_injury: { playerId, subId?, role }`, a gender-neutral line that names no body part (the diagnosis comes later): "Amato was slow to get up after the play and left the game with the trainer. Pai runs for Amato." / "Ohtani grimaced after a pitch and walked off with the trainer." The replacement is in the box from that moment (`accumulateBox`).
+- **The rate:** `InjuryEngine.injuryChancePerExposure` spreads the per-game chance (unchanged constants, age and fatigue included) over a typical game's exposure, `INJURY_EXPOSURE` = { hitterPA 4.21, starterBF 23.0, relieverBF 5.17 } — measured from 600 simulated games. `generatePlays` / `generateResumption` require `context.injuryYear` (the season year, for age) except the All-Star exhibition.
+
+**In the game engine:**
+- **Ours, as revealed.** `GameEngine.tick` applies the injuries in the plays it just revealed, each dated at its play's moment (`injury.injuredAt`, the INJURY event's atMs), brings the roster in line and starts the two-act flow. The roster clock holds at our first pitch until the final (§65), so nothing else in the world happens in between — no ordering to get wrong. A game played with the app closed applies them at its commit, at their own moments (`game._hurtApplied` keeps it to once per player).
+- **The league's**, at the game's final, dated at the play (the CPU GMs react at the final, as before).
+- `InjuryEngine.rollGameInjuries` (and `GameEngine._appearances`) are gone; `injuriesFromPlays(state, plays, gameKey)` reads them, with each player's details from `dice(seed, 'injury', gameKey, id)` (§118).
+- **The trainer's message** names the inning ("came out of today's game in the 6th with what looks like an elbow inflammation"; the article was always "a" — fixed).
+- **Play-by-play:** our game's feed (`pbp-hurt`: red, semi-bold, a plain "!" marker) and the league viewer (`lg-pbp.hurt`).
+
+**An existing defect found and fixed: the sim's bench included the starters.** `_buildLineup` built the bench from `group === BENCH_HITTERS`, but every active hitter carries that group (lineupSlots decide who starts — rule 5), so the nine were on the bench too (a hurt starter was "replaced" by themself), and `_checkBenchSubstitution` skipped any batter of that group — every hitter — so **our manager never pinch-hit**, and spring's playing time for the bench never happened. Now the bench is every available rostered hitter not in today's nine, and a lineup slot carries `sub: true` once a substitute is in (pinch hitter, injury replacement, All-Star plan, resumption; kept through a suspension). Late-game pinch hitting (regular season: 7th inning on, within two runs, a bench bat 5+ OVR better, 20%) and spring's bench at-bats now happen as designed.
+
+**Tests.**
+- `check-game-injuries.mjs` (new, 7): 400 simulated games — a hurt player never bats, pitches or stands on a base again (a pitcher's runs from runners left on base and the end-of-game decisions are the only later stats); the replacement takes the spot and the base; a hurt pitcher is relieved at once; gender-neutral. Then a real day: the look-ahead foresees one of ours hurt; with the app open, the same player is hurt on the same play, under evaluation from that moment (not the final out), and the trainer's message arrives during the game, naming the inning.
+- `measure-injury-rate.mjs` (new): league-wide injuries over 60 of our games, 6 seeds. Before (rolled after the final out): 413 (hitters 197, starters 101, relievers 115). After (on the plays): 415 (hitters 184, starters 129, relievers 102). The total matches; the split moves about as much as the baseline does between seed sets (its starters ran 59 on seeds 1–3, 42 on 4–6), so the exposure constants stay as measured.
+- `test-game-injury-ui.mjs` (new): the real app with a fixed page clock — the look-ahead finds a game where one of ours gets hurt; the app opened 25 minutes after the play shows the line in the play-by-play and the trainer's message in Messages; dark and light.
+
+- **The box score notes who left hurt:** `accumulateBox` sets `hurt: true` on that player's hitter or pitcher line. A reliever hurt before facing anyone is a real box line with no outs (rule 5.10(g): the one-batter rule excuses injury); sim-season's "every pitcher faced a batter" checks exempt `hurt` lines.
+
+**Fresh team:** not needed — no stored data changed. (Step 1's note said step 2 would need one; it turned out not to.)
