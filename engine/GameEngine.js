@@ -973,7 +973,7 @@ function _commitAt(gameIndex) {
 
 
   // ── Recompute IMP scores for all active players ────────────
-  const impMutations = computeAllIMP(StateManager.get(), gameIndex, clockNow());
+  const impMutations = computeAllIMP(StateManager.get(), gameIndex, _gameEndMs(game));   // the game's own time: the same however the clock got here (look-ahead, §118)
   StateManager.mutate(s => {
     s.impScores = impMutations.impScores;
   });
