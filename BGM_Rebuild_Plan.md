@@ -9540,3 +9540,50 @@ The harness's farm checks become free-agent checks (`sim-season`, `check-il-retu
 7. Last season's Impact disappears at the rollover; recompute it from the season log.
 
 **Order.** (1) Impact repairs; (2) league history, checked against what the game actually produces; (3) estimated ratings for untested players, the diamonds, word-gets-out, measured; (4) stage 2 messages, plus the scouting and development compose topics; (5) stage 3 screens, plus a career stats table and the no-history note. All in r140; fresh team required.
+
+### 122.10 Built: Impact repairs, the league's past, untested ratings, diamonds (branch `fa-pool`, Nov 9 — not released)
+
+**Impact (IMPEngine).**
+- One scale for everyone: hitters' raw value × `IMP_H_SCALE` 1.6, pitchers' × `IMP_P_SCALE` 0.26 (measured over a full season, regulars' raw spread was 1.2 for hitters and 8.7 for pitchers). A small sample counts for less: × n / (n + `IMP_SHRINK_PA` 40 / `IMP_SHRINK_IP` 10). Steals are a rate (per 600 PA). Career BABIP comes from career totals. Reliever minimums lowered (2 / 4 / 8 / 15 IP), since the shrink handles small samples.
+- Measured at 58 games: hitters' season Impact −3.6 to +5.5, starters −3.9 to +4.5, relievers −4.4 to +4.2. Hot and cold are about 4% of players each.
+- The windows are days: each game-log entry carries when it was played (`atMs`). Only regular-season games count. The windows end at the game's own time, not the clock's: when they followed the clock, the look-ahead and the real game disagreed (`check-lookahead` failed).
+- `lastSeasonIMP(player)` comes from the season log. The player card shows 7 days / 15 days / 30 days / Season / Last season and "Impact · label". The season box and the label were both broken; both fixed. Sorting League → Players by Impact works.
+- Still to draw (stage 3 screens / stage 2 messages): Impact leaders, the Team row number, trade-card wording.
+
+**The league's past (LeagueHistory.js).**
+- How a season is built:
+  - At league creation every player gets his prior seasons. His ratings are worked back a year at a time along the age curves (`AGE_CURVES`, now shared with the winter development), with variance.
+  - Each year, whether he was in the league is a logistic on his rating then. Below age 25, a year out means he hadn't arrived yet.
+  - Playing time follows his rating that year (regular, part-time, bench), and one season in ten is cut short.
+  - Each line is played plate appearance by plate appearance through `SimEngine.plateAppearanceRates`. This was extracted from `simulateAtBat` without changing it, and `simulateAtBat` now uses it.
+- Calibrated against a full simulated season, same players and playing time:
+
+  | | AVG | OBP | SLG | K% | BB% | SP ERA | RP ERA |
+  |---|---|---|---|---|---|---|---|
+  | Game | .247 | .322 | .402 | .210 | .091 | 4.03 | 4.52 |
+  | History | .245 | .319 | .395 | .217 | .091 | 3.97 | 4.68 |
+
+  One season in history and one in the game correlate 0.74 in Impact: the noise of one real season against another.
+- Results:
+  - **Seasons by age:** a median of 3 seasons at 23–25, 4–5 at 26–28, 8–9 at 29–31, and 12 at 32+ (up to 15).
+  - **Opening pool:** about 70% of free agents have a record.
+  - **Free-agent kinds:** veterans have 3+ seasons, depth players at least 1. Prospects are rookies. International players (a new pool tier, ages 23–30, 12 players) played overseas. Independent players mostly have no league record; 40% had a short stint.
+  - **Opening pool mix:** veteran 40, depth 108, prospect 20, independent 20, international 12.
+- Scouting finds get a history on their own random stream, so writing it never moves the shared event stream.
+- The offseason class: rookies, plus three in ten from abroad (ages 22–29, `FA_CLASS_INTL_AGE`).
+- `p.origin` (`PLAYER_ORIGIN`: league / rookie / overseas / independent) drives the player-card note.
+
+**Untested ratings and diamonds (Diamonds.js).**
+- **True and shown ratings.** An untested player (origin ≠ league) has a hidden gap: true = shown + `_ratingGap`, about N(0, 4–5) per sub-rating. Only the games use the truth: `SimEngine` (the at-bat, baserunning, league norms, the starter's innings) and `PitchingEngine` stamina, via `playingRating` / `trueRatings`. Everything people and clubs judge by sees the shown ratings, including the manager's lineup order.
+- **The gap closes.** It shrinks e-fold per 300 PA or batters faced (spring counts), and the shown ratings move to the truth. A development plan counts as 60. Winter development moves the shown ratings, so the truth moves with them.
+- **A diamond** is worth `DIAMOND.edge` 5+ above his shown OVR and worth 47+ above the league level. Worth is the higher of his true OVR and his role value (a hitter's bat: contact .5, power .45, speed .05; a reliever's stuff .53, control .47).
+- **When word gets around.** When a diamond becomes available (the opening pool, a new class, a scouting find, a release), he gets `_buzzAt`, 10–30 days out. From then CPU clubs value him at his worth (`cpuView` in the daily look, CPU fills, the winter round, waiver claims). Before it they see his rating.
+- **Seeded:** 2 role fits among the opening pool's depth players (before the history is written, so the record shows it) and 4 unproven upside (true 48–54 above the level). Plus 3 upside in each offseason class. Natural ones also count.
+- **Measured, opening pool:** 7–14 diamonds per league, about half each kind.
+  - The best-rated (shown 45+) go in the first days of camp on their rating alone.
+  - The hidden ones (shown 38–43) are signed by CPU clubs on or just after their date: in two leagues, 10 of 11 within a day of it, and two never.
+  - The untested who played: Impact follows the true rating (0.38), not the opening estimate (−0.21; small sample).
+
+**Proofs.** `check-diamonds` (new, 26 checks): the past, untested ratings, the race, Impact. `check-lookahead` passes again; it failed until the Impact windows used the game's time.
+
+**Harness note.** The harness clock starts in the year 2400. A script that measures dates stamped at league creation (`_faSince`, `_buzzAt`) must `clock.set(clock.real())` before `startNewGame`.
