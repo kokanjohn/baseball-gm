@@ -1402,7 +1402,7 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
                               : `${teamName} are offering ${target?.name}`),
     preview:         kind === 'sale' ? `${incoming.name} for ${formatK(-cashK)}.`
                                      : `${_and(ins.map(p => p.name))} for ${_and(outs.map(p => p.name))}.`,
-    body:            `${lead ? lead + ' ' : ''}${deal}${cashNote}${keepNote} ${read}${payrollNote} We can take it, turn it down, or counter.`,
+    body:            `${lead ? lead + ' ' : ''}${deal}${cashNote}${keepNote}${Negotiation.impactNote(state, offer)} ${read}${payrollNote} We can take it, turn it down, or counter.`,
     yesLabel:        'Accept the Trade',
     noLabel:         'Decline',
     autoResolve:     'roster',
@@ -1706,7 +1706,17 @@ function _releaseDue(nowMs) {
                                              subject: c._composeLabel ? `Re: ${c._composeLabel}` : null });
     if (!reply) return { ...c, _composeWrite: false };
     log.push({ topicId: c._composeTopic, channelId: c._composeChannel, atMs: c.deliverAtMs, memo: reply.memo });
-    return { ...c, _composeWrite: false, sender: reply.sender, subject: reply.subject, preview: reply.preview, body: reply.body };
+    const out = { ...c, _composeWrite: false, sender: reply.sender, subject: reply.subject, preview: reply.preview, body: reply.body };
+    // §122.9 a reply that offers something (a development plan) is a decision.
+    const d = reply.decision;
+    if (d && state.players[d.playerId]?.teamId === 'user') {
+      Object.assign(out, {
+        yesLabel: d.yesLabel, noLabel: d.noLabel, _targetPlayerId: d.playerId, autoResolve: 'no',
+        expiresAtMs: c.deliverAtMs + (d.expiresInMs || 2 * 86_400_000),
+        _raw: { ...(c._raw || {}), onYes: d.onYes, onNo: null, _trainGain: d.trainGain, _trainGames: d.trainGames },
+      });
+    }
+    return out;
   });
   StateManager.mutate(s => {
     s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId));
@@ -3258,7 +3268,7 @@ function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, atMs, sen
   return _deliverAt(_rosterCard(st, {
     cardId: 'lt_offer', tag: 'TRADE', sender, avatar: '📞', type: 'normal',
     subject, preview,
-    body: `${lead} Pro Scouting's package: ${what}. `
+    body: `${lead} Pro Scouting's package: ${what}.${Negotiation.impactNote(st, offer)} `
         + `We can make the offer as it stands — ${team.name} answers on their own clock — adjust it first, or pass.`,
     yesLabel: 'Make the Offer', noLabel: 'Pass',
     autoResolve: 'roster', expiresAtMs: atMs + 2 * 86_400_000,

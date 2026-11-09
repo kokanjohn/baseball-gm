@@ -78,7 +78,7 @@ const COMPOSE_CHANNELS = [
     topics: [
       { id: 'pc_rotation',   label: 'Rotation health',          desc: 'Check arm health across the rotation' },
       { id: 'pc_reliever',   label: 'Bullpen workload',         desc: 'Review reliever usage and recovery' },
-      { id: 'pc_prospect',   label: 'Farm pitcher update',      desc: 'Get a report on a developing arm' },
+      { id: 'pc_prospect',   label: 'Young pitcher check-in',   desc: 'A report on a young arm — and a development plan if you want one' },
     ],
   },
   {
@@ -89,7 +89,7 @@ const COMPOSE_CHANNELS = [
     priority: 'high',
     topics: [
       { id: 'hc_slump',      label: 'Hitter in a slump',        desc: 'Ask about a struggling hitter\'s approach' },
-      { id: 'hc_development', label: 'Development check-in',    desc: 'Review a young hitter\'s progress' },
+      { id: 'hc_development', label: 'Development check-in',    desc: 'A young hitter\'s progress — and a development plan if you want one' },
       { id: 'hc_lineup',     label: 'Lineup optimization',      desc: 'Discuss batting order construction' },
     ],
   },
@@ -153,7 +153,8 @@ const COMPOSE_CHANNELS = [
     role:     'Front Office',
     priority: 'medium',
     topics: [
-      { id: 'sc_prospect',   label: 'Prospect report',          desc: 'Get an update on a specific prospect' },
+      { id: 'sc_free_agents', label: 'Free agents worth a look', desc: 'The scouts look over the free agents (three a week)' },
+      { id: 'sc_prospect',   label: 'Young player report',      desc: 'A scouting report on one of our young players' },
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
     ],
   },

@@ -2599,9 +2599,9 @@ export const COMPOSE_RESPONSE_POOL = {
   pc_prospect: {
     id:'compose_pc_prospect', autoResolve:'yes', type:'normal', tag:'SCOUTING',
     sender:'Pitching Coach', avatar:'🎯',
-    subject:'Farm system arm — progress report',
-    body:'The pitching coach got a report from the farm. The arm we\'ve been watching has been consistent — not flashy, but repeating the delivery and throwing strikes. The coach thinks another 4-6 weeks at the current level will tell us a lot. No need to rush the evaluation.',
-    yesLabel:'Noted', yesEffect:{}, yesMsg:'Farm pitcher update noted.',
+    subject:'Young pitcher — progress report',
+    body:'The pitching coach checked in on our young arms. The one we\'ve been watching has been consistent — not flashy, but repeating the delivery and throwing strikes. The coach thinks a few more weeks of work will tell us a lot.',
+    yesLabel:'Noted', yesEffect:{}, yesMsg:'Young pitcher update noted.',
   },
 
   hc_slump: {
@@ -2689,9 +2689,17 @@ export const COMPOSE_RESPONSE_POOL = {
   sc_prospect: {
     id:'compose_sc_prospect', autoResolve:'yes', type:'normal', tag:'SCOUTING',
     sender:'Scouting Dept.', avatar:'🔭',
-    subject:'Prospect report — {active_farm_name}',
+    subject:'Young player report — {active_farm_name}',
     body:'The scouting department sent a report on {active_farm_name}. The tools are there — the question is the adjustment curve. Left-handed pitching has been less of a problem over the last month, which was the biggest concern coming in. The scouts want to see another three weeks before making a recommendation. The trajectory is positive.',
     yesLabel:'Noted', yesEffect:{}, yesMsg:'Prospect report reviewed.',
+  },
+
+  sc_free_agents: {
+    id:'compose_sc_free_agents', autoResolve:'yes', type:'normal', tag:'SCOUTING',
+    sender:'Scouting Dept.', avatar:'🔭',
+    subject:'Free agents worth a look',
+    body:'The scouts went through the free-agent list. Nobody jumped out this time; they will keep looking.',
+    yesLabel:'Noted', yesEffect:{}, yesMsg:'Free-agent report reviewed.',
   },
 
   sc_opponent: {

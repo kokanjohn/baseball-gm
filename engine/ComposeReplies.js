@@ -14,6 +14,9 @@
 import { composeFacts, avgOf, fmtAvg, eraOf } from './ComposeFacts.js';
 import { MS_HOUR, MS_DAY } from './WeatherClimate.js';
 import { crowdFor } from './FinanceEngine.js';
+import { worthOf, trueOVR, isDiamond } from './Diamonds.js';
+import { signingTerms } from './MarketEngine.js';
+import { ARCHETYPE_CARD_WEIGHTS } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -429,7 +432,8 @@ W.pc_prospect = (f, r, who) => {
   const arms = f.young().filter(p => p.pos === 'SP' || p.pos === 'RP');
   if (!arms.length) return { body: ['We don\'t have a young pitcher worth a report right now.'], memo: {} };
   const reported = new Set(f.pastReplies('pc_prospect').slice(0, 2).map(x => x.memo?.playerId));
-  const ranked = arms.sort((a, b) => (b.ovr - f.age(b)) - (a.ovr - f.age(a)));
+  // §122.9 the untested first: they're the ones we know least about.
+  const ranked = arms.sort((a, b) => (!!b._ratingGap - !!a._ratingGap) || ((b.ovr - f.age(b)) - (a.ovr - f.age(a))));
   const p = ranked.find(x => !reported.has(x.id)) || ranked[0];
   const sr = p.subRatings || {};
   const best = ['stuff', 'control', 'stamina'].filter(k => sr[k] != null).sort((a, b) => sr[b] - sr[a]);
@@ -441,9 +445,46 @@ W.pc_prospect = (f, r, who) => {
   const worst = peers.length ? Math.min(...peers.map(x => x.ovr)) : 99;
   const gap = worst - p.ovr;
   out.push(gap <= 2 ? `Honestly, ${p.name} could help us now — that's about where the back of our ${p.pos === 'SP' ? 'rotation' : 'bullpen'} is.` : gap <= 8 ? `Not ready yet, but closer than you'd think. Maybe later this year if it keeps going like this.` : `Still a ways off — a year or two of work before ${p.name} is ready to help.`);
-  if (reported.has(p.id)) out.push(`(Same arm as last time — nothing else in the system is pushing for attention.)`);
-  return { body: out, memo: { playerId: p.id } };
+  if (p._ratingGap) {
+    const read = readOfUntested(p, r, 3);
+    out.push(`${p.name} is ${ORIGIN_WORDS[p.origin] || 'still new to us'}. ${read > 0 ? 'From what I see in the bullpen sessions, there\'s more in this arm than the ratings show.' : read < 0 ? 'Honestly, I don\'t see all of what the reports promised yet.' : 'So far it looks about like the reports said.'} Innings and work will tell us for sure.`);
+  }
+  if (reported.has(p.id)) out.push(`(Same arm as last time — nobody else young is pushing for attention.)`);
+  const offer = planOffer(p, f);
+  if (offer) out.push(`If you want, I'll put ${p.name} on a development plan: a couple of days of focused work, out of action for two games.`);
+  return { body: out, memo: { playerId: p.id }, decision: offer };
 };
+
+// ── §122.9 untested players: what the staff can see ───────────
+
+const ORIGIN_WORDS = {
+  rookie: 'a rookie, so the ratings are our scouts\' projection, not years of numbers',
+  overseas: 'new to the league after playing overseas, so the ratings are our scouts\' estimate',
+  independent: 'out of independent ball, so the ratings are mostly our scouts\' estimate',
+};
+const gauss = (r) => { let u = 0, v = 0; while (u === 0) u = r(); while (v === 0) v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+/** How sharp this club's scouting eye is: the archetype's scouting strength (1.0 – 1.6). */
+const scoutEye = (f) => ARCHETYPE_CARD_WEIGHTS[f.state.archetype]?.scouting || 1.0;
+
+/** A coach's or scout's read of an untested player against the ratings: +1 better, −1 worse, 0 about right. */
+function readOfUntested(p, r, sigma) {
+  if (!p?._ratingGap) return 0;
+  const seen = trueOVR(p) - (p.ovr || 0) + gauss(r) * sigma;
+  return seen >= 3 ? 1 : seen <= -3 ? -1 : 0;
+}
+
+/**
+ * planOffer(p, who) — a development plan the coach offers (§122.9: the work also
+ * shows what the player really has). The reply becomes a decision.
+ */
+function planOffer(p, f) {
+  if (!p || f.devStatus(p).active || f.season === 'off') return null;
+  return {
+    playerId: p.id, yesLabel: `Start a development plan for ${p.name}`, noLabel: 'Not now',
+    onYes: p.pos === 'SP' ? 'train_pitcher_sp' : p.pos === 'RP' ? 'train_pitcher_bp' : 'train_hitter',
+    trainGain: 2, trainGames: 2, expiresInMs: 2 * MS_DAY,
+  };
+}
 
 // ── Hitting Coach ──────────────────────────────────────────────
 
@@ -475,13 +516,17 @@ W.hc_slump = (f, r, who) => {
 };
 
 W.hc_development = (f, r, who) => {
-  const young = f.roster().filter(p => p.pos !== 'SP' && p.pos !== 'RP' && f.age(p) <= 25 && f.isAvailable(p)).sort((a, b) => f.age(a) - f.age(b));
+  const young = f.roster().filter(p => p.pos !== 'SP' && p.pos !== 'RP' && f.age(p) <= 25 && f.isAvailable(p))
+    .sort((a, b) => (!!b._ratingGap - !!a._ratingGap) || (f.age(a) - f.age(b)));   // §122.9 the untested first
   const planned = f.roster().filter(p => p.pos !== 'SP' && p.pos !== 'RP' && f.devStatus(p).active);
   const p = planned.find(x => f.age(x) <= 26) || young[0] || planned[0];
   if (!p) return { body: ['We don\'t have a young hitter to report on right now.'], memo: {} };
   const out = [];
   const dev = f.devStatus(p);
-  out.push(`${p.name}, ${f.age(p)}. Hitting ${statLine(p)} this year in ${plural(S(p)?.ab || 0, 'at-bat')}.`);
+  const lastYr = (p.seasonLog || []).filter(e => e?.stats?.ab).at(-1);
+  out.push((S(p)?.ab || 0) >= 1 ? `${p.name}, ${f.age(p)}. Hitting ${statLine(p)} this year in ${plural(S(p)?.ab || 0, 'at-bat')}.`
+    : lastYr ? `${p.name}, ${f.age(p)}. Hit ${fmtAvg(avgOf(lastYr.stats.h, lastYr.stats.ab))} with ${plural(lastYr.stats.hr || 0, 'homer')} in ${lastYr.stats.ab} at-bats last year.`
+    : `${p.name}, ${f.age(p)}. No at-bats in this league yet.`);
   const sr = p.subRatings || {};
   const strong = ['contact', 'power', 'speed'].filter(k => sr[k] != null).sort((a, b) => sr[b] - sr[a]);
   const lo = strong[strong.length - 1];
@@ -491,7 +536,13 @@ W.hc_development = (f, r, who) => {
   else out.push(`There's no formal development plan on this player. It might be worth one — the age is right for it.`);
   const bats = f.recentBats(10)[p.id];
   if (bats && bats.ab >= 15) out.push(`Lately: ${line(bats)} over ${plural(bats.g, 'game')}.`);
-  return { body: out, memo: { playerId: p.id } };
+  if (p._ratingGap) {
+    const read = readOfUntested(p, r, 3);
+    out.push(`${p.name} is ${ORIGIN_WORDS[p.origin] || 'still new to us'}. ${read > 0 ? 'In the cage I see more bat than the ratings give credit for.' : read < 0 ? 'In the cage it hasn\'t looked like what the reports said.' : 'In the cage it looks about like the reports said.'} At-bats and work will settle it.`);
+  }
+  const offer = planOffer(p, f);
+  if (offer) out.push(`Say the word and I'll start a plan: a couple of days of work, out of the lineup for two games.`);
+  return { body: out, memo: { playerId: p.id }, decision: offer };
 };
 
 W.hc_lineup = (f, r, who) => {
@@ -651,7 +702,7 @@ W.tix_renewals = (f, r, who) => {
 
 W.sc_prospect = (f, r, who) => {
   const farm = f.young();
-  if (!farm.length) return { body: ['We\'re thin on young players right now — nothing worth a report.'], memo: {} };
+  if (!farm.length) return { body: ['We\'re thin on young players right now — nothing worth a report.'], memo: {} };   // (our young players: there's no farm, §122)
   const reported = new Set(f.pastReplies('sc_prospect').slice(0, 3).map(x => x.memo?.playerId));
   const ranked = farm.sort((a, b) => (b.ovr - 0.8 * f.age(b)) - (a.ovr - 0.8 * f.age(a)));
   const p = ranked.find(x => !reported.has(x.id)) || ranked[0];
@@ -667,6 +718,61 @@ W.sc_prospect = (f, r, who) => {
   if (block) out.push(block.ovr - p.ovr <= 3 ? `Close to pushing ${block.name} for playing time.` : `${block.name} is ahead at the position, so ${p.name} has time to develop.`);
   if (f.age(p) <= 20) out.push(`Very young for the level. The ceiling is the reason we like this player.`);
   return { body: out, memo: { playerId: p.id } };
+};
+
+/**
+ * §122.9 the scouts look over the free agents: three players a week, the ones
+ * they think are worth more than their ratings. How sharp the eye is depends on
+ * the club's scouting (the archetype). An untested player: is he better than the
+ * estimate? A proven one: does his role make him better than his rating? And
+ * whether other clubs have caught on yet.
+ */
+const FA_LOOKS_PER_WEEK = 3;
+W.sc_free_agents = (f, r, who) => {
+  const st = f.state, level = st.leagueTalentOffset || 0;
+  const week = f.pastReplies('sc_free_agents').filter(x => f.atMs - x.atMs < 7 * MS_DAY);
+  const seenWeek = week.flatMap(x => x.memo?.playerIds || []);
+  const left = FA_LOOKS_PER_WEEK - seenWeek.length;
+  if (left <= 0) {
+    const next = Math.min(...week.map(x => x.atMs)) + 7 * MS_DAY;
+    const names = seenWeek.map(f.P).filter(p => p && p.group === 'freeAgent').map(p => p.name);
+    return { body: [`We've already looked at our ${FA_LOOKS_PER_WEEK} this week${names.length ? ` (${list(names)}${names.length === 1 ? ' is' : ' are'} still out there)` : ''}. The next look is ${f.onWhen(next)}.`], memo: { playerIds: [] } };
+  }
+  const recent = new Set(f.pastReplies('sc_free_agents').filter(x => f.atMs - x.atMs < 30 * MS_DAY).flatMap(x => x.memo?.playerIds || []));
+  const eye = scoutEye(f), sigma = 4 / eye;
+  const pool = (st.freeAgentPool || []).map(f.P).filter(p => p && p.group === 'freeAgent' && !p.isInjured && !recent.has(p.id));
+  if (!pool.length) return { body: ['There\'s nobody new on the market worth the trip right now.'], memo: { playerIds: [] } };
+  const seen = pool.map(p => ({ p, worth: worthOf(p) + gauss(r) * sigma }))
+    .map(x => ({ ...x, edge: x.worth - (x.p.ovr || 0) }))
+    .filter(x => x.worth - level >= 42)
+    .sort((a, b) => (b.edge + 0.3 * (b.worth - level)) - (a.edge + 0.3 * (a.worth - level)))
+    .slice(0, left);
+  if (!seen.length) return { body: ['We looked. Nobody out there is better than the ratings say right now.'], memo: { playerIds: [] } };
+  const out = [`We looked at ${list(seen.map(x => x.p.name))}.`];
+  for (const { p, edge } of seen) {
+    const ask = signingTerms(st, p);
+    const sr = p.subRatings || {};
+    const last = (p.seasonLog || []).filter(e => e?.stats).at(-1);
+    const lines = [`${p.name} (${p.nativePos || p.pos}, ${f.age(p)}, OVR ${p.ovr}, asking ${ask.salary ? `$${ask.salary}K` : 'the minimum'}${ask.bonus ? ` with a $${ask.bonus}K bonus` : ''}):`];
+    if (p._ratingGap) {
+      const read = readOfUntested(p, r, sigma);
+      lines.push(`${Cap(ORIGIN_WORDS[p.origin] || 'new to the league')}. ${read > 0 ? 'Our read: better than the reports — this could be a real find.' : read < 0 ? 'Our read: not as good as the reports.' : 'Our read: about what the reports say.'}`);
+    } else if (p.pos === 'RP' && (sr.stamina ?? 99) <= 48 && edge >= 3) {
+      lines.push(`The rating counts stamina (${sr.stamina}), and that's the weak spot. For an inning out of the bullpen, the stuff (${sr.stuff}) and control (${sr.control}) play better than the number.${last?.stats?.ip >= 20 ? ` Last year: a ${eraOf(last.stats.er, last.stats.ip).toFixed(2)} ERA in ${Math.round(last.stats.ip)} innings.` : ''}`);
+    } else if (!['SP', 'RP'].includes(p.pos) && (sr.speed ?? 99) <= 48 && edge >= 3) {
+      lines.push(`The rating is dragged down by the legs (speed ${sr.speed}). The bat is the real thing: contact ${sr.contact}, power ${sr.power}.${last?.stats?.ab >= 150 ? ` Last year: ${fmtAvg(avgOf(last.stats.h, last.stats.ab))} with ${plural(last.stats.hr || 0, 'homer')} in ${last.stats.ab} at-bats.` : ''}`);
+    } else {
+      lines.push(edge >= 3 ? 'Better than the rating — more useful than the number suggests.' : 'About what the rating says: a useful depth piece, not more.');
+    }
+    // Whether the rest of the league has caught on (the sharper our scouts, the surer we are).
+    if (edge >= 4 && isDiamond(p, level)) {
+      lines.push(Number.isFinite(p._buzzAt) && p._buzzAt > f.atMs
+        ? `As far as we can tell, nobody else is on this one yet. I'd move before word gets around.`
+        : `Other clubs have been asking about this one. If we want in, it has to be soon.`);
+    }
+    out.push(lines.join(' '));
+  }
+  return { body: out, memo: { playerIds: seen.map(x => x.p.id) } };
 };
 
 W.sc_opponent = (f, r, who) => {
@@ -744,9 +850,10 @@ W.ca_event = (f, r, who) => {
 const TOPIC_LABELS = {
   gk_field: 'the field', gk_weather: 'the weather', mgr_lineup: 'the lineup', mgr_morale: 'the clubhouse',
   mgr_rotation: 'the rotation', mgr_matchup: 'the next series', pc_rotation: 'the rotation', pc_reliever: 'the bullpen',
-  pc_prospect: 'our pitching prospects', hc_slump: 'the slump', hc_development: 'our young hitters', hc_lineup: 'the batting order',
+  pc_prospect: 'our young pitchers', hc_slump: 'the slump', hc_development: 'our young hitters', hc_lineup: 'the batting order',
   bc_morale: 'our in-game decisions', bpc_health: 'the bullpen', fac_status: 'the ballpark', tix_attendance: 'attendance',
-  tix_renewals: 'season-ticket renewals', sc_prospect: 'our prospects', sc_opponent: 'the next opponent',
+  tix_renewals: 'season-ticket renewals', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
+  sc_free_agents: 'the free agents',
   mr_narrative: 'the coverage', ca_event: 'community commitments',
 };
 
@@ -768,5 +875,5 @@ export function writeComposeReply(state, { topicId, channelId, atMs, subject = n
   const open = _open(who.rel, r, TOPIC_LABELS[topicId] || 'that');
   const body = [open, ...paras, _sign(who)].join('\n\n');
   return { sender: who.sender, subject: subject || `Re: ${Cap(TOPIC_LABELS[topicId] || 'your message')}`, body,
-           preview: paras[0].split('\n')[0], memo: res.memo || {} };
+           preview: paras[0].split('\n')[0], memo: res.memo || {}, decision: res.decision || null };
 }

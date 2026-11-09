@@ -29,6 +29,7 @@ import { deliverTalkReply, withdrawTalkCards } from './CardEngine.js';
 import { formatK } from './CardTokens.js';
 import { clockNow } from './Clock.js';
 import { eventRand } from './Dice.js';
+import { getImpLabel, lastSeasonIMP } from './IMPEngine.js';
 
 const H = 3_600_000;
 
@@ -194,6 +195,27 @@ export function act(teamId, action, atMs = clockNow()) {
 }
 
 /** A short summary of what an offer contains (for card text). */
+/**
+ * impactNote(state, offer) — §30.6 / §122.9 how the players in a deal are playing,
+ * in words (Impact's labels, never the number): this season's, or last
+ * season's early on. '' when nobody has a sample.
+ */
+export function impactNote(state, offer) {
+  const ids = [...(offer?.incomingIds || []), ...(offer?.outgoingIds || [])];
+  const parts = [];
+  for (const id of ids) {
+    const p = state.players?.[id];
+    if (!p) continue;
+    const now = state.impScores?.[id]?.impS;
+    if (now != null) { parts.push(`${p.name} has been ${_article(getImpLabel(now))} this year`); continue; }
+    const last = lastSeasonIMP(p);
+    if (last != null) parts.push(`${p.name} was ${_article(getImpLabel(last))} last year`);
+  }
+  return parts.length ? ` By Impact, ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`}.` : '';
+}
+const _article = (label) => (/^(elite|average)/.test(label) ? `an ${label}` : label === 'replacement level' ? 'at replacement level'
+  : label === 'below replacement' ? 'below replacement level' : `a ${label}`);
+
 export function describeOffer(state, offer, teamName) {
   const P = (id) => state.players[id];
   const ref = (p) => `${p.name} (${p.pos}, OVR ${p.ovr})`;
