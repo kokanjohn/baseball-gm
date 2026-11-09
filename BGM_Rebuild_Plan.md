@@ -9670,3 +9670,5 @@ The harness's farm checks become free-agent checks (`sim-season`, `check-il-retu
 - no page errors.
 
 **r140** (sw.js `CACHE_VERSION` and App.js `APP_VERSION`: `tfo-v2-r140`) ships §122 in full: the free-agent pool (stage 1), diamonds and the league's past (§122.9–10), the messages (stage 2) and the screens. **A fresh team is required.**
+
+**Found in the final suite:** the winter roster call never went out. The roster step only runs when `hasDue` says something is due, and in the winter nothing else was. `hasDue` now counts the camp call, and an open spot's deadline as `vacancyDeadline`. Checked from a winter save: the call goes out 3 days before camp, the manager's signings report when camp opens, and we open camp at 28 (before the fix: 18 active, 10 still arriving the next day).
