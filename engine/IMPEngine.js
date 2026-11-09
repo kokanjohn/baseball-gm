@@ -64,7 +64,13 @@ import {
   IMP_MIN_IP_15,
   IMP_MIN_IP_30,
   IMP_MIN_IP_SEASON,
+  IMP_H_SCALE,
+  IMP_P_SCALE,
+  IMP_SHRINK_PA,
+  IMP_SHRINK_IP,
 } from '../data/constants.js';
+
+const DAY_MS = 86_400_000;
 
 // ─────────────────────────────────────────────────────────────
 // MAIN ENTRY POINT
@@ -81,7 +87,7 @@ import {
  * @param {Number} gameIndex  — current game index
  * @returns {Object} mutations
  */
-export function computeAllIMP(state, gameIndex) {
+export function computeAllIMP(state, gameIndex, atMs = null) {
   const impScores = { ...(state.impScores || {}) };
 
   // Collect all active roster player IDs
@@ -94,7 +100,7 @@ export function computeAllIMP(state, gameIndex) {
     const player = state.players[playerId];
     if (!player) continue;
 
-    const score = computePlayerIMP(player, gameIndex);
+    const score = computePlayerIMP(player, gameIndex, atMs);
     if (score) {
       impScores[playerId] = { ...score, updatedAtGame: gameIndex };
     }
@@ -112,18 +118,18 @@ export function computeAllIMP(state, gameIndex) {
  * @param {Number} gameIndex
  * @returns {Object|null} { imp7, imp15, imp30, impS }
  */
-export function computePlayerIMP(player, gameIndex) {
+export function computePlayerIMP(player, gameIndex, atMs = null) {
   const isPitcher = _isPitcher(player);
   const gameLog   = player._impGameLog || [];
 
   if (gameLog.length === 0 && !_hasSeasonStats(player, isPitcher)) return null;
 
   return {
-    imp7:  _computeWindow(player, gameLog, IMP_WINDOW_7,  gameIndex, isPitcher,
+    imp7:  _computeWindow(player, gameLog, IMP_WINDOW_7,  atMs, isPitcher,
                           IMP_MIN_PA_7,  IMP_MIN_IP_7),
-    imp15: _computeWindow(player, gameLog, IMP_WINDOW_15, gameIndex, isPitcher,
+    imp15: _computeWindow(player, gameLog, IMP_WINDOW_15, atMs, isPitcher,
                           IMP_MIN_PA_15, IMP_MIN_IP_15),
-    imp30: _computeWindow(player, gameLog, IMP_WINDOW_30, gameIndex, isPitcher,
+    imp30: _computeWindow(player, gameLog, IMP_WINDOW_30, atMs, isPitcher,
                           IMP_MIN_PA_30, IMP_MIN_IP_30),
     impS:  _computeSeasonIMP(player, isPitcher),
   };
@@ -147,13 +153,14 @@ export function computePlayerIMP(player, gameIndex) {
  * @param {Object} gameStats  — { ab, h, doubles, hr, rbi, r, bb, k, sb, cs, ip, er, ... }
  * @returns {Object} { _impGameLog: [...] }
  */
-export function appendGameLog(player, gameIndex, date, gameStats) {
+export function appendGameLog(player, gameIndex, date, gameStats, atMs = null) {
   const log = [...(player._impGameLog || [])];
 
-  // Add this game's entry
+  // Add this game's entry (§122.9 atMs — when it was played — sets the day windows)
   log.push({
     gameIndex,
     date,
+    atMs,
     stats: { ...gameStats },
   });
 
@@ -162,6 +169,17 @@ export function appendGameLog(player, gameIndex, date, gameStats) {
   const trimmed = log.length > 45 ? log.slice(log.length - 45) : log;
 
   return { _impGameLog: trimmed };
+}
+
+/**
+ * lastSeasonIMP(player)
+ * §122.9 last season's Impact, from the season log (the scores themselves are
+ * cleared at the rollover). Null with no season on record or too small a sample.
+ */
+export function lastSeasonIMP(player) {
+  const last = (player?.seasonLog || []).filter(x => x?.stats).at(-1);
+  if (!last) return null;
+  return _computeSeasonIMP(player, _isPitcher(player), last.stats);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -260,10 +278,13 @@ function _leaderEntry({ playerId, player, impScore }) {
 // WINDOW CALCULATION
 // ─────────────────────────────────────────────────────────────
 
-function _computeWindow(player, gameLog, windowDays, gameIndex, isPitcher, minPA, minIP) {
-  // Collect entries within the window
-  const windowStart = gameIndex - windowDays;
-  const entries     = gameLog.filter(e => e.gameIndex >= windowStart);
+function _computeWindow(player, gameLog, windowDays, atMs, isPitcher, minPA, minIP) {
+  // §122.9 the windows are days, not our games: the games played in the
+  // last N days (by when each was played) up to now — the latest game if no clock is given.
+  const now = Number.isFinite(atMs) ? atMs
+    : Math.max(0, ...gameLog.map(e => e.atMs).filter(Number.isFinite));
+  const windowStart = now - windowDays * DAY_MS;
+  const entries     = gameLog.filter(e => Number.isFinite(e.atMs) && e.atMs > windowStart && e.atMs <= now);
 
   if (entries.length === 0) return null;
 
@@ -280,8 +301,7 @@ function _computeWindow(player, gameLog, windowDays, gameIndex, isPitcher, minPA
   }
 }
 
-function _computeSeasonIMP(player, isPitcher) {
-  const stats = player.stats || {};
+function _computeSeasonIMP(player, isPitcher, stats = player.stats || {}) {
   if (isPitcher) {
     if ((stats.ip || 0) < IMP_MIN_IP_SEASON) return null;
     return _pitcherIMP(stats);
@@ -329,7 +349,7 @@ function _hitterIMP(stats, player) {
   const rbiRate = rbi / ab;
   const bbPct   = bb / pa;
   const kPct    = k  / pa;
-  const sbNet   = sb - (cs * 1.5);
+  const sbNet   = (sb - (cs * 1.5)) / pa * 600;   // §122.9 a rate (per 600 PA), not a count
 
   // BABIP (used for luck adjustment)
   const babip = (h - hr) / Math.max(1, ab - k - hr);
@@ -347,7 +367,10 @@ function _hitterIMP(stats, player) {
   const kDelta      = kPct    - IMP_LEAGUE_AVG_K_PCT;
 
   // BABIP luck adjustment
-  const careerBabip = player?.careerStats?.babip || 0.300;
+  const cs0 = player?.careerStats || {};
+  const careerBabip = (cs0.ab || 0) >= 300
+    ? ((cs0.h || 0) - (cs0.hr || 0)) / Math.max(1, (cs0.ab || 0) - (cs0.k || 0) - (cs0.hr || 0))
+    : 0.300;
   let babipAdj = 0;
   if (babip - careerBabip > IMP_H_BABIP_ADJ_TRIGGER) {
     babipAdj = (babip - careerBabip - IMP_H_BABIP_ADJ_TRIGGER) * IMP_H_BABIP_ADJ_WEIGHT;
@@ -361,7 +384,7 @@ function _hitterIMP(stats, player) {
             - (kDelta     * IMP_H_STRIKEOUT_PENALTY)
             - babipAdj;
 
-  return _round(imp);
+  return _round(imp * IMP_H_SCALE * pa / (pa + IMP_SHRINK_PA));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -416,7 +439,7 @@ function _pitcherIMP(stats) {
             + (hldRate   * IMP_P_HOLD_BONUS)
             + ipBonus;
 
-  return _round(imp);
+  return _round(imp * IMP_P_SCALE * ip / (ip + IMP_SHRINK_IP));
 }
 
 // ─────────────────────────────────────────────────────────────

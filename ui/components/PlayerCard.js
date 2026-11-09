@@ -26,7 +26,7 @@
 
 import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
-import { getHotColdIndicator, getImpLabel } from '../../engine/IMPEngine.js';
+import { getHotColdIndicator, getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { PHASE } from '../../data/constants.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear } from '../../engine/PlayerFactory.js';
@@ -119,7 +119,8 @@ function _renderCard(player, playerId, state) {
   const isPitcher    = ['SP','RP'].includes(player.pos);
   const impScores    = state.impScores?.[playerId];
   const indicator    = getHotColdIndicator(impScores);
-  const impLabel     = getImpLabel(impScores);
+  const impLast      = lastSeasonIMP(player);
+  const impLabel     = impScores?.impS != null ? getImpLabel(impScores.impS) : '';
   const isFarm       = player.tier === 'farm';
   const userRosterIds = new Set(state.userTeam?.rosterIds || []);
   const isOwnPlayer  = userRosterIds.has(playerId);
@@ -163,7 +164,7 @@ function _renderCard(player, playerId, state) {
     ${_renderStats(player, isPitcher, state)}
 
     <!-- IMP trend -->
-    ${_renderImpTrend(impScores, impLabel)}
+    ${_renderImpTrend(impScores, impLabel, impLast)}
 
     <!-- Contract (a free agent: what they're asking) -->
     ${player.group === 'freeAgent' ? _renderAsk(player, state) : _renderContract(player, state)}
@@ -292,14 +293,16 @@ function _renderStats(player, isPitcher, state) {
   `;
 }
 
-function _renderImpTrend(impScores, impLabel) {
-  if (!impScores) return '';
+function _renderImpTrend(impScores, impLabel, impLast = null) {
+  if (!impScores && impLast == null) return '';
 
+  // §122.9 the windows are days; last season's comes from the season log.
   const windows = [
-    { label: '7g',  val: impScores.imp7   },
-    { label: '15g', val: impScores.imp15  },
-    { label: '30g', val: impScores.imp30  },
-    { label: 'Ssn', val: impScores.impSeason },
+    { label: '7 days',      val: impScores?.imp7  },
+    { label: '15 days',     val: impScores?.imp15 },
+    { label: '30 days',     val: impScores?.imp30 },
+    { label: 'Season',      val: impScores?.impS  },
+    { label: 'Last season', val: impLast },
   ];
 
   const cells = windows.map(w => {
@@ -316,7 +319,7 @@ function _renderImpTrend(impScores, impLabel) {
 
   return `
     <div class="pc-section">
-      <div class="pc-section-label">Form (IMP) ${impLabel ? `· ${impLabel}` : ''}</div>
+      <div class="pc-section-label">Impact${impLabel ? ` · ${impLabel}` : ''}</div>
       <div class="pc-imp-grid">${cells}</div>
     </div>
   `;
@@ -460,13 +463,13 @@ function _injectCSS() {
     .pc-stat-val{font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--text);}
     .pc-stat-label{font-size:9px;font-weight:700;letter-spacing:1px;
       text-transform:uppercase;color:var(--muted);margin-top:2px;}
-    .pc-imp-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;}
+    .pc-imp-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;}
     .pc-imp-cell{background:var(--surface2);border-radius:8px;padding:8px;text-align:center;}
     .pc-imp-val{font-family:'DM Mono',monospace;font-size:14px;font-weight:700;color:var(--text);}
     .pc-imp-val.positive{color:var(--text);}
     .pc-imp-val.negative{color:var(--danger);}
     .pc-imp-val.muted{color:var(--muted);}
-    .pc-imp-win{font-size:9px;color:var(--muted);margin-top:3px;font-weight:600;}
+    .pc-imp-win{font-size:9px;color:var(--muted);margin-top:3px;font-weight:600;white-space:nowrap;}
     .pc-contract-row{display:flex;align-items:center;justify-content:space-between;}
     .pc-contract-salary{font-size:15px;font-weight:700;color:var(--text);}
     .pc-contract-status{font-size:12px;color:var(--muted);font-weight:600;}

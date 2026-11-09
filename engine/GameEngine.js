@@ -887,10 +887,11 @@ function _commitAt(gameIndex) {
           }
         }
       }
-      for (const [playerId, gameStats] of Object.entries(perGameDeltas)) {
+      // §122.9 Impact's windows are regular-season form: spring and playoff games stay out.
+      if (statKey === 'stats') for (const [playerId, gameStats] of Object.entries(perGameDeltas)) {
         const player = s.players[playerId];
         if (!player) continue;
-        const logResult = appendGameLog(player, gameIndex, g.date || '', gameStats);
+        const logResult = appendGameLog(player, gameIndex, g.date || '', gameStats, g.gameTime);
         s.players[playerId]._impGameLog = logResult._impGameLog;
       }
     }
@@ -966,7 +967,7 @@ function _commitAt(gameIndex) {
 
 
   // ── Recompute IMP scores for all active players ────────────
-  const impMutations = computeAllIMP(StateManager.get(), gameIndex);
+  const impMutations = computeAllIMP(StateManager.get(), gameIndex, clockNow());
   StateManager.mutate(s => {
     s.impScores = impMutations.impScores;
   });
@@ -2185,8 +2186,8 @@ function _finishLeagueGame(date, i) {
     if (away) Development.countGame(s, away.id);
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
     recordOutings(s, g.plays, endMs);   // §76: the arms' record
-    for (const [pid, d] of Object.entries(perGame)) {
-      if (s.players[pid]) s.players[pid]._impGameLog = appendGameLog(s.players[pid], s.currentGameIndex || 0, date, d)._impGameLog;
+    if (statKey === 'stats') for (const [pid, d] of Object.entries(perGame)) {
+      if (s.players[pid]) s.players[pid]._impGameLog = appendGameLog(s.players[pid], s.currentGameIndex || 0, date, d, g.gameTime)._impGameLog;
     }
     g.homeScore = homeScore;
     g.awayScore = awayScore;

@@ -444,7 +444,7 @@ function _renderPlayers(state) {
     allPlayers = allPlayers.filter(p => p.teamId === _playerFilter.team);
   }
 
-  allPlayers = _sortPlayers(allPlayers, _playerSort);
+  allPlayers = _sortPlayers(allPlayers, _playerSort, impScores);
 
   const isPitcherView = pos === 'pitchers' || PITCHER_POS.includes(pos);
 
@@ -640,16 +640,16 @@ function _playerStatVal(player, key) {
   }
 }
 
-function _sortPlayers(players, { col, dir }) {
+function _sortPlayers(players, { col, dir }, impScores = {}) {
   return [...players].sort((a, b) => {
-    let va = _sortVal(a, col);
-    let vb = _sortVal(b, col);
+    let va = _sortVal(a, col, impScores);
+    let vb = _sortVal(b, col, impScores);
     const cmp = typeof va === 'string' ? va.localeCompare(vb) : (vb - va);
     return dir === 'asc' ? -cmp : cmp;
   });
 }
 
-function _sortVal(player, col) {
+function _sortVal(player, col, impScores = {}) {
   const s = player.stats || {};
   switch (col) {
     case 'ovr':  return player.ovr || 0;
@@ -668,7 +668,7 @@ function _sortVal(player, col) {
     case 'w':    return s.w    || s.wins || 0;
     case 'k':    return s.k    || 0;
     case 'sv':   return s.sv   || 0;
-    case 'imp7': return player._imp7  || 0;
+    case 'imp7': return impScores[player.id]?.imp7 ?? -99;   // no sample sorts last
     case 'name': return player.name || '';
     default:     return 0;
   }

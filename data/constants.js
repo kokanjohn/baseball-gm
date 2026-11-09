@@ -1377,7 +1377,7 @@ export const IMP_WINDOW_30  = 30;
 export const IMP_H_OPS_WEIGHT          = 8.0;
 export const IMP_H_HR_WEIGHT           = 0.8;
 export const IMP_H_RBI_WEIGHT          = 0.4;
-export const IMP_H_SB_WEIGHT           = 0.3;
+export const IMP_H_SB_WEIGHT           = 0.1;   // per net steal over 600 PA (a rate: §122.9)
 export const IMP_H_DISCIPLINE_WEIGHT   = 3.0;
 export const IMP_H_STRIKEOUT_PENALTY   = 2.5;
 export const IMP_H_BABIP_ADJ_TRIGGER   = 0.040;  // BABIP excess above career avg that triggers correction
@@ -1393,6 +1393,15 @@ export const IMP_P_QS_BONUS            = 0.5;   // SP only
 export const IMP_P_SAVE_BONUS          = 0.8;   // closers only
 export const IMP_P_HOLD_BONUS          = 0.4;   // setup relievers only
 export const IMP_P_IP_LOG_SCALE        = 0.015; // log(IP) × this = durability bonus
+
+// §122.9 one scale for hitters and pitchers (measured over a full season:
+// regulars' raw hitter sd 1.2, pitchers' 8.7), so a regular runs about −3 to +6
+// and "elite" (6+) is a handful of players a season.
+export const IMP_H_SCALE               = 1.6;
+export const IMP_P_SCALE               = 0.26;
+// A small sample counts for less: IMP × n / (n + this), n in PA or IP.
+export const IMP_SHRINK_PA             = 40;
+export const IMP_SHRINK_IP             = 10;
 
 // Display thresholds
 export const IMP_HOT_THRESHOLD         =  2.5;  // IMP-7 above this = 🔥
@@ -1429,10 +1438,10 @@ export const IMP_CS_COST     = 1.5;  // caught stealing penalty multiplier in SB
 export const IMP_MIN_PA_15   = 20;
 export const IMP_MIN_PA_30   = 40;
 export const IMP_MIN_PA_SEASON = 80;
-export const IMP_MIN_IP_7    = 3.0;
-export const IMP_MIN_IP_15   = 6.0;
-export const IMP_MIN_IP_30   = 12.0;
-export const IMP_MIN_IP_SEASON = 20.0;
+export const IMP_MIN_IP_7    = 2.0;   // §122.9 lower: small samples are shrunk (IMP_SHRINK_IP)
+export const IMP_MIN_IP_15   = 4.0;
+export const IMP_MIN_IP_30   = 8.0;
+export const IMP_MIN_IP_SEASON = 15.0;
 
 // ─────────────────────────────────────────────────────────────
 // FRANCHISE TURNING POINT
