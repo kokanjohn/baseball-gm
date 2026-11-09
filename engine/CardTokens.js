@@ -497,10 +497,10 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
     const vet = take('nri', marketCandidate(state, { kind: 'veteran', side, rand: eventRand }));
     if (vet) {
       const pos = values.nri_pos;
-      values.nri_subject = `Non-roster invitee ${vet.name} is turning heads`;
-      values.nri_preview = `${vet.name} (${pos}, ${values.nri_age}) came to camp on a minor-league deal — and is making noise…`;
-      values.nri_body = `${vet.name} (${pos}, ${values.nri_age}, OVR ${vet.ovr}) came to camp as a non-roster invitee and has been one of the stories of the spring. `
-        + `A camp spot costs ${values.nri_cost}, with a real shot at an Opening Day job.`;
+      values.nri_subject = `Unsigned veteran ${vet.name} is turning heads`;
+      values.nri_preview = `${vet.name} (${pos}, ${values.nri_age}) has been working out at our complex, still unsigned — and is making noise…`;
+      values.nri_body = `${vet.name} (${pos}, ${values.nri_age}, OVR ${vet.ovr}) has been working out at our complex, still a free agent, and has been one of the stories of the spring. `
+        + `A one-year deal at ${values.nri_cost} puts ${vet.name} on our roster, with a real shot at an Opening Day job.`;
     }
   } else if (spec.intl) {
     const pl = take('intl_player', marketCandidate(state, { kind: 'intl', side, rand: eventRand }, new Set(state.freeAgentPool || [])));

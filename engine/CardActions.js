@@ -248,8 +248,7 @@ const signProspect = (r) => ({
   apply(d, c, atMs) {
     const id = role(c, r);
     const t = signingTerms(d, d.players[id]);
-    const side = sideOf(d.players[id]);
-    const displaceId = rosterIsFull(d, 'user', side) ? weakestReserve(d, side)?.id : undefined;
+    const displaceId = dropFor(d, c, sideOf(d.players[id]));
     const ev = signToClub(d, id, 'user', atMs, { terms: t, displaceId });
     if (c.cardId !== 'sc3_fail') payBonus(d, t.bonus || 0, `Signing bonus — ${d.players[id]?.name}`, atMs);
     return ev;
@@ -268,6 +267,23 @@ export function weakestReserve(st, side) {
     .filter(p => p && sideOf(p) === side && !playing.has(p.id) && !p.isInjured
               && p.group !== PLAYER_GROUP.IL && p.group !== PLAYER_GROUP.IN_TRANSIT)
     .sort((a, b) => (a.ovr || 0) - (b.ovr || 0) || String(a.id).localeCompare(String(b.id)))[0] || null;
+}
+
+/** §122 our lowest-rated healthy reserves on a side (not in the lineup or the rotation), lowest first. */
+export function reserveChoices(st, side, n = 3) {
+  const u = st.userTeam;
+  const playing = new Set([...(u.lineupSlots || []).map(sl => sl.playerId), ...(u.rotation?.order || [])]);
+  return (u.rosterIds || []).map(id => st.players[id])
+    .filter(p => p && sideOf(p) === side && !playing.has(p.id) && !p.isInjured
+              && p.group !== PLAYER_GROUP.IL && p.group !== PLAYER_GROUP.IN_TRANSIT)
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0) || String(a.id).localeCompare(String(b.id))).slice(0, n);
+}
+
+/** §122 who goes when a signing needs his side's spot: the GM's pick from the sign sheet, else the weakest reserve. */
+export function dropFor(st, c, side) {
+  if (!rosterIsFull(st, 'user', side)) return undefined;
+  const pick = c?._pick && reserveChoices(st, side, 99).find(p => p.id === c._pick);
+  return (pick || weakestReserve(st, side))?.id;
 }
 
 /** A released veteran signs a short deal and joins the active roster. */
@@ -308,10 +324,12 @@ const tradeFor = {
   },
 };
 
-/** Spring: a free agent signs to compete for a job (§122 a roster spot — there's no camp roster). */
+/** Spring: a free agent signs to compete for a job (§122 a roster spot — there's no camp roster; full, someone goes on waivers). */
 const inviteNRI = {
-  feasible: (st, c) => st.phase === PHASE.SPRING_TRAINING && isFA(st, role(c, 'nri')) && !rosterIsFull(st, 'user', sideOf(st.players[role(c, 'nri')])),
-  apply: (d, c, atMs) => signToClub(d, role(c, 'nri'), 'user', atMs, { terms: { salary: 75, years: 1 } }),
+  feasible: (st, c) => st.phase === PHASE.SPRING_TRAINING && isFA(st, role(c, 'nri'))
+    && (!rosterIsFull(st, 'user', sideOf(st.players[role(c, 'nri')])) || !!weakestReserve(st, sideOf(st.players[role(c, 'nri')]))),
+  apply: (d, c, atMs) => signToClub(d, role(c, 'nri'), 'user', atMs,
+    { terms: { salary: 75, years: 1 }, displaceId: dropFor(d, c, sideOf(d.players[role(c, 'nri')])) }),
 };
 
 /** A workout: the result comes in 3–5 days — good or a disappointment. */
@@ -347,12 +365,13 @@ const indieTip = {
 };
 
 const indieSign = {
-  feasible: (st, c) => isFA(st, c._targetPlayerId) && !rosterIsFull(st, 'user', sideOf(st.players[c._targetPlayerId]))
+  feasible: (st, c) => isFA(st, c._targetPlayerId)
+    && (!rosterIsFull(st, 'user', sideOf(st.players[c._targetPlayerId])) || !!weakestReserve(st, sideOf(st.players[c._targetPlayerId])))
     && spends(st, signingTerms(st, st.players[c._targetPlayerId]).bonus || 0),
   apply(d, c, atMs) {
     const t = signingTerms(d, d.players[c._targetPlayerId]);
     payBonus(d, t.bonus || 0, `Signing bonus — ${d.players[c._targetPlayerId]?.name}`, atMs);
-    return signToClub(d, c._targetPlayerId, 'user', atMs, { terms: t });
+    return signToClub(d, c._targetPlayerId, 'user', atMs, { terms: t, displaceId: dropFor(d, c, sideOf(d.players[c._targetPlayerId])) });
   },
 };
 

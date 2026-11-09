@@ -75,7 +75,7 @@ import * as Offseason from './OffseasonEngine.js';
 import * as Coach from './CoachEngine.js';
 import * as FrontOffice from './FrontOffice.js';
 import * as Development from './DevelopmentEngine.js';
-import { CARD_ACTIONS, cardFeasible } from './CardActions.js';
+import { CARD_ACTIONS, cardFeasible, reserveChoices } from './CardActions.js';
 import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { addToMarket, signingTerms } from './MarketEngine.js';
@@ -542,7 +542,7 @@ export function deliverInjuryAct1(playerId, atMs = clockNow()) {
     _targetPlayerId: playerId,
     subject:  `${player.name} hurt — evaluation needed`,
     preview:  `${player.name}${_hand(player)} came out of today's game${inn} with a possible ${label}.`,
-    body:     `${player.name}${_hand(player)} (${player.pos}) came out of today's game${inn} with what looks like ${/^[aeiou]/.test(label) ? 'an' : 'a'} ${label}. ${player.name} is unavailable until we know more. An MRI now returns results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a call-up made tomorrow won't report until the day after.`,
+    body:     `${player.name}${_hand(player)} (${player.pos}) came out of today's game${inn} with what looks like ${/^[aeiou]/.test(label) ? 'an' : 'a'} ${label}. ${player.name} is unavailable until we know more. An MRI now returns results in an hour or two, so any roster move can be made before midnight and the replacement reports tomorrow. Or we wait for the team physician's exam in the morning, which costs nothing, but a signing made tomorrow won't report until the day after.`,
     yesLabel: `MRI Now (${'$'}${INJURY_MRI_COST_K}K)`,
     noLabel:  'Wait for the morning exam',
     _budgetCost: INJURY_MRI_COST_K,
@@ -1127,6 +1127,7 @@ function _rosterEventCards(ev, atMs) {
 }
 
 function _rosterConditionCards(delivered, atMs) {
+  _scoutFindsGone(atMs);
   let state = StateManager.get();
 
   // IL clearances → decision cards (at the moment of clearance).
@@ -2535,7 +2536,9 @@ function _createInstance(cardDef, context, state) {
         freeAgentPool: [...(probe.freeAgentPool || []), ...newPlayers.map(p => p.id)] }
     : probe;
   if (!cardFeasible(world, instance)) return null;
-  if ((newPlayers || []).length) StateManager.mutate(s => { for (const p of newPlayers) addToMarket(s, p, clockNow()); });
+  // §122 a scouting find exists only for this card: sign him, or he's gone (_scoutFindsGone).
+  if ((newPlayers || []).length) StateManager.mutate(s => { for (const p of newPlayers) addToMarket(s, { ...p, _scoutFind: true }, clockNow()); });
+  _addDropChoices(StateManager.get(), instance);
   return instance;
 }
 
@@ -3742,7 +3745,7 @@ function _contractSentences(state, p, X) {
   else if (X.letdown) out.push(`${p.name} was one of the disappointments of the year.`);
   else if (X.core) out.push(`${p.name} is part of our young core.`);
   out.push(X.internal
-    ? `Without ${p.name}, the job goes to ${X.internal.name} (OVR ${X.internal.ovr}${X.internal.farm ? ', from the farm' : ''}).`
+    ? `Without ${p.name}, the job goes to ${X.internal.name} (OVR ${X.internal.ovr}).`
     : `Without ${p.name}, we have nobody else at ${pos}.`);
   out.push(X.marketN
     ? `On the market now at ${pos}: ${_listWords(X.market.map(m => `${m.name} (OVR ${m.ovr}, asking ${formatK(m.ask)})`))}.`
@@ -3971,8 +3974,7 @@ export function deliverFreeAgentCards(atMs, springAt) {
     const p = t.player;
     const terms = p._ask || Offseason.marketTerms(state, p);
     const room = Offseason.displacementFor(state, 'user', p);
-    // §78: only free agents ownership would pay for (a displaced major-league
-    // contract is still paid in the farm — no credit for him).
+    // §78: only free agents ownership would pay for.
     const outK = room ? (room.contractSalary || 0) : 0;   // §122 a dropped player costs nothing from then on
     if (!Finance.canAddSalary(state, terms.salary, outK)) continue;
     const age = computeAge(p.dob, baseballYear(state) + 1);
@@ -3984,7 +3986,7 @@ export function deliverFreeAgentCards(atMs, springAt) {
       preview: `${p.nativePos || p.pos}, OVR ${p.ovr}, ${age} — ${t.reason}.`,
       body: `${_who(p)}, ${age} next season${from ? `, formerly with ${from}` : ''}, is on the market — ${t.reason}. `
           + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)}. `
-          + (room ? `Our 28 is full, so ${room.name} (OVR ${room.ovr}) would go to the farm to make room. ` : '')
+          + (room ? `Our 28 is full, so ${room.name} (OVR ${room.ovr}) would be let go to make room (nothing owed after that). ` : '')
           + `Other clubs are looking too — if ${p.name} signs elsewhere this offer disappears.`,
       yesLabel: `Sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Pass',
       expiresAtMs: Math.min(atMs + FA_CARD_TTL_DAYS * 86_400_000, springAt),
@@ -4244,7 +4246,47 @@ function _deliverFollowupDef(defId, preset, atMs) {
   return _deliverAt(inst, atMs);
 }
 
-/** The scout's independent-league report: sign him to the farm, or pass. */
+/**
+ * _scoutFindsGone(atMs) — §122 a player the scouts found (a card's new player)
+ * never joins the free-agent pool: once no card or scheduled card still names
+ * him and he hasn't signed, he signs elsewhere or goes home (he leaves the league).
+ */
+function _scoutFindsGone(atMs) {
+  const st = StateManager.get();
+  const finds = (st.freeAgentPool || []).filter(id => st.players[id]?._scoutFind);
+  if (!finds.length) return;
+  const named = new Set();
+  for (const c of [...(st.inbox || []).filter(x => !x.resolved), ...(st.scheduledCards || [])]) {
+    if (c._targetPlayerId) named.add(c._targetPlayerId);
+    for (const id of Object.values(c._tokenPlayers || {})) if (id) named.add(id);
+  }
+  const gone = finds.filter(id => !named.has(id));
+  if (gone.length) StateManager.mutate(s => { for (const id of gone) Offseason.departLeague(s, id, atMs, 'scouting pass'); });
+}
+
+/**
+ * _addDropChoices(state, instance) — §122 a card that signs a free agent
+ * (its target) when his side of our 28 is full: the sign sheet asks who goes
+ * on waivers — our three lowest-rated reserves on that side, the lowest
+ * recommended. (The card's action reads the pick: CardActions.dropFor.)
+ */
+function _addDropChoices(state, instance) {
+  if (!instance || instance._choices?.length) return;
+  const id = instance._targetPlayerId;
+  const p = id && state.players[id];
+  // (the signings whose action reads the pick — CardActions.dropFor)
+  const signs = /^(sign_acquire_pitcher|sign_prospect_pitcher|sign_intl_player|sign_intl_flyer|indie_sign|sp15_callup)$/.test(instance._raw?.onYes || '');
+  if (!p || p.group !== PLAYER_GROUP.FREE_AGENT || !signs) return;
+  const side = sideOf(p);
+  if (!rosterIsFull(state, 'user', side)) return;
+  const res = reserveChoices(state, side);
+  if (!res.length) return;
+  const sign = instance.yesLabel || `Sign ${p.name}`;
+  instance._choices = res.map(r => ({ key: r.id, label: `${sign} — waive ${r.name}`,
+    sub: `${r.name} (${r.nativePos || r.pos}, OVR ${r.ovr}) goes on waivers: off the payroll at once` }));
+}
+
+/** The scout's independent-league report: sign him to our roster, or pass (he's gone). */
 function _deliverIndieReport(playerId, atMs) {
   const state = StateManager.get();
   const p = state.players[playerId];
@@ -4257,12 +4299,14 @@ function _deliverIndieReport(playerId, atMs) {
     subject: `Scouting report: ${p.name}`,
     preview: `${_who(p)}, ${age} — ${p._indieLeague || 'independent ball'}.`,
     body: `Our scout saw ${_who(p)}, ${age}, in the ${p._indieLeague || 'independent leagues'}. `
-        + `A ${formatK(terms.bonus)} bonus gets the deal done, with a spot in our farm system.`,
+        + `A ${formatK(terms.bonus)} bonus gets the deal done: ${p.name} joins our roster (the minimum salary, three years). `
+        + `Pass, and ${p.name} signs somewhere else.`,
     yesLabel: `Sign (${formatK(terms.bonus)})`, noLabel: 'Pass',
     expiresAtMs: atMs + 3 * 86_400_000,
     _raw: { onYes: 'indie_sign', onNo: 'indie_pass', onAuto: 'indie_pass' },
     _autoLabel: 'No answer — passed',
   });
+  _addDropChoices(state, card);
   return _deliverAt(card, atMs);
 }
 
