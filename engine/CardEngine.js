@@ -486,11 +486,11 @@ function _deliverAt(instance, atMs) {
   // r139 §121 a roster card's id comes from what it is about (its key, and
   // how many came before it), so the look-ahead and the real clock agree.
   const instanceId = instance._rosterKey ? diceId(dice(diceSeed(state), 'roster-card', instance._rosterKey, same.length)) : instance.instanceId;
+  const card = { ...instance, instanceId, deliverAtMs: atMs };
   StateManager.mutate(s => {
-    s.scheduledCards = [...(s.scheduledCards || []), { ...instance, instanceId, deliverAtMs: atMs }]
-      .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+    s.scheduledCards = [...(s.scheduledCards || []), card].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
   });
-  return instance;
+  return card;   // (the card as parked — with the id it will have in the inbox)
 }
 
 /** Remove unresolved cards matching `pred` from the inbox and the schedule. */
