@@ -9397,3 +9397,69 @@ In Chromium (fresh save): the real save is byte-for-byte unchanged after a look-
 
 **Fresh team:** not needed. (A save from before r139 starts its roster-step mark when it first opens; the playoff queue starts empty.)
 
+## 122. DRAFT — The farm becomes a free-agent pool (design pass, Nov 8; not built)
+
+**Why (GM, Nov 8).** The game is the intersection of a GM sim, fantasy baseball and a game. The farm, spring invitees, keepers and dead money are realism that costs more simplicity than it gives. Replace them with what fantasy players know: a roster, a pool of free agents anyone can sign, and waivers anyone can claim. **Supersedes §20 (the farm), the farm parts of §65, §73, §76, §85, §96, §112.3 (dead money) and §114.**
+
+### 122.1 The model (decided with the GM)
+
+- **The one money rule: you pay the players on your roster, and nobody else.** Active and injured list both count. No dead money, anywhere.
+- **Rosters:** 28 active (14 hitters / 14 pitchers, §76 — kept), plus the injured list. An IL player doesn't take one of the 28 spots, but his salary still counts.
+- **Dropping a player:** he goes on waivers for 72 hours, and his salary leaves your payroll at once. A club that claims him takes his contract. If nobody claims him, he's a free agent.
+- **Waivers:** any club can claim, the GM included; worst record first (as now). A CPU club claims when he's a clear upgrade at his role, its owner can afford him, and it makes sense for the club — **including an injured player** when he's a clear upgrade once healthy, it can afford him, and waiting suits it (a rebuilding club waits out a long injury; a contender claims only if he's back in time to matter).
+- **Free agents:** signable by anyone at any time with an open spot, or by dropping someone. In season: a one-year deal at a market price that's situationally aware — age, rating, role, how much of the season is left, and how long he's been unsigned (the price falls the longer he sits).
+- **CPU clubs in season**, once a day each: fill a hole (an injury or an open spot) from the pool; and make at most one clear upgrade (a free agent ≥ 5 OVR better than its weakest at that role, affordable), waiving its weakest at the role — who recirculates through waivers.
+- **No random arrivals.** In season the pool changes only through drops and signings. Injuries recycle players: a pickup to cover an injury becomes a drop when the injured player returns. **A league starts with ~200 free agents** (the players who would have been the ten farms). New players enter only on a **named offseason day: the new free-agent class** (rookies and international players), announced. Retirements leave as now (free agents included).
+- **Scouting finds** (an international or independent-league player, from a message): signing puts him on your roster (drop someone if it's full — the sign sheet asks who). Pass, and he signs elsewhere or goes home: he never enters the pool.
+- **Injuries:** the decision is keep or cut, with what each costs. **Keep:** he goes on the IL, stays on your payroll, and you fill his spot from waivers or free agency (paying both). **Cut:** he goes on waivers, injured; his salary leaves at once (a club may claim him, as above); you fill the spot. Day-to-day injuries stay off the IL (the bench covers). When he's healthy again and the roster is full, someone goes on waivers to make room — **the return message gets a deadline** (the next game's roster deadline); unanswered, the manager waives the weakest reserve at his role. *(Correction: today that message has no deadline — the player waits on the IL until the GM picks. That changes.)*
+
+### 122.2 What goes away
+
+| Gone | Where it lives now |
+|---|---|
+| The farm (`farmIds`, `PRACTICE_SQUAD`, farm caps and position minimums, overflow displacement) | `LeagueFactory` (builds 20 per club), `RosterEngine.sendToFarm` / `_buildSendToFarmMutation` / `_findDisplacementCandidate` / `_wouldViolateMinimums`, `ROSTER_LIMITS.FARM_*`, `FARM_*` constants |
+| Call-ups (GM, manager, CPU) and sending players back | `TransactionEngine.callUp` / `rankCallupCandidates` / `managerPick` / `cancelCallUps`, `GameEngine.gmCallUp`, the Team screen's dashed spots |
+| Outright to the farm when a player clears waivers | `RosterEngine.clearWaivers` (the farm branch) |
+| Farm depth signings, farm caps, minor-league deals | `TransactionEngine._maintainFarmDepth` / `_depthSigning`, `MarketEngine._farmCap`, `OffseasonEngine._enforceFarmCaps`, the `contractMLB` flag |
+| Farm story arcs | `InjuryEngine.assignFarmArc` / `processFarmArcs`, the farm retirement rule, `PlayerCard` farm arc |
+| Spring invitees, keepers, the 38→28 cut-down | `GameEngine._addSpringInvitees`, `RosterEngine.toggleKeeperTag` / `applySpringCuts` / `autoResolveSpringCuts` / `_openingDayFill`, `ROSTER_LIMITS.SPRING_*`, the keeper UI, `springFlag` card actions |
+| Dead money | `FinanceEngine.addDeadMoney` (never called) / `addDeadFuture` / `offsetDead` / `deadAhead`, `fin.dead` / `fin.deadFuture`, its payday line and the Team screen's lines, `strain` / `payrollRoom` counting it |
+| "Unsigned free agents leave the league" at the new season | `OffseasonEngine.openNewSeason` — they stay in the pool |
+
+### 122.3 What changes shape
+
+- **The open-spot message:** offers the best free agents and waiver claims that fit the spot, with their price. **The manager's deadline move** (today's manager call-up): he signs the best affordable free agent at the role; the ownership hit for not acting stays; "Keep / Send him back — I'll pick" becomes "Keep / Release him — I'll pick".
+- **The injury diagnosis (Act 2):** today "IL and call up, or day-to-day". Becomes: **IL him** (still paid) and pick a replacement, **cut him** (waivers; salary off), or day-to-day for short timelines — showing his salary, how long he's out, and the best replacements available.
+- **The IL return message:** a deadline, and "who goes on waivers" instead of "who goes down".
+- **Scouting cards** (international trip, workout, independent report, unattached prospect): sign to the roster (drop if full) or pass (he's gone).
+- **The cut order:** met by real payroll reduction — a trade, a salary dump, or dropping the named player (salary off at once). "No club can take the contract" offers dropping him.
+- **Offseason:** contract day as now (expiring deals re-signed or to free agency); CPU free-agency rounds as now; the farm's amateur signings become **the new free-agent class** on a named day; an offseason release just ends the contract (no dead money); every club must open the season with 28 — a club short signs from the pool (the manager does it for us if we don't).
+- **Trades:** a CPU club that asks for "our prospects" asks for young players on our roster (`MarketEngine.prospectToSend`, `TradeEngine._holeCost`, `LeagueTrades._org`); "prospect haul" offers give young roster players.
+- **Payroll:** `isPaid` = on the roster (active or IL) or reporting to it. `payrollOf` = that.
+- **Development plans:** unchanged (they already work on anyone on the roster).
+- **Card tokens** that name a farm player (`CardTokens._bestFarm` / `_pickFarm`) name a young bench player or a free agent instead.
+- **Messages that mention the farm**, to rewrite or retire: `r2` (system call-up) retire; `sp11` / `sp11b` (spring prospect worth watching) retire; `sp15` (offer a spot / send to the minors) rewrite as a free-agent camp tryout, or retire; `s2` (pitching prospect available) rewrite as a free agent; `sc1` / `sc2` / `sc3_*` and the independent report rewrite (sign to roster); `t9` (prospect haul) rewrite; `sr2` / `dl3` / `dl4` / `i1` wording only; compose topics `pc_prospect` / `sc_prospect` rewrite. Final list confirmed while building.
+
+### 122.4 Screens
+
+- **Team:** no farm section, no keeper toggles, no dashed call-up spots; an open spot links to free agents that fit it. Payroll without dead-money lines.
+- **League → Players:** free agents and waivers become the main place to add players — filter by role, sort by OVR / price / days unsigned; a claim or a signing from the row (the sign sheet asks who to drop when the roster is full).
+- **Player card:** no farm arc; a free agent shows his asking price and how long he's been unsigned.
+- **Spring:** the 28 play the spring games; no camp roster to cut down.
+
+### 122.5 How it's built and proven
+
+Three stages, **released together as one version** (a partial release would leave messages pointing at a farm that's gone), with a check-in after the model stage:
+1. **Model** — the farm, keepers, invitees and dead money removed; the opening pool; waivers to free agency; drop = salary off at once; injured claims; CPU clubs' daily fill and upgrade; situational prices; the offseason class. **Measured over seasons:** usable free agents at every role all season (never run dry), how long good players sit unsigned, roster turnover, payroll and the owner's mood.
+2. **Decisions** — the messages in 122.3, the scouting signings, the cut order, trades.
+3. **Screens** — 122.4, dark and light.
+
+The harness's farm checks become free-agent checks (`sim-season`, `check-il-return`, `check-manager-fill`, `check-contracts`, `multi-season`, the compose and notices UI tests); the push and look-ahead proofs (§118–§121) run unchanged. **Fresh team required.**
+
+### 122.6 Open questions (for the GM)
+
+1. When does a pickup play — reports the next day (as trades do now), or available for the next game that hasn't started?
+2. With no dead money, a long contract can be dropped at no cost beyond losing the player. Accept that?
+3. Keep the 14 hitters / 14 pitchers split on the 28?
+4. Ship as one version (recommended), or stage by stage?
+
