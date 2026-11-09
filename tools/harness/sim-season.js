@@ -388,6 +388,7 @@ async function runOffseasonChecks() {
   const phases = []; let lastPhase = pre.phase; let offseasonAt = null, springAt = null;
   const resignCards = new Set(), faCards = new Set(); let ownershipCard = 0, signedByUser = 0, ownerBody = '', priorityCard = null, firstFaAfterPriority = null;
   const coachCards = new Map(), contractCards = new Map(), foCards = new Map(), meetCards = new Map();
+  const offseasonFeed = new Set();   // Recent keeps 72 hours: collect the winter's lines as they come
   const fo0 = { tp: pre.userTeam.finances.ticketPrice || 1, atmo: pre.userTeam.atmosphere, fac: { ...(pre.userTeam.facilities || {}) } };
   const staffBefore = JSON.parse(JSON.stringify(pre.userTeam.coachingStaff || {}));
   clock.set(Math.max(clock.get(), os.endedAt));
@@ -407,6 +408,7 @@ async function runOffseasonChecks() {
       if (!gm.review && SM.get().offseason?.review) gm.review = SM.get().offseason.review;
       if (c.cardId === 'os_free_agent' && SM.get().offseason?.priority && !firstFaAfterPriority) firstFaAfterPriority = { id: c._targetPlayerId, pri: SM.get().offseason.priority };
     }
+    for (const e of SM.get().activityFeed || []) offseasonFeed.add(e.text || '');
     const faBefore = SM.get().userTeam.rosterIds.length;
     gmActs();
     if (SM.get().userTeam.rosterIds.length > faBefore) signedByUser++;
@@ -488,7 +490,7 @@ async function runOffseasonChecks() {
     const pri = gm.review?.needs?.find(n => n.short === (SM.get().offseason?.priority?.short)) || null;
     console.log(`  meetings: ${targets.length} target card(s): ${targets.map(c => `${c.subject} (day ${c._day})`).join(' | ') || 'none'}; ${calls.length} trade call(s) to us on days 6–7`);
     for (const c of targets.slice(0, 1)) console.log(`    “${c.body.slice(0, 520)}…”`);
-    const feed = (st.activityFeed || []).map(e => e.text || '');
+    const feed = [...offseasonFeed, ...(st.activityFeed || []).map(e => e.text || '')];
     const filledAll = feed.some(t => /holes Pro Scouting was asked to fill are filled/.test(t));
     check(`meetings: Pro Scouting brings targets for the winter's priority on day 6 (or says it's filled)`,
           filledAll || (targets.length >= 1 && targets.every(c => c._day === 6)));

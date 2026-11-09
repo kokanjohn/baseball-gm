@@ -52,6 +52,8 @@ const PRECACHE_ASSETS = [
   '/baseball-gm/engine/PlayerFactory.js',
   '/baseball-gm/engine/FreeAgency.js',
   '/baseball-gm/engine/LeagueFactory.js',
+  '/baseball-gm/engine/LeagueHistory.js',
+  '/baseball-gm/engine/Diamonds.js',
   '/baseball-gm/engine/RosterEngine.js',
   '/baseball-gm/engine/SeasonEngine.js',
   '/baseball-gm/engine/SeasonReview.js',
