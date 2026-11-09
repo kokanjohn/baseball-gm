@@ -69,14 +69,19 @@ const d = D.find(p => worthOf(p) - p.ovr >= DIAMOND.edge);
 check('CPU clubs see his rating before word gets around', cpuView(d, d._buzzAt - 1) === d.ovr);
 check('…and his worth after', cpuView(d, d._buzzAt) === worthOf(d));
 
-// The race: a low-rated diamond nobody wants on his rating is signed once word gets around.
-const low = D.filter(p => p.ovr - L <= 43).sort((a, b) => worthOf(b) - worthOf(a))[0];
-if (low) {
-  const before = SM.speculate(() => { SM.mutate(dr => { cpuFreeAgentLook(dr, low._buzzAt - 3_600_000); }); return SM.get().players[low.id].teamId; });
-  const after  = SM.speculate(() => { SM.mutate(dr => { cpuFreeAgentLook(dr, low._buzzAt + 3_600_000); }); return SM.get().players[low.id].teamId; });
-  check(`a hidden diamond (${low.name}, rated ${low.ovr - L}, worth ${worthOf(low) - L}) sits until word gets around`, !before, `signed by ${before}`);
-  check('…and is signed once it does', !!after);
-}
+// The race: the same three weeks of CPU looks (one upgrade a club a day, the opening flurry
+// first), with and without word getting around. Word is what gets the hidden ones signed.
+const DAY = 86_400_000;
+const lows = D.filter(p => p.ovr - L <= 43);
+const signedOver = (quiet) => SM.speculate(() => {
+  if (quiet) SM.mutate(dr => { for (const p of lows) delete dr.players[p.id]._buzzAt; });
+  const from = Math.min(...lows.map(p => p._buzzAt)) - 10 * DAY, to = Math.max(...lows.map(p => p._buzzAt)) + 7 * DAY;
+  for (let t = from; t <= to; t += DAY) SM.mutate(dr => { cpuFreeAgentLook(dr, t); });
+  return lows.filter(p => SM.get().players[p.id].teamId).length;
+});
+const quietly = signedOver(true), word = signedOver(false);
+check(`hidden diamonds (rated ≤ 43 over the level): word getting around gets them signed (${word} of ${lows.length}, against ${quietly} without it)`,
+  lows.length > 0 && word > quietly);
 const rel = { ...pool.find(p => p.origin === PLAYER_ORIGIN.LEAGUE && !isDiamond(p, L)) };
 markAvailable(rel, now, () => 0.5, L);
 check('a released ordinary player gets no date', !Number.isFinite(rel._buzzAt));
