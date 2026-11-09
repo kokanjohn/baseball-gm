@@ -82,7 +82,9 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const first = gameItems(regs.at(-1));
 const exp1 = await expected();
 console.log(`    ${first.length} game pushes registered: ${first.map(i => i.title).join(' | ')}`);
-check('opened 10 hours ahead, the app registers our next game\'s pushes, the final among them', first.some(i => i.id === `g:${T0}:final`));
+// (the run's real date sets the weather: a foreseen postponement is the game's push instead of the final)
+check('opened 10 hours ahead, the app registers our next game\'s pushes, the final among them (or its postponement)',
+      first.some(i => i.id === `g:${T0}:final`) || first.some(i => /^Postponed/.test(i.title)));
 check('…exactly the look-ahead\'s', same(first, exp1), JSON.stringify(first).slice(0, 200));
 
 // 2. A GM change: a bench hitter takes over at DH. The app re-sends at once.

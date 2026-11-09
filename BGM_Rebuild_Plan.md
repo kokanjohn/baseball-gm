@@ -9587,3 +9587,49 @@ The harness's farm checks become free-agent checks (`sim-season`, `check-il-retu
 **Proofs.** `check-diamonds` (new, 26 checks): the past, untested ratings, the race, Impact. `check-lookahead` passes again; it failed until the Impact windows used the game's time.
 
 **Harness note.** The harness clock starts in the year 2400. A script that measures dates stamped at league creation (`_faSince`, `_buzzAt`) must `clock.set(clock.real())` before `startNewGame`.
+
+### 122.11 Stage 2 built: the messages (branch `fa-pool`, Nov 9 — not released)
+
+**The injury decision (Act 2).** The diagnosis is now keep or cut, with what each costs.
+- The card's choices:
+  - IL the player and sign one of the two best free agents who fit (each with position, OVR, and asking price a year);
+  - IL the player and pick the replacement ourselves;
+  - cut the player (waivers, injured; the salary comes off at once);
+  - day-to-day (the "no" answer), only when the timeline allows.
+- The body states the salary paid on the IL, what cutting saves, and the fits.
+- Cut is recommended first when the injury is season-ending and the contract ends this season.
+- A plain yes takes the recommended choice. Unanswered: IL, and the manager signs someone.
+
+**Open spots.** The card offers the three best free agents who fit, with prices and last season's line (§122.9). The other answer is "I'll choose in League → Players." At the deadline the manager signs: "I signed X ($K for the year, paid only for the days on our roster)", with **Keep / Release X — I'll pick** (nothing owed before reporting).
+
+**Deadlines.**
+- **In season:** an open spot's deadline is the night before the next game day (11 PM), when that leaves at least 3 hours, so the manager's signing reports in time for the game. Otherwise it's an hour before first pitch, as before (`TransactionEngine.vacancyDeadline`). The injury decision uses the same deadline.
+- **The winter roster call:** 3 days before camp (`WINTER_ROSTER_CALL_DAYS`), our open spots get a card ("Camp opens …: we're N short of 28"). The deadline is the night before camp opens, so a signing reports when camp opens and the first spring game is never played short.
+
+**The IL return** has a deadline: the next roster deadline. The choices read "Activate X — waive Y". Unanswered, the manager waives the recommended (lowest-rated) reserve and activates the player. The other answer puts the returning player on waivers. No farm in spring.
+
+**Scouting finds.**
+- A card's new player is tagged `_scoutFind`. Once no card or scheduled card names that player and the player hasn't signed, they leave the league ("signs somewhere else").
+- A signing card whose action reads the pick (`sign_acquire_pitcher`, `sign_prospect_pitcher`, `sign_intl_*`, `indie_sign`, `sp15_callup`) gets a sign sheet when that side of our 28 is full: our three lowest-rated reserves, "Sign — waive Y". `CardActions.dropFor` takes the GM's pick, else the weakest. The NRI and independent-league signings may now displace too.
+- Wording: the independent report ("joins our roster… Pass, and X signs somewhere else"); the NRI ("still a free agent… a one-year deal puts X on our roster", "Let Them Go"); s2 and sc2 ("Pass, and another club signs them").
+
+**Retired:** r2, sp11, sp11b (t9, dl3, dl4 were already). sr2 no longer mentions call-ups. The farm wording in the contract sentences, offseason free-agent cards, Act 1 and the manager's messages is rewritten.
+
+**The cut order.** Two ways to meet it: move the player to another club (the salary dump), or release them (waivers, the salary off at once). With no taker, the "No club can take X's contract" card asks: Release X / Keep X.
+
+**Compose (diamonds, difficulty: hard).**
+- **Scouting → "Free agents worth a look"** (`sc_free_agents`): the scouts look at three free agents a week, the ones they judge worth more than their ratings. Their eye: worth + noise, sigma 4 ÷ the archetype's scouting strength (1.0–1.6). For each player:
+  - an untested player: whether they're better than, about, or worse than the estimate, read through the same noise;
+  - a role fit: why the rating undersells them (speed or stamina), with last year's line;
+  - a diamond the scouts see: "nobody else is on this one yet — I'd move before word gets around", or after word is out, "other clubs have been asking".
+  - Asked again in the same week: who's still out there, and when the next look is.
+- **Young pitcher check-in / development check-in:** the coach reports on the untested first, with a read on the estimate. The reply can be a decision: **Start a development plan for X / Not now** (gain 2, out 2 games; the work also brings out the true ratings). `writeComposeReply` returns `decision`, and `releaseDueCards` turns the reply into a decision card.
+- "Young player report" replaces "Prospect report".
+
+**Impact on trade cards.** `Negotiation.impactNote` adds a sentence to Pro Scouting's ideas and to CPU offers: "By Impact, X has been an elite contributor this year and Y was at replacement level last year." Labels only, never the number.
+
+**Proofs.**
+- Full season 3669/3669; multi-season 52/52 (nine in the lineup at the first spring game now holds).
+- `check-injury-decision` (new, 10 checks); `check-il-return`, `check-manager-fill` and `test-notices-ui` updated; `check-diamonds`, `check-compose-replies`, look-ahead and every engine check pass.
+- `test-game-pushes-ui` now accepts a foreseen postponement: the run's real date sets the weather.
+- `check-weather-cards` still fails as on main (pre-existing).

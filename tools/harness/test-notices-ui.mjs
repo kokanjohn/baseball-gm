@@ -66,12 +66,12 @@ if (rw) await rw.screenshot({ path: `${out}/notices-recent-${theme}.png` });
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('decisions'); });
 await page.waitForTimeout(500);
 const list = await page.evaluate(() => [...document.querySelectorAll('.ml-row')].map(r => r.innerText.replace(/\s+/g, ' ')).join(' || '));
-check('the inbox lists the call-up, not the news', /called up/.test(list) && !/development plan|All-Star Game MVP/.test(list), list);
+check('the inbox lists the manager\'s signing, not the news', /I signed/.test(list) && !/development plan|All-Star Game MVP/.test(list), list);
 await page.screenshot({ path: `${out}/notices-inbox-${theme}.png` });
 await page.click(`[data-open="${made.card}"]`);
 await page.waitForTimeout(500);
 const body = await page.evaluate(() => document.body.innerText);
-check('the message offers Keep and Send back', body.includes(`Keep ${made.picked}`) && body.includes(`Send ${made.picked} back`), body.slice(0, 300));
+check('the message offers Keep and Release', body.includes(`Keep ${made.picked}`) && body.includes(`Release ${made.picked}`), body.slice(0, 300));
 await page.screenshot({ path: `${out}/notices-callup-${theme}.png` });
 
 check('no page errors', errors.length === 0, errors.join(' | '));

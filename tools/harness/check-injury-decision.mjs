@@ -6,7 +6,7 @@ import { clock, seedRandom } from './shims.js';            // MUST be first (ins
 import * as SM from '../../store/StateManager.js';
 import { startNewGame, advanceClock } from '../../engine/GameEngine.js';
 import { deliverInjuryAct2, releaseDueCards, resolve, getInbox } from '../../engine/CardEngine.js';
-import { beginInjury } from '../../engine/InjuryEngine.js';
+import { beginInjury, dayToDayAllowed } from '../../engine/InjuryEngine.js';
 import { payrollOf } from '../../engine/FinanceEngine.js';
 import { vacancyDeadline, decisionDeadlineAfter } from '../../engine/TransactionEngine.js';
 import { PLAYER_GROUP, ROSTER_DECISION_LEAD_MS } from '../../data/constants.js';
@@ -64,7 +64,8 @@ check(`cut: ${P(b.id).name} on waivers, injured; ${salaryB}K off the payroll at 
 
 const d = injure('C', 'minor');
 console.log(`    minor: no = “${d.card?.noLabel}”`);
-check('a short timeline offers day-to-day', d.card?.noLabel?.startsWith('Day-to-day') && d.card._raw.onNo === 'day_to_day');
+check(`day-to-day is offered exactly when the timeline is short enough (${P(d.id).injury.days} days: ${dayToDayAllowed(P(d.id)) ? 'yes' : 'no'})`,
+      !!d.card && (dayToDayAllowed(P(d.id)) ? d.card.noLabel?.startsWith('Day-to-day') && d.card._raw.onNo === 'day_to_day' : !d.card.noLabel && !d.card._raw.onNo));
 
 console.log('Open spots');
 releaseDueCards();
