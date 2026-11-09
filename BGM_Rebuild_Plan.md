@@ -9472,3 +9472,35 @@ The harness's farm checks become free-agent checks (`sim-season`, `check-il-retu
 - **Sort:** OVR, best first, by default; price and days unsigned as the other sorts for available players.
 - Position buttons and last-name search as now; the "All | Other Teams" buttons go (Filter covers them).
 - A row for an available player shows his asking price and how long he's been unsigned (or the time left on waivers), and adds him from the row — a claim or a signing; the sign sheet asks who goes on waivers when the roster is full.
+
+### 122.8 Stage 1 built: the model (branch `fa-pool`, Nov 8 — not released)
+
+**Built.** The farm, keepers, spring invitees, call-ups and dead money are gone from the engine. A league opens with 200 free agents. A drop goes on waivers with games on the calendar (straight to free agency in the winter), and its salary leaves the payroll at once. CPU clubs fill holes from the pool at once (`TransactionEngine._cpuFill` / `fillShortRosters`) and look once a day, worst record first (`cpuFreeAgentLook`, the `falook` clock event at 10:00). They claim injured players when it suits them (`LeagueEngine.cpuWaiverClaimant`: a contender only if he's back with ≥ 30 days left; others also if his deal runs past this season). The asking price (`MarketEngine.signingTerms`, `FA_ASK`) is 80% of market for a one-year deal, less 3% a day unsigned, to a floor of 50%, never below 50K; young finds sign for a bonus at the minimum. On offseason day 5 the new class arrives with a line in Recent (`OffseasonEngine.newFreeAgentClass`). At the new season the pool is trimmed to 260, and CPU clubs short of 28 sign to it. Scouting finds join the roster; with that side of the roster full, the lowest-rated reserve not playing goes on waivers (`CardActions.weakestReserve`; stage 2 lets the GM choose).
+
+**Two calibrations the measurements forced:**
+1. **The opening pool is bench-level, not the winter market.** Built first from `MARKET_KINDS`, the pool's median veteran (57 above the league level) beat the median CPU starter (lineup 52, rotation 55), and its median depth player (50) beat every bench (41 hitters, 45 pitchers). The old farms were 38. CPU clubs spent to their owners' limit within 25 days: all nine went over budget (1.11× target) and league strength jumped 4 points. Now `LeagueFactory.FA_POOL_MIX` has its own ranges (veterans 42–54, depth 36–46, prospects 32–44, independent 34–44; built medians 49 / 41 / 39 / 38).
+2. **A CPU upgrade fits under the season's payroll target** (or saves money). Not the owner's stretch past it, nor the league-minimum allowance meant for filling holes.
+
+**Measured** (seed 1, two seasons, a GM who answers yes, else no, every day):
+
+| | Season 1 | Season 2 |
+|---|---|---|
+| Free agents in the pool | 160–269 | 140–224 |
+| Best available in season (above league level) | 41–48 at every role | 39–45 |
+| CPU signings and claims | 522 | 436 |
+| Days a clear upgrade sat unsigned (a +5 for some club that can pay) | 17 (the first week of camp) | 12 |
+
+- **Every position stays stocked all season**, and the pool never runs dry.
+- **How long good free agents sit:** rated ≥ 60, median 3 days; 52–59, about 1 day; the rest median 4, p90 64.
+- **League strength (best 26) is steady:** 49.6 at the start, 49.4 after two seasons. Main's multi-season run is steady too (61.5 → 62.0 → 61.9; the branch is 60.6 → 61.8 → 61.7).
+- **CPU clubs stay under budget.**
+- **Turnover:** an opening flurry in the first week of camp (each club upgrades about five bench spots), then a trickle for injuries.
+- **Waivers** peak at 30 in the first spring.
+- **Our payroll and owner mood:** the simple test GM drains owner trust and atmosphere on main as well (main ends a 2-season run at atmosphere 7). One branch 3-season run did run our payroll 22% over target by the first winter (main's run: 16% under). That's one seed, but it fits the new injury rule: the injured player stays paid and the replacement is a real one-year deal. Stage 2's injury decision ("cut him") is the GM's lever.
+
+**Proofs:** the full season passes 3633/3634. The one failure was a check that assumed a sixth starter to promote; it now expects five, or every healthy starter (as the multi-season check does). Multi-season, the message look-ahead (40 windows), every engine check and the four UI tests pass. `check-lookahead` failed once on a game it had foreseen correctly (postponed by snow, made up on the next day's off-day); the check now accepts a foreseen postponement and makeup. `check-weather-cards` fails on main too: pre-existing, not from §122.
+
+**For stage 2** (found while building):
+- **Scouting cards still invent players** (`marketCandidate` → `generateMarketPlayer` + `addToMarket`), and a pass leaves them in the pool. 122.1 says a passed find is gone.
+- **Our open spots at the new season** get their deadline at the first spring game, so the manager's signings report a day late and that game is played short. The open-spot message should come in the winter, with a deadline before camp.
+- **The roster messages still talk about the farm** (122.3); the manager's fill reads "called up".
