@@ -4,7 +4,7 @@
  *
  *   openTradeComposer({ teamId, theirIds, ourIds, cashK, retain, round })
  *
- * Up to three players a side (either club's roster or farm), cash either way,
+ * Up to three players a side (either club's roster), cash either way,
  * and a share of a salary the sending club keeps paying this season. The GM
  * can run it by Pro Scouting (a read in words, never a number) and sees what
  * our owner would say about the payroll. Sending starts (or continues) the
@@ -154,7 +154,7 @@ function _pickHtml(state, who) {
   const byOvr = (ids) => ids.map(id => state.players[id]).filter(Boolean).sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
   return `${_head(who === 'theirs' ? `${club?.name || 'Their'} roster` : 'Our roster', `Choose up to ${TRADE.maxPerSide}. Tap again to remove.`, true, 'tc-back')}
     <div class="tc-sec">Active roster</div><div class="tc-list">${byOvr(club?.rosterIds || []).map(row).join('')}</div>
-    <div class="tc-sec">Farm</div><div class="tc-list">${byOvr(club?.farmIds || []).map(row).join('')}</div>
+
     <div class="tc-actions"><button class="tc-btn primary" id="tc-done">Done</button></div>`;
 }
 

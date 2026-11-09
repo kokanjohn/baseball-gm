@@ -3,23 +3,19 @@
  * Team tab rendered into #team-content.
  *
  * Two internal tabs (Section 1.14 — LOCKED):
- *   Players — active roster + IL + pending transactions + farm system
+ *   Players — active roster + IL + pending transactions (§122: no farm)
  *   Staff   — coaching staff with contracts and relationships
  *
  * Roster sections (Section 20.3 — LOCKED order):
  *   ├── Hitters               (collapsible) — STARTING_HITTERS + BENCH_HITTERS
  *   ├── Pitchers              (collapsible) — STARTING_PITCHERS + BULLPEN + PITCHER_BENCH
  *   ├── Injured List          (collapsible) — IL group
- *   ├── Pending Transactions  (collapsible) — state.transactions ledger (§65)
- *   └── Farm System           (collapsible) — farmIds, split into Position Players + Pitchers
- *
- * Farm player row shows: name, pos, OVR, age, story arc indicator, send-down date.
- * Farm section is user-only — CPU farm is not browsable (Section 20.3).
+ *   └── Pending Transactions  (collapsible) — state.transactions ledger (§65)
  *
  * Swap buttons (promote/demote) apply roster mutations via RosterEngine.
  * Open roster spots render as dashed cards (TransactionEngine.getRosterNeeds —
- * the same source the inbox uses); a call-up goes through GameEngine.gmCallUp
- * and reports the next calendar day (§65).
+ * the same source the inbox uses); tapping one opens League → Players with
+ * everyone we could add who fits it (§122.4). A signing reports the next day.
  *
  * Screen label is "Team" not "Roster" (Section 1.14 — LOCKED).
  */
@@ -30,14 +26,14 @@ import * as StateManager from '../../store/StateManager.js';
 import { baseballYear, isAvailable } from '../../engine/PlayerFactory.js';
 import { contractIsUp } from '../../engine/OffseasonEngine.js';
 import { developmentStatus } from '../../engine/DevelopmentEngine.js';
-import { getHotColdIndicator } from '../../engine/IMPEngine.js';
+import { getHotColdIndicator, lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { bullpenRoles, armStatus, ROLE_ABBR } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
 import { eligibleSlotsFor, reconcileRoster, applyRosterMutation }
   from '../../engine/RosterEngine.js';
-import { getRosterNeeds, rankPickups } from '../../engine/TransactionEngine.js';
+import { getRosterNeeds } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as Coach from '../../engine/CoachEngine.js';
 
@@ -56,13 +52,6 @@ const _groupOpen = {
   pitchers:     false,
   il:           false,
   pending:      false,
-  farm:         false,
-};
-
-// Track which farm sub-section is open
-const _farmOpen = {
-  hitters:  true,
-  pitchers: true,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -286,17 +275,11 @@ export function refresh() {
 function _renderPlayers(state) {
   const team       = state.userTeam;
   const rosterIds  = team.rosterIds  || [];
-  const farmIds    = team.farmIds    || [];
   const players    = state.players   || {};
   const impScores  = state.impScores || {};
   const lineupSlots = team.lineupSlots || [];
   const gameIdx    = state.currentGameIndex || 0;
   const isSpring   = state.phase === PHASE.SPRING_TRAINING;
-
-  // Keeper count — only meaningful during spring
-  const keeperCount = isSpring
-    ? rosterIds.filter(id => players[id]?._isKeeper).length
-    : 0;
 
   // Starters = players in lineupSlots; bench = BENCH_HITTERS not in lineupSlots
   const starterIds   = new Set(lineupSlots.map(s => s.playerId).filter(Boolean));
@@ -306,7 +289,6 @@ function _renderPlayers(state) {
 
   const pitchers    = rosterIds.map(id => players[id]).filter(p => p && [PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group));
   const ilPlayers   = rosterIds.map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.IL);
-  const farmPlayers = farmIds.map(id => players[id]).filter(Boolean);
 
   // §65 — one source for open spots, arrivals and departures (the inbox reads it too).
   const needs       = getRosterNeeds(state, 'user');
@@ -320,35 +302,24 @@ function _renderPlayers(state) {
 
   const hitterCount = starterIds.size + hitterBench.length;
 
-  const keeperBanner = isSpring ? `
-    <div class="keeper-banner">
-      <span>Spring Camp</span>
-      <span class="keeper-count ${keeperCount >= ROSTER_LIMITS.ACTIVE_TOTAL ? 'keeper-count-full' : ''}">
-        Keepers: ${keeperCount}/${ROSTER_LIMITS.ACTIVE_TOTAL}
-      </span>
-    </div>
-  ` : '';
-
   const vacancyBanner = needs.short > 0 ? `
     <div class="vacancy-banner">
-      <span><b>${needs.short} open roster spot${needs.short > 1 ? 's' : ''}</b> — tap a dashed card to call someone up.</span>
-      ${needs.deadlineAt ? `<span class="vacancy-deadline">Due ${_clockText(needs.deadlineAt)} or ${_escape(team.coachingStaff?.manager?.name || 'the manager')} picks</span>` : ''}
+      <span><b>${needs.short} open roster spot${needs.short > 1 ? 's' : ''}</b> — tap one to see the free agents who fit.</span>
+      ${needs.deadlineAt ? `<span class="vacancy-deadline">Due ${_clockText(needs.deadlineAt)} or ${_escape(team.coachingStaff?.manager?.name || 'the manager')} signs someone</span>` : ''}
     </div>` : '';
 
   return `
     <div style="padding:0 0 16px;">
-      ${keeperBanner}
       ${vacancyBanner}
       ${_renderGroup('hitters',  'Hitters',              hitterCount,       _renderHitterGroup(hitterStarters, hitterBench, players, impScores, gameIdx, isSpring, rosterIds) + spotsHtml('hitter'))}
       ${_renderGroup('pitchers', 'Pitchers',             pitchers.length,   _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring, players, rosterIds, team.rotation) + spotsHtml('pitcher'))}
       ${_renderGroup('il',       'Injured List',         ilPlayers.length,  _renderILGroup(ilPlayers, state, gameIdx))}
       ${_renderGroup('pending',  'Pending Transactions', pending.length,    _renderPendingGroup(pending, players))}
-      ${_renderGroup('farm',     'Farm System',          farmPlayers.length, _renderFarmGroup(farmPlayers, state, gameIdx, needs), true)}
     </div>
   `;
 }
 
-function _renderGroup(key, label, count, bodyHtml, isFarm = false) {
+function _renderGroup(key, label, count, bodyHtml) {
   const isOpen    = _groupOpen[key];
   const headClass = key === 'hitters' ? 'hitters'
                   : key === 'pitchers' ? 'pitchers'
@@ -422,12 +393,6 @@ function _renderHitterRow(player, imp, role, slot, gameIdx, isSpring = false, al
   // Show slot in the pos badge; show nativePos below the name line (like pitchers)
   const slotLabel = slot || nativePos;
 
-  const stBadge     = isSpring && player._isSpringInvitee
-    ? `<span class="st-badge">ST</span>` : '';
-  const keeperBadge = isSpring
-    ? `<span class="keeper-badge ${player._isKeeper ? 'keeper-on' : 'keeper-off'}" data-keeper="${player.id}">${player._isKeeper ? '♦' : '◇'}</span>`
-    : '';
-
   let swapBtn = '';
   if (isAvailable(player)) {
     if (role === 'starter') {
@@ -446,20 +411,27 @@ function _renderHitterRow(player, imp, role, slot, gameIdx, isSpring = false, al
       <div class="player-info">
         <div class="player-name">
           ${_escape(player.name)}
-          ${stBadge}
           ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
           ${_dotIndicator(player)}
         </div>
-        <div class="player-sub">${nativePos} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_contractNote(player)}${emergency ? ' · <span class="oop-note">out of position</span>' : ''}</div>
+        <div class="player-sub">${nativePos} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_impNote(player, imp)}${_contractNote(player)}${emergency ? ' · <span class="oop-note">out of position</span>' : ''}</div>
       </div>
       <div class="player-pos-badge${emergency ? ' oop' : ''}">${slotLabel}</div>
       <div class="rating-cell">
         <div class="rating-num ${ovrColor}">${formatOVR(player.ovr)}</div>
-        ${keeperBadge}
       </div>
       <div class="row-actions">${swapBtn}${statusEl}</div>
     </div>
   `;
+}
+
+/** §30.6 the row's Impact: this season's, else last season's (marked). */
+function _impNote(player, imp) {
+  const now = imp?.impS;
+  const v = now ?? lastSeasonIMP(player);
+  if (v == null) return '';
+  const cls = v >= 1 ? 'imp-pos' : v <= -1 ? 'imp-neg' : '';
+  return ` · <span class="imp-note ${cls}">IMP ${v > 0 ? '+' : ''}${v.toFixed(1)}${now == null ? ' last yr' : ''}</span>`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -527,12 +499,6 @@ function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [],
 
   const posHand   = `<span class="pitcher-pos-hand">${player.pos} · ${player.hand === 'L' ? 'LHP' : 'RHP'}</span>`;
 
-  const stBadge     = isSpring && player._isSpringInvitee
-    ? `<span class="st-badge">ST</span>` : '';
-  const keeperBadge = isSpring
-    ? `<span class="keeper-badge ${player._isKeeper ? 'keeper-on' : 'keeper-off'}" data-keeper="${player.id}">${player._isKeeper ? '♦' : '◇'}</span>`
-    : '';
-
   let swapBtn = '';
   if (isAvailable(player)) {
     if (role === 'rotation' || role === 'bullpen') {
@@ -555,15 +521,13 @@ function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [],
           ${_escape(player.name)}
           ${nextBadge}
           ${roleBadge}
-          ${stBadge}
           ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
           ${_dotIndicator(player)}
         </div>
-        <div class="player-sub">${posHand} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_contractNote(player)}${armNote}</div>
+        <div class="player-sub">${posHand} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_impNote(player, imp)}${_contractNote(player)}${armNote}</div>
       </div>
       <div class="rating-cell">
         <div class="rating-num ${ovrColor}">${formatOVR(player.ovr)}</div>
-        ${keeperBadge}
       </div>
       <div class="row-actions">${swapBtn}${statusEl}</div>
     </div>
@@ -651,7 +615,7 @@ function _renderPendingGroup(pending, players) {
     const player = players[tx.playerId];
     if (!player) return '';
     const sub = kind === 'in'
-      ? `${tx.reason === 'trade' ? `Acquired from ${teamName(tx.fromTeamId)}` : tx.reason === 'callup' ? (tx.by === 'manager' ? 'Called up by the manager' : 'Called up from the farm') : 'Claimed'} — reports ${_whenText(tx.effectiveAt)}`
+      ? `${tx.reason === 'trade' ? `Acquired from ${teamName(tx.fromTeamId)}` : tx.reason === 'signing' ? (tx.by === 'manager' ? 'Signed by the manager' : 'Signed as a free agent') : 'Claimed off waivers'} — reports ${_whenText(tx.effectiveAt)}`
       : `Traded to ${teamName(tx.teamId)} — reports ${_whenText(tx.effectiveAt)}`;
     return `
       <div class="player-row-item" style="grid-template-columns:1fr auto;" id="pr-${player.id}">
@@ -666,7 +630,7 @@ function _renderPendingGroup(pending, players) {
 
 /**
  * _renderOpenSpots(needs, arrivals, allNeeds, state)
- * Dashed cards (§65): one per open active-roster spot (tap → call-up picker)
+ * Dashed cards (§65): one per open active-roster spot (tap → §122.4 League → Players, filtered to fit)
  * and one per player already on his way (shows who is coming and when).
  */
 function _renderOpenSpots(needs, arrivals, allNeeds, state) {
@@ -684,7 +648,7 @@ function _renderOpenSpots(needs, arrivals, allNeeds, state) {
         <div class="player-row-item vacancy-row arriving" id="pr-${p.id}">
           <div class="player-info">
             <div class="player-name vacancy-name">${_escape(p.name)}</div>
-            <div class="player-sub vacancy-sub">${t.reason === 'trade' ? 'Acquired by trade' : 'Called up'} — reports ${_whenText(t.effectiveAt)}</div>
+            <div class="player-sub vacancy-sub">${t.reason === 'trade' ? 'Acquired by trade' : t.reason === 'signing' ? 'Signed' : 'Claimed off waivers'} — reports ${_whenText(t.effectiveAt)}</div>
           </div>
           <div class="player-pos-badge vacancy-pos">${p.nativePos || p.pos}</div>
           <div class="rating-cell"><div class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</div></div>
@@ -695,7 +659,7 @@ function _renderOpenSpots(needs, arrivals, allNeeds, state) {
       <div class="player-row-item vacancy-row" data-need="${n.index}">
         <div class="player-info">
           <div class="player-name vacancy-name">Open spot</div>
-          <div class="player-sub vacancy-sub">${label(n)} — tap to call up${due}</div>
+          <div class="player-sub vacancy-sub">${label(n)} — tap to find a free agent${due}</div>
         </div>
         <div class="player-pos-badge vacancy-pos">${n.pos || (n.side === 'pitcher' ? 'P' : 'H')}</div>
         <div class="rating-cell"></div>
@@ -728,93 +692,6 @@ function _whenText(ms) {
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
   if (d.toDateString() === tomorrow.toDateString() && d.getHours() === 0) return 'tomorrow';
   return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}`;
-}
-
-// ─────────────────────────────────────────────────────────────
-// FARM SYSTEM (Section 20.3 — LOCKED)
-// ─────────────────────────────────────────────────────────────
-
-function _renderFarmGroup(farmPlayers, state, gameIdx, needs = null) {
-  const canCallUp = !needs?.applies || needs.short > 0;
-  if (farmPlayers.length === 0) {
-    return '<div style="padding:10px 14px;font-size:13px;color:var(--muted);">Farm system empty</div>';
-  }
-
-  const farmHitters  = farmPlayers
-    .filter(p => !['SP','RP'].includes(p.pos))
-    .sort((a, b) => _posOrder(a.pos) - _posOrder(b.pos) || b.ovr - a.ovr);
-  const farmPitchers = farmPlayers
-    .filter(p => ['SP','RP'].includes(p.pos))
-    .sort((a, b) => b.ovr - a.ovr);
-
-  const hitterCap  = 12;
-  const pitcherCap = 8;
-
-  return `
-    <div style="padding:8px 14px 4px;font-size:11px;color:var(--muted);">
-      ${farmHitters.length}/${hitterCap} position players · ${farmPitchers.length}/${pitcherCap} pitchers
-    </div>
-
-    <!-- Farm Position Players sub-section -->
-    <div class="roster-sub-head" data-farm-group="hitters" style="cursor:pointer;">
-      Position Players
-      <span class="roster-chevron ${_farmOpen.hitters ? 'open' : ''}" style="margin-left:4px;">▼</span>
-    </div>
-    ${_farmOpen.hitters ? farmHitters.map(p => _renderFarmRow(p, state, gameIdx, canCallUp)).join('') : ''}
-
-    <!-- Farm Pitchers sub-section -->
-    <div class="roster-sub-head" data-farm-group="pitchers" style="cursor:pointer;margin-top:4px;">
-      Pitchers
-      <span class="roster-chevron ${_farmOpen.pitchers ? 'open' : ''}" style="margin-left:4px;">▼</span>
-    </div>
-    ${_farmOpen.pitchers ? farmPitchers.map(p => _renderFarmRow(p, state, gameIdx, canCallUp)).join('') : ''}
-  `;
-}
-
-function _renderFarmRow(player, state, gameIdx, canCallUp = true) {
-  if (!player) return '';
-
-  const ovrColor  = _ovrColor(player.ovr);
-  const arcIcon   = _farmArcIcon(player._farmArc);
-  const sendDown  = player._sentDownGame != null
-    ? `Game ${player._sentDownGame + 1}`
-    : 'Farm';
-
-  // Context note: performance relative to expectations
-  const contextNote = _farmContextNote(player);
-
-  return `
-    <div class="player-row-item farm-row" style="grid-template-columns:1fr 36px 56px;" id="fpr-${player.id}"
-      data-callup="${player.id}">
-      <div class="player-info">
-        <div class="player-name">
-          ${_escape(player.name)}
-          <span style="font-size:10px;color:var(--muted);margin-left:3px;">${player.pos}</span>
-          ${arcIcon ? `<span class="farm-arc-icon" title="${player._farmArc || ''}">${arcIcon}</span>` : ''}
-        </div>
-        <div style="font-size:11px;color:var(--muted);">${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${sendDown}${contextNote ? ` · ${contextNote}` : ''}</div>
-      </div>
-      <div class="rating-cell">
-        <div class="rating-num ${ovrColor}" style="font-size:18px;">${formatOVR(player.ovr)}</div>
-      </div>
-      <div>
-        <button class="swap-btn promote${canCallUp ? '' : ' full'}" data-callup="${player.id}" style="font-size:9px;"
-          ${canCallUp ? '' : 'title="The active roster is full (28)"'}>Call Up</button>
-      </div>
-    </div>
-  `;
-}
-
-function _farmArcIcon(arc) {
-  if (!arc) return '';
-  return arc === 'motivation' ? '↑' : arc === 'decline' ? '↓' : '—';
-}
-
-function _farmContextNote(player) {
-  if (!player._farmArc) return '';
-  if (player._farmArc === 'motivation') return 'performing well';
-  if (player._farmArc === 'decline')    return 'struggling';
-  return '';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1029,45 +906,6 @@ function _attachListeners(state) {
     });
   });
 
-  // Farm sub-section headers
-  document.querySelectorAll('[data-farm-group]').forEach(el => {
-    el.addEventListener('click', () => {
-      const key = el.dataset.farmGroup;
-      if (key in _farmOpen) {
-        _farmOpen[key] = !_farmOpen[key];
-        refresh();
-      }
-    });
-  });
-
-  // Call-up buttons in farm section
-  document.querySelectorAll('.swap-btn.promote[data-callup]').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await _handleCallUp(btn.dataset.callup, state);
-    });
-  });
-
-  // Keeper toggle — fires during spring training only
-  document.querySelectorAll('.keeper-badge[data-keeper]').forEach(badge => {
-    badge.addEventListener('click', async e => {
-      e.stopPropagation();
-      const playerId = badge.dataset.keeper;
-      const { toggleKeeperTag } = await import('../../engine/RosterEngine.js');
-      const result = toggleKeeperTag(StateManager.get(), playerId);
-      if (result.error) {
-        App.showToast(result.error, 'negative');
-        return;
-      }
-      StateManager.mutate(s => {
-        if (result.players?.[playerId]) {
-          Object.assign(s.players[playerId], result.players[playerId]);
-        }
-      });
-      refresh();
-    });
-  });
-
   // Swap buttons — now opens swap modal instead of auto-swapping
   document.querySelectorAll('.swap-btn[data-swap]:not([disabled])').forEach(btn => {
     btn.addEventListener('click', async (e) => {
@@ -1100,60 +938,25 @@ function _attachListeners(state) {
     });
   });
 
-  // Open roster spot (dashed card) → farm call-up picker, best fit first (§65)
+  // Open roster spot (dashed card) → §122.4 League → Players: everyone we could add who fits it
   document.querySelectorAll('.vacancy-row[data-need]').forEach(el => {
-    el.addEventListener('click', () => {
-      const s     = StateManager.get();
-      const need  = getRosterNeeds(s, 'user').needs[Number(el.dataset.need)];
+    el.addEventListener('click', async () => {
+      const need = getRosterNeeds(StateManager.get(), 'user').needs[Number(el.dataset.need)];
       if (!need) { refresh(); return; }
-      const ranked = rankPickups(s, 'user', need);   // §122 stage 3 rebuilds this picker
-      if (!ranked.length) {
-        App.showToast('No free agent fits that spot right now.', 'negative');
-        return;
-      }
-      _openReplacementPicker(
-        need.side === 'pitcher' ? 'Call up a pitcher — reports tomorrow' : 'Call up a position player — reports tomorrow',
-        ranked,
-        (player) => { _handleCallUp(player.id, StateManager.get()); }
-      );
+      App.playClick();
+      const League = await import('./LeagueScreen.js');
+      League.showAvailable({ side: need.side, pos: need.pos });
     });
   });
 
-  // Player row tap → PlayerCard — guard against swap btn, keeper badge, vacancy
+  // Player row tap → PlayerCard — guard against the swap button
   document.querySelectorAll('.player-row-item[id^="pr-"]').forEach(el => {
     el.addEventListener('click', (e) => {
-      if (e.target.closest('.swap-btn') || e.target.closest('.keeper-badge')) return;
+      if (e.target.closest('.swap-btn')) return;
       const playerId = el.id.replace('pr-', '');
       openPlayerCard(playerId, StateManager.get());
     });
   });
-}
-
-// ─────────────────────────────────────────────────────────────
-// CALL-UP FROM FARM
-// ─────────────────────────────────────────────────────────────
-
-async function _handleCallUp(playerId, state) {
-  const player = state.players[playerId];
-  if (!player) return;
-  try {
-    // One path for every call-up (inbox, dashed card, farm row): the ledger.
-    // He reports the next calendar day; any inbox card about this spot is
-    // withdrawn by the roster clock (§65).
-    const { gmCallUp } = await import('../../engine/GameEngine.js');
-    const res = gmCallUp(playerId, Date.now());
-    if (!res.ok) {
-      App.showToast(res.error || 'Could not make that call-up.', 'negative');
-      return;
-    }
-    EventBus.emit('roster:changed', { type: 'callup', playerId });
-    EventBus.emit('inbox:changed', { source: 'team' });
-    App.showToast(`${player.name} called up — reports tomorrow.`, 'positive');
-    refresh();
-  } catch (err) {
-    console.error('TeamScreen._handleCallUp:', err);
-    App.showToast('Could not process call-up.', 'negative');
-  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1502,11 +1305,8 @@ function _injectCSS() {
   _cssInjected = true;
   const style = document.createElement('style');
   style.textContent = `
-    /* Farm rows */
-    .farm-row{cursor:pointer;}
-    .farm-row:active{opacity:.8;}
-    .farm-arc-icon{font-size:12px;margin-left:4px;font-weight:700;}
     .imp-indicator{font-size:11px;margin-left:3px;}
+    .imp-note{font-weight:700;} .imp-note.imp-pos{color:#22C55E;} .imp-note.imp-neg{color:var(--danger);}
 
     /* Ropt bar */
     .ropt-row{display:flex;align-items:center;gap:7px;margin-bottom:6px;}
@@ -1521,18 +1321,6 @@ function _injectCSS() {
       justify-content:center;font-family:'DM Sans',sans-serif;padding:0;}
     .ropt-hint-btn:active{opacity:.6;}
 
-    /* Keeper badge — shown during spring training */
-    .keeper-badge{font-size:13px;cursor:pointer;margin-left:4px;line-height:1;
-      transition:color .15s;}
-    .keeper-on{color:var(--text);}
-    .keeper-off{color:var(--border);}
-    .keeper-badge:active{opacity:.6;}
-
-    /* Spring training invitee badge */
-    .st-badge{font-size:9px;font-weight:800;letter-spacing:.5px;
-      color:var(--text);background:var(--chip-accent-bg);
-      border:1px solid var(--accent);border-radius:4px;
-      padding:1px 4px;margin-left:5px;vertical-align:middle;}
 
     .fin-wrap{padding:8px 16px 20px;display:flex;flex-direction:column;gap:10px;}
     .fin-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;}
@@ -1567,13 +1355,6 @@ function _injectCSS() {
       border:1px solid #34d399;border-radius:4px;
       padding:1px 4px;margin-left:5px;vertical-align:middle;}
 
-    /* Keeper banner at top of players tab */
-    .keeper-banner{display:flex;align-items:center;justify-content:space-between;
-      padding:7px 14px;background:var(--chip-accent-bg);
-      border-bottom:1px solid var(--accent);font-size:11px;font-weight:700;
-      letter-spacing:.5px;text-transform:uppercase;color:var(--text);}
-    .keeper-count{font-size:12px;font-weight:800;}
-    .keeper-count-full{color:var(--text);}
 
     /* Pitcher pos/hand subtitle */
     .pitcher-pos-hand{font-size:11px;font-weight:700;color:var(--soft);}

@@ -1,11 +1,12 @@
 /**
  * ui/components/SignSheet.js
- * §96 Sign a free agent, put in a waiver claim, or withdraw our claim — from
- * a player's card on the League screen. When the incoming player's side of
- * the 28 is full, the GM chooses who goes down to make room (for a claim: who
- * goes down if the claim is awarded). The sheet says what each choice costs
- * (a full farm side puts its weakest player on waivers), shows the payroll
- * against ownership's target, and the reason when the move can't be made.
+ * §96 / §122 Sign a free agent, put in a waiver claim, or withdraw our claim —
+ * from a player's card or a row on the League screen. When the incoming
+ * player's side of the 28 is full, the GM chooses who goes on waivers to make
+ * room (for a claim: who goes if the claim is awarded; between seasons, who is
+ * released). The sheet says what each choice costs — the salary leaves the
+ * payroll at once — shows the payroll against ownership's target, and the
+ * reason when the move can't be made.
  */
 
 import * as StateManager from '../../store/StateManager.js';
@@ -68,30 +69,26 @@ function _render(playerId, kind) {
 
   const claiming = kind === 'claim';
   const terms = claiming ? { salary: p.contractSalary || 0, years: Math.max(1, (p.contractExpiry || 0) - (st.seasonNum || 1)) } : FreeAgency.termsFor(st, p);
-  const room = FreeAgency.roomFor(st, p, { toFarm: !claiming && !!terms.toFarm });
+  const room = FreeAgency.roomFor(st, p);
   const gamesOn = ![PHASE.OFFSEASON, PHASE.SEASON_SUMMARY].includes(st.phase);
   const blocker = claiming ? FreeAgency.claimBlocker(st, playerId, _drop) : FreeAgency.signBlocker(st, playerId, _drop);
   const needChoice = room.needsDrop && !_drop;
 
   // Payroll after the move, against ownership's target (§78).
   const d = _drop ? st.players[_drop] : null;
-  const addK = terms.toFarm ? 0 : (terms.salary || 0);
+  const addK = terms.salary || 0;
   const outK = room.needsDrop && d ? (d.contractSalary || 0) : 0;
   const payroll = Finance.payrollOf(st, 'user') + addK - outK;
   const target = Finance.seasonTarget(st.userTeam.finances) || 0;
 
   const intro = claiming
     ? `${who} is on waivers for another ${_leftText(FreeAgency.waiverEndsAt(p))}. Claims are decided when the window closes, and clubs with worse records claim first. If the claim is ours, ${_esc(p.name)} reports the next day and comes with the contract: ${formatK(terms.salary)} a year.`
-    : terms.toFarm
-      ? `${who} signs a minor-league deal and reports to the farm${terms.bonus ? `, with a ${formatK(terms.bonus)} signing bonus` : ''}.`
-      : `${who} signs for ${formatK(terms.salary)} a year, ${terms.years || 1} year${(terms.years || 1) === 1 ? '' : 's'}. ${gamesOn ? `${_esc(p.name)} reports tomorrow.` : ''}`;
+    : `${who} signs for ${formatK(terms.salary)} a year, ${terms.years || 1} year${(terms.years || 1) === 1 ? '' : 's'}${terms.bonus ? `, with a ${formatK(terms.bonus)} signing bonus` : ''}. ${gamesOn ? `${_esc(p.name)} reports tomorrow${terms.years === 1 ? ', and is paid only for the days on our roster' : ''}.` : ''}`;
 
-  const outcomeText = (c) => c.outcome.kind === 'released' ? 'released — the farm is full'
-    : c.outcome.waives ? `to the farm — it's full, so ${_esc(c.outcome.waives)} goes on waivers`
-    : 'to the farm';
+  const outcomeText = (c) => `${c.outcome.kind === 'released' ? 'released' : 'on waivers'} — ${formatK(c.player.contractSalary || 0)} off the payroll at once`;
   const list = room.needsDrop ? `
     <div class="ss-label">Make room</div>
-    <div class="ss-text">${isP(p) ? 'Our pitching staff is' : 'Our position-player spots are'} full. Choose who goes down${claiming ? ' if the claim is awarded' : ''}:</div>
+    <div class="ss-text">${isP(p) ? 'Our pitching staff is' : 'Our position-player spots are'} full. Choose who goes${claiming ? ' if the claim is awarded' : ''}:</div>
     <div class="ss-list">${room.candidates.map(c => `
       <button class="ss-row${_drop === c.player.id ? ' on' : ''}" data-drop="${c.player.id}">
         <span class="ss-radio">${_drop === c.player.id ? '●' : '○'}</span>
@@ -103,7 +100,7 @@ function _render(playerId, kind) {
     <div class="ss-title">${claiming ? `Claim ${_esc(p.name)}` : `Sign ${_esc(p.name)}`}</div>
     <div class="ss-text">${intro}</div>
     ${list}
-    ${terms.toFarm ? '' : `<div class="ss-pay${payroll > target ? ' over' : ''}">Payroll after: ${formatK(Math.round(payroll))} of ${formatK(target)} target</div>`}
+    <div class="ss-pay${payroll > target ? ' over' : ''}">Payroll after: ${formatK(Math.round(payroll))} of ${formatK(target)} target</div>
     ${blocker && !needChoice ? `<div class="ss-why">${_esc(blocker[0].toUpperCase() + blocker.slice(1))}.</div>` : ''}
     <div class="ss-actions">
       <button class="ss-btn" id="ss-cancel">Cancel</button>
@@ -120,7 +117,7 @@ function _render(playerId, kind) {
     const down = _drop ? StateManager.get().players[_drop]?.name : null;
     App.showToast(claiming
       ? `Claim in on ${p.name}. We'll know when the window closes.`
-      : `${p.name} signed${down ? `; ${down} goes down` : ''}.`, 'positive', 4000);
+      : `${p.name} signed${down ? `; ${down} ${StateManager.get().phase === PHASE.OFFSEASON ? 'released' : 'goes on waivers'}` : ''}.`, 'positive', 4000);
     close();
   };
 }

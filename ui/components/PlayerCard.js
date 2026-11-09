@@ -15,7 +15,7 @@
  *   - Hot/cold indicator
  *   - Trait label
  *   - GM relationship bar
- *   - Farm arc label if tier === 'farm'
+ *   - Career: the seasons before this one (§122.9), or why there are none
  *
  * Section 1.11b: No premium gating. All data shown regardless of tier.
  *
@@ -121,7 +121,6 @@ function _renderCard(player, playerId, state) {
   const indicator    = getHotColdIndicator(impScores);
   const impLast      = lastSeasonIMP(player);
   const impLabel     = impScores?.impS != null ? getImpLabel(impScores.impS) : '';
-  const isFarm       = player.tier === 'farm';
   const userRosterIds = new Set(state.userTeam?.rosterIds || []);
   const isOwnPlayer  = userRosterIds.has(playerId);
 
@@ -150,8 +149,7 @@ function _renderCard(player, playerId, state) {
           <span class="pc-age">${formatAge(player.dob, baseballYear(StateManager.get()))} yrs</span>
         </div>
         <div class="pc-team">${_escape(teamName)}</div>
-        ${isFarm ? `<div class="pc-farm-badge">Farm System</div>` : ''}
-        ${player.trait ? `<div class="pc-trait">${_escape(player.trait)}</div>` : ''}
+        ${player.trait ? `<div class="pc-trait">${_escape(TRAIT_WORDS[player.trait] || player.trait)}</div>` : ''}
         ${(player.allStarSeasons || []).length ? `<div class="pc-trait" style="color:#c9971c;">★ ${player.allStarSeasons.length > 1 ? `${player.allStarSeasons.length}× ` : ''}All-Star${(player.allStarMvps || []).length ? ` · ${player.allStarMvps.length > 1 ? `${player.allStarMvps.length}× ` : ''}ASG MVP` : ''}</div>` : ''}
       </div>
       ${indicator ? `<div class="pc-hot-cold">${indicator}</div>` : ''}
@@ -163,6 +161,9 @@ function _renderCard(player, playerId, state) {
     <!-- Season stats -->
     ${_renderStats(player, isPitcher, state)}
 
+    <!-- §122.9 career: the seasons before this one, or why there are none -->
+    ${_renderCareer(player, isPitcher)}
+
     <!-- IMP trend -->
     ${_renderImpTrend(impScores, impLabel, impLast)}
 
@@ -172,8 +173,6 @@ function _renderCard(player, playerId, state) {
     <!-- GM relationship (own players only) -->
     ${isOwnPlayer ? _renderRelationship(player) : ''}
 
-    <!-- Farm arc (farm players only) -->
-    ${isFarm ? _renderFarmArc(player) : ''}
 
     <!-- §85 trade talks: start from any player's card -->
     ${_tradeButton(player, state)}
@@ -191,8 +190,54 @@ function _renderAsk(player, state) {
       <div class="pc-section-label">Asking</div>
       <div class="pc-contract-row">
         <div class="pc-contract-salary">${formatSalary(t.salary)}/yr</div>
-        <div class="pc-contract-status">${years} year${years === 1 ? '' : 's'}${t.bonus ? ` · ${formatSalary(t.bonus)} bonus` : ''}${t.toFarm ? ' · signs to the farm' : ''}</div>
+        <div class="pc-contract-status">${years} year${years === 1 ? '' : 's'}${t.bonus ? ` · ${formatSalary(t.bonus)} bonus` : ''}</div>
       </div>
+      ${Number.isFinite(player._faSince) ? `<div class="pc-ask-note">Unsigned for ${_daysText(Math.max(0, Math.floor((Date.now() - player._faSince) / 86_400_000)))}${years === 1 && state.phase !== PHASE.OFFSEASON ? ' · paid only for the days on a roster' : ''}</div>` : ''}
+    </div>`;
+}
+
+const TRAIT_WORDS = { youngGun: 'Young gun', clubhouseLeader: 'Clubhouse leader', veteran: 'Veteran', volatile: 'Volatile', consistent: 'Consistent' };
+const _daysText = (d) => (d === 0 ? 'less than a day' : `${d} day${d === 1 ? '' : 's'}`);
+
+const ORIGIN_NOTE = {
+  rookie:      'First season in the league: no league record yet. The ratings are our scouts\' projection.',
+  overseas:    'Played professionally overseas: no league record. The ratings are our scouts\' estimate.',
+  independent: 'Came up through independent ball: little or no league record. The ratings are mostly our scouts\' estimate.',
+};
+
+/** §122.9 the seasons before this one (no clubs, just the numbers), with the career line. */
+function _renderCareer(player, isPitcher) {
+  const log = (player.seasonLog || []).filter(e => e?.stats);
+  const note = ORIGIN_NOTE[player.origin] || '';
+  if (!log.length) {
+    return note ? `<div class="pc-section"><div class="pc-section-label">Career</div><div class="pc-origin-note">${_escape(note)}</div></div>` : '';
+  }
+  const f3 = (x) => x.toFixed(3).replace(/^0/, '');
+  const ipText = (ip) => `${Math.floor(ip + 1e-6)}.${Math.round(((ip + 1e-6) % 1) * 3)}`;
+  const tot = {};
+  for (const e of log) for (const [k, v] of Object.entries(e.stats)) if (typeof v === 'number') tot[k] = (tot[k] || 0) + v;
+  const head = isPitcher ? ['Year', 'G', 'IP', 'W-L', 'ERA', 'K', 'SV'] : ['Year', 'G', 'AB', 'AVG', 'HR', 'RBI', 'SB', 'OPS'];
+  const row = (label, st) => {
+    if (isPitcher) {
+      const era = st.ip ? (9 * (st.er || 0) / st.ip).toFixed(2) : '—';
+      return [label, st.g || 0, st.ip ? ipText(st.ip) : '0.0', `${st.w || 0}-${st.l || 0}`, era, st.k || 0, st.sv || 0];
+    }
+    const pa = (st.ab || 0) + (st.bb || 0) + (st.hbp || 0) + (st.sf || 0);
+    const ops = st.ab ? f3(((st.h || 0) + (st.bb || 0) + (st.hbp || 0)) / Math.max(1, pa) + (st.tb || 0) / st.ab) : '—';
+    return [label, st.g || 0, st.ab || 0, st.ab ? f3((st.h || 0) / st.ab) : '—', st.hr || 0, st.rbi || 0, st.sb || 0, ops];
+  };
+  const rows = [...log].reverse().map(e => row(String(e.year ?? e.season), e.stats));
+  const cells = (xs, cls = '') => `<tr class="${cls}">${xs.map(x => `<td>${_escape(String(x))}</td>`).join('')}</tr>`;
+  return `
+    <div class="pc-section">
+      <div class="pc-section-label">Career · ${log.length} season${log.length === 1 ? '' : 's'}</div>
+      <div class="pc-career-wrap">
+        <table class="pc-career">
+          <thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(r => cells(r)).join('')}${cells(row('Total', tot), 'pc-career-tot')}</tbody>
+        </table>
+      </div>
+      ${note ? `<div class="pc-origin-note">${_escape(note)}</div>` : ''}
     </div>`;
 }
 
@@ -259,7 +304,7 @@ function _renderStats(player, isPitcher, state) {
 
   if (isPitcher) {
     const era  = s.ip ? ((s.er||0) / s.ip * 9).toFixed(2) : '—';
-    const whip = s.ip ? (((s.h||0) + (s.bb||0)) / s.ip).toFixed(2) : '—';
+    const whip = s.ip ? (((s.h_allowed||0) + (s.bb||0)) / s.ip).toFixed(2) : '—';
     const ip   = s.ip ? `${Math.floor(s.ip)}.${Math.round((s.ip % 1) * 3)}` : '—';
     return `
       <div class="pc-section">
@@ -360,22 +405,6 @@ function _renderRelationship(player) {
   `;
 }
 
-function _renderFarmArc(player) {
-  if (!player._farmArc) return '';
-  const labels = {
-    motivation: '↑ Performing above expectations',
-    decline:    '↓ Struggling to develop',
-    steady:     '— Progressing steadily',
-  };
-  const label = labels[player._farmArc] || player._farmArc;
-  return `
-    <div class="pc-section">
-      <div class="pc-section-label">Development Arc</div>
-      <div style="font-size:13px;color:var(--soft);">${_escape(label)}</div>
-    </div>
-  `;
-}
-
 // ─────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────
@@ -445,6 +474,14 @@ function _injectCSS() {
     .pc-pos{font-weight:700;color:var(--text);}
     .pc-dot{color:var(--border);}
     .pc-team{font-size:13px;color:var(--soft);margin-bottom:3px;}
+    .pc-career-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;max-height:220px;overflow-y:auto;}
+    .pc-career{width:100%;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums;}
+    .pc-career th{font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);text-align:right;padding:3px 5px;position:sticky;top:0;background:var(--surface);}
+    .pc-career td{text-align:right;padding:3px 5px;color:var(--text);border-top:1px solid var(--border);white-space:nowrap;}
+    .pc-career th:first-child,.pc-career td:first-child{text-align:left;}
+    .pc-career-tot td{font-weight:800;}
+    .pc-origin-note{font-size:12px;color:var(--soft);line-height:1.45;margin-top:6px;}
+    .pc-ask-note{font-size:12px;color:var(--muted);margin-top:4px;}
     .pc-farm-badge{font-size:10px;font-weight:700;color:var(--text);
       background:var(--chip-accent-bg);padding:1px 6px;border-radius:4px;display:inline-block;}
     .pc-trait{font-size:11px;color:var(--muted);font-style:italic;margin-top:2px;}

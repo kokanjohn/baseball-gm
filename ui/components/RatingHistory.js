@@ -103,7 +103,7 @@ export function openRatingHistory(state) {
     const r = pts[0]?.r ?? teamRating(state, 'user');
     content = `
       <div class="rh-summary"><div class="rh-now">${r}</div><div class="rh-sub">Rating today</div></div>
-      <div class="rh-empty">The history starts the day you took over. Every time the rating moves — a trade, a call-up, an injury, a player developing — it's added here, season after season.</div>`;
+      <div class="rh-empty">The history starts the day you took over. Every time the rating moves — a trade, a signing, an injury, a player developing — it's added here, season after season.</div>`;
   } else {
     const first = pts[0], last = pts[pts.length - 1];
     const hi = pts.reduce((a, p) => (p.r > a.r ? p : a)), lo = pts.reduce((a, p) => (p.r < a.r ? p : a));

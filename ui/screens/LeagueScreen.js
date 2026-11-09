@@ -3,7 +3,8 @@
  * League tab rendered into #league-content.
  *
  * Three internal tabs (Section 1.14 — LOCKED):
- *   Players   — league-wide player list, filterable by pos/team, sortable by stat
+ *   Players   — §122.7 ESPN-fantasy style: opens on everyone we could add (free
+ *               agents and waivers); Filter / Team / Health / Sort; add from the row
  *   Teams     — all 10 teams grouped by division with record and streak
  *   Standings — division standings with W/L/GB + stat leaders (Section 28.7)
  *   Moves     — §90 the League wire: every trade, signing, claim and release,
@@ -16,7 +17,6 @@
  *
  * Activity feed (Section 28.5 — LOCKED):
  *   72-hour rolling feed shown at bottom of Standings tab.
- *   CPU farm is NOT browsable — only user's farm shown in TeamScreen.
  *
  * Hot/cold indicators shown on Players tab (own roster only on free tier).
  */
@@ -24,7 +24,8 @@
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
-import { getHotColdIndicator, getImpLeaderboard } from '../../engine/IMPEngine.js';
+import { getHotColdIndicator, getImpLeaderboard, lastSeasonIMP } from '../../engine/IMPEngine.js';
+import { openSignSheet } from '../components/SignSheet.js';
 import {
   formatRecord, formatGB, formatOVR,
   formatERA, formatAVG, formatStreak,
@@ -42,7 +43,7 @@ let _mounted    = false;
 let _listeners  = [];
 
 // Players tab filter/sort state
-let _playerFilter = { pos: 'batters', team: 'all', onRosters: false };
+let _playerFilter = { pos: 'batters', view: 'available', team: 'all', health: 'all' };   // §122.7
 let _playerSort   = { col: 'ovr', dir: 'desc' };
 let _lpSearch     = '';
 // §90 Moves tab filter: 'all' | 'trades' | 'ours'
@@ -71,6 +72,20 @@ export function mount() {
   wire('roster:changed',    () => refresh());
   wire('nav:tabActivated',  ({ tab }) => { if (tab === 'league') refresh(); });
 
+  refresh();
+}
+
+/**
+ * showAvailable({ side, pos }) — §122.4 an open spot on the Team screen jumps
+ * here: League → Players, everyone we could add who fits the spot.
+ */
+export function showAvailable({ side = 'hitter', pos = null } = {}) {
+  _activeTab = 'players';
+  _lpSearch = '';
+  const key = side === 'pitcher' ? (pos === 'SP' || pos === 'RP' ? pos : 'pitchers') : (pos && pos !== 'DH' ? pos : 'batters');
+  _playerFilter = { pos: key, view: 'available', team: 'all', health: 'healthy' };
+  _playerSort = { col: 'ovr', dir: 'desc' };
+  App.switchTab('league');
   refresh();
 }
 
@@ -386,74 +401,59 @@ function _renderPlayers(state) {
   const players       = state.players || {};
   const impScores     = state.impScores || {};
   const leagueTeams   = state.leagueTeams || [];
+  const f             = _playerFilter;
 
   const isSearching = _lpSearch.trim().length > 0;
-  const wire = _playerFilter.team === 'waivers' || _playerFilter.team === 'fa';
+  const waivers = FreeAgency.waiverList(state), fas = FreeAgency.freeAgentList(state);
+  const rostered = () => [...(state.userTeam?.rosterIds || []), ...leagueTeams.flatMap(t => t.rosterIds || [])].map(id => players[id]).filter(Boolean);
 
-  // All active roster players — or, §96, the waiver wire or the free agents
-  // (a search looks everywhere: every roster, the wire and the market).
-  const unattached = [...FreeAgency.waiverList(state), ...FreeAgency.freeAgentList(state)];
-  let allPlayers = _playerFilter.team === 'waivers' ? FreeAgency.waiverList(state)
-    : _playerFilter.team === 'fa' ? FreeAgency.freeAgentList(state)
-    : [
-        ...[...(state.userTeam?.rosterIds || []), ...leagueTeams.flatMap(t => t.rosterIds || [])].map(id => players[id]).filter(Boolean),
-        ...(isSearching ? unattached : []),
-      ];
+  // §122.7 Filter: who's in the list. Available (the default) is everyone we could add.
+  let allPlayers = isSearching ? [...rostered(), ...waivers, ...fas]
+    : f.view === 'waivers' ? waivers
+    : f.view === 'fa'      ? fas
+    : f.view === 'rosters' ? rostered()
+    : f.view === 'all'     ? [...rostered(), ...waivers, ...fas]
+    : [...waivers, ...fas];
+  const available = (p) => p.onWaivers || p.group === 'freeAgent';
+  const showMarket = !isSearching && ['available', 'waivers', 'fa'].includes(f.view);
 
-  // "Other Teams" = hide user's own players — bypassed when searching
-  if (_playerFilter.onRosters && !isSearching && !wire) {
-    allPlayers = allPlayers.filter(p => !userRosterIds.has(p.id));
+  // Team: one club's players (On Rosters / All).
+  if (!isSearching && ['rosters', 'all'].includes(f.view) && f.team !== 'all') {
+    allPlayers = allPlayers.filter(p => (f.team === 'user' ? userRosterIds.has(p.id) : p.teamId === f.team) && !available(p));
   }
+  // Health: IL-eligible (out long enough for the IL) or healthy (day-to-day counts, tagged DTD).
+  if (!isSearching && f.health === 'il') allPlayers = allPlayers.filter(p => _ilEligible(p));
+  if (!isSearching && f.health === 'healthy') allPlayers = allPlayers.filter(p => !_ilEligible(p));
 
-  // Search filter (last name) — always runs, no other filters apply when searching
+  // Search filter (last name) — runs over everyone
   if (isSearching) {
     const q = _lpSearch.trim().toLowerCase();
-    allPlayers = allPlayers.filter(p =>
-      (p.name || '').toLowerCase().includes(q)
-    );
+    allPlayers = allPlayers.filter(p => (p.name || '').toLowerCase().includes(q));
   }
 
   // Position filter — bypassed when searching so cross-position search works
   const HITTER_POS  = ['C','1B','2B','3B','SS','OF','DH'];
   const PITCHER_POS = ['SP','RP'];
   const POS_FAMILY  = {
-    '2B': ['2B','2B/SS'],
-    '1B': ['1B','1B/3B'],
-    'DH': ['DH','DH/OF'],
-    'SS': ['SS','2B/SS'],
-    '3B': ['3B','1B/3B'],
-    'OF': ['OF','DH/OF'],
+    '2B': ['2B','2B/SS'], '1B': ['1B','1B/3B'], 'DH': ['DH','DH/OF'],
+    'SS': ['SS','2B/SS'], '3B': ['3B','1B/3B'], 'OF': ['OF','DH/OF'],
   };
-  const pos = _playerFilter.pos;
-
+  const pos = f.pos;
   if (!isSearching) {
-    if (pos === 'batters') {
-      allPlayers = allPlayers.filter(p => !['SP','RP'].includes(p.pos));
-    } else if (pos === 'pitchers') {
-      allPlayers = allPlayers.filter(p => ['SP','RP'].includes(p.pos));
-    } else if (pos !== 'all') {
+    if (pos === 'batters') allPlayers = allPlayers.filter(p => !['SP','RP'].includes(p.pos));
+    else if (pos === 'pitchers') allPlayers = allPlayers.filter(p => ['SP','RP'].includes(p.pos));
+    else if (pos !== 'all') {
       const family = POS_FAMILY[pos] || [pos];
       allPlayers = allPlayers.filter(p => family.includes(p.nativePos || p.pos));
     }
   }
 
-  // Team filter
-  if (_playerFilter.team === 'user') {
-    allPlayers = allPlayers.filter(p => userRosterIds.has(p.id));
-  } else if (_playerFilter.team !== 'all' && !wire) {
-    allPlayers = allPlayers.filter(p => p.teamId === _playerFilter.team);
-  }
-
-  allPlayers = _sortPlayers(allPlayers, _playerSort, impScores);
-
+  allPlayers = _sortPlayers(allPlayers, _playerSort, impScores, state);
   const isPitcherView = pos === 'pitchers' || PITCHER_POS.includes(pos);
 
   // ── Filter UI (sticky) ────────────────────────────────────────
   const posBtn = (label, key) =>
-    `<button class="lp-pos-btn ${_playerFilter.pos === key ? 'active' : ''}" data-pos="${key}">${label}</button>`;
-
-  // Row 1: Batters | Pitchers
-  // Row 2: position chips
+    `<button class="lp-pos-btn ${f.pos === key ? 'active' : ''}" data-pos="${key}">${label}</button>`;
   const filterBar = `
     <div class="lp-pos-bar">
       <div class="lp-pos-row1">
@@ -465,37 +465,45 @@ function _renderPlayers(state) {
         <span class="lp-sep">|</span>
         ${PITCHER_POS.map(p => posBtn(p, p)).join('')}
       </div>
-    </div>
-  `;
+    </div>`;
 
-  // Roster bar: All | On Rosters | [team select] [search]
-  const teamOptions = [
-    `<option value="all"  ${_playerFilter.team === 'all'  ? 'selected' : ''}>All Teams</option>`,
-    `<option value="user" ${_playerFilter.team === 'user' ? 'selected' : ''}>${_escape(state.userTeam?.abbr || 'My Team')}</option>`,
-    `<option value="waivers" ${_playerFilter.team === 'waivers' ? 'selected' : ''}>On Waivers (${FreeAgency.waiverList(state).length})</option>`,
-    `<option value="fa" ${_playerFilter.team === 'fa' ? 'selected' : ''}>Free Agents (${FreeAgency.freeAgentList(state).length})</option>`,
-    ...leagueTeams.map(t =>
-      `<option value="${t.id}" ${_playerFilter.team === t.id ? 'selected' : ''}>${_escape(t.name)}</option>`
-    ),
+  const opt = (v, label, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${label}</option>`;
+  const viewSel = [
+    opt('available', `Available (${waivers.length + fas.length})`, f.view),
+    opt('waivers', `On Waivers (${waivers.length})`, f.view),
+    opt('fa', `Free Agents (${fas.length})`, f.view),
+    opt('rosters', 'On Rosters', f.view),
+    opt('all', 'All', f.view),
+  ].join('');
+  const teamSel = [
+    opt('all', 'All Teams', f.team),
+    opt('user', _escape(state.userTeam?.abbr || 'My Team'), f.team),
+    ...leagueTeams.map(t => opt(t.id, _escape(t.name), f.team)),
+  ].join('');
+  const healthSel = [opt('all', 'Health: All', f.health), opt('il', 'IL-eligible', f.health), opt('healthy', 'Healthy', f.health)].join('');
+  const sortSel = [
+    opt('ovr', 'Sort: OVR', _playerSort.col),
+    ...(showMarket ? [opt('price', 'Sort: Price', _playerSort.col), opt('days', 'Sort: Days unsigned', _playerSort.col)] : []),
+    opt('imp', 'Sort: Impact', _playerSort.col),
   ].join('');
 
   const rosterFilterBar = `
     <div class="lp-roster-bar">
-      <button class="lp-roster-btn ${!_playerFilter.onRosters ? 'active' : ''}" data-roster="all">All</button>
-      <button class="lp-roster-btn ${_playerFilter.onRosters  ? 'active' : ''}" data-roster="on">Other Teams</button>
-      <select class="lp-team-select" id="lp-team-select">${teamOptions}</select>
+      <select class="lp-sel" id="lp-view-select" aria-label="Filter">${viewSel}</select>
+      ${['rosters', 'all'].includes(f.view) ? `<select class="lp-sel" id="lp-team-select" aria-label="Team">${teamSel}</select>` : ''}
+      <select class="lp-sel" id="lp-health-select" aria-label="Health">${healthSel}</select>
+      <select class="lp-sel" id="lp-sort-select" aria-label="Sort">${sortSel}</select>
+    </div>
+    <div class="lp-roster-bar">
       <input id="lp-search" type="search" placeholder="Last name…" value="${_escape(_lpSearch)}"
         class="lp-search-input" autocomplete="off" autocorrect="off" spellcheck="false">
-      <button class="lp-reset-btn" id="lp-reset-btn" title="Reset filters">↺</button>
-    </div>
-  `;
+      <button class="lp-reset-btn" id="lp-reset-btn" title="Reset filters">Reset</button>
+    </div>`;
 
-  // Column definitions — order per spec.
-  // Hitters:  H/AB | AVG | R | HR | RBI | BB | SB | IMP | RTG
-  // Pitchers: IP | H | ER | BB | K | W | ERA | SVHD | IMP | RTG
-  // The first 2 visible stat cols (before scroll) are: AVG for hitters, IP for pitchers.
-  // IMP and RTG are last — scroll into view.
-  const statCols = isPitcherView
+  // Columns: for players we could add, the add button, the asking price and how long
+  // they've been unsigned (or the time left on waivers) come first.
+  const market = showMarket ? [{ key: 'add', label: '' }, { key: 'price', label: 'ASK' }, { key: 'days', label: 'DAYS' }] : [];
+  const statCols = [...market, ...(isPitcherView
     ? [
         { key:'ip',   label:'IP'   },
         { key:'h_allowed', label:'H' },
@@ -505,7 +513,7 @@ function _renderPlayers(state) {
         { key:'w',    label:'W'    },
         { key:'era',  label:'ERA'  },
         { key:'svhd', label:'SVHD' },
-        { key:'imp7', label:'IMP'  },
+        { key:'imp',  label:'IMP'  },
         { key:'ovr',  label:'RTG'  },
       ]
     : [
@@ -516,49 +524,58 @@ function _renderPlayers(state) {
         { key:'rbi',  label:'RBI'  },
         { key:'bb',   label:'BB'   },
         { key:'sb',   label:'SB'   },
-        { key:'imp7', label:'IMP'  },
+        { key:'imp',  label:'IMP'  },
         { key:'ovr',  label:'RTG'  },
-      ];
+      ])];
 
-  // IMP is now inline in statCols — no separate allCols needed
+  const extra = (k) => k === 'hab' ? ' lp-th-hab' : k === 'imp' ? ' lp-td-imp' : k === 'add' ? ' lp-td-add' : k === 'price' || k === 'days' ? ' lp-td-mkt' : '';
   const heads = statCols.map(c => {
     const isActive = c.key === _playerSort.col;
-    const extraCls = c.key === 'hab' ? ' lp-th-hab' : c.key === 'imp7' ? ' lp-td-imp' : '';
-    return `<div class="lp-th${extraCls} ${isActive ? 'lp-th-active' : ''}" data-sort="${c.key}">${c.label}</div>`;
+    return `<div class="lp-th${extra(c.key)} ${isActive ? 'lp-th-active' : ''}" ${c.key === 'add' ? '' : `data-sort="${c.key}"`}>${c.label}</div>`;
   }).join('');
 
   const rows = allPlayers.slice(0, 100).map(p => {
     const isUser   = userRosterIds.has(p.id);
-    const imp      = impScores[p.id];
-    // Use team abbr for user's players — never 'YOU'
     const teamAbbr = isUser
       ? ((state.userTeam?.abbr || '').toUpperCase() || '—')
-      : p.onWaivers ? _waiverTag(p)
-      : p.group === 'freeAgent' ? 'Free agent'
+      : p.onWaivers ? 'Waivers'
+      : p.group === 'freeAgent' ? 'FA'
       : _teamAbbr(p.teamId, state);
+    const dtd = p.injury?.status === 'dtd' ? ' · <span class="lp-dtd">DTD</span>' : _ilEligible(p) ? ' · <span class="lp-il">IL</span>' : '';
+    // §122.9 a player with nothing this season (a free agent, spring): last season's line, marked.
+    const shown = _statsShown(p);
     const statVals = statCols.map(c => {
-      if (c.key === 'imp7') {
-        const imp7 = imp?.imp7;
+      if (c.key === 'add') {
+        const label = p.onWaivers ? (p._userClaim ? 'Claimed' : 'Claim') : p.group === 'freeAgent' ? 'Add' : '';
+        const kind = p.onWaivers ? (p._userClaim ? 'withdraw' : 'claim') : 'sign';
+        return `<div class="lp-td lp-td-add">${label && !(p.onWaivers && p._waivedBy === 'user') && !p.isInjured
+          ? `<button class="lp-add-btn${p._userClaim ? ' on' : ''}" data-add="${p.id}" data-kind="${kind}">${label}</button>` : ''}</div>`;
+      }
+      if (c.key === 'price') return `<div class="lp-td lp-td-mkt">${p.group === 'freeAgent' ? _askText(state, p) : p.onWaivers ? _money(p.contractSalary || 0) : '—'}</div>`;
+      if (c.key === 'days') return `<div class="lp-td lp-td-mkt">${p.onWaivers ? _waiverLeft(p) : p.group === 'freeAgent' ? _daysUnsigned(p) : '—'}</div>`;
+      if (c.key === 'imp') {
+        const now = impScores[p.id]?.impS;
+        const v = now ?? lastSeasonIMP(p);
         return `<div class="lp-td lp-td-imp">${
-          imp7 != null
-            ? `<span class="lp-imp ${imp7 > 0 ? 'lp-imp-pos' : imp7 < 0 ? 'lp-imp-neg' : 'lp-imp-neu'}">${imp7 > 0 ? '+' : ''}${imp7.toFixed(1)}</span>`
+          v != null
+            ? `<span class="lp-imp ${v > 0 ? 'lp-imp-pos' : v < 0 ? 'lp-imp-neg' : 'lp-imp-neu'}${now == null ? ' lp-imp-ly' : ''}" title="${now == null ? 'Last season' : 'This season'}">${v > 0 ? '+' : ''}${v.toFixed(1)}${now == null ? '<span class="lp-ly">LY</span>' : ''}</span>`
             : `<span class="lp-imp lp-imp-neu">—</span>`
         }</div>`;
       }
-      const extraCls = c.key === 'hab' ? ' lp-td-hab' : '';
-      return `<div class="lp-td${extraCls}">${_playerStatVal(p, c.key)}</div>`;
+      return `<div class="lp-td${c.key === 'hab' ? ' lp-td-hab' : ''}">${_playerStatVal(shown.p, c.key)}</div>`;
     }).join('');
 
     return `
       <div class="lp-row ${isUser ? 'user-player-row' : ''}" data-player="${p.id}">
         <div class="lp-td-name">
           <div class="lp-name-line">${_escape(p.name)}</div>
-          <div class="lp-name-sub">${_escape(teamAbbr)} · ${p.nativePos || p.pos}</div>
+          <div class="lp-name-sub">${_escape(teamAbbr)} · ${p.nativePos || p.pos}${shown.year ? ` · <span class="lp-lyline">'${String(shown.year).slice(-2)} stats</span>` : ''}${dtd}</div>
         </div>
         ${statVals}
-      </div>
-    `;
+      </div>`;
   }).join('');
+
+  const leaders = f.view === 'rosters' && !isSearching ? _renderImpactLeaders(state) : '';
 
   return `
     <div id="lp-filter-wrap" class="lp-tab-wrap active">
@@ -566,19 +583,60 @@ function _renderPlayers(state) {
         ${filterBar}
         ${rosterFilterBar}
       </div>
+      ${leaders}
       <div class="lp-scroll-wrap">
         <div class="lp-header">
           <div class="lp-th-name lp-col-sticky">Player</div>
           ${heads}
         </div>
         <div id="lp-list">${rows || `<div class="lw-empty">${
-          _playerFilter.team === 'waivers' ? 'No one on waivers fits these filters right now. A club puts a player on waivers to clear a roster spot; other clubs have 72 hours to claim them, worst record first.'
-          : _playerFilter.team === 'fa' ? 'No free agents fit these filters right now.'
+          f.view === 'waivers' ? 'No one on waivers fits these filters right now. A club puts a player on waivers to clear a roster spot; any club can claim for 72 hours, worst record first.'
+          : f.view === 'fa' || f.view === 'available' ? 'No free agents fit these filters right now.'
           : 'No players match these filters.'}</div>`}</div>
         ${allPlayers.length > 100 ? `<div style="padding:8px 16px;font-size:11px;color:var(--muted);">Showing 100 of ${allPlayers.length}</div>` : ''}
       </div>
     </div>
   `;
+}
+
+/** The stats a row shows: this season's, or — with none yet — last season's (and its year). */
+function _statsShown(p) {
+  const s = p.stats || {};
+  if ((s.ab || 0) > 0 || (s.ip || 0) > 0) return { p, year: null };
+  const last = (p.seasonLog || []).filter(e => e?.stats).at(-1);
+  return last ? { p: { ...p, stats: last.stats }, year: last.year } : { p, year: null };
+}
+
+/** §122.7 out long enough for the IL (not day-to-day). */
+function _ilEligible(p) {
+  if (!p?.isInjured && p?.group !== 'il') return false;
+  return p.injury?.status !== 'dtd';
+}
+
+const _money = (k) => (k >= 1000 ? `$${(k / 1000).toFixed(k >= 10000 ? 0 : 1)}M` : `$${Math.round(k)}K`);
+function _askText(state, p) {
+  const t = FreeAgency.termsFor(state, p);
+  return _money(t.salary || 0);
+}
+function _daysUnsigned(p) {
+  return Number.isFinite(p._faSince) ? String(Math.max(0, Math.floor((Date.now() - p._faSince) / 86_400_000))) : '—';
+}
+function _waiverLeft(p) {
+  const left = Math.max(0, FreeAgency.waiverEndsAt(p) - Date.now());
+  const h = Math.floor(left / 3_600_000);
+  return h >= 24 ? `${Math.floor(h / 24)}d left` : `${h}h left`;
+}
+
+/** §30.6 the Impact leaders: the season's top five hitters and pitchers (labels with the number). */
+function _renderImpactLeaders(state) {
+  const lb = getImpLeaderboard(state, 5);
+  if (!lb.hitters.length && !lb.pitchers.length) return '';
+  const col = (title, xs) => `
+    <div class="lp-lead-col">
+      <div class="lp-lead-title">${title}</div>
+      ${xs.map((e, i) => `<div class="lp-lead-row" data-player="${e.playerId}"><span>${i + 1}. ${_escape(e.name)} <span class="lp-lead-tm">${_escape(_teamAbbr(e.teamId, state))}</span></span><span class="lp-lead-v">${e.impS > 0 ? '+' : ''}${e.impS.toFixed(1)}</span></div>`).join('')}
+    </div>`;
+  return `<div class="lp-leaders"><div class="lp-lead-head">Impact leaders</div><div class="lp-lead-cols">${col('Hitters', lb.hitters)}${col('Pitchers', lb.pitchers)}</div></div>`;
 }
 
 function _getPlayerCols(posFilter) {
@@ -640,16 +698,16 @@ function _playerStatVal(player, key) {
   }
 }
 
-function _sortPlayers(players, { col, dir }, impScores = {}) {
+function _sortPlayers(players, { col, dir }, impScores = {}, state = null) {
   return [...players].sort((a, b) => {
-    let va = _sortVal(a, col, impScores);
-    let vb = _sortVal(b, col, impScores);
+    let va = _sortVal(a, col, impScores, state);
+    let vb = _sortVal(b, col, impScores, state);
     const cmp = typeof va === 'string' ? va.localeCompare(vb) : (vb - va);
     return dir === 'asc' ? -cmp : cmp;
   });
 }
 
-function _sortVal(player, col, impScores = {}) {
+function _sortVal(player, col, impScores = {}, state = null) {
   const s = player.stats || {};
   switch (col) {
     case 'ovr':  return player.ovr || 0;
@@ -668,7 +726,10 @@ function _sortVal(player, col, impScores = {}) {
     case 'w':    return s.w    || s.wins || 0;
     case 'k':    return s.k    || 0;
     case 'sv':   return s.sv   || 0;
-    case 'imp7': return impScores[player.id]?.imp7 ?? -99;   // no sample sorts last
+    case 'imp':  return impScores[player.id]?.impS ?? lastSeasonIMP(player) ?? -99;   // no sample sorts last
+    // §122.7 the market sorts: cheapest first, longest unsigned first (waivers: least time left)
+    case 'price': return -(player.group === 'freeAgent' && state ? (FreeAgency.termsFor(state, player).salary || 0) : (player.contractSalary || 0));
+    case 'days':  return player.onWaivers ? -(FreeAgency.waiverEndsAt(player)) / 86_400_000 : Number.isFinite(player._faSince) ? -player._faSince : -Infinity;
     case 'name': return player.name || '';
     default:     return 0;
   }
@@ -697,7 +758,7 @@ function _attachListeners(state) {
   // Reset button — clears all filters, search, and sort back to defaults
   document.getElementById('lp-reset-btn')?.addEventListener('click', () => {
     App.playClick();
-    _playerFilter = { pos: 'batters', team: 'all', onRosters: false };
+    _playerFilter = { pos: 'batters', view: 'available', team: 'all', health: 'all' };
     _playerSort   = { col: 'ovr', dir: 'desc' };
     _lpSearch     = '';
     refresh();
@@ -712,23 +773,21 @@ function _attachListeners(state) {
     });
   });
 
-  // All / Other Teams toggle
-  document.querySelectorAll('.lp-roster-btn[data-roster]').forEach(btn => {
-    btn.addEventListener('click', () => {
+  // §122.7 Filter / Team / Health / Sort
+  const sel = (id, fn) => document.getElementById(id)?.addEventListener('change', (e) => { fn(e.target.value); refresh(); });
+  sel('lp-view-select',   (v) => { _playerFilter.view = v; if (!['available', 'waivers', 'fa'].includes(v) && ['price', 'days'].includes(_playerSort.col)) _playerSort = { col: 'ovr', dir: 'desc' }; });
+  sel('lp-team-select',   (v) => { _playerFilter.team = v; });
+  sel('lp-health-select', (v) => { _playerFilter.health = v; });
+  sel('lp-sort-select',   (v) => { _playerSort = { col: v, dir: 'desc' }; });
+
+  // Add from the row: sign a free agent, claim off waivers, or withdraw our claim (the sign sheet asks who goes when full)
+  document.querySelectorAll('.lp-add-btn[data-add]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
       App.playClick();
-      _playerFilter.onRosters = btn.dataset.roster === 'on';
-      refresh();
+      openSignSheet(btn.dataset.add, btn.dataset.kind);
     });
   });
-
-  // Team dropdown
-  const teamSel = document.getElementById('lp-team-select');
-  if (teamSel) {
-    teamSel.addEventListener('change', () => {
-      _playerFilter.team = teamSel.value;
-      refresh();
-    });
-  }
 
   // Search input — key fix: save cursor position, refresh, restore focus+cursor
   // This prevents the "type one letter then lose focus" bug caused by DOM re-render.
@@ -1066,6 +1125,27 @@ function _injectCSS() {
     .lw-row.lw-ours{background:var(--chip-accent-bg);}
     .lw-kind{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:2px;}
     .lw-text{font-size:13px;line-height:1.4;color:var(--text);}
+    /* §122.7 filters, the market columns, add from the row, Impact leaders */
+    .lp-sel{flex:1 1 0;min-width:0;font-size:11px;font-weight:600;padding:5px 6px;border-radius:7px;
+      border:1px solid var(--border);background:var(--surface2);color:var(--text);font-family:inherit;}
+    .lp-search-input{flex:1 1 auto;width:auto;}
+    .lp-reset-btn{width:auto;padding:0 10px;font-size:11px;font-weight:700;}
+    .lp-td-add{width:52px;min-width:52px;}
+    .lp-td-mkt{width:52px;min-width:52px;font-size:11px;}
+    .lp-add-btn{font-size:10px;font-weight:800;padding:4px 6px;border-radius:6px;border:1px solid var(--text);
+      background:var(--text);color:var(--bg);font-family:inherit;cursor:pointer;}
+    .lp-add-btn.on{background:transparent;color:var(--text);}
+    .lp-dtd{color:#fbbf24;font-weight:700;} .lp-il{color:var(--danger);font-weight:700;}
+    .lp-lyline{color:var(--soft);}
+    .lp-ly{font-size:8px;font-weight:700;margin-left:2px;opacity:.75;}
+    .lp-leaders{margin:8px 10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);}
+    .lp-lead-head{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
+    .lp-lead-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .lp-lead-title{font-size:11px;font-weight:700;color:var(--text);margin-bottom:2px;}
+    .lp-lead-row{display:flex;justify-content:space-between;gap:4px;font-size:11px;color:var(--text);padding:2px 0;cursor:pointer;min-width:0;}
+    .lp-lead-row > span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .lp-lead-tm{color:var(--muted);font-size:10px;}
+    .lp-lead-v{font-weight:800;}
     .lw-empty{padding:28px 20px;font-size:13px;line-height:1.5;color:var(--muted);text-align:center;}
 
     /* Clickable team cards */
