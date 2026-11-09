@@ -71,6 +71,7 @@ import {
 } from '../data/constants.js';
 
 import { computeOVR, isAvailable } from './PlayerFactory.js';
+import { playingRating, trueRatings } from './Diamonds.js';
 import { injuryChancePerExposure } from './InjuryEngine.js';
 import {
   ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, tireAfterBF, reliefInnings,
@@ -662,13 +663,13 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
 
   if (bases.second && !bases.third) {
     const runner = players[bases.second];
-    const spd    = _effectiveSR(runner, 'speed', runner?.subRatings?.speed) || 50;
+    const spd    = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
     if (spd >= SIM_H_SPEED_SB_THRESHOLD && _roll() < SIM_SB_ATTEMPT_PROB * 0.7) {
       runnerId = bases.second; fromBase = 'second'; toBase = 'third';
     }
   } else if (bases.first && !bases.second) {
     const runner = players[bases.first];
-    const spd    = _effectiveSR(runner, 'speed', runner?.subRatings?.speed) || 50;
+    const spd    = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
     if (spd >= SIM_H_SPEED_SB_THRESHOLD && _roll() < SIM_SB_ATTEMPT_PROB) {
       runnerId = bases.first; fromBase = 'first'; toBase = 'second';
     }
@@ -677,7 +678,7 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
   if (!runnerId) return null;
 
   const runner   = players[runnerId];
-  const spd      = _effectiveSR(runner, 'speed', runner?.subRatings?.speed) || 50;
+  const spd      = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
   const success  = _roll() < (SIM_SB_BASE_SUCCESS + (spd / SIM_SB_SPEED_BONUS_DIVISOR));
 
   const newBases = { ...bases };
@@ -995,9 +996,9 @@ export function leagueNorms(teams, players) {
     for (const sl of t.lineupSlots || []) {
       const p = players[sl.playerId];
       if (!ok(p)) continue;
-      sum.contact += _effectiveSR(p, 'contact', p.subRatings?.contact, { coached: false });
-      sum.power   += _effectiveSR(p, 'power',   p.subRatings?.power, { coached: false });
-      sum.speed   += _effectiveSR(p, 'speed',   p.subRatings?.speed, { coached: false });
+      sum.contact += _effectiveSR(p, 'contact', playingRating(p, 'contact'), { coached: false });
+      sum.power   += _effectiveSR(p, 'power',   playingRating(p, 'power'), { coached: false });
+      sum.speed   += _effectiveSR(p, 'speed',   playingRating(p, 'speed'), { coached: false });
       nh++;
     }
     // Pitchers: the league average a batter FACES — weighted by the innings
@@ -1009,8 +1010,8 @@ export function leagueNorms(teams, players) {
       const prior = NORM_PITCHER_PRIOR_IP[p?.group];
       if (!ok(p) || prior == null) continue;
       const w = (p.stats?.ip || 0) + prior;
-      sum.stuff   += w * _effectiveSR(p, 'stuff',   p.subRatings?.stuff, { coached: false });
-      sum.control += w * _effectiveSR(p, 'control', p.subRatings?.control, { coached: false });
+      sum.stuff   += w * _effectiveSR(p, 'stuff',   playingRating(p, 'stuff'), { coached: false });
+      sum.control += w * _effectiveSR(p, 'control', playingRating(p, 'control'), { coached: false });
       np += w;
     }
   }
@@ -1040,8 +1041,9 @@ export function leagueNorms(teams, players) {
  */
 export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 1.0, context = {}) {
   const { inning = 1, isSpring = false } = context;
-  const sr  = batter.subRatings  || {};
-  const psr = pitcher.subRatings || {};
+  // §122.9 the games play the truth (an untested player's estimate may be off).
+  const sr  = trueRatings(batter);
+  const psr = trueRatings(pitcher);
 
   // Apply injury penalty if active
   const contact  = _effectiveSR(batter,  'contact',  sr.contact);
@@ -1189,7 +1191,7 @@ export function plateAppearanceRates({ contact, power, speed, stuff, control }, 
  *   playMod     — override play type for display (e.g. 'fielders_choice', 'sac_fly')
  */
 function _advanceBases(bases, atBat, batter, players, outs = 0) {
-  const speed = _effectiveSR(batter, 'speed', batter.subRatings?.speed);
+  const speed = _effectiveSR(batter, 'speed', playingRating(batter, 'speed'));
   let newBases   = { first: bases.first, second: bases.second, third: bases.third };
   let runsScored = 0;
   const runnerIds = [];
@@ -1228,7 +1230,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       // First: tries to score — throw-out check based on speed
       if (bases.first) {
         const runner = players[bases.first];
-        const rs     = _effectiveSR(runner, 'speed', runner?.subRatings?.speed) || 50;
+        const rs     = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
         if (rs >= SIM_H_SPEED_DOUBLE_SCORE_THRESHOLD) {
           if (_roll() < throwoutProb(SIM_THROWOUT_PLATE_BASE, rs)) {
             // Thrown out at plate — runner out, batter ends on second
@@ -1258,7 +1260,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       // Second: tries to score — throw-out check
       if (bases.second) {
         const runner = players[bases.second];
-        const rs     = _effectiveSR(runner, 'speed', runner?.subRatings?.speed) || 50;
+        const rs     = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
         if (_roll() < throwoutProb(SIM_THROWOUT_PLATE_BASE, rs)) {
           extraOuts++;         // thrown out at plate
           newBases.second = null;
@@ -1272,7 +1274,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       // First: advances to second (normal) or tries for third (fast runner)
       if (bases.first) {
         const runner = players[bases.first];
-        const rs     = _effectiveSR(runner, 'speed', runner?.subRatings?.speed) || 50;
+        const rs     = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
         if (rs >= SIM_H_SPEED_STRETCH_THRESHOLD) {
           // Tries for third — throw-out check
           if (_roll() < throwoutProb(SIM_THROWOUT_EXTRA_BASE, rs)) {
@@ -1389,7 +1391,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       // Third: tag-up to score (sac fly)
       if (bases.third) {
         const runner3 = players[bases.third];
-        const rs3 = _effectiveSR(runner3, 'speed', runner3?.subRatings?.speed) || 50;
+        const rs3 = _effectiveSR(runner3, 'speed', playingRating(runner3, 'speed')) || 50;
         if (rs3 >= SIM_H_SPEED_TAG_THRESHOLD) {
           runsScored++;
           runnerIds.push(bases.third);
@@ -1400,7 +1402,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       // Second: can tag up to third on a deep fly
       if (bases.second && outs < 2) {
         const runner2 = players[bases.second];
-        const rs2 = _effectiveSR(runner2, 'speed', runner2?.subRatings?.speed) || 50;
+        const rs2 = _effectiveSR(runner2, 'speed', playingRating(runner2, 'speed')) || 50;
         // 50% chance runner on second tries to advance to third on deep fly
         if (rs2 >= 60 && _roll() < 0.50) {
           if (_roll() < throwoutProb(SIM_THROWOUT_EXTRA_BASE, rs2)) {
@@ -1897,7 +1899,7 @@ function _pitcherHurt(gs, players, plays, pitcher, side, tired, inning, outs, ba
 // with how much offense a game happens to produce.
 function _pitcherTargetInnings(pitcher, gs = null) {
   if (gs?.exhibition) return gs.exhibition.starterIds.has(pitcher?.id) ? ALLSTAR_STARTER_INNINGS : 1;
-  const stam = pitcher?.subRatings?.stamina ?? 60;
+  const stam = playingRating(pitcher, 'stamina') ?? 60;
   const isRP = pitcher?.group === PLAYER_GROUP.BULLPEN
             || pitcher?.group === PLAYER_GROUP.PITCHER_BENCH;
   if (isRP) return Math.max(1, Math.round(1 + (stam - 40) / 25)); // ~1–2 IP

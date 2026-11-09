@@ -21,6 +21,7 @@
 import { PLAYER_SURNAMES } from '../data/player-names.js';
 import { createPlayer, computeOVR, computeAge, clamp, _freshStats } from './PlayerFactory.js';
 import { writeHistoryForKind } from './LeagueHistory.js';
+import { seedRoleFits, seedUpside } from './Diamonds.js';
 import { leagueNorms } from './SimEngine.js';
 import {
   PLAYER_GROUP,
@@ -574,11 +575,15 @@ export function buildFullLeague({ archetypeId, seasonNum, seasonYear = new Date(
   // Merge all players into one registry
   const players = { ...cpuPlayers, ...userPlayers, ...faPlayers };
 
-  // §122.9 the league already existed: everyone's past seasons.
+  // §122.9 the league already existed: everyone's past seasons — the free
+  // agents' role fits shaped first (their record shows it), the unproven
+  // upside after (it needs to know who has no record).
+  seedRoleFits(faPlayers, leagueOffset, Math.random);
   writeLeaguePast(players, {
     year: seasonYear, seasonNum, level: leagueOffset,
     norms: leagueNorms([...leagueTeams, { lineupSlots, rosterIds }], players),
   });
+  seedUpside(faPlayers, leagueOffset, Math.random);
 
   // Apply archetype values to userTeam object
   applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams);

@@ -17,6 +17,7 @@
  */
 
 import { plateAppearanceRates } from './SimEngine.js';
+import { giveUntestedGap } from './Diamonds.js';
 import { computeOVR, computeAge, _freshStats } from './PlayerFactory.js';
 import {
   HISTORY, PLAYER_ORIGIN, AGE_CURVES, AGE_DEVELOPMENT_WINDOWS,
@@ -47,7 +48,9 @@ export function writeHistoryForKind(p, ctx) {
   else if (kind === 'indie') { opts.origin = originForKind(kind); opts.someLeague = ctx.rand() < 0.4; }
   else if (kind === 'veteran') opts.atLeast = 3;
   else if (kind === 'depth') opts.atLeast = 1;
-  return writeHistory(p, opts);
+  const n = writeHistory(p, opts);
+  giveUntestedGap(p, ctx.rand);   // §122.9 no league record: his ratings are an estimate
+  return n;
 }
 
 /**

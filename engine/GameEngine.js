@@ -79,6 +79,7 @@ import {
 import * as CardEngine from './CardEngine.js';
 import { seasonReview } from './SeasonReview.js';
 import { computeAllIMP, appendGameLog } from './IMPEngine.js';
+import { markAvailable, exposeRatings } from './Diamonds.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
 import * as AllStar from './AllStarEngine.js';
 import { recordOutings, starterRested, bullpenRoles } from './PitchingEngine.js';
@@ -314,7 +315,10 @@ export async function startNewGame(config) {
     s.userTeam.rosterIds   = league.rosterIds;
     s.userTeam.lineupSlots = league.lineupSlots;
     s.freeAgentPool        = league.freeAgentIds;   // §122 anyone can sign them
-    for (const id of league.freeAgentIds) s.players[id]._faSince = clockNow();   // unsigned since the league opened (their price eases from here)
+    for (const id of league.freeAgentIds) {
+      s.players[id]._faSince = clockNow();   // unsigned since the league opened (their price eases from here)
+      markAvailable(s.players[id], clockNow(), Math.random, league.leagueOffset ?? 0);   // §122.9 a diamond: when word gets around (setup is never replayed, §118)
+    }
     s.leagueTalentOffset   = league.leagueOffset ?? 0;   // §69 — league talent level
     s.baseYear             = baseYear;                   // §70 — the league's year for season 1
     s.userTeam.finances.payroll = league.payroll;
@@ -887,6 +891,8 @@ function _commitAt(gameIndex) {
           }
         }
       }
+      // §122.9 every game he plays shows what he really is (spring too).
+      for (const [playerId, gameStats] of Object.entries(perGameDeltas)) exposeRatings(s.players[playerId], _faced(s.players[playerId], gameStats));
       // §122.9 Impact's windows are regular-season form: spring and playoff games stay out.
       if (statKey === 'stats') for (const [playerId, gameStats] of Object.entries(perGameDeltas)) {
         const player = s.players[playerId];
@@ -2186,6 +2192,7 @@ function _finishLeagueGame(date, i) {
     if (away) Development.countGame(s, away.id);
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
     recordOutings(s, g.plays, endMs);   // §76: the arms' record
+    for (const [pid, d] of Object.entries(perGame)) exposeRatings(s.players[pid], _faced(s.players[pid], d));   // §122.9
     if (statKey === 'stats') for (const [pid, d] of Object.entries(perGame)) {
       if (s.players[pid]) s.players[pid]._impGameLog = appendGameLog(s.players[pid], s.currentGameIndex || 0, date, d, g.gameTime)._impGameLog;
     }
@@ -2621,6 +2628,13 @@ function _timeOn(day, timeStr) {
 }
 
 /** The baseball-calendar date shown for a real day (one offset for the season). */
+/** §122.9 how much of him a game showed: plate appearances, or batters faced. */
+function _faced(p, d) {
+  if (!p || !d) return 0;
+  if (p.pos === 'SP' || p.pos === 'RP') return Math.round((d.ip || 0) * 3) + (d.h_allowed || 0) + (d.bb || 0) + (d.hbp || 0);
+  return (d.ab || 0) + (d.bb || 0) + (d.hbp || 0) + (d.sf || 0);
+}
+
 function _displayDateFor(state, realMs) {
   const base = state.schedule[0];
   const baseReal = new Date(base.gameTime); baseReal.setHours(0, 0, 0, 0);

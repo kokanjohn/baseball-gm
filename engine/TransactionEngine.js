@@ -65,6 +65,7 @@ import { cpuWaiverClaimant, weakestPeer } from './LeagueEngine.js';
 import { tradePlayerPatches } from './TradeEngine.js';
 import { payrollRoom, contractToMove, cutOrderAmount, post as postFunds, retainSalary, canAddSalary, seasonTarget, payrollOf } from './FinanceEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
+import { markAvailable, cpuView } from './Diamonds.js';
 import { adjustRapport } from './TradeEngine.js';
 import { releaseToFreeAgency } from './OffseasonEngine.js';
 import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate } from './InjuryEngine.js';
@@ -216,11 +217,13 @@ export const sideOf = (p) => (isPitcher(p) ? 'pitcher' : 'hitter');
  * club's owner will add to the payroll. What a GM scanning the free agents
  * would pick. (Waiver claims are decided days later — not a fill for today.)
  */
-export function rankPickups(state, teamId, need) {
+export function rankPickups(state, teamId, need, { atMs = null } = {}) {
   const fits = _fitFn(need);
+  // §122.9 a CPU club (atMs given) sees his worth once word has got around; the GM sees ratings.
+  const seen = (p) => (atMs != null && teamId !== 'user' ? cpuView(p, atMs) : (p.ovr || 0));
   return _signable(state, teamId)
     .filter(p => !need?.side || (need.side === 'pitcher') === isPitcher(p))
-    .sort((a, b) => fits(b) - fits(a) || (b.ovr || 0) - (a.ovr || 0));
+    .sort((a, b) => fits(b) - fits(a) || seen(b) - seen(a));
 }
 
 /**
@@ -300,6 +303,7 @@ export function releasePickups(draft, playerIds, teamId, atMs) {
     tx.doneAt = atMs;
     Object.assign(p, { teamId: null, group: PLAYER_GROUP.FREE_AGENT, tier: 'freeAgent',
                        _faFrom: teamId, _faSince: atMs, _faReason: 'released' });
+    markAvailable(p, atMs, dice(diceSeed(draft), 'available', id, atMs), draft.leagueTalentOffset || 0);   // §122.9
     draft.freeAgentPool = [...(draft.freeAgentPool || []).filter(x => x !== id), id];
     back.push(id);
   }
@@ -345,7 +349,7 @@ function _cpuFill(draft, teamId, atMs, short, events) {
     while (need && !open[need.side]) need = wants.shift();
     if (!need) need = { side: open.hitter && (!open.pitcher || count.hitter <= count.pitcher) ? 'hitter' : 'pitcher', pos: null };
     if (!open[need.side]) break;
-    const pick = rankPickups(draft, teamId, need)[0];
+    const pick = rankPickups(draft, teamId, need, { atMs })[0];   // a CPU club: §122.9 its view
     if (!pick) break;
     events.push(...signToClub(draft, pick.id, teamId, atMs, { by: 'cpu' }));
     events.push({ type: 'CPU_SIGNED', playerId: pick.id, teamId, atMs, reason: 'fill' });
@@ -371,14 +375,15 @@ export function cpuFreeAgentLook(draft, atMs) {
     let best = null;
     for (const fa of _healthyFreeAgents(draft)) {
       const weak = weakestPeer(team, fa, draft.players);
-      if (!weak || (fa.ovr || 0) < (weak.ovr || 0) + FA_CPU_UPGRADE_MARGIN) continue;
+      const seen = cpuView(fa, atMs);   // §122.9 his rating — or his worth, once word has got around
+      if (!weak || seen < (weak.ovr || 0) + FA_CPU_UPGRADE_MARGIN) continue;
       // An upgrade is a choice, not a hole: it fits under the season's payroll target (or saves
       // money) — not the owner's stretch past it, nor the league-minimum allowance that lets
       // any club fill an empty spot.
       const net = (signingTerms(draft, fa).salary || 0) - (weak.contractSalary || 0);
       if (net > 0 && net > seasonTarget(team.finances || {}) - payrollOf(draft, team.id)) continue;
-      const gain = (fa.ovr || 0) - (weak.ovr || 0);
-      if (!best || gain > best.gain || (gain === best.gain && (fa.ovr || 0) > (best.fa.ovr || 0))) best = { fa, weak, gain };
+      const gain = seen - (weak.ovr || 0);
+      if (!best || gain > best.gain || (gain === best.gain && seen > cpuView(best.fa, atMs))) best = { fa, weak, gain };
     }
     if (!best) continue;
     events.push(...signToClub(draft, best.fa.id, team.id, atMs, { displaceId: best.weak.id, by: 'cpu' }));

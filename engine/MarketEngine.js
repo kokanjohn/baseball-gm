@@ -16,7 +16,8 @@
  * Pure: never imports StateManager.
  */
 
-import { diceId } from './Dice.js';
+import { dice, diceSeed, diceId } from './Dice.js';
+import { markAvailable } from './Diamonds.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, MARKET_KINDS, FA_ASK } from '../data/constants.js';
 import { clockNow } from './Clock.js';
 import { createPlayer, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
@@ -75,9 +76,11 @@ export function generateMarketPlayer(state, { kind = 'depth', side = 'hitter', p
     contractLengthOverride: 1, teamId: null, leagueLevel: level,
   });
   Object.assign(p, { tier: 'freeAgent', _faFrom: null, _faReason: kind, _marketKind: kind });
-  // §122.9 his past in the league (or why he has none).
+  // §122.9 his past in the league (or why he has none) — on his own stream, so
+  // writing it never moves the shared event stream the rest of the world draws on.
   writeHistoryForKind(p, { year: baseballYear(state), seasonNum: state.seasonNum || 1, level,
-                           norms: leagueNorms([state.userTeam, ...(state.leagueTeams || [])], state.players || {}), rand });
+                           norms: leagueNorms([state.userTeam, ...(state.leagueTeams || [])], state.players || {}),
+                           rand: dice(diceSeed(state), 'history', p.id) });
   return p;
 }
 
@@ -85,6 +88,7 @@ export function generateMarketPlayer(state, { kind = 'depth', side = 'hitter', p
 export function addToMarket(draft, player, atMs) {
   if (!player || draft.players[player.id]) return;
   draft.players[player.id] = { ...player, _faSince: atMs };
+  markAvailable(draft.players[player.id], atMs, dice(diceSeed(draft), 'available', player.id, atMs), draft.leagueTalentOffset || 0);   // §122.9
   draft.freeAgentPool = [...(draft.freeAgentPool || []), player.id];
 }
 

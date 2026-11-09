@@ -38,6 +38,7 @@ import {
   AGE_DEVELOPMENT_WINDOWS,
   AGE_CURVES,
   FA_CLASS_INTL_AGE,
+  DIAMOND,
   RETIREMENT_AGE_HARD,
   RETIREMENT_AGE_SOFT,
   RETIREMENT_OVR_SOFT,
@@ -70,6 +71,7 @@ import {
 
 import { computeAge, computeOVR, createPlayer, baseballYear, _freshStats } from './PlayerFactory.js';
 import { originForKind } from './LeagueHistory.js';
+import { giveUntestedGap, seedUpside, markAvailable, cpuView } from './Diamonds.js';
 import { clearInjuryUpdate } from './InjuryEngine.js';
 import {
   defaultActiveGroup,
@@ -323,6 +325,7 @@ export function releaseToFreeAgency(draft, playerId, atMs, { reason = 'contract'
     _ask: p._ask || marketTerms(draft, p),
     lineupSlot: null,
   });
+  markAvailable(p, atMs, dice(diceSeed(draft), 'available', playerId, atMs), draft.leagueTalentOffset || 0);   // §122.9
   draft.freeAgentPool = [...(draft.freeAgentPool || []), playerId];
   return { type: 'FREE_AGENT', playerId, fromTeamId: from, atMs };
 }
@@ -829,9 +832,11 @@ function _cpuSignOne(draft, t, atMs) {
     if (activeCount(draft, t.id) >= ROSTER_LIMITS.ACTIVE_TOTAL) {
       // A full club still upgrades: the best free agent who beats its weakest
       // same-side reserve by FA_UPGRADE_MIN sends that man to the farm.
-      for (const fa of [...pool].sort((a, b) => (b.ovr || 0) - (a.ovr || 0))) {
+      // §122.9 a CPU club sees a free agent's rating — his worth, once word has got around.
+      const seen = (p) => cpuView(p, atMs);
+      for (const fa of [...pool].sort((a, b) => seen(b) - seen(a))) {
         const out = displacementFor(draft, t.id, fa);
-        if (out && (fa.ovr || 0) >= (out.ovr || 0) + FA_UPGRADE_MIN) {
+        if (out && seen(fa) >= (out.ovr || 0) + FA_UPGRADE_MIN) {
           events.push(...(signFreeAgent(draft, fa.id, t.id, atMs, { displaceId: out.id }) || []));
           break;
         }
@@ -840,7 +845,7 @@ function _cpuSignOne(draft, t, atMs) {
     }
     const need = teamNeed(draft, t.id);
     if (!need) return events;
-    const byOvr = (a, b) => (b.ovr || 0) - (a.ovr || 0);
+    const byOvr = (a, b) => cpuView(b, atMs) - cpuView(a, atMs);
     const best = pool.filter(p => _fits(p, need)).sort(byOvr)[0]
       || pool.filter(p => _fits(p, { side: need.side, pos: null })).sort(byOvr)[0];
     if (!best) return events;
@@ -1131,9 +1136,14 @@ export function newFreeAgentClass(draft, atMs) {
     });
     Object.assign(p, { tier: 'freeAgent', _faFrom: null, _faSince: atMs, _faReason: 'class',
                        _marketKind: kind, _classOf: season + 1, origin: originForKind(kind) });
+    giveUntestedGap(p, rand);   // §122.9 new to the league: his ratings are an estimate
     draft.players[p.id] = p;
     ids.push(p.id);
   }
+  // §122.9 a few of the class are much better than the scouts think.
+  const seedRand = dice(diceSeed(draft), 'fa-class-diamonds', season);
+  seedUpside(Object.fromEntries(ids.map(id => [id, draft.players[id]])), level, seedRand, DIAMOND.classUpside);
+  for (const id of ids) markAvailable(draft.players[id], atMs, seedRand, level);
   draft.freeAgentPool = [...(draft.freeAgentPool || []), ...ids];
   return [{ type: 'FA_CLASS', playerIds: ids, season: season + 1, atMs }];
 }

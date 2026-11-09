@@ -27,6 +27,7 @@ import {
   PITCH_RP_MAX_STRAIGHT_DAYS, PITCH_RP_TIRED_ONSET_SHARE, PITCH_ARM_HISTORY_DAYS, PITCH_LONG_INNINGS,
 } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
+import { playingRating } from './Diamonds.js';
 
 const DAY = 86_400_000;
 export const ROLE = Object.freeze({ STARTER: 'starter', CLOSER: 'closer', SETUP: 'setup', MIDDLE: 'middle', LONG: 'long' });
@@ -39,7 +40,7 @@ export const daysBetween = (fromMs, toMs) => dayOf(toMs) - dayOf(fromMs);
 /** Days since an outing, by the day it was played. */
 const daysSince = (o, atMs) => dayOf(atMs) - (o.day ?? dayOf(o.at));
 
-const stamina = (p) => p?.subRatings?.stamina ?? 60;
+const stamina = (p) => playingRating(p, 'stamina') ?? 60;   // §122.9 how long he lasts is the truth
 
 // ─────────────────────────────────────────────────────────────
 // ROLES

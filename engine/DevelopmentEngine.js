@@ -37,8 +37,10 @@ import {
   OVR_P_STUFF_WEIGHT,
   OVR_P_CONTROL_WEIGHT,
   OVR_P_STAMINA_WEIGHT,
+  DIAMOND,
 } from '../data/constants.js';
 import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
+import { exposeRatings } from './Diamonds.js';
 import { devFactor } from './CoachEngine.js';
 import { trainingDevFactor } from './FrontOffice.js';
 
@@ -92,6 +94,7 @@ export function startPlan(draft, playerId, { gain, focus = null, source = 'card'
   if (!p || !gain) return null;
   const keys = (focus && focus.length ? focus : defaultFocus(p)).filter(k => p.subRatings?.[k] != null);
   if (!keys.length) return null;
+  exposeRatings(p, DIAMOND.trainExposure);   // §122.9 the coaches see what he really has
 
   const active = (draft.developmentPlans || []).filter(x => x.playerId === playerId && x.status === 'active'
     && x.keys.some(k => keys.includes(k)));

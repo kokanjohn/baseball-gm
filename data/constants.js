@@ -1701,3 +1701,24 @@ export const PLAYER_ORIGIN = Object.freeze({
   OVERSEAS:    'overseas',      // played professionally abroad
   INDEPENDENT: 'independent',   // independent ball
 });
+
+// §122.9 untested players and diamonds in the rough (engine/Diamonds.js).
+export const DIAMOND = Object.freeze({
+  // An untested player's shown ratings are scouts' estimates: true = shown + gap,
+  // gap ~ N(0, sigma) per sub-rating, by where he comes from.
+  sigma:      Object.freeze({ rookie: 4, overseas: 5, independent: 4 }),
+  gapMax:     12,
+  revealN:    300,     // PA (hitters) or batters faced (pitchers): the gap shrinks e-fold per this many
+  trainExposure: 60,   // a development plan shows the coaches what he has (counts as this much playing)
+  edge:       5,       // worth this far above his shown OVR…
+  minWorthRel: 47,     // …and worth a lineup or bullpen spot (above the league level): a diamond
+  buzzDays:   Object.freeze([10, 30]),   // days after he's available until CPU clubs hear
+  // Seeded: unproven upside (true well above shown), and proven role fits
+  // (a slow bat, a short reliever: the rating counts speed/stamina the role barely uses).
+  opening:    Object.freeze({ upside: 4, role: 2 }),
+  classUpside: 3,
+  upsideTrueRel: Object.freeze([48, 54]),   // unproven upside: what he really is (above the league level)…
+  upsideShownMin: 38,                         // …taken from the untested shown at least this (gaps stay believable)
+  gapMaxSeeded: 16,
+  roleShownRel: 45,    // a role fit's shown OVR, above the league level: under the CPU clubs' radar
+});

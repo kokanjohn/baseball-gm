@@ -34,6 +34,7 @@ import {
 
 import { computeOVR, isAvailable } from './PlayerFactory.js';
 import { canAddSalary } from './FinanceEngine.js';
+import { cpuView } from './Diamonds.js';
 import { eventRand } from './Dice.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -109,7 +110,7 @@ export function cpuWaiverClaimant(state, playerId, atMs = null) {
     if (entry.id === 'user') { if (player._userClaim) return 'user'; continue; }
     const team = state.leagueTeams.find(t => t.id === entry.id);
     // §78.5 a claim takes on his contract: only a club whose owner can carry it.
-    if (team && _isUpgradeFor(team, player, state.players)
+    if (team && _isUpgradeFor(team, player, state.players, atMs)
         && canAddSalary(state, player.contractSalary || 0, 0, team.id)
         && _worthTheWait(state, player, contender.has(team.id), atMs)) return team.id;
   }
@@ -151,11 +152,12 @@ export function weakestPeer(team, player, players) {
 }
 
 /** Would this player be a real upgrade over the weakest active player he'd replace? */
-function _isUpgradeFor(team, player, players) {
+function _isUpgradeFor(team, player, players, atMs = null) {
   const isP = ['SP', 'RP'].includes(player.pos);
   const weakest = weakestPeer(team, player, players);
   if (!weakest) return !isP || player.pos === 'SP';   // a hole at his position
-  return (player.ovr || 0) >= (weakest.ovr || 0) + WAIVER_CLAIM_MIN_UPGRADE;
+  const seen = Number.isFinite(atMs) ? cpuView(player, atMs) : (player.ovr || 0);   // §122.9
+  return seen >= (weakest.ovr || 0) + WAIVER_CLAIM_MIN_UPGRADE;
 }
 
 // ─────────────────────────────────────────────────────────────
