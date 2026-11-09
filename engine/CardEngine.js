@@ -2996,9 +2996,10 @@ export function deliverOwnerFinanceCard(stage, strain, atMs) {
 }
 
 /**
- * The owner orders cuts: move a contract (named) by the next payday. Yes —
- * the front office finds a taker (a salary dump: the player for nothing back
- * but the savings); no — the owner remembers.
+ * The owner orders cuts: move a contract (named) by the next payday. §122 two
+ * ways to meet it — the front office finds a taker (a salary dump: the player
+ * for nothing back but the savings), or we release the player (waivers: the
+ * salary is off the payroll at once). No — the owner remembers.
  */
 export function deliverOwnerCutOrder(playerId, amountK, atMs) {
   const state = StateManager.get();
@@ -3014,7 +3015,11 @@ export function deliverOwnerCutOrder(playerId, amountK, atMs) {
     preview: `"${_voice(state, 'concerned')}" Due by ${due}.`,
     body: `"${_voice(state, 'concerned')}" Ownership wants ${formatK(amountK)} a year off the payroll by the payday on ${due}. `
         + `The obvious contract is ${_who(p)}, at ${formatK(p.contractSalary)} a year. We can find a club to take the contract — it's a salary dump, nothing much comes back but the savings — `
-        + `or tell ownership we're keeping ${p.name} and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
+        + `or release ${p.name}: waivers, and the salary comes off the payroll at once. Or tell ownership we're keeping ${p.name} and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
+    _choices: [
+      { key: 'dump', label: `Move ${p.name} to another club`, sub: 'A salary dump: the contract goes, nothing much comes back' },
+      { key: 'release', label: `Release ${p.name}`, sub: `Waivers: ${formatK(p.contractSalary)} a year off at once; any club can claim` },
+    ],
     yesLabel: `Move ${p.name}`, noLabel: `Keep ${p.name}`,
     autoResolve: 'no', expiresAtMs: order.dueAt,
     _raw: { onYes: 'fin_dump_yes', onNo: 'fin_dump_no', onAuto: 'fin_dump_no' },
@@ -3040,25 +3045,36 @@ export function deliverOwnerOrderResult(result, atMs) {
 /** The cut-order decision (inside _applyRosterAction). */
 function _applyFinanceAction(action, instance, atMs) {
   if (action === 'fin_call_club') { _callClubAboutSalary(instance, atMs); return; }
-  if (action !== 'fin_dump_yes') return;   // keeping the contract: the order stands, the owner decides at the deadline
+  if (action !== 'fin_dump_yes' && action !== 'fin_release') return;   // keeping the contract: the order stands, the owner decides at the deadline
   const st = StateManager.get();
   const pid = instance._targetPlayerId;
   const p = st.players[pid];
   if (!p || p.teamId !== 'user' || !(st.userTeam.rosterIds || []).includes(pid)) return;
+  if (action === 'fin_release' || instance._pick === 'release') {   // §122 waivers: the salary is off at once
+    StateManager.mutate(s => { dropPlayer(s, pid, 'user', atMs, { reason: 'payroll' }); });
+    const rec = reconcileRoster(StateManager.get(), 'user');
+    StateManager.mutate(s => applyRosterMutation(s, rec));
+    return;
+  }
   // The taker (§78.5): the club whose owner has the most payroll room for him.
   const taker = [...(st.leagueTeams || [])]
     .map(t => ({ t, room: Finance.payrollRoom(st, t.id) }))
     .filter(x => x.room >= (p.contractSalary || 0))
     .sort((a, b) => b.room - a.room)[0]?.t;
   if (!taker) {
-    _deliverNotice(`owner:noTaker:${instance.instanceId}`, {
-      cardId: 'owner_no_taker', tag: 'OWNERSHIP', sender: st.userTeam.ownerName || 'Ownership', avatar: '📞', type: 'normal',
+    // §122 no taker: releasing is still on the table.
+    const key = `owner:noTaker:${instance.instanceId}`;
+    if (!_cardsWithKey(st, key).length) _deliverAt(_rosterCard(st, {
+      cardId: 'owner_no_taker', tag: 'OWNERSHIP', sender: st.userTeam.ownerName || 'Ownership', avatar: '📞', type: 'urgent',
+      _rosterKey: key, _targetPlayerId: pid,
       subject: `No club can take ${p.name}'s contract`,
-      preview: `We called around — nobody has ${formatK(p.contractSalary || 0)} of room right now.`,
+      preview: `We called around — nobody has ${formatK(p.contractSalary || 0)} of room right now. Release ${p.name}?`,
       body: `We called every club about ${p.name} (${formatK(p.contractSalary || 0)} a year). Nobody's owner has the payroll room for that contract right now. `
-          + `The order stands; the payroll will have to come down another way.`,
-      yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
-    }, atMs);
+          + `We can still release ${p.name}: waivers, and the salary comes off the payroll at once (any club can put in a claim over the next 72 hours). Or keep ${p.name}, and the payroll has to come down another way.`,
+      yesLabel: `Release ${p.name}`, noLabel: `Keep ${p.name}`,
+      autoResolve: 'no', expiresAtMs: st.userTeam.finances?.owner?.order?.dueAt || atMs + 2 * 86_400_000,
+      _raw: { onYes: 'fin_release', onNo: 'fin_dump_no', onAuto: 'fin_dump_no' },
+    }), atMs);
     return;
   }
   StateManager.mutate(s => {
@@ -4370,7 +4386,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   // §75 All-Star Game
   'as_lobby_yes', 'as_lobby_no',
   // §78 the owner's cut orders
-  'fin_dump_yes', 'fin_dump_no',
+  'fin_dump_yes', 'fin_dump_no', 'fin_release',
 ]));
 
 function _cardActionsHandled(card) {
