@@ -37,6 +37,8 @@ import {
   PHASE,
   ROSTER_LIMITS,
   ROSTER_DECISION_LEAD_MS,
+  VACANCY_MIN_WINDOW_MS,
+  WINTER_ROSTER_CALL_DAYS,
   MANAGER_FILL_PENALTY,
   TRANSACTION_HISTORY_KEEP,
   GM_RELATIONSHIP_DEFAULT,
@@ -123,6 +125,30 @@ export function decisionDeadlineAfter(state, atMs) {
   return null;
 }
 
+/** §122 when the winter's roster call goes out: WINTER_ROSTER_CALL_DAYS before camp opens. */
+export const campCallAt = (os) => (os?.springAt ?? Infinity) - WINTER_ROSTER_CALL_DAYS * 86_400_000;
+
+/**
+ * vacancyDeadline(state, atMs) — §122 when an open spot must be filled: the
+ * night before the next game day (ROSTER_DECISION_LEAD_MS before midnight), so
+ * a signing — which reports the next day — is there for that game, when that
+ * leaves VACANCY_MIN_WINDOW_MS to decide; otherwise the game's own roster
+ * deadline. In the winter, the night before camp opens.
+ */
+export function vacancyDeadline(state, atMs) {
+  const os = state?.offseason;
+  if (state?.phase === PHASE.OFFSEASON && os?.campCall) {
+    const dl = os.springAt - ROSTER_DECISION_LEAD_MS;
+    return dl > atMs ? dl : null;
+  }
+  const game = decisionDeadlineAfter(state, atMs);
+  if (game == null) return null;
+  const day = new Date(game + ROSTER_DECISION_LEAD_MS);
+  day.setHours(0, 0, 0, 0);
+  const eve = day.getTime() - ROSTER_DECISION_LEAD_MS;
+  return eve >= atMs + VACANCY_MIN_WINDOW_MS ? eve : game;
+}
+
 // ─────────────────────────────────────────────────────────────
 // NEEDS (derived — the single source for Team screen + inbox)
 // ─────────────────────────────────────────────────────────────
@@ -140,7 +166,9 @@ export function getRosterNeeds(state, teamId = 'user') {
     : (state.leagueTeams || []).find(t => t.id === teamId);
   const arrivals = pendingArrivals(state, teamId);
   const empty = { short: 0, surplus: 0, needs: [], arrivals, deadlineAt: null, applies: false };
-  if (!team || !CAP_PHASES.has(state.phase)) return empty;
+  // §122 in the winter, from the camp call on (WINTER_ROSTER_CALL_DAYS before camp): our 28 for spring.
+  const winter = state.phase === PHASE.OFFSEASON && teamId === 'user' && !!state.offseason?.campCall;
+  if (!team || !(CAP_PHASES.has(state.phase) || winter)) return empty;
 
   const players = state.players || {};
   const active  = (team.rosterIds || []).map(id => players[id])
@@ -799,6 +827,8 @@ function _arrive(draft, tx, events, touched) {
  */
 function _runVacancyClock(draft, clockMs, events) {
   const team  = draft.userTeam;
+  const os    = draft.offseason;
+  if (draft.phase === PHASE.OFFSEASON && os?.springAt && !os.campCall && clockMs >= campCallAt(os)) os.campCall = true;
   const needs = getRosterNeeds(draft, 'user');
   if (!needs.applies || needs.short === 0) {
     if (team.vacancyDeadlineAt != null) {
@@ -808,7 +838,7 @@ function _runVacancyClock(draft, clockMs, events) {
     return false;
   }
   if (team.vacancyDeadlineAt == null) {
-    const dl = decisionDeadlineAfter(draft, clockMs);
+    const dl = vacancyDeadline(draft, clockMs);
     if (dl == null) return false;          // no game left to field
     team.vacancyDeadlineAt = dl;
     events.push({ type: 'NEED_OPENED', deadlineAt: dl, count: needs.short });

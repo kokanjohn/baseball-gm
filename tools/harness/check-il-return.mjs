@@ -136,11 +136,8 @@ const lowest3 = bench.sort((a, b) => a.ovr - b.ovr).slice(0, 3).map(p => p.id);
 check('the Team Physician asks who goes down: our three lowest-rated bench bats, the lowest first',
       c?.sender === 'Team Physician' && c._choices?.map(x => x.key).join() === lowest3.join());
 check(`the fill-in (${P(Y1).name}, OVR ${P(Y1).ovr}) is not offered unless among the lowest`, lowest3.includes(Y1) || !c._choices.some(x => x.key === Y1));
-check('no deadline: nothing happens on its own', !Number.isFinite(c.expiresAtMs) && !c._raw.onAuto);
-check('the card is gender-neutral', !GEN.test(c.body));
-step(30 * 3600_000);
-check(`a day later, still unanswered: ${P(X1).name} is still on the IL and the roster is at 28`,
-      !!cardFor('il_return', X1) && P(X1).group === PLAYER_GROUP.IL && active() === 28);
+check('§122 a deadline: the next roster deadline, and the manager acts on it', Number.isFinite(c.expiresAtMs) && c.expiresAtMs > clock.get() && c._raw.onAuto === 'il_return_auto');
+check('the card is gender-neutral', !GEN.test(c.body), (c.body.match(GEN) || []).join());
 // A pick that's no longer possible (the player was sent down meanwhile): nobody moves, the card comes back.
 const gone = c._choices[0].key;
 SM.mutate(s => toPool(s, gone));
@@ -162,6 +159,18 @@ check(`the hitting coach (${U().coachingStaff.hittingCoach.name}) asks before ou
       !!n && n.sender === U().coachingStaff.hittingCoach.name && n.expiresAtMs > clock.get() && n.body.includes(P(Y1).name) && !GEN.test(n.body));
 resolve(n.instanceId, 'yes'); advanceClock(clock.get());
 check(`yes: ${P(X1).name} back ${slot1}, ${P(Y1).name} to the bench`, slotOf(X1) === slot1 && !slotOf(Y1) && !P(X1)._lostSlot && active() === 28);
+
+// ── 1b. §122 unanswered by the deadline: the manager waives the recommended reserve ──
+console.log('\nThe return card, unanswered');
+{
+  const X4 = U().lineupSlots.find(sl => sl.slot === 'C')?.playerId;
+  hurt(X4, 2); fillRoster(); step(2.5 * 3600_000);
+  const c4 = cardFor('il_return', X4);
+  const rec = c4?._choices?.[0]?.key;
+  step(Math.max(60_000, (c4?.expiresAtMs || clock.get()) - clock.get() + 60_000));
+  check(`past the deadline: ${P(rec)?.name} (the recommended one) went on waivers and ${P(X4).name} is active, the roster at 28`,
+        !!c4 && P(rec)?.onWaivers && P(X4).group !== PLAYER_GROUP.IL && active() === 28);
+}
 
 // ── 2. Unanswered: the manager follows up once; "keep" ends it ──
 console.log('\nUnanswered: the manager follows up once');

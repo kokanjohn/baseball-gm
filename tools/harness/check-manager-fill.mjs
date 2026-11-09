@@ -95,8 +95,8 @@ let mf = open('manager_fill')[0];
 const fillIds = mf?._fillIds || [];
 console.log(`    ${mf?.sender}: “${mf?.subject}” — ${mf?.body}`);
 console.log(`    [${mf?.yesLabel}]  [${mf?.noLabel}]`);
-check('it\'s a real choice: keep the call-up, or send it back and pick',
-      mf.yesLabel.startsWith('Keep') && mf.noLabel.startsWith('Send') && mf._raw.onNo === 'mfill_sendback' && fillIds.length === 1);
+check('it\'s a real choice: keep the signing, or release it and pick',
+      mf.yesLabel.startsWith('Keep') && mf.noLabel.startsWith('Release') && mf._raw.onNo === 'mfill_sendback' && fillIds.length === 1);
 check('it says what it cost with ownership, and the hit was taken', mf.body.includes('Owner Trust') && U().ownerTrust === Math.max(0, trust0 + MANAGER_FILL_PENALTY.ownerTrust));
 check('the call-up is in transit and reports at midnight; the card is open until then',
       P(fillIds[0]).group === PLAYER_GROUP.IN_TRANSIT && mf.expiresAtMs === SM.get().transactions.find(t => t.playerId === fillIds[0] && t.status === 'pending').effectiveAt);

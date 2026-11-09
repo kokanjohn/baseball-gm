@@ -67,7 +67,7 @@ import {
 } from './RosterEngine.js';
 import { evaluateTrade, queueTrade, generateCPUCashSale, tradeWindow, tradeBlockers, startCooldown, busyWithUs, evaluateForUser, evaluateForClub, clubBar } from './TradeEngine.js';
 import {
-  getRosterNeeds, rankPickups, signPickup, decisionDeadlineAfter, rosterIsFull, sideOf, releasePickups, dropPlayer,
+  getRosterNeeds, rankPickups, signPickup, decisionDeadlineAfter, vacancyDeadline, rosterIsFull, sideOf, releasePickups, dropPlayer,
 } from './TransactionEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
@@ -557,10 +557,15 @@ export function deliverInjuryAct1(playerId, atMs = clockNow()) {
 /**
  * deliverInjuryAct2(playerId, atMs)
  * Act 2 — the diagnosis. The exam revises the Act 1 read (better / as feared
- * / worse). Place on the IL and call up the best fit, or — for a short
- * timeline — manage him day-to-day and keep the roster spot. Due before the
- * next roster deadline; if nobody answers, he goes on the IL and the
- * manager makes the call-up.
+ * / worse). §122 the decision is keep or cut, with what each costs:
+ *   - IL him (he stays on our payroll) and sign a replacement now — the best
+ *     free agents who fit, with their price (a pickup reports the next day) —
+ *     or IL him and pick the replacement ourselves;
+ *   - cut him: waivers, injured; his salary leaves the payroll at once (a club
+ *     may claim him), and his spot opens;
+ *   - for a short timeline, day-to-day: the roster spot stays, the bench covers.
+ * Due before the next roster deadline; if nobody answers, he goes on the IL and
+ * the manager signs the replacement.
  */
 export function deliverInjuryAct2(playerId, atMs = clockNow()) {
   let state = StateManager.get();
@@ -581,22 +586,36 @@ export function deliverInjuryAct2(playerId, atMs = clockNow()) {
   const seasonEnding = inj.severity === 'season';
   const ilDays     = Math.max(inj.days, ilMinDays(player));
   const eligibleAt = inj.injuredAt + ilDays * 86_400_000;
-  const best       = rankPickups(state, 'user', _needFor(player))[0] || null;
+  const picks      = rankPickups(state, 'user', _needFor(player)).slice(0, 2);
   const dtd        = dayToDayAllowed(player);
-  const deadline   = decisionDeadlineAfter(state, atMs);
+  const deadline   = vacancyDeadline(state, atMs);   // §122 a signing made by then reports in time when it can
+  const salary     = player.contractSalary || 0;
+  const lastYear   = Offseason.contractIsUp(player, state.seasonNum || 1);
+  // Cutting is the better call when he's gone for the year and his deal ends with it.
+  const cutFirst   = seasonEnding && lastYear;
 
   const ilLine = seasonEnding
     ? `${player.name} is out for the rest of the season.`
     : `On the ${ilMinDays(player)}-day IL (backdated to the injury), ${player.name} is eligible to return ${_day(eligibleAt)}.`;
+  const moneyLine = ` On the IL ${player.name} stays on our payroll (${formatK(salary)} a year), and a replacement is paid on top of that. `
+    + `Cut ${player.name} instead and the salary comes off at once: ${player.name} goes on waivers, where a club may make a claim${seasonEnding ? '' : ' and wait out the injury'}.`;
   const dtdLine = dtd
     ? ` Or we manage it day-to-day: the roster spot stays put and ${player.name} should be available in about ${inj.days} days, but we play a player short until then.`
     : '';
-  const bestLine = best
-    ? ` Best fit on the farm: ${best.name}${_hand(best)} (${best.nativePos || best.pos}, OVR ${best.ovr}), who would report tomorrow.`
-    : ' There is no healthy fit on the farm right now.';
+  const fitLine = picks.length
+    ? ` Best fits among the free agents: ${_list(picks.map(p => `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}, ${formatK(signingTerms(state, p).salary || 0)} a year)`))}. A signing reports tomorrow.`
+    : ' No healthy free agent fits right now.';
   const dlLine = deadline
-    ? ` We need a decision by ${_clock(deadline)} (${_day(deadline)}) or ${_managerName(state)} will make the call.`
+    ? ` We need a decision by ${_clock(deadline)} (${_day(deadline)}) or ${_managerName(state)} will put ${player.name} on the IL and sign someone.`
     : '';
+
+  const ilChoices = [
+    ...picks.map(p => ({ key: `il:${p.id}`, label: `IL ${player.name} — sign ${p.name}`,
+      sub: `${p.nativePos || p.pos}, OVR ${p.ovr}, ${formatK(signingTerms(state, p).salary || 0)} a year; ${player.name} stays paid` })),
+    { key: 'il', label: `IL ${player.name} — I'll pick the replacement`, sub: `${player.name} stays on the payroll; the open spot waits for your pick` },
+  ];
+  const cutChoice = { key: 'cut', label: `Cut ${player.name}`,
+    sub: `Waivers, injured: ${formatK(salary)} a year comes off at once; the spot opens` };
 
   const card = _rosterCard(state, {
     cardId:   'injury_act2',
@@ -604,21 +623,21 @@ export function deliverInjuryAct2(playerId, atMs = clockNow()) {
     sender:   'Team Physician',
     _rosterKey: `injury:${playerId}:act2`,
     _targetPlayerId:  playerId,
-    _callupCandidate: best?.id || null,
+    _choices: cutFirst ? [cutChoice, ...ilChoices] : [...ilChoices, cutChoice],
     subject:  seasonEnding
       ? `${player.name} — ${(inj.label || 'injury').toLowerCase()}, out for the season`
       : `${player.name} — ${(inj.label || 'injury').toLowerCase()}, about ${inj.days} days`,
-    preview:  `${varianceNote} ${seasonEnding ? 'Season-ending.' : `About ${inj.days} days.`}`,
-    body:     `${report?.detailedText || ''} ${varianceNote} ${ilLine}${dtdLine}${bestLine}${dlLine}`.replace(/\s+/g, ' ').trim(),
-    yesLabel: best ? `Place on IL — call up ${best.name}` : 'Place on IL',
-    noLabel:  dtd ? 'Day-to-day — keep the roster spot' : `Place on IL — I'll pick the call-up`,
+    preview:  `${varianceNote} ${seasonEnding ? 'Season-ending.' : `About ${inj.days} days.`} IL or cut?`,
+    body:     `${report?.detailedText || ''} ${varianceNote} ${ilLine}${moneyLine}${dtdLine}${fitLine}${dlLine}`.replace(/\s+/g, ' ').trim(),
+    yesLabel: 'Decide',
+    noLabel:  dtd ? 'Day-to-day — keep the roster spot' : null,
     expiresAtMs: deadline,
     _raw: {
-      onYes:  best ? 'il_placement' : 'il_placement_only',
-      onNo:   dtd ? 'day_to_day' : 'il_placement_only',
+      onYes:  'injury_decide',
+      onNo:   dtd ? 'day_to_day' : null,
       onAuto: 'injury_auto',
     },
-    _autoLabel: `No decision — placed on IL, ${_managerName(state)} made the call-up`,
+    _autoLabel: `No decision — placed on IL, ${_managerName(state)} signed a replacement`,
   });
 
   const delivered = _deliverAt(card, atMs);
@@ -712,18 +731,18 @@ function _restoreSpot(s, player, spot) {
 /**
  * IL return decision — delivered the moment the player is cleared (Team
  * Physician). §114 with a full roster on the player's side, someone has to go
- * down first: the card offers our three lowest-rated reserves on that side
- * (never a starter, a rotation arm or a bullpen arm), the lowest recommended.
- * Nobody rejoins the roster until the GM picks — no answer, no deadline: the
- * player stays on the IL until then. The other choice is unchanged (the
- * player to waivers; to the farm in spring).
+ * on waivers first (§122): the card offers our three lowest-rated reserves on
+ * that side (never a starter, a rotation arm or a bullpen arm), the lowest
+ * recommended. §122 it has a deadline — the next roster deadline; unanswered,
+ * the manager waives the recommended one and activates the player. The other
+ * choice: the returning player goes on waivers.
  */
 function _deliverILReturnCard(playerId, atMs) {
   const state  = StateManager.get();
   const player = state.players[playerId];
   if (!player || !(state.ilReturnQueue || []).includes(playerId)) return null;
-  const isSpring = state.phase === PHASE.SPRING_TRAINING;
   const full     = rosterIsFull(state, 'user', sideOf(player));   // his side's spots (§76)
+  const deadline = decisionDeadlineAfter(state, atMs);
   const ref      = `${player.name}${_hand(player)} (${player.pos})`;
   const spot     = _whoHasSpot(state, player);
   const choices  = full ? _sendDownChoices(state, player) : [];
@@ -741,24 +760,25 @@ function _deliverILReturnCard(playerId, atMs) {
     _choices: choices.length ? choices : null,
     _needsRoom: full,
     subject:  `${player.name} cleared to return`,
-    preview:  full ? `${ref} is cleared. Who goes down to make room?` : `${ref} has been cleared — roster decision needed.`,
+    preview:  full ? `${ref} is cleared. Who goes on waivers to make room?` : `${ref} has been cleared — roster decision needed.`,
     body:     `${ref} has completed the recovery and is cleared for game action.`
             + (spot ? ` While ${player.name} was out, ${where(spot.player)} ${spot.kind === 'rotation' ? `took ${what}` : `took over ${what}`}.` : '')
             + (full
                 ? (_overSide(state, player)
-                    ? ` We're carrying ${_overSide(state, player)} ${sideOf(player) === 'pitcher' ? 'pitchers' : 'position players'}, more than the 14 a roster carries, so ${sideOf(player) === 'pitcher' ? 'pitchers' : 'position players'} have to go down to the farm before ${player.name} can be activated (one at a time; this message comes back until there's room).`
-                    : ` The active roster is full, so someone has to go down to the farm before ${player.name} can be activated.`)
-                  + (choices.length ? ` These are our lowest-rated ${sideOf(player) === 'pitcher' ? 'arms' : 'bats'} off ${reserve}.` : ` Nobody on ${reserve} can go down right now.`)
-                  + ` ${player.name} stays on the injured list until you choose.`
+                    ? ` We're carrying ${_overSide(state, player)} ${sideOf(player) === 'pitcher' ? 'pitchers' : 'position players'}, more than the 14 a roster carries, so ${sideOf(player) === 'pitcher' ? 'pitchers' : 'position players'} have to go on waivers before ${player.name} can be activated (one at a time; this message comes back until there's room).`
+                    : ` The active roster is full, so someone has to go on waivers before ${player.name} can be activated. Whoever goes comes off the payroll at once; any club can put in a claim over the next 72 hours.`)
+                  + (choices.length ? ` These are our lowest-rated ${sideOf(player) === 'pitcher' ? 'arms' : 'bats'} off ${reserve}.` : ` Nobody on ${reserve} can go right now.`)
+                  + (choices.length && deadline ? ` If you haven't chosen by ${_clock(deadline)} (${_day(deadline)}), ${_managerName(state)} will waive ${choices[0].name} and activate ${player.name}.` : ` ${player.name} stays on the injured list until you choose.`)
                 : ' There is room on the active roster.')
             + ` ${player.name} rejoins on ${reserve}; ${sideOf(player) === 'pitcher'
                 ? `a return to ${player.pos === 'SP' ? 'the rotation' : 'the bullpen'} is your call.`
                 : 'a return to the lineup is your call.'}`,
     yesLabel: choices.length ? choices[0].label : stuck ? 'Understood' : `Activate ${player.name}`,
-    noLabel:  isSpring ? `Send ${player.name} to the farm` : `Place ${player.name} on waivers`,
+    noLabel:  `Place ${player.name} on waivers`,
     type:     'urgent',
-    expiresAtMs: null,
-    _raw: { onYes: stuck ? 'il_return_wait' : 'il_return_activate', onNo: isSpring ? 'il_return_farm' : 'il_return_waive', onAuto: null },
+    expiresAtMs: choices.length ? deadline : null,
+    _raw: { onYes: stuck ? 'il_return_wait' : 'il_return_activate', onNo: 'il_return_waive', onAuto: choices.length ? 'il_return_auto' : null },
+    _autoLabel: choices.length ? `No answer — ${_managerName(state)} waived ${choices[0].name}` : undefined,
   });
   return _deliverAt(card, atMs);
 }
@@ -788,7 +808,7 @@ function _sendDownChoices(state, player) {
     .slice(0, 3)
     .map(p => ({
       key: p.id, name: p.name,
-      label: `Activate ${player.name} — send down ${p.name}`,
+      label: `Activate ${player.name} — waive ${p.name}`,
       sub: `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})${_lineNow(p) ? `, ${_lineNow(p)}` : ''}`,
     }));
 }
@@ -911,12 +931,24 @@ function _lineupNudges(atMs) {
   return delivered;
 }
 
-/** Open roster spot — one card per open spot, tied to the current deadline. */
+/**
+ * Open roster spot — one card per open spot, tied to the current deadline.
+ * §122 it offers the free agents who fit, best first, with their price (a
+ * signing reports the next day); or the GM picks in League → Players. At the
+ * deadline the manager signs the best affordable fit himself.
+ */
 function _deliverNeedCard(state, need, index, needs, atMs) {
   const deadline = needs.deadlineAt;
-  const best     = rankPickups(state, 'user', need)[0] || null;
+  const picks    = rankPickups(state, 'user', need).slice(0, 3);
   const what     = need.pos ? (need.side === 'pitcher' ? (need.pos === 'SP' ? 'a starting pitcher' : 'a reliever') : `a ${need.pos}`)
                             : (need.side === 'pitcher' ? 'a pitcher' : 'a position player');
+  const winter   = state.phase === PHASE.OFFSEASON && !!state.offseason?.springAt;   // §122 the camp call
+  const choices  = picks.map(p => {
+    const t = signingTerms(state, p);
+    const line = _lineNow(p) || _lastLine(p);
+    return { key: p.id, label: `Sign ${p.name}`,
+             sub: `${p.nativePos || p.pos}, OVR ${p.ovr}, ${formatK(t.salary || 0)} a year${line ? `; ${line}` : ''}` };
+  });
   const card = _rosterCard(state, {
     cardId:   'roster_need',
     tag:      'ROSTER',
@@ -924,24 +956,42 @@ function _deliverNeedCard(state, need, index, needs, atMs) {
     type:     'urgent',
     _rosterKey: `need:${deadline}:${index}`,
     _rosterKind: 'need',
-    _callupCandidate: best?.id || null,
     _need:    need,
+    _choices: choices.length ? choices : null,
     subject:  needs.short > 1 ? `${needs.short} open roster spots` : 'Open roster spot',
-    preview:  `We're ${needs.short} short of 28 — I need ${what}.`,
-    body:     `We're carrying ${28 - needs.short} active players. I need ${what}.`
-            + (best ? ` The best fit on the farm is ${best.name}${_hand(best)} (${best.nativePos || best.pos}, OVR ${best.ovr}), who would report tomorrow.` : ' Nobody on the farm fits — look at the waiver wire or make a trade.')
-            + ` You can also pick someone else from the dashed spot on the Team screen.`
-            + (deadline ? ` If nothing's done by ${_clock(deadline)} (${_day(deadline)}), I'll call someone up myself.` : ''),
-    yesLabel: best ? `Call up ${best.name}` : 'Understood',
-    noLabel:  best ? `I'll choose on the Team screen` : null,
+    preview:  winter ? `Camp opens ${_day(state.offseason.springAt)}: we're ${needs.short} short of 28.` : `We're ${needs.short} short of 28 — I need ${what}.`,
+    body:     (winter ? `Camp opens ${_day(state.offseason.springAt)}, and we have ${28 - needs.short} players under contract for it. I need ${what}.`
+                      : `We're carrying ${28 - needs.short} active players. I need ${what}.`)
+            + (picks.length ? ` These are the best free agents who fit, with what they're asking for a one-year deal (paid only for the days on our roster). ${winter ? 'A signing reports when camp opens.' : 'A signing reports tomorrow.'}`
+                            : ' No free agent fits right now — look at the waiver wire or make a trade.')
+            + ` Or pick anyone in League → Players.`
+            + (deadline ? ` If nothing's done by ${_clock(deadline)} (${_day(deadline)}), I'll sign someone myself.` : ''),
+    yesLabel: picks.length ? `Sign ${picks[0].name}` : 'Understood',
+    noLabel:  `I'll choose in League → Players`,
     expiresAtMs: deadline,
-    _raw: { onYes: best ? 'need_callup' : 'need_defer', onNo: 'need_defer', onAuto: 'need_auto' },
-    _autoLabel: `No decision — ${_managerName(state)} made the call-up`,
+    _raw: { onYes: picks.length ? 'need_callup' : 'need_defer', onNo: 'need_defer', onAuto: 'need_auto' },
+    _autoLabel: `No decision — ${_managerName(state)} signed someone`,
   });
   return _deliverAt(card, atMs);
 }
 
-/** One-button notice (manager's call-up, voided trade). */
+/** §122.9 last season's line in a few words (a free agent with no games this year). */
+function _lastLine(p) {
+  const e = (p?.seasonLog || []).filter(x => x?.stats).at(-1);
+  if (!e) return p?.origin === 'overseas' ? 'played overseas' : p?.origin === 'independent' ? 'independent ball' : p?.origin === 'rookie' ? 'rookie' : null;
+  const s = e.stats;
+  if (['SP', 'RP'].includes(p.pos)) return s.ip >= 5 ? `${e.year}: ${(9 * (s.er || 0) / s.ip).toFixed(2)} ERA in ${Math.round(s.ip)} innings` : null;
+  if (!(s.ab >= 20)) return null;
+  return `${e.year}: ${_f3((s.h || 0) / s.ab)}, ${s.hr || 0} HR in ${s.ab} AB`;
+}
+
+/** What the manager's signings cost (one-year deals). */
+function _mfillTerms(st, ids) {
+  const parts = ids.map(id => st.players[id]).filter(Boolean).map(p => `${formatK(p.contractSalary || signingTerms(st, p).salary || 0)}`);
+  return parts.length === 1 ? ` (${parts[0]} for the year, paid only for the days on our roster)` : parts.length ? ` (one-year deals: ${_list(parts)})` : '';
+}
+
+/** One-button notice (manager's signing, voided trade). */
 function _deliverNotice(key, fields, atMs) {
   const state = StateManager.get();
   if (_cardsWithKey(state, key).length) return null;
@@ -966,11 +1016,11 @@ function _ourNews(text, atMs) {
 }
 
 /**
- * The open-spot deadline passed and the manager called players up (§65), at
- * a cost with ownership. r135 the call-ups don't report until midnight, so
- * the GM can keep them or send them back and pick — the spot opens again
- * with a new deadline and the usual open-spot card. The ownership hit stands
- * either way. Nobody to call up ("playing short"): the consequence alone.
+ * The open-spot deadline passed and the manager signed free agents (§65,
+ * §122), at a cost with ownership. r135 the signings don't report until
+ * midnight, so the GM can keep them or release them and pick — the spot opens
+ * again with a new deadline and the usual open-spot card. The ownership hit
+ * stands either way. Nobody to sign ("playing short"): the consequence alone.
  */
 function _deliverManagerFillCard(ev) {
   const st = StateManager.get();
@@ -983,7 +1033,7 @@ function _deliverManagerFillCard(ev) {
       sender: mgr, type: 'urgent',
       subject: 'We are playing short',
       preview: 'Nobody made a move on the open roster spot before the deadline.',
-      body:    `Nobody made a move on the open roster spot before the deadline, and there's no one on the farm who can fill it. We'll play short until something changes — the waiver wire or a trade. ${cost}`,
+      body:    `Nobody made a move on the open roster spot before the deadline, and no free agent we can afford fits it. We'll play short until something changes — a free agent, the waiver wire or a trade. ${cost}`,
     }, ev.atMs);
   }
   const key = `managerfill:${ev.atMs}`;
@@ -998,12 +1048,12 @@ function _deliverManagerFillCard(ev) {
     type:     'urgent',
     _rosterKey: key,
     _fillIds: ids,
-    subject:  `I called up ${them}`,
+    subject:  `I signed ${them}`,
     preview:  'No move was made before the deadline, so I made it.',
-    body:     `Nobody made a move on the open roster spot before the deadline, so I called up ${them}. ${cost} `
-            + `${one ? 'The call-up reports' : 'They report'} at midnight. If you'd rather pick, I can send ${one ? 'the call-up' : 'them'} back before then — the spot opens again, and you'll get the call to make before our next game.`,
+    body:     `Nobody made a move on the open roster spot before the deadline, so I signed ${them}${_mfillTerms(st, ids)}. ${cost} `
+            + `${one ? `${names[0]} reports` : 'They report'} at midnight. If you'd rather pick, I can release ${one ? names[0] : 'them'} before then (nothing owed before reporting) — the spot opens again, and you'll get the call to make before our next game.`,
     yesLabel: `Keep ${one ? names[0] : 'them'}`,
-    noLabel:  `Send ${one ? names[0] : 'them'} back — I'll pick`,
+    noLabel:  `Release ${one ? names[0] : 'them'} — I'll pick`,
     expiresAtMs: reportAt,
     _raw: { onYes: 'mfill_keep', onNo: 'mfill_sendback', onAuto: 'mfill_keep' },
     _autoLabel: `No answer — ${them} reported`,
@@ -4246,12 +4296,14 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'il_return_activate',
   'lineup_restore', 'lineup_keep', 'lineup_auto', 'il_return_wait',
   'il_return_waive',
+  'il_return_auto',
   'il_return_farm',
   'trade_execute',
   'trade_decline',
   // §65 roster clock
   'injury_mri_now',
   'injury_mri_wait',
+  'injury_decide',
   'il_placement',
   'il_placement_only',
   'day_to_day',
@@ -4330,6 +4382,21 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     }
 
     // ── Injury Act 2 ────────────────────────────────────────────
+    case 'injury_decide': {   // §122 the GM's pick: IL + a signing, IL alone, or cut
+      const pick = instance._pick || instance._choices?.[0]?.key || 'il';   // (a plain yes: the recommended one)
+      const st = StateManager.get();
+      if (st.players[playerId]?.injury?.status !== 'evaluating' || st.players[playerId]?.teamId !== 'user') break;
+      if (pick === 'cut') {
+        StateManager.mutate(s => { dropPlayer(s, playerId, 'user', atMs, { reason: 'injured' }); });
+        reconcileUser();
+        break;
+      }
+      const need = _needFor(st.players[playerId]);
+      placeOnIL();
+      reconcileUser();
+      if (pick.startsWith('il:')) { callUpBest(pick.slice(3), need); reconcileUser(); }
+      break;
+    }
     case 'il_placement': {
       const need = _needFor(StateManager.get().players[playerId]);
       placeOnIL();
@@ -4360,7 +4427,7 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
 
     // ── Open roster spot ────────────────────────────────────────
     case 'need_callup':
-      callUpBest(instance._callupCandidate, instance._need);
+      callUpBest(instance._pick || instance._choices?.[0]?.key || instance._callupCandidate, instance._need);
       reconcileUser();
       break;
     case 'need_defer':
@@ -4378,6 +4445,7 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
       break;
 
     // ── IL return ───────────────────────────────────────────────
+    case 'il_return_auto':   // §122 no answer by the deadline: the manager waives the recommended reserve
     case 'il_return_activate': {
       const st = StateManager.get();
       const player = st.players[playerId];
@@ -4389,7 +4457,9 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
       if (rosterIsFull(st, 'user', sideOf(player))) {
         const ok = (id) => { const d = st.players[id]; return !!d && d.teamId === 'user' && d.group !== PLAYER_GROUP.IL && !d.isInjured
           && (st.userTeam.rosterIds || []).includes(id) && _sendDownChoices(st, player).some(c => c.key === id); };
-        const pick = instance._pick || (instance._choices?.length === 1 ? instance._choices[0].key : null);
+        const pick = action === 'il_return_auto'
+          ? _sendDownChoices(st, player)[0]?.key
+          : instance._pick || (instance._choices?.length === 1 ? instance._choices[0].key : null);
         if (!pick || !ok(pick)) break;
         StateManager.mutate(s => { dropPlayer(s, pick, 'user', atMs, { reason: 'corresponding move' }); });
         if (rosterIsFull(StateManager.get(), 'user', sideOf(player))) break;   // (still no room: stays on the IL)

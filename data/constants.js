@@ -1327,6 +1327,12 @@ export const INJURY_MORNING_EXAM_HOUR      = 9;       // local, + up to 90 min
 // makes the call-up himself (by position and seniority, not best rating)
 // and the front office takes a small hit for not acting.
 export const ROSTER_DECISION_LEAD_MS       = 60 * 60_000;   // 1 hour before first pitch
+// §122 an open spot's deadline is the night before the next game day when there's time
+// (a signing then reports for that game), else an hour before first pitch.
+export const VACANCY_MIN_WINDOW_MS        = 3 * 3600_000;
+// §122 the winter call: our open spots get a deadline the night before camp opens,
+// asked this many days ahead (a signing reports when camp opens).
+export const WINTER_ROSTER_CALL_DAYS      = 3;
 export const MANAGER_FILL_PENALTY          = Object.freeze({ ownerTrust: -2, atmosphere: -1 });
 // Fallback length of a game when its plays are not available (3 hours).
 export const GAME_DURATION_FALLBACK_MS     = 3 * 60 * 60_000;

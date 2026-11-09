@@ -57,7 +57,7 @@ import {
   teamRating, recordRating,
 } from './RosterEngine.js';
 
-import { rosterClock, applyDue, hasDue, cpuSalaryMove, cpuFreeAgentLook } from './TransactionEngine.js';
+import { rosterClock, applyDue, hasDue, cpuSalaryMove, cpuFreeAgentLook, campCallAt } from './TransactionEngine.js';
 import {
   seedDivision, buildBracket, prepareRound, recordGame, roundComplete, roundSeries,
   roundForPhase, nextRound, seriesGames, ROUND_PHASE, ROUND_LABEL,
@@ -3187,6 +3187,7 @@ function _nextRosterDue(state, uptoMs, { overdue = true } = {}) {
   }
   for (const x of state.developmentPlans || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);
   take(state.userTeam?.vacancyDeadlineAt);
+  if (state.phase === PHASE.OFFSEASON && state.offseason?.springAt && !state.offseason.campCall) take(campCallAt(state.offseason));   // §122 the winter roster call
   return best;
 }
 
