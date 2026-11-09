@@ -9397,7 +9397,7 @@ In Chromium (fresh save): the real save is byte-for-byte unchanged after a look-
 
 **Fresh team:** not needed. (A save from before r139 starts its roster-step mark when it first opens; the playoff queue starts empty.)
 
-## 122. DRAFT — The farm becomes a free-agent pool (design pass, Nov 8; not built)
+## 122. The farm becomes a free-agent pool — r140 (designed Nov 8, built Nov 8–9)
 
 **Why (GM, Nov 8).** The game is the intersection of a GM sim, fantasy baseball and a game. The farm, spring invitees, keepers and dead money are realism that costs more simplicity than it gives. Replace them with what fantasy players know: a roster, a pool of free agents anyone can sign, and waivers anyone can claim. **Supersedes §20 (the farm), the farm parts of §65, §73, §76, §85, §96, §112.3 (dead money) and §114.**
 
@@ -9633,3 +9633,40 @@ The harness's farm checks become free-agent checks (`sim-season`, `check-il-retu
 - `check-injury-decision` (new, 10 checks); `check-il-return`, `check-manager-fill` and `test-notices-ui` updated; `check-diamonds`, `check-compose-replies`, look-ahead and every engine check pass.
 - `test-game-pushes-ui` now accepts a foreseen postponement: the run's real date sets the weather.
 - `check-weather-cards` still fails as on main (pre-existing).
+
+### 122.12 Stage 3 built: the screens — and r140 (Nov 9)
+
+**Team → Players.**
+- No farm, keepers or spring-invitee badges, and no call-ups.
+- The open-spot banner reads "tap one to see the free agents who fit". A dashed open spot opens League → Players (`LeagueScreen.showAvailable`): Available, Healthy, that position.
+- Arriving players read "Signed", "Signed by the manager" or "Claimed off waivers".
+- Every row shows Impact: this season's, else last season's ("IMP +1.6 last yr"), green at +1 or more and red at −1 or less.
+- The old call-up picker (`gmCallUp`, which no longer existed) is gone.
+
+**League → Players (§122.7).**
+- **Filters:** Filter (Available, the default with its count / On Waivers / Free Agents / On Rosters / All), Team (shown for On Rosters and All), Health (All / IL-eligible / Healthy; day-to-day is healthy and tagged DTD in the row), Sort (OVR / Price / Days unsigned / Impact), position buttons, search and Reset.
+- **Available rows** carry an **Add** (free agent) or **Claim / Claimed** (waivers) button, opening the sign sheet. They also show **ASK** (one-year price; waivers: the contract) and **DAYS** (unsigned; waivers: time left).
+- **No stats this season** (a free agent, or spring): the row shows last season's line, marked "'25 stats".
+- The IMP column is this season's Impact, else last season's (marked LY), and Impact sorts.
+- **Impact leaders** (top five hitters and pitchers) head On Rosters once the season has a sample.
+
+**The sign sheet.** No farm: whoever makes room goes on waivers (between seasons, released), "$K off the payroll at once". A one-year signing is "paid only for the days on our roster".
+
+**The player card.**
+- **Career:** every past season (year, G, AB, AVG, HR, RBI, SB, OPS; pitchers G, IP, W-L, ERA, K, SV) with a total row.
+- With no league record, a note says why: a rookie (the scouts' projection), overseas, or independent ball. A free agent's ask adds "Unsigned for N days".
+- Traits in words ("Young gun").
+- Also fixed: the season WHIP read `h` instead of `h_allowed`.
+
+**Also:** the trade composer has no farm section, and the rating history says "a signing" instead of "a call-up".
+
+**Proof.** `test-fa-screens-ui` (new, 13 checks, dark and light):
+- the Team screen has no farm or keepers, points open spots to the free agents, and shows Impact on rows, with no sideways scroll;
+- the open spot opens Available with Add, ASK and DAYS;
+- Add opens the sign sheet;
+- On Rosters shows the Team filter;
+- a veteran's card has the career, ask and unsigned days; a rookie's says why there's no record;
+- the injury decision shows its choices;
+- no page errors.
+
+**r140** (sw.js `CACHE_VERSION` and App.js `APP_VERSION`: `tfo-v2-r140`) ships §122 in full: the free-agent pool (stage 1), diamonds and the league's past (§122.9–10), the messages (stage 2) and the screens. **A fresh team is required.**

@@ -554,10 +554,13 @@ export function hasDue(state, clockMs) {
     if (inj.status === 'dtd' && inj.returnAt <= clockMs) return true;
     if (inj.status === 'il'  && inj.eligibleAt <= clockMs) return true;
   }
+  // §122 the winter roster call is due (its flag is set by the vacancy clock).
+  const os = state.offseason;
+  if (state.phase === PHASE.OFFSEASON && os?.springAt && !os.campCall && clockMs >= campCallAt(os)) return true;
   const needs = getRosterNeeds(state, 'user');
   const dl    = state.userTeam?.vacancyDeadlineAt ?? null;
   if (!needs.applies || needs.short === 0) return dl != null;
-  return dl == null ? decisionDeadlineAfter(state, clockMs) != null : dl <= clockMs;
+  return dl == null ? vacancyDeadline(state, clockMs) != null : dl <= clockMs;
 }
 
 function _onActiveRoster(draft, p) {
