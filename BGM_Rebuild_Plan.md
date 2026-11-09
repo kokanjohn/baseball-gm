@@ -9504,3 +9504,39 @@ The harness's farm checks become free-agent checks (`sim-season`, `check-il-retu
 - **Scouting cards still invent players** (`marketCandidate` → `generateMarketPlayer` + `addToMarket`), and a pass leaves them in the pool. 122.1 says a passed find is gone.
 - **Our open spots at the new season** get their deadline at the first spring game, so the manager's signings report a day late and that game is played short. The open-spot message should come in the winter, with a deadline before camp.
 - **The roster messages still talk about the farm** (122.3); the manager's fill reads "called up".
+
+### 122.9 Decided: diamonds in the rough, a league with a past, Impact repairs (GM, Nov 9)
+
+**The goal.** A GM who looks hard should find a few free agents worth much more than their rating, and get them before CPU clubs do.
+
+**No "plays like" rating.** No new number or column anywhere. The clues are the sub-ratings, the player's past stats, and what the staff say in compose messages.
+
+**1. The league has a past (every player, not just free agents).** The GM is taking over a club in a league that already existed.
+- At league creation every player gets prior seasons. How many depends on age and talent (better players debut younger): a 35-year-old veteran might have 12, a 26-year-old 3, a true rookie none.
+- Each past season is built from the player's ratings at that age, worked back along the §4.1 age curves. The line comes from the game's own at-bat model, so the history matches how he will actually play. Variation gives career years, off years and the odd injury-shortened season. Playing time follows role (regulars full seasons; bench, relievers less).
+- Seasons only, no clubs: the history lists stats, not teams. Team archetypes play no part.
+- Career totals and the season log are filled from it, so every player with history has last season's Impact on opening day.
+- No history gets a short note on the player card: rookies "First season in the league"; international players "Played professionally overseas, no league record"; independent-ball players likewise.
+
+**2. Untested players' ratings are scouts' estimates.** Veterans' ratings are true (years of stats prove them). Rookies and international players have a hidden true rating that can sit several points off the shown one, either way. As they play (and train), the shown ratings drift toward the truth. Some flyers pay off.
+
+**3. Diamonds come in two kinds.**
+- **Proven but overlooked:** a slow slugger or a short reliever whose OVR undersells him (OVR counts speed and stamina a quarter each; the at-bat uses contact/power and stuff/control). Clues: sub-ratings and history (a 54-OVR bat with 20+ home runs three years running).
+- **Unproven upside:** a rookie or international player whose true ratings are above the shown ones. Clue: the staff.
+- Seeded: about 6 in the opening pool, about 3 in each offseason class; CPU releases add a few naturally.
+- **The race:** CPU clubs shop by shown OVR. Each diamond has a hidden date 10–30 days after he becomes a free agent when word gets around; from then CPU clubs value him at his true worth.
+
+**4. Compose messages to dig (difficulty: hard).**
+- The scouting director looks at a few free agents a week and reports what he sees. For an untested player his look narrows the gap to the true rating. A better scouting director sees more clearly and sometimes tips the GM off before word gets out.
+- The hitting or pitching coach can work with a young player (the existing development plans); playing and training bring out the true ratings sooner.
+
+**5. Impact repairs (audit, Nov 9).**
+1. The player card's season box is always blank (reads `impSeason`; the engine writes `impS`).
+2. The player card label passes the whole score set to `getImpLabel`, so everyone with a score reads "below replacement".
+3. League → Players sorts Impact by `player._imp7`, which is never set.
+4. Pitcher Impact runs about ten times the hitters' scale (−73 to +31 at 46 games against −4 to +4); small samples blow up, relievers worst. Rescale to the hitters' range and let small samples count for less.
+5. The windows count our games (`gameIndex`), and CPU games are stamped with our game count. The plan says days: count by date.
+6. Not drawn where §30.6 says: no Impact leaders (`getImpLeaderboard` imported, unused), no trade-card wording, Team rows show only the hot/cold mark.
+7. Last season's Impact disappears at the rollover; recompute it from the season log.
+
+**Order.** (1) Impact repairs; (2) league history, checked against what the game actually produces; (3) estimated ratings for untested players, the diamonds, word-gets-out, measured; (4) stage 2 messages, plus the scouting and development compose topics; (5) stage 3 screens, plus a career stats table and the no-history note. All in r140; fresh team required.
