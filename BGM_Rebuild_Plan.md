@@ -9443,7 +9443,7 @@ In Chromium (fresh save): the real save is byte-for-byte unchanged after a look-
 ### 122.4 Screens
 
 - **Team:** no farm section, no keeper toggles, no dashed call-up spots; an open spot links to free agents that fit it. Payroll without dead-money lines.
-- **League → Players:** free agents and waivers become the main place to add players — filter by role, sort by OVR / price / days unsigned; a claim or a signing from the row (the sign sheet asks who to drop when the roster is full).
+- **League → Players:** the main place to add players, ESPN-style (122.7).
 - **Player card:** no farm arc; a free agent shows his asking price and how long he's been unsigned.
 - **Spring:** the 28 play the spring games; no camp roster to cut down.
 
@@ -9456,10 +9456,19 @@ Three stages, **released together as one version** (a partial release would leav
 
 The harness's farm checks become free-agent checks (`sim-season`, `check-il-return`, `check-manager-fill`, `check-contracts`, `multi-season`, the compose and notices UI tests); the push and look-ahead proofs (§118–§121) run unchanged. **Fresh team required.**
 
-### 122.6 Open questions (for the GM)
+### 122.6 Decided (GM, Nov 8)
 
-1. When does a pickup play — reports the next day (as trades do now), or available for the next game that hasn't started?
-2. With no dead money, a long contract can be dropped at no cost beyond losing the player. Accept that?
-3. Keep the 14 hitters / 14 pitchers split on the 28?
-4. Ship as one version (recommended), or stage by stage?
+1. **A pickup reports the next day**, like a trade (a free-agent signing and a waiver claim alike).
+2. **No dead money is accepted:** a long contract can be dropped at no cost beyond losing the player.
+3. **The 14 hitters / 14 pitchers split stays.**
+4. **One version**, built in three stages with a check-in after the model.
 
+### 122.7 The Players view, ESPN-fantasy style (GM, Nov 8)
+
+**League → Players** works like an ESPN fantasy league's Players page: it opens on **everyone you could add**, and filters narrow from there. (Team → Players stays our roster, lineup and IL; an open spot there jumps to League → Players filtered to fit it.)
+- **Filter:** **Available** (default — free agents and players on waivers together), *On Waivers*, *Free Agents*, *On Rosters*, *All*.
+- **Team:** one club's players — today's "All Teams" drop-down without *On Waivers* and *Free Agents* (they're in Filter). Applies to *On Rosters* and *All*.
+- **Health:** *All*, *IL-eligible* (injured enough for the IL), *Healthy* (day-to-day players count as healthy, tagged **DTD**).
+- **Sort:** OVR, best first, by default; price and days unsigned as the other sorts for available players.
+- Position buttons and last-name search as now; the "All | Other Teams" buttons go (Filter covers them).
+- A row for an available player shows his asking price and how long he's been unsigned (or the time left on waivers), and adds him from the row — a claim or a signing; the sign sheet asks who goes on waivers when the roster is full.
