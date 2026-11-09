@@ -32,7 +32,6 @@ import {
   GM_RELATIONSHIP_DEFAULT,
   SUB_RATING_MIN,
   SUB_RATING_MAX,
-  MARKET_KINDS,
 } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -109,11 +108,17 @@ const SP_COUNT                 = 5;
 const BP_COUNT                 = 5;   // active bullpen (locked: 5 RP)
 const PITCHER_BENCH_SP_COUNT   = 2;   // SP bench slots
 const PITCHER_BENCH_RP_COUNT   = 2;   // RP bench slots
-// §122 the opening free-agent pool (200): who's left unsigned when the league begins.
-// Kinds (MarketEngine.MARKET_KINDS: OVR relative to the league level, ages):
-// veterans who can still help, depth, young players with upside, independent-league finds.
+// §122 the opening free-agent pool (200): who's left unsigned when the league begins — the
+// players the old farms and camp lists held, so about a bench player's level (the clubs' bench
+// sits near 41–45 above the league level, the old farms near 38): a few veterans who'd help a
+// bench, depth, young players with upside, independent-league finds. OVR relative to the league
+// level. (Not the winter market's MARKET_KINDS ranges: that market holds the good players whose
+// deals ran out; this is what was left over.) `kind` sets the asking price (MarketEngine.signingTerms).
 const FA_POOL_MIX = Object.freeze([
-  { kind: 'veteran', n: 40 }, { kind: 'depth', n: 100 }, { kind: 'prospect', n: 40 }, { kind: 'indie', n: 20 },
+  { kind: 'veteran',  n: 40,  ovrMin: 42, ovrMax: 54, ageMin: 30, ageMax: 35 },
+  { kind: 'depth',    n: 100, ovrMin: 36, ovrMax: 46, ageMin: 26, ageMax: 32 },
+  { kind: 'prospect', n: 40,  ovrMin: 32, ovrMax: 44, ageMin: 19, ageMax: 22 },
+  { kind: 'indie',    n: 20,  ovrMin: 34, ovrMax: 44, ageMin: 22, ageMax: 27 },
 ]);
 const FA_HITTER_POSITIONS = ['C','C','1B','2B','3B','SS','OF','OF','OF','2B/SS','1B/3B'];   // cycled for hitters
 const FA_HITTER_SHARE     = 0.55;
@@ -585,8 +590,8 @@ export function buildFullLeague({ archetypeId, seasonNum, seasonYear = new Date(
 export function buildFreeAgentPool(names, seasonNum, uuidFn, leagueOffset = 0, seasonYear = new Date().getFullYear()) {
   const players = {}, freeAgentIds = [];
   let ni = 0, hi = 0, pi = 0;
-  for (const { kind, n } of FA_POOL_MIX) {
-    const prof = MARKET_KINDS[kind];
+  for (const prof of FA_POOL_MIX) {
+    const { kind, n } = prof;
     for (let k = 0; k < n && ni < names.length; k++) {
       const hitter = Math.random() < FA_HITTER_SHARE;
       const pos = hitter ? FA_HITTER_POSITIONS[hi++ % FA_HITTER_POSITIONS.length] : (pi++ % 100 < FA_SP_SHARE * 100 ? 'SP' : 'RP');

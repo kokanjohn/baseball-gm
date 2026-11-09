@@ -19,7 +19,7 @@ const check = (name, ok, info = '') => {
   console.log(`  ${ok ? '\x1b[32mPASS\x1b[0m' : '\x1b[31mFAIL\x1b[0m'}  ${name}${!ok && info ? ` — ${info}` : ''}`);
 };
 
-seedRandom(5);
+seedRandom(2);   // (a typical club — a lopsided one saturates the win effect)
 await startNewGame({ archetypeId: 'contender', gmName: 'Test GM', city: 'Testville', nickname: 'Testers',
                      abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: 'east' });
 const st = SM.get();

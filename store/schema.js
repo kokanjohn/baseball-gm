@@ -395,7 +395,6 @@ export function createUserTeamObject(config = {}) {
       season:            { income: {}, spend: {} },
       history:           [],        // one summary per season
       cal:               null,      // this season's pay calendar
-      dead:              [],        // released players still owed this season
       owner:             { stage: 'content', mood: 0, order: null, targetPenalty: 0, lastReviewAt: null },
     },
 

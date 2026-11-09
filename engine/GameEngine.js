@@ -314,6 +314,7 @@ export async function startNewGame(config) {
     s.userTeam.rosterIds   = league.rosterIds;
     s.userTeam.lineupSlots = league.lineupSlots;
     s.freeAgentPool        = league.freeAgentIds;   // §122 anyone can sign them
+    for (const id of league.freeAgentIds) s.players[id]._faSince = clockNow();   // unsigned since the league opened (their price eases from here)
     s.leagueTalentOffset   = league.leagueOffset ?? 0;   // §69 — league talent level
     s.baseYear             = baseYear;                   // §70 — the league's year for season 1
     s.userTeam.finances.payroll = league.payroll;

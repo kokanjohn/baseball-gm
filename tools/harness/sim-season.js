@@ -253,7 +253,9 @@ function gmActs() {
     }
     // §112.3 take the first extension and release the first overpaid player, so both paths always run.
     if (c.cardId === 'os_extension' && !gm.extended) {
-      gm.extended = { id: c._targetPlayerId, terms: c._extTerms, season: SM.get().seasonNum }; resolveCard(c.instanceId, 'yes'); gm.acted++; advanceClock(clock.get()); continue;
+      gm.extended = { id: c._targetPlayerId, terms: c._extTerms, season: SM.get().seasonNum }; resolveCard(c.instanceId, 'yes'); gm.acted++;
+      gm.extended.applied = `${SM.get().players[c._targetPlayerId]?.contractSalary}K/exp${SM.get().players[c._targetPlayerId]?.contractExpiry}@s${SM.get().seasonNum}`;
+      advanceClock(clock.get()); continue;
     }
     if (c.cardId === 'os_release' && !gm.released) {
       const p0 = SM.get().players[c._targetPlayerId];
@@ -541,7 +543,8 @@ async function runOffseasonChecks() {
     if (gm.extended) {
       const q = st.players[gm.extended.id];
       check(`contracts: an extension takes effect (${q?.name}: ${gm.extended.terms.years} years at ${gm.extended.terms.salary}K → through ${q?.contractExpiry - 1})`,
-            !!q && q.contractSalary === gm.extended.terms.salary && q.contractExpiry === 2 + gm.extended.terms.years);
+            !!q && q.contractSalary === gm.extended.terms.salary && q.contractExpiry === 2 + gm.extended.terms.years,
+            `now ${q?.teamId}/${q?.group} ${q?.contractSalary}K exp ${q?.contractExpiry} extendedSeason ${q?._extendedSeason} applied ${gm.extended.applied}`);
     }
     if (gm.released) {
       const R = gm.released, q = st.players[R.id];
@@ -931,8 +934,11 @@ function runFaultInjection(base) {
     applyRosterMutation(st, reconcileRoster(st, 'user'));
     check('fault(user SP): injured SP dropped from rotation.order',
           !st.userTeam.rotation.order.includes(spId));
-    check('fault(user SP): rotation restored to 5',
-          st.userTeam.rotation.order.length === ROSTER_LIMITS.STARTING_PITCHERS,
+    // Five again — or every healthy starter we have (§122: no farm arm to promote; an open
+    // rotation spot is the GM's to fill from the free agents).
+    const healthySP = st.userTeam.rosterIds.map(id => st.players[id]).filter(q => q && q.pos === 'SP' && !q.isInjured && q.group !== 'il').length;
+    check(`fault(user SP): rotation restored to 5 (or every healthy starter: ${healthySP})`,
+          st.userTeam.rotation.order.length === Math.min(ROSTER_LIMITS.STARTING_PITCHERS, healthySP),
           `got ${st.userTeam.rotation.order.length}`);
     assertTeamIntegrity(st, st.userTeam, 'fault(user SP)');
   }
@@ -2243,7 +2249,7 @@ async function main() {
     check('player cards: every absence ends (games counted down)', stale.length === 0, stale.length);
     const chained = [...gm.chainSeen.values()];
     check(`card chains: follow-up cards are set in motion (${chained.length})`, chained.length >= 1,
-          [...new Set(chained)].join(','));
+          `${[...new Set(chained)].join(',')} — scouting cards seen: ${[...gm.cardIdsSeen].filter(x => /^(sc|intl|indie|s2)/.test(x)).join(',') || 'none'}`);
     const timedPre = [...(st.inbox || [])].filter(c => c._pool === 'PREGAME_POOL');
     check(`card timing: pre-game cards arrive before first pitch (${timedPre.length})`,
           timedPre.every(c => !Number.isFinite(c.expiresAtMs) || (c.arrivedAtMs ?? c.deliverAtMs) <= c.expiresAtMs));

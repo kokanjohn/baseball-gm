@@ -22,6 +22,7 @@ import { eligibleSlotsFor } from '../../engine/RosterEngine.js';
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { baseballDateIso, springStartIso } from '../../engine/WeatherClimate.js';
 import { writeFileSync } from 'node:fs';
+import { runAt, setClock } from '../../engine/Clock.js';
 import { GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP, OFFSEASON_DAYS } from '../../data/constants.js';
 
 const SEASONS = parseInt(process.argv[2] || '3', 10);
@@ -210,8 +211,19 @@ function checkTurn(prev, os, label) {
   // Our club: a legal roster, a lineup, a rotation, a full staff, live contracts.
   const u = st.userTeam;
   const active = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && p.group !== PLAYER_GROUP.IL);
-  check(`${label}: our roster is legal (${(u.rosterIds || []).length} active)`, (u.rosterIds || []).length <= ROSTER_LIMITS.ACTIVE_TOTAL + 8 && active.length >= 24);
-  check(`${label}: nine in the lineup`, (u.lineupSlots || []).filter(sl => st.players[sl.playerId]).length === 9);
+  // §122 the open spots are the GM's (the open-spot card, then the manager at its deadline): by
+  // the first spring game the club holds 28 (on a scratch copy: the clock run to that first pitch).
+  const firstPitch = st.schedule.find(g => Number.isFinite(g.gameTime))?.gameTime;
+  const heldAt = SM.speculate(() => runAt(firstPitch, () => {
+    setClock(firstPitch); advanceClock(firstPitch);
+    const s2 = SM.get(), u2 = s2.userTeam;
+    return { held: u2.rosterIds.filter(id => s2.players[id]?.group !== PLAYER_GROUP.IL).length
+         + (s2.transactions || []).filter(t => t.kind === 'arrival' && t.status === 'pending' && t.teamId === 'user').length,
+             nine: (u2.lineupSlots || []).filter(sl => s2.players[sl.playerId]).length };
+  }));
+  check(`${label}: our roster is legal (${active.length} active at the turn; ${heldAt.held} held by the first spring game)`,
+        (u.rosterIds || []).length <= ROSTER_LIMITS.ACTIVE_TOTAL + 8 && heldAt.held === ROSTER_LIMITS.ACTIVE_TOTAL);
+  check(`${label}: nine in the lineup by the first spring game (${(u.lineupSlots || []).filter(sl => st.players[sl.playerId]).length} at the turn)`, heldAt.nine === 9);
   // Five turns — or every healthy starter we have, when the GM let it get thinner than five.
   const healthySP = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && p.pos === 'SP' && !p.isInjured && p.group !== PLAYER_GROUP.IL).length;
   const rot = (u.rotation?.order || []).filter(id => st.players[id]).length;

@@ -41,7 +41,7 @@ for (let d = 0; d < DAYS; d++) {
   const st = SM.get();
   const g0 = st.schedule[st.currentGameIndex];
   if (!g0 || !Number.isFinite(g0.gameTime)) break;
-  const idx = g0.index;
+  const idx = g0.index, T = g0.gameTime;
   // A moment to look from: between the last game and an hour before this one.
   const lo = Math.max(prevEnd, clock.get()), hi = g0.gameTime - 3600_000;
   const t0 = hi > lo ? lo + Math.floor(Math.random() * (hi - lo)) : lo;
@@ -84,11 +84,14 @@ for (let d = 0; d < DAYS; d++) {
   const boxSame = !!L.boxScore && JSON.stringify(L.boxScore) === JSON.stringify(gEnd?.boxScore);
   const same = boxSame && (!real || (look.length === real.length && look.every((s, i) => s === real[i])));
   // No game at all: both must be the same postponement, called at the same moment.
-  const postponedBoth = !L.plays.length && !real && L.wx?.outcome === gEnd?.wx?.outcome && L.wx?.decidedAt === gEnd?.wx?.decidedAt
-    && (gEnd?.status === GAME_STATUS.POSTPONED || gEnd?.cancelled);
+  const postponedBoth = (!L.plays.length && !real && L.wx?.outcome === gEnd?.wx?.outcome && L.wx?.decidedAt === gEnd?.wx?.decidedAt
+    && (gEnd?.status === GAME_STATUS.POSTPONED || gEnd?.cancelled))
+    // …or moved to a makeup the look-ahead named (it then plays that day — another game, looked at on its own).
+    || (!!L.postponed && !L.plays.length && L.postponed.makeupTime === gEnd?.gameTime
+        && (gEnd?.postponements || []).some(p => p.gameTime === T && p.decidedAt === L.postponed.decidedAt && p.reason === L.postponed.reason));
   const note = `${fmt(g0.gameTime)} vs ${g0.opponent} · looked from ${((g0.gameTime - t0) / 3600_000).toFixed(1)}h before · ${mode}`;
   if (same || postponedBoth) {
-    console.log(`  ✓ ${note} · ${look.length} plays${real ? '' : ' (box only: plays dropped at commit)'}${postponedBoth ? ` (postponed — called ${fmt(L.wx.decidedAt)}, as foreseen)` : ''}`);
+    console.log(`  ✓ ${note} · ${look.length} plays${real ? '' : ' (box only: plays dropped at commit)'}${postponedBoth ? ` (postponed — called ${fmt(L.wx?.decidedAt ?? L.postponed.decidedAt)}${L.postponed?.makeupTime ? `, made up ${fmt(L.postponed.makeupTime)}` : ''}, as foreseen)` : ''}`);
   } else {
     const i = real ? look.findIndex((s, k) => s !== real[k]) : -1;
     bad.push(note);

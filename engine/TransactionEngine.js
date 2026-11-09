@@ -63,7 +63,7 @@ import {
 import { cpuWaiverClaimant, weakestPeer } from './LeagueEngine.js';
 
 import { tradePlayerPatches } from './TradeEngine.js';
-import { payrollRoom, contractToMove, cutOrderAmount, post as postFunds, retainSalary, canAddSalary } from './FinanceEngine.js';
+import { payrollRoom, contractToMove, cutOrderAmount, post as postFunds, retainSalary, canAddSalary, seasonTarget, payrollOf } from './FinanceEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { adjustRapport } from './TradeEngine.js';
 import { releaseToFreeAgency } from './OffseasonEngine.js';
@@ -356,7 +356,7 @@ function _cpuFill(draft, teamId, atMs, short, events) {
  * cpuFreeAgentLook(draft, atMs) — §122 once a day each CPU club looks at the
  * free agents, worst record first (like waivers): a free agent at least
  * FA_CPU_UPGRADE_MARGIN better than its weakest healthy player in that role,
- * whom its owner can pay (the man he replaces comes off), is signed — at most
+ * whom its owner can pay within the season's payroll target (the man he replaces comes off), is signed — at most
  * one a club a day — and that weakest player goes on waivers, where any club
  * (the GM too) can claim him. So a good player doesn't sit unsigned while a
  * club has a much weaker one in his role and the money to fix it. No
@@ -372,7 +372,11 @@ export function cpuFreeAgentLook(draft, atMs) {
     for (const fa of _healthyFreeAgents(draft)) {
       const weak = weakestPeer(team, fa, draft.players);
       if (!weak || (fa.ovr || 0) < (weak.ovr || 0) + FA_CPU_UPGRADE_MARGIN) continue;
-      if (!canAddSalary(draft, signingTerms(draft, fa).salary || 0, weak.contractSalary || 0, team.id)) continue;
+      // An upgrade is a choice, not a hole: it fits under the season's payroll target (or saves
+      // money) — not the owner's stretch past it, nor the league-minimum allowance that lets
+      // any club fill an empty spot.
+      const net = (signingTerms(draft, fa).salary || 0) - (weak.contractSalary || 0);
+      if (net > 0 && net > seasonTarget(team.finances || {}) - payrollOf(draft, team.id)) continue;
       const gain = (fa.ovr || 0) - (weak.ovr || 0);
       if (!best || gain > best.gain || (gain === best.gain && (fa.ovr || 0) > (best.fa.ovr || 0))) best = { fa, weak, gain };
     }

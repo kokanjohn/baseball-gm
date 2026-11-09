@@ -100,7 +100,8 @@ SM.mutate(s => {
   const org = [...u.rosterIds, ...(s.freeAgentPool || []).filter(id => Pl(id)?.group === PLAYER_GROUP.FREE_AGENT && !Pl(id).isInjured)];
   const lineup = u.lineupSlots.map(sl => sl.playerId), rot = u.rotation.order;
   const byOvr = (a, b) => Pl(b).ovr - Pl(a).ovr;
-  const benchBats = org.filter(id => !['SP', 'RP'].includes(Pl(id).pos) && !lineup.includes(id)).sort(byOvr).slice(0, 5);
+  const own = new Set(u.rosterIds);   // our own bench first (it covers the field's positions), free agents only to fill out
+  const benchBats = org.filter(id => !['SP', 'RP'].includes(Pl(id).pos) && !lineup.includes(id)).sort((a, b) => (own.has(b) - own.has(a)) || byOvr(a, b)).slice(0, 5);
   const spareSP = org.filter(id => Pl(id).pos === 'SP' && !rot.includes(id)).sort(byOvr).slice(0, 1);
   const rps = org.filter(id => Pl(id).pos === 'RP').sort(byOvr).slice(0, 8);
   const keep = [...lineup, ...benchBats, ...rot, ...spareSP, ...rps];
@@ -167,7 +168,9 @@ console.log('\nUnanswered: the manager follows up once');
 const X3 = U().lineupSlots.find(sl => sl.slot === 'OF')?.playerId;
 hurt(X3, 2); fillRoster(); step(2.5 * 3600_000);
 c = cardFor('il_return', X3);
-resolve(c.instanceId, 'yes', { pick: c._choices[0].key }); advanceClock(clock.get());
+// (send down a reserve who isn't playing: sending the fill-in would hand the spot straight back)
+const notPlaying = c._choices.find(x => !U().lineupSlots.some(sl => sl.playerId === x.key)) || c._choices[0];
+resolve(c.instanceId, 'yes', { pick: notPlaying.key }); advanceClock(clock.get());
 n = waitFor('lineup_return', X3);
 const lock = n?.expiresAtMs;
 for (let i = 0; i < 60 && cardFor('lineup_return', X3)?._nudge !== 2; i++) step(60 * 60_000);

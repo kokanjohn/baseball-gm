@@ -1,8 +1,7 @@
 // §112.3 Contract day for the GM — checks of the money behind releases and extensions.
 //   node tools/harness/check-contracts.mjs
-// A real league; a release between seasons owes the rest of the deal season by
-// season, counts against payroll room, shrinks when another club signs the
-// player, and becomes the new season's dead money when its pay calendar starts.
+// A real league; a release between seasons takes the whole deal off our books
+// at once (§122 — there's no dead money); another club's deal is its own.
 import { seedRandom } from './shims.js';            // MUST be first (installs globals)
 import * as SM from '../../store/StateManager.js';
 import { startNewGame } from '../../engine/GameEngine.js';
@@ -38,38 +37,23 @@ check('an overpaid veteran after a poor season is a release candidate (3 seasons
 const X = Offseason.contractContext(st, st.players[vet]);
 check(`the context reads the season and the role (“${X.line}”, ${X.role})`, /\.200\/.*3 HR in 90 games/.test(X.line || '') && /part-time/.test(X.role));
 
-const room0 = Finance.payrollRoom(st);
+const room0 = Finance.payrollRoom(st), pay0 = Finance.payrollOf(st, 'user');
 SM.mutate(s => { Offseason.applyRelease(s, vet, t0); });
 st = SM.get();
-const fut = st.userTeam.finances.deadFuture || [];
-check(`the release owes each remaining season (${fut.map(d => `s${d.season} ${d.salary}K`).join(', ')})`,
-      fut.length === 3 && fut.every(d => d.salary === 3000) && fut.map(d => d.season).join() === '2,3,4');
+// §122 no dead money: a release takes the whole deal off our books at once.
 check(`the player is a free agent`, st.players[vet].teamId == null && st.freeAgentPool.includes(vet));
-check(`next season's dead money counts against payroll room (owed ahead ${Finance.deadAhead(st)}K; room ${Math.round(room0)} → ${Math.round(Finance.payrollRoom(st))})`,
-      Finance.deadAhead(st) === 3000 && Math.abs(Finance.payrollRoom(st) - room0) <= 50);
+check(`the release takes the salary off our payroll at once (${pay0}K → ${Finance.payrollOf(st, 'user')}K)`,
+      pay0 - Finance.payrollOf(st, 'user') === 3000);
+check(`…and opens the room by as much (${Math.round(room0)} → ${Math.round(Finance.payrollRoom(st))})`,
+      Finance.payrollRoom(st) - room0 >= 2990);
+check('nothing is owed on him, now or later', !('dead' in st.userTeam.finances) && !('deadFuture' in st.userTeam.finances));
 
-// Another club signs the player: its salary comes off what we still owe, season by season.
+// Another club signs the player: the new deal is theirs alone.
 const club = st.leagueTeams[0].id;
-const ask = st.players[vet]._ask.salary;
 SM.mutate(s => { Offseason.signFreeAgent(s, vet, club, t0 + 3600_000); });
 st = SM.get();
-const left = st.userTeam.finances.deadFuture || [];
-const newExp = st.players[vet].contractExpiry - 1;
-check(`a new club's salary offsets it (signs at ${ask}K through season ${newExp}: owed ${left.map(d => `s${d.season} ${d.salary}K`).join(', ')})`,
-      left.every(d => d.salary === (d.season <= newExp ? 3000 - ask : 3000)) && left.reduce((a, d) => a + d.salary, 0) < 9000);
-
-// Season 2 opens: its share becomes dead money on the pay calendar.
-SM.mutate(s => {
-  s.offseason = null; s.seasonNum = 2;
-  for (const g of s.schedule) g.gameTime += 365 * 86_400_000;
-  s.userTeam.finances.cal = null;
-  Finance.ensureSeason(s, 'user');
-});
-st = SM.get();
-const dead = st.userTeam.finances.dead || [];
-check(`season 2's share is now dead money, paid on paydays (${dead.map(d => `${d.salary}K`).join(', ')}; ahead later: ${(st.userTeam.finances.deadFuture || []).map(d => `s${d.season}`).join(',')})`,
-      dead.some(d => d.playerId === vet) && !(st.userTeam.finances.deadFuture || []).some(d => d.season === 2));
-check(`in season it still counts against the room (${Finance.deadAhead(st)}K)`, Finance.deadAhead(st) === dead.reduce((a, d) => a + d.salary, 0) && Finance.deadAhead(st) > 0);
+check(`a new club signs the player; our payroll doesn't move (${Finance.payrollOf(st, 'user')}K)`,
+      st.players[vet].teamId === club && Finance.payrollOf(st, 'user') === pay0 - 3000);
 
 // Extensions: the young core, under contract, terms that start next season.
 seedRandom(10);
