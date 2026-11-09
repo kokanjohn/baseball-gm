@@ -24,6 +24,8 @@ import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor } 
 import { defaultActiveGroup, eligibleSlotsFor, makeArrival } from './RosterEngine.js';
 import { rosterIsFull, sideOf, dropPlayer } from './TransactionEngine.js';
 import { newPlayerName } from './Names.js';
+import { writeHistoryForKind } from './LeagueHistory.js';
+import { leagueNorms } from './SimEngine.js';
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const HITTER_POS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'OF', 'OF', '2B/SS', '1B/3B'];
@@ -73,6 +75,9 @@ export function generateMarketPlayer(state, { kind = 'depth', side = 'hitter', p
     contractLengthOverride: 1, teamId: null, leagueLevel: level,
   });
   Object.assign(p, { tier: 'freeAgent', _faFrom: null, _faReason: kind, _marketKind: kind });
+  // §122.9 his past in the league (or why he has none).
+  writeHistoryForKind(p, { year: baseballYear(state), seasonNum: state.seasonNum || 1, level,
+                           norms: leagueNorms([state.userTeam, ...(state.leagueTeams || [])], state.players || {}), rand });
   return p;
 }
 

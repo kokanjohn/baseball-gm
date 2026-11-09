@@ -1094,60 +1094,82 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   // others — but the league's run environment stays where baseball is.
   // Without norms (tests, previews) the fixed SIM_RATING_AVG is used.
   const N  = context.norms || {};
-  const A  = SIM_RATING_AVG;
-  const Ac = N.contact ?? A, Ap = N.power ?? A, As = N.speed ?? A;
-  const Ast = N.stuff ?? A, Act = N.control ?? A;
   const r = _roll();
 
-  // 1. Walk — control below average → more walks
-  const walkProb = _clamp(SIM_PA_WALK_BASE + (Act - control) * SIM_PA_WALK_PER_PT,
-                          SIM_PA_WALK_MIN, SIM_PA_WALK_MAX) * fatigueWalkMod * pitcherMod
-                 * (context.walkMod ?? 1);   // §102.2 a wet or cold ball
-  if (r < walkProb) return { type: 'walk' };
+  const R = plateAppearanceRates({ contact, power, speed, stuff, control }, N, {
+    walk: [fatigueWalkMod, pitcherMod, context.walkMod ?? 1],   // §102.2 a wet or cold ball
+    k:    [fatigueKMod, pitcherMod, batterMod],
+    hit:  [fatigueHitMod, batterMod, envMod, context.scoutHit ?? 1],   // §90 advance scouting: our hitters know what's coming
+    hr:   [context.hrMod != null ? context.hrMod * (envMod / (context.hitEnv ?? envMod)) : envMod],   // §102.2 temperature and wind carry the ball
+  });
 
-  let pos = walkProb;
+  // 1. Walk — control below average → more walks
+  if (r < R.walk) return { type: 'walk' };
+  let pos = R.walk;
 
   // 2. HBP
-  const hbpProb = control < SIM_P_CONTROL_HBP_THRESHOLD ? 0.012 : 0.008;
-  if (r < pos + hbpProb) return { type: 'hbp' };
-  pos += hbpProb;
+  if (r < pos + R.hbp) return { type: 'hbp' };
+  pos += R.hbp;
 
   // 3. Strikeout — stuff vs contact
-  const kProb = _clamp(SIM_PA_K_BASE
-                       + (Ac - contact) * SIM_PA_K_PER_CONTACT_PT
-                       + (stuff - Ast)  * SIM_PA_K_PER_STUFF_PT,
-                       SIM_PA_K_MIN, SIM_PA_K_MAX) * fatigueKMod * pitcherMod * batterMod;
-  if (r < pos + kProb) return { type: 'strikeout' };
-  pos += kProb;
+  if (r < pos + R.k) return { type: 'strikeout' };
+  pos += R.k;
 
   // 4. Hit vs out — contact vs stuff, plus speed-driven infield hits
-  const hitProb = _clamp(SIM_PA_HIT_BASE
-                         + (contact - Ac) * SIM_PA_HIT_PER_CONTACT_PT
-                         - (stuff - Ast)  * SIM_PA_HIT_PER_STUFF_PT,
-                         SIM_PA_HIT_MIN, SIM_PA_HIT_MAX) * fatigueHitMod * batterMod * envMod
-                         * (context.scoutHit ?? 1);   // §90 advance scouting: our hitters know what's coming
-  const infieldBonus = Math.max(0, (speed - As) * SIM_PA_INFIELD_HIT_PER_SPEED_PT);
-  const adjHitProb   = Math.min(0.45, hitProb + infieldBonus);
-
-  if (r >= pos + adjHitProb) {
+  if (r >= pos + R.hit) {
     // Out — groundout vs flyout split
     const groundoutProb = 0.55; // slight groundout lean
     return { type: _roll() < groundoutProb ? 'groundout' : 'flyout' };
   }
 
   // 5. Hit type: HR / triple / double / single — power sets the extra-base share
-  const hrShare  = _clamp(SIM_HIT_HR_SHARE_BASE + (power - Ap) * SIM_HIT_HR_SHARE_PER_PT,
-                          SIM_HIT_HR_SHARE_MIN, SIM_HIT_HR_SHARE_MAX)
-                   * (context.hrMod != null ? context.hrMod * (envMod / (context.hitEnv ?? envMod)) : envMod);   // §102.2 temperature and wind carry the ball
-  const xbhShare = _clamp(SIM_HIT_XBH_SHARE_BASE + (power - Ap) * SIM_HIT_XBH_SHARE_PER_PT,
-                          SIM_HIT_XBH_SHARE_MIN, SIM_HIT_XBH_SHARE_MAX);
-  const tripleShare = SIM_HIT_TRIPLE_SHARE * _clamp(speed / As, 0.5, 1.8);
+  const hrShare = R.hrShare, tripleShare = R.tripleShare, xbhShare = R.xbhShare;
 
   const hitRoll = _roll();
   if (hitRoll < hrShare)                          return { type: 'hr' };
   if (hitRoll < hrShare + tripleShare)            return { type: 'triple' };
   if (hitRoll < hrShare + tripleShare + xbhShare) return { type: 'double' };
   return { type: 'single' };
+}
+
+/**
+ * plateAppearanceRates(ratings, norms?, mods?)
+ * The plate-appearance model's probabilities (§60), shared by simulateAtBat
+ * and anything that needs a player's expected line without playing a game
+ * (§122.9 the league's past). Pure: no rolls.
+ *   ratings — { contact, power, speed, stuff, control } (effective values)
+ *   norms   — the league's averages (leagueNorms); SIM_RATING_AVG without
+ *   mods    — { walk, k, hit, hr }: lists of multipliers, applied in order
+ * @returns {{ walk, hbp, k, hit, hrShare, tripleShare, xbhShare }}
+ *   (each step's probability, in the order simulateAtBat tests them; `hit` is
+ *    the chance of a hit including infield hits; the shares split the hits)
+ */
+export function plateAppearanceRates({ contact, power, speed, stuff, control }, N = {}, mods = {}) {
+  const mul = (x, fs) => (fs || []).reduce((a, f) => a * f, x);
+  const A  = SIM_RATING_AVG;
+  const Ac = N.contact ?? A, Ap = N.power ?? A, As = N.speed ?? A;
+  const Ast = N.stuff ?? A, Act = N.control ?? A;
+
+  const walk = mul(_clamp(SIM_PA_WALK_BASE + (Act - control) * SIM_PA_WALK_PER_PT,
+                          SIM_PA_WALK_MIN, SIM_PA_WALK_MAX), mods.walk);
+  const hbp  = control < SIM_P_CONTROL_HBP_THRESHOLD ? 0.012 : 0.008;
+  const k    = mul(_clamp(SIM_PA_K_BASE
+                          + (Ac - contact) * SIM_PA_K_PER_CONTACT_PT
+                          + (stuff - Ast)  * SIM_PA_K_PER_STUFF_PT,
+                          SIM_PA_K_MIN, SIM_PA_K_MAX), mods.k);
+  const hitProb = mul(_clamp(SIM_PA_HIT_BASE
+                             + (contact - Ac) * SIM_PA_HIT_PER_CONTACT_PT
+                             - (stuff - Ast)  * SIM_PA_HIT_PER_STUFF_PT,
+                             SIM_PA_HIT_MIN, SIM_PA_HIT_MAX), mods.hit);
+  const infieldBonus = Math.max(0, (speed - As) * SIM_PA_INFIELD_HIT_PER_SPEED_PT);
+  const hit = Math.min(0.45, hitProb + infieldBonus);
+
+  const hrShare  = mul(_clamp(SIM_HIT_HR_SHARE_BASE + (power - Ap) * SIM_HIT_HR_SHARE_PER_PT,
+                              SIM_HIT_HR_SHARE_MIN, SIM_HIT_HR_SHARE_MAX), mods.hr);
+  const xbhShare = _clamp(SIM_HIT_XBH_SHARE_BASE + (power - Ap) * SIM_HIT_XBH_SHARE_PER_PT,
+                          SIM_HIT_XBH_SHARE_MIN, SIM_HIT_XBH_SHARE_MAX);
+  const tripleShare = SIM_HIT_TRIPLE_SHARE * _clamp(speed / As, 0.5, 1.8);
+  return { walk, hbp, k, hit, hrShare, tripleShare, xbhShare };
 }
 
 // ─────────────────────────────────────────────────────────────

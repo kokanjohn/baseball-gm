@@ -1229,6 +1229,14 @@ export const AGE_DEVELOPMENT_WINDOWS = Object.freeze({
   DECLINE: { min: 31, max: 33 },
   STEEP:   { min: 34, max: 99 },
 });
+// §4.1 the yearly change per sub-rating by window (GROWTH…STEEP), in the
+// order [contact|control, power|stuff, speed|stamina]. Used going forward at
+// each winter (OffseasonEngine) and backward for the league's past (§122.9).
+export const AGE_CURVES = Object.freeze([
+  Object.freeze([1.5, 0.5, -0.5, -1.5, -3.0]),
+  Object.freeze([1.0, 0.5, -1.0, -2.0, -3.5]),
+  Object.freeze([0.5, 0.0, -1.5, -2.5, -4.0]),
+]);
 
 // ─────────────────────────────────────────────────────────────
 // PLAYER RETIREMENT THRESHOLDS (Section 20.7 — LOCKED)
@@ -1652,3 +1660,44 @@ export const FA_CPU_UPGRADE_MARGIN = 5;   // a CPU club signs a free agent this 
 export const FA_CPU_LOOK_HOUR      = 10;  // when each CPU club looks at the free agents, every day (local hour)
 export const FA_POOL_MAX          = 260; // the free-agent market's size at the new season (the least promising go home past it)
 
+
+// ─────────────────────────────────────────────────────────────
+// §122.9 THE LEAGUE'S PAST — prior seasons for every player at league creation
+// (engine/LeagueHistory.js). Ratings are relative to the league level (rel).
+// The run/RBI/steal/earned-run rates were fit to a full simulated season.
+// ─────────────────────────────────────────────────────────────
+export const HISTORY = Object.freeze({
+  firstAge:     20,      // nobody played in the league younger
+  walkMod:      1.1,     // the game walks a little more than the bare model (tired arms, nerves): measured
+  // Was he in the league that year? A logistic on his rating then (rel).
+  inLeagueMid:  { hitter: 37, SP: 41, RP: 39 },
+  inLeagueSlope: 0.35,
+  minorsStopAge: 25,     // a year out of the league before this age: he hadn't arrived yet
+  // Playing time by rel: [rel at least, low, high] — PA for hitters, IP for pitchers.
+  playing: Object.freeze({
+    hitter: [[47, 480, 610], [41, 220, 460], [35, 60, 240], [-99, 12, 80]],
+    SP:     [[50, 130, 185], [44, 70, 140], [-99, 15, 70]],
+    RP:     [[48, 50, 68],   [42, 30, 58],  [-99, 8, 35]],
+  }),
+  injuredShare: 0.10,    // a season cut short (playing time × 0.25–0.7)
+  gamesPerPA:   0.234,
+  sfPerPA:      0.0032,
+  // Runs beyond his home runs: per time on base (less HR), by speed above the league's.
+  runBase: 0.277, runPerSpeed: 0.00269,
+  rbiBase: 0.425, rbiPerPower: 0.00429,   // RBI beyond HR, per non-HR hit
+  sbBase:  0.036, sbPerSpeed:  0.00309,   // per time on first
+  csBase:  0.0071, csPerSpeed: 0.00064,
+  // Earned runs: (H−HR), (BB+HBP), HR, IP.
+  er: Object.freeze([0.472, 0.292, 1.338, -0.202]),
+  ipPerStart: 5.8,
+  maxGames: 132,
+});
+// §122.9 the offseason class's players from abroad: older than the rookies.
+export const FA_CLASS_INTL_AGE = Object.freeze({ min: 22, max: 29 });
+// §122.9 players with no league record: who they are.
+export const PLAYER_ORIGIN = Object.freeze({
+  LEAGUE:      'league',        // has played in the league
+  ROOKIE:      'rookie',        // first season in the league
+  OVERSEAS:    'overseas',      // played professionally abroad
+  INDEPENDENT: 'independent',   // independent ball
+});

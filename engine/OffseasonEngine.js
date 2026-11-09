@@ -36,6 +36,8 @@ import {
   SUB_RATING_MIN,
   SUB_RATING_MAX,
   AGE_DEVELOPMENT_WINDOWS,
+  AGE_CURVES,
+  FA_CLASS_INTL_AGE,
   RETIREMENT_AGE_HARD,
   RETIREMENT_AGE_SOFT,
   RETIREMENT_OVR_SOFT,
@@ -67,6 +69,7 @@ import {
 } from '../data/constants.js';
 
 import { computeAge, computeOVR, createPlayer, baseballYear, _freshStats } from './PlayerFactory.js';
+import { originForKind } from './LeagueHistory.js';
 import { clearInjuryUpdate } from './InjuryEngine.js';
 import {
   defaultActiveGroup,
@@ -475,11 +478,7 @@ function _archiveStats(draft) {
  * power/stuff:     +1.0   +0.5  -1.0   -2.0    -3.5
  * speed/stamina:   +0.5   +0.0  -1.5   -2.5    -4.0
  */
-const CURVES = [
-  [1.5, 0.5, -0.5, -1.5, -3.0],
-  [1.0, 0.5, -1.0, -2.0, -3.5],
-  [0.5, 0.0, -1.5, -2.5, -4.0],
-];
+const CURVES = AGE_CURVES;
 function _develop(p, nextYear, seasonNum, staff = null, facility = 0) {
   const sr = p.subRatings;
   if (sr) {
@@ -1118,17 +1117,20 @@ export function newFreeAgentClass(draft, atMs) {
     const pitcher = rand() < 0.45;
     const pos = pitcher ? (rand() < 0.5 ? 'SP' : 'RP') : HITTER_POS[Math.floor(rand() * HITTER_POS.length)];
     const name = _newName(used, rand);   // §82 (added to `used`)
+    // §122.9 a rookie, or (three in ten) a player from abroad: older, new to the league.
+    const kind = rand() < 0.3 ? 'intl' : 'prospect';
     const p = createPlayer({
       id: diceId(rand), name, pos, group: PLAYER_GROUP.FREE_AGENT,
       hand: pitcher ? (rand() < 0.28 ? 'L' : 'R') : null,
       targetOvr: level + PROSPECT_OVR_MIN + Math.floor(rand() * (PROSPECT_OVR_MAX - PROSPECT_OVR_MIN + 1)),
       rand,
-      ageMin: PROSPECT_AGE_MIN, ageMax: PROSPECT_AGE_MAX,
+      ageMin: kind === 'intl' ? FA_CLASS_INTL_AGE.min : PROSPECT_AGE_MIN,
+      ageMax: kind === 'intl' ? FA_CLASS_INTL_AGE.max : PROSPECT_AGE_MAX,
       seasonNum: season + 1, seasonYear: baseballYear(draft) + 1,
       contractLengthOverride: 1, teamId: null, leagueLevel: level,
     });
     Object.assign(p, { tier: 'freeAgent', _faFrom: null, _faSince: atMs, _faReason: 'class',
-                       _marketKind: rand() < 0.3 ? 'intl' : 'prospect', _classOf: season + 1 });
+                       _marketKind: kind, _classOf: season + 1, origin: originForKind(kind) });
     draft.players[p.id] = p;
     ids.push(p.id);
   }

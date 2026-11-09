@@ -20,6 +20,8 @@
 
 import { PLAYER_SURNAMES } from '../data/player-names.js';
 import { createPlayer, computeOVR, computeAge, clamp, _freshStats } from './PlayerFactory.js';
+import { writeHistoryForKind } from './LeagueHistory.js';
+import { leagueNorms } from './SimEngine.js';
 import {
   PLAYER_GROUP,
   LINEUP_SLOTS,
@@ -116,9 +118,11 @@ const PITCHER_BENCH_RP_COUNT   = 2;   // RP bench slots
 // deals ran out; this is what was left over.) `kind` sets the asking price (MarketEngine.signingTerms).
 const FA_POOL_MIX = Object.freeze([
   { kind: 'veteran',  n: 40,  ovrMin: 42, ovrMax: 54, ageMin: 30, ageMax: 35 },
-  { kind: 'depth',    n: 100, ovrMin: 36, ovrMax: 46, ageMin: 26, ageMax: 32 },
-  { kind: 'prospect', n: 40,  ovrMin: 32, ovrMax: 44, ageMin: 19, ageMax: 22 },
+  { kind: 'depth',    n: 108, ovrMin: 36, ovrMax: 46, ageMin: 26, ageMax: 32 },
+  { kind: 'prospect', n: 20,  ovrMin: 32, ovrMax: 44, ageMin: 19, ageMax: 22 },
   { kind: 'indie',    n: 20,  ovrMin: 34, ovrMax: 44, ageMin: 22, ageMax: 27 },
+  // §122.9 older than rookies but new to the league: they played abroad.
+  { kind: 'intl',     n: 12,  ovrMin: 34, ovrMax: 46, ageMin: 23, ageMax: 30 },
 ]);
 const FA_HITTER_POSITIONS = ['C','C','1B','2B','3B','SS','OF','OF','OF','2B/SS','1B/3B'];   // cycled for hitters
 const FA_HITTER_SHARE     = 0.55;
@@ -570,11 +574,26 @@ export function buildFullLeague({ archetypeId, seasonNum, seasonYear = new Date(
   // Merge all players into one registry
   const players = { ...cpuPlayers, ...userPlayers, ...faPlayers };
 
+  // §122.9 the league already existed: everyone's past seasons.
+  writeLeaguePast(players, {
+    year: seasonYear, seasonNum, level: leagueOffset,
+    norms: leagueNorms([...leagueTeams, { lineupSlots, rosterIds }], players),
+  });
+
   // Apply archetype values to userTeam object
   applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams);
   userTeam.finances.payroll = payroll;
 
   return { players, leagueTeams, rosterIds, freeAgentIds, payroll, lineupSlots, leagueOffset };
+}
+
+/**
+ * writeLeaguePast(players, { year, seasonNum, level, norms }) — §122.9
+ * Every player's seasons before this one (LeagueHistory.writeHistoryForKind).
+ * League setup happens once and is never replayed (§118): Math.random.
+ */
+export function writeLeaguePast(players, ctx, rand = Math.random) {
+  for (const p of Object.values(players)) writeHistoryForKind(p, { ...ctx, rand });
 }
 
 /**
