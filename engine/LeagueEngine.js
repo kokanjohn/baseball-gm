@@ -90,7 +90,7 @@ export function processCPURosterDecisions(state, dateStr, atMs) {
  * @param {String} playerId
  * @returns {String|null}
  */
-export function cpuWaiverClaimant(state, playerId) {
+export function cpuWaiverClaimant(state, playerId, atMs = null) {
   const player = state.players[playerId];
   if (!player) return null;
   const standings = _computeStandingsBase(state.leagueTeams, {
@@ -100,7 +100,9 @@ export function cpuWaiverClaimant(state, playerId) {
     wins:       state.userTeam?.wins   || 0,
     losses:     state.userTeam?.losses || 0,
   });
-  for (const entry of [...standings.all].reverse()) {
+  const order = [...standings.all];
+  const contender = new Set(order.slice(0, Math.ceil(order.length / 2)).map(e => e.id));
+  for (const entry of [...order].reverse()) {
     if (entry.id === player._waivedBy) continue;
     // The user claims only by putting a claim in (§73); clubs claim in
     // reverse order of the standings — worst record first.
@@ -108,21 +110,52 @@ export function cpuWaiverClaimant(state, playerId) {
     const team = state.leagueTeams.find(t => t.id === entry.id);
     // §78.5 a claim takes on his contract: only a club whose owner can carry it.
     if (team && _isUpgradeFor(team, player, state.players)
-        && canAddSalary(state, player.contractSalary || 0, 0, team.id)) return team.id;
+        && canAddSalary(state, player.contractSalary || 0, 0, team.id)
+        && _worthTheWait(state, player, contender.has(team.id), atMs)) return team.id;
   }
   return null;
+}
+
+/**
+ * §122 An injured player on waivers is worth claiming when waiting suits the
+ * club: anyone claims him if he'll be back with a month of the regular season
+ * still to play; a club out of the race also claims him when his deal runs
+ * past this season (it can wait for next year). A short injury (a week or
+ * less) doesn't count.
+ */
+function _worthTheWait(state, player, isContender, atMs) {
+  const inj = player.injury;
+  if (!inj || !player.isInjured) return true;
+  const now = Number.isFinite(atMs) ? atMs : (player.waiverStartTime || 0);
+  const back = inj.status === 'il' ? inj.eligibleAt : inj.returnAt;
+  const outDays = Number.isFinite(back) ? (back - now) / 86_400_000 : (inj.days || 0);
+  if (outDays <= 7) return true;
+  const lastGame = (state.schedule || []).filter(g => !g.isSpring && !g.isPlayoff && Number.isFinite(g.gameTime)).pop()?.gameTime;
+  const leftAfter = Number.isFinite(lastGame) ? (lastGame - (now + outDays * 86_400_000)) / 86_400_000 : 0;
+  if (leftAfter >= 30) return true;
+  return !isContender && (player.contractExpiry || 0) > (state.seasonNum || 1) + 1;
+}
+
+/**
+ * weakestPeer(team, player, players) — §122 the club's weakest healthy active
+ * player in his role: the same position for a hitter, starter or reliever for
+ * a pitcher. null when the club has nobody there (a hole).
+ */
+export function weakestPeer(team, player, players) {
+  const isP = ['SP', 'RP'].includes(player.pos);
+  const peers = (team.rosterIds || []).map(id => players[id]).filter(p =>
+    p && p.id !== player.id && p.group !== PLAYER_GROUP.IL && !p.isInjured
+    && (isP ? p.pos === player.pos
+            : !['SP', 'RP'].includes(p.pos) && (p.nativePos || p.pos) === (player.nativePos || player.pos)));
+  return peers.sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0] || null;
 }
 
 /** Would this player be a real upgrade over the weakest active player he'd replace? */
 function _isUpgradeFor(team, player, players) {
   const isP = ['SP', 'RP'].includes(player.pos);
-  const peers = (team.rosterIds || []).map(id => players[id]).filter(p =>
-    p && p.group !== PLAYER_GROUP.IL && !p.isInjured
-    && (isP ? p.pos === player.pos
-            : !['SP', 'RP'].includes(p.pos) && (p.nativePos || p.pos) === (player.nativePos || player.pos)));
-  if (!peers.length) return !isP || player.pos === 'SP';   // a hole at his position
-  const weakest = Math.min(...peers.map(p => p.ovr || 0));
-  return (player.ovr || 0) >= weakest + WAIVER_CLAIM_MIN_UPGRADE;
+  const weakest = weakestPeer(team, player, players);
+  if (!weakest) return !isP || player.pos === 'SP';   // a hole at his position
+  return (player.ovr || 0) >= (weakest.ovr || 0) + WAIVER_CLAIM_MIN_UPGRADE;
 }
 
 // ─────────────────────────────────────────────────────────────

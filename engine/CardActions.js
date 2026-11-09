@@ -20,8 +20,8 @@
 import { PLAYER_GROUP, PHASE, ROSTER_LIMITS } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
 import { setUnavailable, setCondition, startPlan } from './DevelopmentEngine.js';
-import { callUp, rosterIsFull, sideOf } from './TransactionEngine.js';
-import { sendToFarm, applyRosterMutation, eligibleSlotsFor, defaultActiveGroup } from './RosterEngine.js';
+import { rosterIsFull, sideOf } from './TransactionEngine.js';
+import { applyRosterMutation, eligibleSlotsFor, defaultActiveGroup } from './RosterEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
@@ -120,49 +120,9 @@ const letWalk = {
   },
 };
 
-/** Spring: a farm player is flagged for the Opening Day roster (joins camp as a keeper). */
-const springFlag = (r) => ({
-  feasible: (st, c) => {
-    const id = role(c, r);
-    const p = st.players[id];
-    if (st.phase !== PHASE.SPRING_TRAINING || !p || !isAvailable(p)) return false;
-    return (st.userTeam.farmIds || []).includes(id) ? !rosterIsFull(st, 'user', sideOf(p)) : ours(st, id);
-  },
-  apply(d, c) {
-    const id = role(c, r);
-    const p = d.players[id];
-    const u = d.userTeam;
-    if ((u.farmIds || []).includes(id)) {
-      u.farmIds = u.farmIds.filter(x => x !== id);
-      u.rosterIds = [...u.rosterIds, id];
-      Object.assign(p, { group: defaultActiveGroup(p), tier: 'active', _isSpringInvitee: true, _farmArc: null });
-    }
-    p._isKeeper = true;
-    return [{ type: 'SPRING_FLAGGED', playerId: id }];
-  },
-});
-
-/** The farm's best bat is called up; the weakest bench bat goes down if the 28 is full. */
-const callupHitter = {
-  feasible: (st, c) => {
-    const id = role(c, 'prospect_hitter');
-    if (!REGULAR.has(st.phase) || !(st.userTeam.farmIds || []).includes(id) || !isAvailable(st.players[id])) return false;
-    // Room for a bat — now, or once the weakest bench bat goes down.
-    const down = role(c, 'drop_hitter');
-    return !rosterIsFull(st, 'user', 'hitter') || (ours(st, down) && !rosterIsFull(st, 'user', 'hitter', { excluding: down }));
-  },
-  apply(d, c, atMs) {
-    const events = [];
-    const down = role(c, 'drop_hitter');
-    if (rosterIsFull(d, 'user', 'hitter') && down) {
-      applyRosterMutation(d, sendToFarm(d, down, 'user'));
-      events.push({ type: 'OPTIONED', playerId: down, teamId: 'user', atMs });
-    }
-    const res = callUp(d, role(c, 'prospect_hitter'), 'user', atMs, 'gm');
-    if (res.ok) events.push({ type: 'CALLED_UP', playerId: role(c, 'prospect_hitter'), tx: res.tx });
-    return events;
-  },
-};
+/** §122 retired with the farm (spring keepers, farm call-ups): never feasible, so their cards never go out. */
+const springFlag = () => ({ feasible: () => false, apply: () => [] });
+const callupHitter = { feasible: () => false, apply: () => [] };
 
 /** A bench bat takes the named starter's lineup spot (the starter sits). */
 const audition = {
@@ -255,7 +215,7 @@ const salaryOf = (st, id) => st.players[id]?.contractSalary || 0;
 // frees his salary only on a minor-league deal — a major-league contract is
 // paid in the farm too (§78).
 const affords = (st, addK, outId = null, side = null) => Finance.canAddSalary(st, addK,
-  outId && fullFor(st, side) && !st.players[outId]?.contractMLB ? salaryOf(st, outId) : 0);
+  outId && fullFor(st, side) ? salaryOf(st, outId) : 0);
 const spends = (st, k) => Finance.canSpend(st, k);
 const payBonus = (d, k, label, atMs) => { if (k) Finance.post(d.userTeam.finances, -k, 'bonus', label, atMs); };
 const fullFor = (st, side = null) => rosterIsFull(st, 'user', side);
@@ -276,18 +236,39 @@ const signStarter = {
   },
 };
 
-/** A prospect signs a bonus and reports to the farm. */
+/**
+ * A young find signs (bonus) and joins our roster (§122 — there's no farm).
+ * With his side of the 28 full, our lowest-rated reserve there (not in the
+ * lineup or the rotation) goes on waivers to make room.
+ */
 const signProspect = (r) => ({
   feasible: (st, c) => isFA(st, role(c, r))
+    && (!rosterIsFull(st, 'user', sideOf(st.players[role(c, r)])) || !!weakestReserve(st, sideOf(st.players[role(c, r)])))
     && (c.cardId === 'sc3_fail' || spends(st, signingTerms(st, st.players[role(c, r)]).bonus || 0)),
   apply(d, c, atMs) {
     const id = role(c, r);
     const t = signingTerms(d, d.players[id]);
-    const ev = signToClub(d, id, 'user', atMs, { toFarm: true, terms: t });
+    const side = sideOf(d.players[id]);
+    const displaceId = rosterIsFull(d, 'user', side) ? weakestReserve(d, side)?.id : undefined;
+    const ev = signToClub(d, id, 'user', atMs, { terms: t, displaceId });
     if (c.cardId !== 'sc3_fail') payBonus(d, t.bonus || 0, `Signing bonus — ${d.players[id]?.name}`, atMs);
     return ev;
   },
 });
+
+/**
+ * weakestReserve(st, side) — §122 our lowest-rated healthy active player on
+ * one side of the roster who isn't in the lineup or the rotation: who goes
+ * when a signing needs his spot. null when every one of them plays.
+ */
+export function weakestReserve(st, side) {
+  const u = st.userTeam;
+  const playing = new Set([...(u.lineupSlots || []).map(sl => sl.playerId), ...(u.rotation?.order || [])]);
+  return (u.rosterIds || []).map(id => st.players[id])
+    .filter(p => p && sideOf(p) === side && !playing.has(p.id) && !p.isInjured
+              && p.group !== PLAYER_GROUP.IL && p.group !== PLAYER_GROUP.IN_TRANSIT)
+    .sort((a, b) => (a.ovr || 0) - (b.ovr || 0) || String(a.id).localeCompare(String(b.id)))[0] || null;
+}
 
 /** A released veteran signs a short deal and joins the active roster. */
 const signReleased = {
@@ -318,7 +299,7 @@ const tradeFor = {
     const inK  = o.incomingIds.reduce((a, id) => a + salaryOf(st, id), 0);
     const outK = o.outgoingIds.filter(id => ours(st, id)).reduce((a, id) => a + salaryOf(st, id), 0);
     return !!team && o.incomingIds.every(id => team.rosterIds.includes(id) && isAvailable(st.players[id]))
-      && o.outgoingIds.every(id => (st.userTeam.farmIds || []).includes(id) || ours(st, id))
+      && o.outgoingIds.every(id => ours(st, id))
       && affords(st, inK - outK);
   },
   apply(d, c, atMs) {
@@ -327,15 +308,10 @@ const tradeFor = {
   },
 };
 
-/** Spring: a non-roster invitee joins camp to compete for a job. */
+/** Spring: a free agent signs to compete for a job (§122 a roster spot — there's no camp roster). */
 const inviteNRI = {
   feasible: (st, c) => st.phase === PHASE.SPRING_TRAINING && isFA(st, role(c, 'nri')) && !rosterIsFull(st, 'user', sideOf(st.players[role(c, 'nri')])),
-  apply(d, c, atMs) {
-    const id = role(c, 'nri');
-    const ev = signToClub(d, id, 'user', atMs, { terms: { salary: 75, years: 1 } });
-    if (d.players[id]) d.players[id]._isSpringInvitee = true;
-    return ev;
-  },
+  apply: (d, c, atMs) => signToClub(d, role(c, 'nri'), 'user', atMs, { terms: { salary: 75, years: 1 } }),
 };
 
 /** A workout: the result comes in 3–5 days — good or a disappointment. */
@@ -371,11 +347,12 @@ const indieTip = {
 };
 
 const indieSign = {
-  feasible: (st, c) => isFA(st, c._targetPlayerId) && spends(st, signingTerms(st, st.players[c._targetPlayerId]).bonus || 0),
+  feasible: (st, c) => isFA(st, c._targetPlayerId) && !rosterIsFull(st, 'user', sideOf(st.players[c._targetPlayerId]))
+    && spends(st, signingTerms(st, st.players[c._targetPlayerId]).bonus || 0),
   apply(d, c, atMs) {
     const t = signingTerms(d, d.players[c._targetPlayerId]);
     payBonus(d, t.bonus || 0, `Signing bonus — ${d.players[c._targetPlayerId]?.name}`, atMs);
-    return signToClub(d, c._targetPlayerId, 'user', atMs, { toFarm: true, terms: t });
+    return signToClub(d, c._targetPlayerId, 'user', atMs, { terms: t });
   },
 };
 

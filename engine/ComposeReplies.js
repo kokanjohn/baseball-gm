@@ -426,8 +426,8 @@ W.pc_reliever = (f, r, who) => {
 };
 
 W.pc_prospect = (f, r, who) => {
-  const arms = f.farm().filter(p => p.pos === 'SP' || p.pos === 'RP');
-  if (!arms.length) return { body: ['We don\'t have a pitcher in the system worth a report right now.'], memo: {} };
+  const arms = f.young().filter(p => p.pos === 'SP' || p.pos === 'RP');
+  if (!arms.length) return { body: ['We don\'t have a young pitcher worth a report right now.'], memo: {} };
   const reported = new Set(f.pastReplies('pc_prospect').slice(0, 2).map(x => x.memo?.playerId));
   const ranked = arms.sort((a, b) => (b.ovr - f.age(b)) - (a.ovr - f.age(a)));
   const p = ranked.find(x => !reported.has(x.id)) || ranked[0];
@@ -477,12 +477,11 @@ W.hc_slump = (f, r, who) => {
 W.hc_development = (f, r, who) => {
   const young = f.roster().filter(p => p.pos !== 'SP' && p.pos !== 'RP' && f.age(p) <= 25 && f.isAvailable(p)).sort((a, b) => f.age(a) - f.age(b));
   const planned = f.roster().filter(p => p.pos !== 'SP' && p.pos !== 'RP' && f.devStatus(p).active);
-  const p = planned.find(x => f.age(x) <= 26) || young[0] || planned[0] || f.farm().filter(x => x.pos !== 'SP' && x.pos !== 'RP').sort((a, b) => b.ovr - a.ovr)[0];
+  const p = planned.find(x => f.age(x) <= 26) || young[0] || planned[0];
   if (!p) return { body: ['We don\'t have a young hitter to report on right now.'], memo: {} };
   const out = [];
   const dev = f.devStatus(p);
-  const farm = p.tier === 'farm' || (f.u.farmIds || []).includes(p.id);
-  out.push(`${p.name}, ${f.age(p)}${farm ? ', down in the system' : ''}. ${farm ? '' : `Hitting ${statLine(p)} this year in ${plural(S(p)?.ab || 0, 'at-bat')}.`}`.trim());
+  out.push(`${p.name}, ${f.age(p)}. Hitting ${statLine(p)} this year in ${plural(S(p)?.ab || 0, 'at-bat')}.`);
   const sr = p.subRatings || {};
   const strong = ['contact', 'power', 'speed'].filter(k => sr[k] != null).sort((a, b) => sr[b] - sr[a]);
   const lo = strong[strong.length - 1];
@@ -651,8 +650,8 @@ W.tix_renewals = (f, r, who) => {
 // ── Scouting / Development ─────────────────────────────────────
 
 W.sc_prospect = (f, r, who) => {
-  const farm = f.farm();
-  if (!farm.length) return { body: ['The system is thin right now — nothing worth a report.'], memo: {} };
+  const farm = f.young();
+  if (!farm.length) return { body: ['We\'re thin on young players right now — nothing worth a report.'], memo: {} };
   const reported = new Set(f.pastReplies('sc_prospect').slice(0, 3).map(x => x.memo?.playerId));
   const ranked = farm.sort((a, b) => (b.ovr - 0.8 * f.age(b)) - (a.ovr - 0.8 * f.age(a)));
   const p = ranked.find(x => !reported.has(x.id)) || ranked[0];
@@ -661,8 +660,6 @@ W.sc_prospect = (f, r, who) => {
   const ks = keys.filter(k => sr[k] != null).sort((a, b) => sr[b] - sr[a]);
   const out = [`${p.name} — ${p.pos}, ${f.age(p)} years old, ${p.ovr} overall right now.`];
   out.push(`Best tool: ${ks[0]} (${sr[ks[0]]}). Needs work: ${ks[ks.length - 1]} (${sr[ks[ks.length - 1]]}).`);
-  if (p._farmArc === 'breakout' || (p._farmArcOvrDelta || 0) >= 3) out.push(`This one is moving — up ${p._farmArcOvrDelta || 'several'} points this year.`);
-  else if ((p._farmArcOvrDelta || 0) <= -2) out.push(`A tough year — down ${-p._farmArcOvrDelta} points. Our people think it's a mechanical issue they can fix.`);
   const dev = f.devStatus(p);
   if (dev.active) out.push(dev.appliedActive >= 0.5 ? `The development plan is about ${dev.appliedActive.toFixed(1)} points in.` : `The development plan has just started.`);
   const same = f.roster().filter(x => x.pos === p.pos || (['LF', 'CF', 'RF', 'OF'].includes(x.pos) && ['LF', 'CF', 'RF', 'OF'].includes(p.pos)));

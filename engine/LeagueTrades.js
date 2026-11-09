@@ -114,7 +114,7 @@ export function movable(p, atMs, state) {
 
 /** The organization's players (active roster and farm). */
 function _org(t) {
-  return [...(t.rosterIds || []), ...(t.farmIds || [])];
+  return [...(t.rosterIds || [])];   // §122 a club is its roster
 }
 
 /** A CPU club doesn't move on a player it just traded for (a month, §90). */

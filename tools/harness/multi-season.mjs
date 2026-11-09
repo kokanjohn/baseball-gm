@@ -210,7 +210,7 @@ function checkTurn(prev, os, label) {
   // Our club: a legal roster, a lineup, a rotation, a full staff, live contracts.
   const u = st.userTeam;
   const active = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && p.group !== PLAYER_GROUP.IL);
-  check(`${label}: our roster is legal (${(u.rosterIds || []).length} active)`, (u.rosterIds || []).length <= ROSTER_LIMITS.SPRING_TOTAL && active.length >= 24);
+  check(`${label}: our roster is legal (${(u.rosterIds || []).length} active)`, (u.rosterIds || []).length <= ROSTER_LIMITS.ACTIVE_TOTAL + 8 && active.length >= 24);
   check(`${label}: nine in the lineup`, (u.lineupSlots || []).filter(sl => st.players[sl.playerId]).length === 9);
   // Five turns — or every healthy starter we have, when the GM let it get thinner than five.
   const healthySP = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && p.pos === 'SP' && !p.isInjured && p.group !== PLAYER_GROUP.IL).length;
@@ -228,7 +228,7 @@ function checkTurn(prev, os, label) {
   const fin = u.finances;
   check(`${label}: the books are sound (funds ${Math.round(fin.funds)}K, payroll ${fin.payroll}K, target ${Finance.seasonTarget(fin)}K)`,
         Number.isFinite(fin.funds) && fin.payroll > 0 && Finance.seasonTarget(fin) > 0 && fin.cal?.seasonNum === N);
-  check(`${label}: no dead money owed for a past season`, !(fin.deadFuture || []).some(d => d.season <= N));
+  check(`${label}: no dead money anywhere (§122)`, !('dead' in fin) && !('deadFuture' in fin));
   check(`${label}: ticket price and facilities in range (price ×${fin.ticketPrice || 1}, ${JSON.stringify(u.facilities || {})})`,
         (fin.ticketPrice || 1) >= 0.5 && (fin.ticketPrice || 1) <= 2 && Object.values(u.facilities || {}).every(v => v >= 0 && v <= 3));
   check(`${label}: last season's campaign is done`, !fin.campaign || fin.campaign.season >= N);
@@ -236,19 +236,19 @@ function checkTurn(prev, os, label) {
   // The league: every player in one place.
   const where = new Map();
   let dup = 0;
-  for (const t of [u, ...st.leagueTeams]) for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) { if (where.has(id)) dup++; where.set(id, t.id || 'user'); }
+  for (const t of [u, ...st.leagueTeams]) for (const id of t.rosterIds || []) { if (where.has(id)) dup++; where.set(id, t.id || 'user'); }
   check(`${label}: every player belongs to one club at most (${where.size} rostered)`, dup === 0);
   const fa = new Set(st.freeAgentPool || []);
   const both = [...fa].filter(id => where.has(id));
   check(`${label}: free agents aren't on rosters`, both.length === 0, both.slice(0, 3).join(','));
-  const badCpu = st.leagueTeams.filter(t => (t.rosterIds || []).length > ROSTER_LIMITS.SPRING_TOTAL || (t.rosterIds || []).length < 24
+  const badCpu = st.leagueTeams.filter(t => (t.rosterIds || []).length > ROSTER_LIMITS.ACTIVE_TOTAL + 8 || (t.rosterIds || []).length < 24
     || (t.lineupSlots || []).filter(sl => st.players[sl.playerId]).length !== 9);
   check(`${label}: every league club has a legal roster and a lineup`, badCpu.length === 0, badCpu.map(t => `${t.abbr} ${(t.rosterIds || []).length}`).join(','));
 }
 
-/** A club's strength: the average OVR of its best 26 (roster and farm). */
+/** A club's strength: the average OVR of its best 26. */
 function strength(st, t) {
-  const ovrs = [...(t.rosterIds || []), ...(t.farmIds || [])].map(id => st.players[id]?.ovr || 0).sort((a, b) => b - a).slice(0, 26);
+  const ovrs = (t.rosterIds || []).map(id => st.players[id]?.ovr || 0).sort((a, b) => b - a).slice(0, 26);
   return ovrs.length ? ovrs.reduce((a, b) => a + b, 0) / ovrs.length : 0;
 }
 const trend = [];

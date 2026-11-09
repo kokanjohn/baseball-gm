@@ -72,23 +72,32 @@ function fillRoster() {
     const isP = (id) => ['SP', 'RP'].includes(s.players[id].pos);
     const act = () => u.rosterIds.filter(id => s.players[id].group !== PLAYER_GROUP.IL).length;
     const pitchers = () => u.rosterIds.filter(id => isP(id) && s.players[id].group !== PLAYER_GROUP.IL).length;
-    while (act() < 28 && u.farmIds.length) {
+    // §122 a free agent signed into the spot (placed at once, for the test)
+    const pool = () => (s.freeAgentPool || []).filter(id => s.players[id]?.group === PLAYER_GROUP.FREE_AGENT && !s.players[id].isInjured);
+    while (act() < 28 && pool().length) {
       const wantP = pitchers() < 14;
-      const id = u.farmIds.find(x => isP(x) === wantP) || u.farmIds[0];
-      u.farmIds = u.farmIds.filter(x => x !== id);
+      const id = pool().find(x => isP(x) === wantP) || pool()[0];
+      s.freeAgentPool = s.freeAgentPool.filter(x => x !== id);
       u.rosterIds.push(id);
+      Object.assign(s.players[id], { teamId: 'user', tier: 'mlb' });
       const p = s.players[id];
       p.group = ['SP', 'RP'].includes(p.pos) ? PLAYER_GROUP.PITCHER_BENCH : PLAYER_GROUP.BENCH_HITTERS;
     }
     applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: clock.get() }));
   });
 }
-// The regular season's 28-man squeeze (spring rosters run large): 14 hitters (the nine, five on
-// the bench) and 14 pitchers (the rotation, five in the pen, a spare starter, three reserve arms).
+/** §122 a player let go, straight to the free agents (for the test). */
+function toPool(s, id) {
+  s.userTeam.rosterIds = s.userTeam.rosterIds.filter(x => x !== id);
+  Object.assign(s.players[id], { teamId: null, group: PLAYER_GROUP.FREE_AGENT, tier: 'freeAgent' });
+  s.freeAgentPool = [...(s.freeAgentPool || []), id];
+}
+// The regular season's 28: 14 hitters (the nine, five on the bench) and 14 pitchers (the
+// rotation, five in the pen, a spare starter, three reserve arms) — from our 28 and the free agents.
 SM.mutate(s => {
   s.phase = PHASE.REGULAR_SEASON;
   const u = s.userTeam, Pl = (id) => s.players[id];
-  const org = [...u.rosterIds, ...u.farmIds];
+  const org = [...u.rosterIds, ...(s.freeAgentPool || []).filter(id => Pl(id)?.group === PLAYER_GROUP.FREE_AGENT && !Pl(id).isInjured)];
   const lineup = u.lineupSlots.map(sl => sl.playerId), rot = u.rotation.order;
   const byOvr = (a, b) => Pl(b).ovr - Pl(a).ovr;
   const benchBats = org.filter(id => !['SP', 'RP'].includes(Pl(id).pos) && !lineup.includes(id)).sort(byOvr).slice(0, 5);
@@ -97,10 +106,12 @@ SM.mutate(s => {
   const keep = [...lineup, ...benchBats, ...rot, ...spareSP, ...rps];
   for (const id of org) {
     const on = keep.includes(id);
-    Pl(id).group = !on ? 'farm' : lineup.includes(id) || benchBats.includes(id) ? PLAYER_GROUP.BENCH_HITTERS
+    if (!on) { if (Pl(id).teamId === 'user') toPool(s, id); continue; }
+    if (Pl(id).teamId !== 'user') { s.freeAgentPool = s.freeAgentPool.filter(x => x !== id); Object.assign(Pl(id), { teamId: 'user', tier: 'mlb' }); }
+    Pl(id).group = lineup.includes(id) || benchBats.includes(id) ? PLAYER_GROUP.BENCH_HITTERS
       : rot.includes(id) ? PLAYER_GROUP.STARTING_PITCHERS : rps.slice(0, 5).includes(id) ? PLAYER_GROUP.BULLPEN : PLAYER_GROUP.PITCHER_BENCH;
   }
-  u.rosterIds = keep; u.farmIds = org.filter(id => !keep.includes(id));
+  u.rosterIds = keep;
   applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: clock.get() }));
 });
 const healthyRP = () => U().rosterIds.map(P).filter(p => p.pos === 'RP' && !p.isInjured && p.group !== PLAYER_GROUP.IL).length;
@@ -131,7 +142,7 @@ check(`a day later, still unanswered: ${P(X1).name} is still on the IL and the r
       !!cardFor('il_return', X1) && P(X1).group === PLAYER_GROUP.IL && active() === 28);
 // A pick that's no longer possible (the player was sent down meanwhile): nobody moves, the card comes back.
 const gone = c._choices[0].key;
-SM.mutate(s => { const u = s.userTeam; u.rosterIds = u.rosterIds.filter(id => id !== gone); u.farmIds.push(gone); s.players[gone].group = 'farm'; });
+SM.mutate(s => toPool(s, gone));
 fillRoster();
 resolve(c.instanceId, 'yes', { pick: gone }); advanceClock(clock.get()); step(60_000);
 const c2 = cardFor('il_return', X1);
@@ -139,8 +150,8 @@ check('a pick that\'s no longer possible: still on the IL, and the card comes ba
       P(X1).group === PLAYER_GROUP.IL && !!c2 && !c2._choices.some(x => x.key === gone) && active() === 28);
 const down = c2._choices[0].key;
 resolve(c2.instanceId, 'yes', { pick: down }); advanceClock(clock.get());
-check(`picked: ${P(down).name} went down, ${P(X1).name} is active on the bench, the roster is at 28`,
-      U().farmIds.includes(down) && P(X1).group === PLAYER_GROUP.BENCH_HITTERS && !slotOf(X1) && active() === 28);
+check(`picked: ${P(down).name} went on waivers, ${P(X1).name} is active on the bench, the roster is at 28`,
+      P(down).onWaivers && P(X1).group === PLAYER_GROUP.BENCH_HITTERS && !slotOf(X1) && active() === 28);
 check('the decision reads as the choice in the Completed tab', SM.get().inbox.find(x => x.instanceId === c2.instanceId)?.yesLabel.includes(P(down).name));
 
 console.log('\nThe hitting coach asks');

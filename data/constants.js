@@ -110,7 +110,6 @@ export const PLAYER_GROUP = Object.freeze({
   BENCH_HITTERS:    'bh',
   STARTING_PITCHERS:'sp',
   BULLPEN:          'bp',
-  PRACTICE_SQUAD:   'pp',   // farm/minors
   PITCHER_BENCH:    'pb',   // 2 SP bench + 2 RP bench (not on active rotation)
   IL:               'il',
   // Between teams: traded or called up, reporting the next calendar day (§65).
@@ -146,23 +145,8 @@ export const ROSTER_LIMITS = Object.freeze({
   STARTING_PITCHERS: 5,
   BULLPEN:           5,
   PITCHER_BENCH:     4,   // 2 SP bench + 2 RP bench
-  ACTIVE_TOTAL:     28,
-  SPRING_INVITEES:        10,  // 5 hitters + 5 pitchers invited to spring camp
-  SPRING_INVITEE_HITTERS:  5,
-  SPRING_INVITEE_PITCHERS: 5,
-  SPRING_TOTAL:     38,   // 28 active + 10 invitees
-
-  // Farm composition caps (Section 20.3 — LOCKED)
-  // Separate hitter/pitcher limits, not a single total
-  FARM_HITTER_MAX:  12,
-  FARM_PITCHER_MAX:  8,
-  FARM_TOTAL:       20,   // FARM_HITTER_MAX + FARM_PITCHER_MAX
+  ACTIVE_TOTAL:     28,   // §122 in spring too (no camp invitees), and no farm behind it
 });
-
-// Farm position minimums — overflow displacement must preserve these (Section 20.3)
-export const FARM_HITTER_MIN_POSITIONS = Object.freeze(['C', 'CI', 'MI', 'OF']); // min 1 each
-export const FARM_PITCHER_MIN_SP = 2;
-export const FARM_PITCHER_MIN_RP = 2;
 
 // ─────────────────────────────────────────────────────────────
 // PLAYER TRAITS
@@ -1253,32 +1237,6 @@ export const AGE_DEVELOPMENT_WINDOWS = Object.freeze({
 export const RETIREMENT_AGE_HARD  = 38;  // retires regardless of OVR
 export const RETIREMENT_AGE_SOFT  = 35;  // retires if OVR also below RETIREMENT_OVR_SOFT
 export const RETIREMENT_OVR_SOFT  = 55;  // OVR threshold for age-35+ retirement
-export const RETIREMENT_OVR_FARM  = 50;  // OVR threshold for farm decline-arc retirement
-
-// ─────────────────────────────────────────────────────────────
-// FARM STORY ARC CONSTANTS (Section 20.4 — LOCKED)
-// ─────────────────────────────────────────────────────────────
-
-export const FARM_ARC_MOTIVATION_PROB_BASE  = 0.45;  // 45% baseline chance
-export const FARM_ARC_DECLINE_PROB_BASE     = 0.25;  // 25% baseline chance
-export const FARM_ARC_STABLE_PROB_BASE      = 0.30;  // 30% baseline chance
-
-// Sub-rating drift per month on farm (applied at each season transition)
-export const FARM_ARC_MOTIVATION_DRIFT_MIN  = 0.5;
-export const FARM_ARC_MOTIVATION_DRIFT_MAX  = 1.5;
-export const FARM_ARC_MOTIVATION_DRIFT_CAP  = 3;    // max total before callup
-export const FARM_ARC_DECLINE_DRIFT_MIN     = 0.5;
-export const FARM_ARC_DECLINE_DRIFT_MAX     = 1.5;
-export const FARM_ARC_DECLINE_DRIFT_CAP     = 4;    // max total decline
-
-// Trait modifiers to arc probabilities
-export const FARM_ARC_YOUNG_GUN_MOTIVATION_BONUS   =  0.20;
-export const FARM_ARC_YOUNG_GUN_DECLINE_PENALTY    = -0.10;
-export const FARM_ARC_VOLATILE_DECLINE_BONUS       =  0.25;
-export const FARM_ARC_AGE_DECLINE_BONUS_PER_YEAR   =  0.10; // per year above 28
-
-// Extended decline risk: if on decline arc > 60 real days, request-release card fires
-export const FARM_ARC_DECLINE_RELEASE_REQUEST_DAYS = 60;
 
 // ─────────────────────────────────────────────────────────────
 // MAKEUP GAME SCHEDULING
@@ -1372,12 +1330,6 @@ export const WAIVER_CLAIM_WINDOW_MS        = 72 * 60 * 60_000;
 // A CPU club claims only a real upgrade: at least this many OVR points over
 // the weakest active player he would replace.
 export const WAIVER_CLAIM_MIN_UPGRADE      = 3;
-// Organizational depth (§65): every club's farm director keeps the system
-// stocked. When a farm falls below these floors (or loses its last C / CI /
-// MI / OF, or drops under 2 SP / 2 RP — the locked minimums), he signs the
-// best matching free agent to a minor-league deal at the tier-1 minimum.
-export const FARM_DEPTH_FLOOR_HITTERS      = 6;
-export const FARM_DEPTH_FLOOR_PITCHERS     = 5;
 // Completed transactions kept for the Team screen's recent list.
 export const TRANSACTION_HISTORY_KEEP      = 60;
 
@@ -1670,3 +1622,24 @@ export const FIN_OVERDRAFT_SHARE      = 0.5;     // of that tolerance, as red in
 export const FIN_BOOKS_OFFER = Object.freeze({ perMargin: 0.5, max: 0.05 });  // season's profit margin → next target
 export const MANAGER_EXTENSION_YEARS   = 2;
 export const MANAGER_AUTO_CONFIDENCE   = -5;
+
+// Market players by kind: ages, and OVR relative to the league level (MarketEngine; §122 the opening free-agent pool).
+export const MARKET_KINDS = Object.freeze({
+  veteran:  { ageMin: 30, ageMax: 35, ovrMin: 52, ovrMax: 62 },   // OVR relative to the league level
+  depth:    { ageMin: 26, ageMax: 32, ovrMin: 47, ovrMax: 56 },
+  prospect: { ageMin: 18, ageMax: 22, ovrMin: 38, ovrMax: 48 },
+  intl:     { ageMin: 17, ageMax: 21, ovrMin: 36, ovrMax: 50 },
+  indie:    { ageMin: 22, ageMax: 27, ovrMin: 42, ovrMax: 52 },
+});
+
+// §122 Free agency without a farm.
+export const FA_ASK = Object.freeze({
+  inSeasonShare: 0.8,     // an in-season one-year deal: this share of his market salary…
+  dropPerDay:    0.03,    // …less this much for each day he's gone unsigned…
+  floorShare:    0.5,     // …never below this share of it…
+  minK:          50,      // …nor the league minimum ($K).
+});
+export const FA_CPU_UPGRADE_MARGIN = 5;   // a CPU club signs a free agent this many OVR better than its weakest at the role
+export const FA_CPU_LOOK_HOUR      = 10;  // when each CPU club looks at the free agents, every day (local hour)
+export const FA_POOL_MAX          = 260; // the free-agent market's size at the new season (the least promising go home past it)
+

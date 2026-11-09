@@ -49,7 +49,7 @@ function until(pred, maxMin = 3000) { for (let i = 0; i < maxMin && !pred(); i++
 SM.mutate(s => {
   s.phase = PHASE.REGULAR_SEASON;
   const u = s.userTeam, Pl = (id) => s.players[id];
-  const org = [...u.rosterIds, ...u.farmIds];
+  const org = [...u.rosterIds, ...(s.freeAgentPool || []).filter(id => Pl(id)?.group === PLAYER_GROUP.FREE_AGENT && !Pl(id).isInjured)];   // §122 our 28 and the free agents
   const lineup = u.lineupSlots.map(sl => sl.playerId), rot = u.rotation.order;
   const byOvr = (a, b) => Pl(b).ovr - Pl(a).ovr;
   const benchBats = org.filter(id => !['SP', 'RP'].includes(Pl(id).pos) && !lineup.includes(id)).sort(byOvr).slice(0, 5);
@@ -58,10 +58,12 @@ SM.mutate(s => {
   const keep = [...lineup, ...benchBats, ...rot, ...spareSP, ...rps];
   for (const id of org) {
     const on = keep.includes(id);
-    Pl(id).group = !on ? 'farm' : lineup.includes(id) || benchBats.includes(id) ? PLAYER_GROUP.BENCH_HITTERS
+    if (!on) { if (Pl(id).teamId === 'user') { Object.assign(Pl(id), { teamId: null, group: PLAYER_GROUP.FREE_AGENT, tier: 'freeAgent' }); s.freeAgentPool.push(id); } continue; }
+    if (Pl(id).teamId !== 'user') { s.freeAgentPool = s.freeAgentPool.filter(x => x !== id); Object.assign(Pl(id), { teamId: 'user', tier: 'mlb' }); }
+    Pl(id).group = lineup.includes(id) || benchBats.includes(id) ? PLAYER_GROUP.BENCH_HITTERS
       : rot.includes(id) ? PLAYER_GROUP.STARTING_PITCHERS : rps.slice(0, 5).includes(id) ? PLAYER_GROUP.BULLPEN : PLAYER_GROUP.PITCHER_BENCH;
   }
-  u.rosterIds = keep; u.farmIds = org.filter(id => !keep.includes(id));
+  u.rosterIds = keep;
   applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: clock.get() }));
 });
 check('28 active to start', active() === 28);
@@ -73,7 +75,8 @@ function openSpot() {
     const lineup = u.lineupSlots.map(sl => sl.playerId);
     const id = u.rosterIds.find(x => !['SP', 'RP'].includes(s.players[x].pos) && !lineup.includes(x));
     u.rosterIds = u.rosterIds.filter(x => x !== id);
-    s.players[id].teamId = null; s.players[id].group = 'free_agent';
+    Object.assign(s.players[id], { teamId: null, group: PLAYER_GROUP.FREE_AGENT, tier: 'freeAgent' });
+    s.freeAgentPool = [...(s.freeAgentPool || []), id];
     applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: clock.get() }));
   });
   step(60_000);
@@ -99,15 +102,16 @@ check('the call-up is in transit and reports at midnight; the card is open until
 check('gender-neutral', !GEN.test(mf.body + mf.subject + mf.yesLabel + mf.noLabel));
 
 resolve(mf.instanceId, 'no'); advanceClock(clock.get()); releaseDueCards();
-const tx1 = SM.get().transactions.find(t => t.playerId === fillIds[0] && t.reason === 'callup');
-check('sent back: the call-up is cancelled and the player is on the farm again',
-      U().farmIds.includes(fillIds[0]) && P(fillIds[0]).group === PLAYER_GROUP.PRACTICE_SQUAD && tx1?.status === 'cancelled' && active() === 27);
+const tx1 = SM.get().transactions.find(t => t.playerId === fillIds[0] && t.kind === 'arrival' && t.reason === 'signing');
+check('let go before reporting: the signing is cancelled and the player is a free agent again',
+      (SM.get().freeAgentPool || []).includes(fillIds[0]) && P(fillIds[0]).group === PLAYER_GROUP.FREE_AGENT && tx1?.status === 'cancelled' && active() === 27,
+      JSON.stringify({ g: P(fillIds[0]).group, tx: tx1?.status, a: active() }));
 check('the ownership hit stands', U().ownerTrust === Math.max(0, trust0 + MANAGER_FILL_PENALTY.ownerTrust));
 const need2 = open('roster_need')[0];
 check('the spot is open again with a new deadline ahead, and the open-spot card asks',
       !!need2 && need2.instanceId !== need1.instanceId && need2.expiresAtMs > clock.get() && U().vacancyDeadlineAt === need2.expiresAtMs);
 resolve(need2.instanceId, 'yes'); advanceClock(clock.get());
-check('the GM\'s own pick is on the way', SM.get().transactions.some(t => t.status === 'pending' && t.reason === 'callup' && t.by !== 'manager'));
+check('the GM\'s own signing is on the way', SM.get().transactions.some(t => t.status === 'pending' && t.kind === 'arrival' && t.reason === 'signing' && t.teamId === 'user' && t.by !== 'manager'));
 step(26 * 3600_000);
 check('…and reports: 28 again', active() === 28);
 
@@ -138,16 +142,15 @@ check('after the call-up reported, nothing can be sent back', U().rosterIds.incl
 
 // ── 4. News goes to Recent ──
 console.log('\nNews about our club goes to Recent');
-const farmId = U().farmIds[0];
+const devId = U().rosterIds[0];
 const inboxBefore = (SM.get().inbox || []).length + (SM.get().scheduledCards || []).length;
 syncRosterCards([
-  { type: 'FARM_SIGNING', teamId: 'user', playerId: farmId, atMs: clock.get() },
-  { type: 'DEV_DONE', teamId: 'user', playerId: farmId, planId: 'p-test', realized: 3, planned: 2, profile: 'steady', atMs: clock.get() },
+  { type: 'DEV_DONE', teamId: 'user', playerId: devId, planId: 'p-test', realized: 3, planned: 2, profile: 'steady', atMs: clock.get() },
 ], clock.get());
 const feed = (SM.get().activityFeed || []).filter(e => e.type === 'ours');
 console.log(`    Recent: ${feed.map(e => e.text).join(' | ')}`);
-check('a minor-league signing and a development result are in Recent, not Messages',
-      feed.some(e => e.text.includes('minor-league deal')) && feed.some(e => e.text.includes('development plan'))
+check('a development result is in Recent, not Messages',
+      feed.some(e => e.text.includes('development plan'))
       && (SM.get().inbox || []).length + (SM.get().scheduledCards || []).length === inboxBefore);
 check('…and no Recent entry is dated ahead of now', feed.every(e => e.timestamp <= clock.get()));
 

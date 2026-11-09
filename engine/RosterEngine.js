@@ -8,10 +8,9 @@
  *     Caller (GameEngine) applies results via StateManager.mutate().
  *   - Does NOT generate cards. Does NOT evaluate trade fairness. Does NOT touch SimEngine.
  *
- * Farm vs waivers rule (LOCKED — Section 9.7):
- *   - sendToFarm() is valid ONLY during spring training cuts (38→28) and
- *     position-aware farm overflow displacement.
- *   - ALL other removals go through placeOnWaivers().
+ * Removals (§122 — there is no farm):
+ *   - A club drops a player through placeOnWaivers(); unclaimed after the
+ *     window, he's a free agent (clearWaivers).
  *   - IL return always flags _pendingILReturn and queues to ilReturnQueue —
  *     CardEngine (Phase 9) surfaces the decision card. Never auto-activates.
  *
@@ -25,9 +24,6 @@ import {
   ROSTER_LIMITS,
   LINEUP_SLOTS,
   PHASE,
-  FARM_HITTER_MIN_POSITIONS,
-  FARM_PITCHER_MIN_SP,
-  FARM_PITCHER_MIN_RP,
 } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
 import { reliefValue } from './PitchingEngine.js';
@@ -37,7 +33,7 @@ import { clockNow } from './Clock.js';
 // ─────────────────────────────────────────────────────────────
 // POSITION COMPATIBILITY MAP
 // Which positions can cover for each native position.
-// Used for depth checks and farm overflow displacement.
+// Used for depth checks.
 // ─────────────────────────────────────────────────────────────
 
 const POSITION_COVERAGE = Object.freeze({
@@ -163,7 +159,7 @@ export function activateFromIL(state, playerId, targetGroup) {
 /**
  * placeOnWaivers(state, playerId)
  * The primary path for all mid-season player removals.
- * Removes player from their current team's rosterIds/farmIds,
+ * Removes player from his team's rosterIds,
  * adds to state.waiverPool, sets player.onWaivers = true.
  *
  * Valid for:
@@ -172,7 +168,7 @@ export function activateFromIL(state, playerId, targetGroup) {
  *   - Declined contract re-signs
  *   - Any player the GM no longer wants
  *
- * NOT valid for spring training cuts — use sendToFarm() for that.
+ * §122 his salary leaves the club's payroll at once (he's off its roster).
  *
  * @param {Object} state
  * @param {String} playerId
@@ -194,8 +190,7 @@ export function placeOnWaivers(state, playerId, { atMs = clockNow(), reason = nu
         waiverStartTime:  atMs,
         _pendingILReturn: false,
         teamId:           null,
-        // Section 20.2: unclaimed after 72h → outrighted to this team's farm
-        // (a farm-overflow displacement goes to free agency instead).
+        // §122 unclaimed after the window → a free agent.
         _waivedBy:        teamId || null,
         _waiveReason:     reason,
       },
@@ -250,10 +245,8 @@ export function claimFromWaivers(state, playerId, claimingTeamId) {
 
 /**
  * clearWaivers(state, playerId)
- * Player clears waivers unclaimed (Section 20.2 step 7 — LOCKED): he is
- * outrighted to the farm of the team that placed him (composition caps and
- * displacement apply). A farm-overflow displacement — or a player whose team
- * no longer exists — goes to free agency instead.
+ * Player clears waivers unclaimed: §122 he's a free agent — on the market,
+ * from the club that let him go (there's no farm to outright him to).
  *
  * @param {Object} state
  * @param {String} playerId
@@ -266,17 +259,6 @@ export function clearWaivers(state, playerId, atMs = null) {
   const owner  = player._waivedBy;
   const reset  = { onWaivers: false, waiverStartTime: null, _waivedBy: null, _waiveReason: null };
   const pool   = (state.waiverPool || []).filter(id => id !== playerId);
-  const ownerExists = owner === 'user' || (state.leagueTeams || []).some(t => t.id === owner);
-
-  if (owner && ownerExists && player._waiveReason !== 'displaced') {
-    const farm = sendToFarm({ ...state, waiverPool: pool }, playerId, owner);
-    return {
-      ...farm,
-      players:    { ...(farm.players || {}), [playerId]: { ...reset, ...(farm.players?.[playerId] || {}) } },
-      waiverPool: farm.waiverPool || pool,
-    };
-  }
-
   return {
     players: {
       // A free agent like any other: on the market, from the club that let him go.
@@ -291,49 +273,6 @@ export function clearWaivers(state, playerId, atMs = null) {
 // ─────────────────────────────────────────────────────────────
 // FARM SYSTEM
 // ─────────────────────────────────────────────────────────────
-
-/**
- * sendToFarm(state, playerId, teamId)
- * ONLY valid during spring training cuts (38→28) and position-aware farm
- * overflow displacement. All other removals must use placeOnWaivers().
- *
- * @param {Object} state
- * @param {String} playerId
- * @param {String} teamId
- * @returns {Object} mutations
- */
-export function sendToFarm(state, playerId, teamId) {
-  _assertPlayerExists(state, playerId);
-
-  const isUserTeam = teamId === 'user';
-  const farmIds = isUserTeam
-    ? state.userTeam.farmIds || []
-    : _getLeagueTeamFarmIds(state, teamId);
-
-  const player = state.players[playerId];
-  const isPitcher = player && ['SP','RP'].includes(player.pos);
-  const farmPlayers = farmIds.map(id => state.players[id]).filter(Boolean);
-  const currentHitters  = farmPlayers.filter(p => !['SP','RP'].includes(p.pos)).length;
-  const currentPitchers = farmPlayers.filter(p =>  ['SP','RP'].includes(p.pos)).length;
-
-  // Check composition cap for this player's group
-  const atCap = isPitcher
-    ? currentPitchers >= ROSTER_LIMITS.FARM_PITCHER_MAX
-    : currentHitters  >= ROSTER_LIMITS.FARM_HITTER_MAX;
-
-  if (atCap) {
-    // Farm is full — displace the lowest-rated player at this position first
-    const displaced = _findDisplacementCandidate(state, playerId, farmIds);
-    if (displaced) {
-      // Displaced player goes to waivers, not deeper farm
-      const waiversMutation = placeOnWaivers(state, displaced, { reason: 'displaced' });
-      const farmMutation    = _buildSendToFarmMutation(state, playerId, teamId, farmIds.filter(id => id !== displaced));
-      return _mergeMutations(waiversMutation, farmMutation);
-    }
-  }
-
-  return _buildSendToFarmMutation(state, playerId, teamId, farmIds);
-}
 
 /**
  * defaultActiveGroup(player)
@@ -360,15 +299,14 @@ export function reserveGroup(player) {
 
 /**
  * pendingArrivals(state, teamId)
- * Players already on their way to this team's active roster (traded or
- * called up, reporting the next calendar day). They hold their roster spot:
- * every count of the active roster adds them, so nobody calls up a second
- * body for the same spot. §91 a prospect traded from a farm reports to the
- * new club's farm (`toFarm`) and holds no active spot.
+ * Players already on their way to this team's active roster (traded, signed
+ * or claimed — reporting the next calendar day). They hold their roster spot:
+ * every count of the active roster adds them, so nobody signs a second body
+ * for the same spot.
  */
 export function pendingArrivals(state, teamId) {
   return (state.transactions || []).filter(t =>
-    t.status === 'pending' && t.kind === 'arrival' && t.teamId === teamId && !t.toFarm);
+    t.status === 'pending' && t.kind === 'arrival' && t.teamId === teamId);
 }
 
 /**
@@ -384,7 +322,7 @@ export function nextCalendarDay(ms) {
 /**
  * makeArrival({ player, teamId, fromTeamId, reason, atMs, by })
  * Builds the ledger record + player patch for a player heading to `teamId`.
- * The caller removes him from his old roster/farm list. Pure.
+ * The caller removes him from his old roster (or the pool he came from). Pure.
  * @returns {{ tx: Object, patch: Object }}
  */
 export function makeArrival({ player, teamId, fromTeamId = null, reason, atMs, by = null }) {
@@ -396,7 +334,7 @@ export function makeArrival({ player, teamId, fromTeamId = null, reason, atMs, b
       playerId:    player.id,
       fromTeamId,
       toGroup:     defaultActiveGroup(player),
-      reason,                       // 'trade' | 'callup'
+      reason,                       // 'trade' | 'signing' | 'waiver'
       by,                           // 'gm' | 'manager' | 'cpu'
       createdAt:   atMs,
       effectiveAt: nextCalendarDay(atMs),
@@ -406,8 +344,6 @@ export function makeArrival({ player, teamId, fromTeamId = null, reason, atMs, b
       group:  PLAYER_GROUP.IN_TRANSIT,
       teamId,
       tier:   'active',
-      _farmArc: null,
-      _farmArcStart: null,
     },
   };
 }
@@ -490,8 +426,7 @@ export function checkDepth(state, teamId) {
   const activePlayers = rosterIds
     .map(id => state.players[id])
     .filter(p => p && isAvailable(p)
-                  && p.group !== PLAYER_GROUP.IL
-                  && p.group !== PLAYER_GROUP.PRACTICE_SQUAD);
+                  && p.group !== PLAYER_GROUP.IL);
 
   const issues = [];
 
@@ -563,20 +498,19 @@ export function checkDepth(state, teamId) {
  *   4. Active-count invariant (GM domain, regular season and playoffs):
  *      active (non-IL) players + players already on their way (pending
  *      'arrival' transactions) == ACTIVE_TOTAL.
- *        CPU (autoManage): its GM calls up from the farm at once — through
- *          the transaction ledger, so the call-up reports the next calendar
- *          day like everyone else's (needs options.atMs) — and waives the
- *          lowest-OVR droppable surplus.
- *        USER: never auto-moves. Reports `pendingCallups` / `pendingSurplus`;
- *          TransactionEngine runs the decision deadline (§65).
- *      Spring: no cap enforcement.
- *   5. No id appears in both rosterIds and farmIds.
+ *        CPU (autoManage): waives the lowest-OVR droppable surplus; a short
+ *          roster is reported (`shortBy`, `openPositions`) and its GM signs
+ *          free agents for it (§122, TransactionEngine — a signing applies a
+ *          contract, so it isn't done here).
+ *        USER: never auto-moves. Reports `pendingCallups` (the open spots)
+ *          / `pendingSurplus`; TransactionEngine runs the decision deadline (§65).
+ *      §122 spring too: there is no 38-man camp.
  *
  * @param {Object}  state
  * @param {String}  [teamId='user']
  * @param {Object}  [options]
  * @param {Boolean} [options.autoManage=false] — CPU teams pass true
- * @param {Number}  [options.atMs]             — roster-clock time for CPU call-ups
+ * @param {Number}  [options.atMs]             — roster-clock time (waivers)
  * @returns {Object} mutation: { players, userTeam|leagueTeams, waiverPool?,
  *                    transactions?, pendingCallups?, pendingSurplus?, surplusCount? }
  */
@@ -590,16 +524,13 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   const tid = isUserTeam ? 'user' : teamId;
 
   const players   = state.players || {};
-  const inSpring  = state.phase === PHASE.SPRING_TRAINING;
   const activeCap = ROSTER_LIMITS.ACTIVE_TOTAL;
   const atMs      = Number.isFinite(options.atMs) ? options.atMs : null;
 
   // ── Working copies (never mutate state) ───────────────────────────────
   let rosterIds = [...(team.rosterIds || [])];
-  let farmIds   = [...(team.farmIds   || [])];
   const patch   = {};                 // playerId -> partial player update
   const waived  = [];                 // playerIds moved to waivers this pass
-  const newTx   = [];                 // CPU call-ups created this pass
   const inbound = pendingArrivals(state, tid);
 
   const groupOf = (id) => (patch[id] && patch[id].group !== undefined)
@@ -793,45 +724,15 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   let pendingCallups = null;
   let surplusCount   = 0;
 
-  if (!inSpring) {
+  let cpuShort = null;
+  {
     let count = _nonILCount(rosterIds, groupOf) + inbound.length;
 
     if (autoManage) {
-      // CPU GM: call up to the cap — position need first (open lineup
-      // positions, a short rotation), then by roster balance, best OVR.
-      const sideCounts = _sideCounts(rosterIds, groupOf, players, inbound);
-      const wants = [...openPositions.map(pos => ({ side: 'hitter', pos })),
-                     ...Array.from({ length: rotationShort }, () => ({ side: 'pitcher', pos: 'SP' }))];
-      while (count < activeCap) {
-        const want = wants.shift() || {
-          side: sideCounts.hitter < HITTER_TARGET ? 'hitter'
-              : sideCounts.pitcher < PITCHER_TARGET ? 'pitcher'
-              : (sideCounts.hitter <= sideCounts.pitcher ? 'hitter' : 'pitcher'),
-          pos: null,
-        };
-        const pool = farmIds.map(id => players[id])
-          .filter(p => p && isHealthy(p.id) && (want.side === 'pitcher') === isP(p));
-        const fit  = (p) => !want.pos ? 0
-          : want.side === 'pitcher' ? (p.pos === want.pos ? 1 : 0)
-          : (eligibleSlotsFor(p).includes(want.pos) ? 1 : 0);
-        const pick = pool.sort((a, b) => fit(b) - fit(a) || (b.ovr || 0) - (a.ovr || 0))[0]
-          || farmIds.map(id => players[id]).filter(p => p && isHealthy(p.id))
-               .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
-        if (!pick) break;
-        farmIds = farmIds.filter(id => id !== pick.id);
-        if (atMs !== null) {
-          const { tx, patch: tp } = makeArrival({ player: pick, teamId: tid, fromTeamId: tid,
-                                                  reason: 'callup', atMs, by: 'cpu' });
-          newTx.push(tx);
-          setPatch(pick.id, tp);
-        } else {
-          // No clock (league build / offseason): the roster is set directly.
-          rosterIds.push(pick.id);
-          setPatch(pick.id, { group: defaultActiveGroup(pick), tier: 'active', teamId: tid,
-                              _farmArc: null, _farmArcStart: null });
-        }
-        sideCounts[isP(pick) ? 'pitcher' : 'hitter']++;
-        count++;
+      // CPU GM: a short roster is filled from the free agents (§122) — by
+      // TransactionEngine, which signs them; reported here as the need.
+      if (count < activeCap || openPositions.length || rotationShort) {
+        cpuShort = { count: Math.max(0, activeCap - count), positions: [...openPositions], rotationShort };
       }
       if (count > activeCap) {
         surplusCount = count - activeCap;
@@ -871,7 +772,6 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   // ── Assemble the mutation object ──────────────────────────────────────
   const teamPatch = {
     rosterIds,
-    farmIds,
     lineupSlots: slots,
     rotation: { order, currentIndex },
   };
@@ -884,8 +784,8 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
       t.id === teamId ? { ...t, ...teamPatch } : t);
   }
   if (waived.length) mutation.waiverPool = [...(state.waiverPool || []), ...waived];
-  if (newTx.length)  mutation.transactions = [...(state.transactions || []), ...newTx];
   if (pendingCallups) mutation.pendingCallups = pendingCallups;
+  if (cpuShort) mutation.cpuShort = cpuShort;
   if (pendingSurplus && pendingSurplus.length) {
     mutation.pendingSurplus = pendingSurplus;
     mutation.surplusCount   = surplusCount;
@@ -948,7 +848,7 @@ export function settleRoster(draft, teamId = 'user', options = {}) {
 export function applyRosterMutation(state, mutation) {
   if (!mutation) return;
   for (const [key, value] of Object.entries(mutation)) {
-    if (key === 'pendingSurplus' || key === 'surplusCount' || key === 'pendingCallups') continue;
+    if (key === 'pendingSurplus' || key === 'surplusCount' || key === 'pendingCallups' || key === 'cpuShort') continue;
     // Never write `undefined` over a real collection.
     if (value === undefined) continue;
     if (key === 'players' && value && typeof value === 'object') {
@@ -1023,198 +923,6 @@ function _seatByEligibility(slots, ids, players) {
 // SPRING TRAINING CUTS
 // ─────────────────────────────────────────────────────────────
 
-/**
- * toggleKeeperTag(state, playerId)
- * Flips _isKeeper on a player during spring training.
- * Enforces the 28-keeper cap — returns an error string if at cap and
- * the player is currently not a keeper (can't add more).
- *
- * @param {Object} state
- * @param {String} playerId
- * @returns {Object} mutations  — or { error: String } if cap hit
- */
-export function toggleKeeperTag(state, playerId) {
-  const player = state.players[playerId];
-  if (!player) return { error: 'Player not found' };
-
-  const isCurrentlyKeeper = !!player._isKeeper;
-
-  // Enforce 28-keeper cap when trying to ADD a keeper
-  if (!isCurrentlyKeeper) {
-    const currentKeeperCount = state.userTeam.rosterIds
-      .filter(id => state.players[id]?._isKeeper)
-      .length;
-    if (currentKeeperCount >= ROSTER_LIMITS.ACTIVE_TOTAL) {
-      return { error: 'Untag another player first — you already have 28 keepers.' };
-    }
-  }
-
-  return {
-    players: {
-      [playerId]: { _isKeeper: !isCurrentlyKeeper },
-    },
-  };
-}
-
-/**
- * applySpringCuts(state)
- * Processes the Opening Day roster cut (38→28) using keeper flags.
- * Players with _isKeeper: true form the 28-man Opening Day roster.
- * - Spring invitees not kept → return to farm
- * - Regular roster players not kept → waived
- * If fewer than 28 are tagged, auto-fills from untagged regular
- * players by OVR descending until reaching 28.
- *
- * @param {Object} state
- * @returns {Object} mutations
- */
-export function applySpringCuts(state) {
-  const players    = state.players;
-  // Injured players stay on the IL (and on rosterIds); only the active
-  // roster is cut to 28.
-  const ilIds      = (state.userTeam.rosterIds || []).filter(id => players[id]?.group === PLAYER_GROUP.IL);
-  const rosterIds  = (state.userTeam.rosterIds || []).filter(id => players[id]?.group !== PLAYER_GROUP.IL);
-  // A player already on his way (traded / called up in spring) holds one of
-  // the 28 Opening Day spots (§65).
-  const cap        = ROSTER_LIMITS.ACTIVE_TOTAL - pendingArrivals(state, 'user').length;
-
-  // Build keeper list from flags
-  let keepers = rosterIds.filter(id => players[id]?._isKeeper);
-
-  // Auto-fill if under 28 — balanced like a real Opening Day roster
-  // (14 position players incl. every position + a backup catcher, 14 arms).
-  if (keepers.length < cap) {
-    keepers = _openingDayFill(keepers, rosterIds, cap, players, pendingArrivals(state, 'user'));
-  }
-
-  // Hard cap at 28 (less anyone already on his way)
-  keepers = keepers.slice(0, cap);
-
-  const keepSet   = new Set(keepers);
-  const toRelease = rosterIds.filter(id => !keepSet.has(id));
-
-  const mutations  = { players: {} };
-  let newFarmIds   = [...(state.userTeam.farmIds || [])];
-
-  for (const playerId of toRelease) {
-    const player = state.players[playerId];
-    if (!player) continue;
-
-    if (player._isSpringInvitee) {
-      // Invitees always return to farm
-      if (newFarmIds.length < ROSTER_LIMITS.FARM_TOTAL) {
-        newFarmIds.push(playerId);
-        mutations.players[playerId] = {
-          group:             PLAYER_GROUP.PRACTICE_SQUAD,
-          teamId:            'user',
-          _isSpringInvitee:  false,
-          _isKeeper:         false,
-        };
-      } else {
-        const wMut = placeOnWaivers(state, playerId);
-        Object.assign(mutations.players, wMut.players || {});
-        if (wMut.waiverPool) mutations.waiverPool = wMut.waiverPool;
-      }
-    } else {
-      // Regular roster player the GM chose not to keep → waived
-      const wMut = placeOnWaivers(state, playerId);
-      Object.assign(mutations.players, wMut.players || {});
-      if (wMut.waiverPool) mutations.waiverPool = wMut.waiverPool;
-    }
-  }
-
-  // Clear spring flags on all kept players
-  for (const playerId of keepers) {
-    mutations.players[playerId] = {
-      ...(mutations.players[playerId] || {}),
-      _isSpringInvitee: false,
-      _isKeeper:        false,
-    };
-  }
-
-  return {
-    ...mutations,
-    userTeam: {
-      rosterIds: [...keepers, ...ilIds],
-      farmIds:   newFarmIds,
-    },
-  };
-}
-
-/**
- * autoResolveSpringCuts(state)
- * Called when the spring cut deadline expires without GM action.
- * Tags the 28 highest-rated players as keepers, then applies cuts.
- *
- * @param {Object} state
- * @returns {Object} mutations
- */
-export function autoResolveSpringCuts(state) {
-  const allIds = (state.userTeam.rosterIds || []).filter(id => state.players[id]?.group !== PLAYER_GROUP.IL);
-  const cap    = ROSTER_LIMITS.ACTIVE_TOTAL - pendingArrivals(state, 'user').length;
-  const keep   = new Set(_openingDayFill([], allIds, cap, state.players, pendingArrivals(state, 'user')));
-
-  // Tag the balanced 28 as keepers in a temp state copy for applySpringCuts
-  const tempMutations = { players: {} };
-  for (const id of allIds) tempMutations.players[id] = { _isKeeper: keep.has(id) };
-
-  // Build a patched state to pass to applySpringCuts
-  const patchedState = {
-    ...state,
-    players: { ...state.players },
-  };
-  for (const [id, patch] of Object.entries(tempMutations.players)) {
-    patchedState.players[id] = { ...patchedState.players[id], ...patch };
-  }
-
-  return applySpringCuts(patchedState);
-}
-
-/**
- * _openingDayFill(keepers, pool, cap, players, inbound)
- * Completes an Opening Day roster the way a club builds one: every lineup
- * position covered plus a backup catcher, then the best players on each side
- * up to the 14 / 14 composition, then best available. Pure.
- */
-function _openingDayFill(keepers, pool, cap, players, inbound = []) {
-  const keep = [...keepers];
-  const has  = new Set(keep);
-  const isP  = (id) => ['SP', 'RP'].includes(players[id]?.pos);
-  const side = { hitter: 0, pitcher: 0 };
-  for (const id of keep) side[isP(id) ? 'pitcher' : 'hitter']++;
-  for (const t of inbound) side[isP(t.playerId) ? 'pitcher' : 'hitter']++;
-  const byOvr = pool.filter(id => players[id]).sort((a, b) => (players[b].ovr || 0) - (players[a].ovr || 0));
-  const add = (id) => { if (!id || has.has(id) || keep.length >= cap) return; keep.push(id); has.add(id); side[isP(id) ? 'pitcher' : 'hitter']++; };
-
-  // 1. Every lineup position, best eligible first; a second catcher.
-  for (const slot of ['C', 'SS', '2B', '3B', '1B', 'OF', 'OF', 'OF']) {
-    const covered = keep.filter(id => !isP(id) && eligibleSlotsFor(players[id]).includes(slot)).length;
-    const needHere = slot === 'OF' ? 3 : 1;
-    if (covered >= needHere) continue;
-    add(byOvr.find(id => !has.has(id) && !isP(id) && eligibleSlotsFor(players[id]).includes(slot)));
-  }
-  if (keep.filter(id => (players[id]?.nativePos || players[id]?.pos) === 'C').length < 2) {
-    add(byOvr.find(id => !has.has(id) && (players[id].nativePos || players[id].pos) === 'C'));
-  }
-  // 2. Five starters plus the two spot starters on the pitcher bench
-  //    (Section 20 composition: PITCHER_BENCH = 2 SP + 2 RP).
-  while (keep.filter(id => players[id]?.pos === 'SP').length < ROSTER_LIMITS.STARTING_PITCHERS + 2) {
-    const sp = byOvr.find(id => !has.has(id) && players[id].pos === 'SP');
-    if (!sp || keep.length >= cap) break;
-    add(sp);
-  }
-  // 3. Each side to its target, best first; then best available.
-  for (const want of ['hitter', 'pitcher']) {
-    const target = want === 'hitter' ? HITTER_TARGET : PITCHER_TARGET;
-    for (const id of byOvr) {
-      if (side[want] >= target || keep.length >= cap) break;
-      if (!has.has(id) && (want === 'pitcher') === isP(id)) add(id);
-    }
-  }
-  for (const id of byOvr) add(id);
-  return keep.slice(0, cap);
-}
-
 // ─────────────────────────────────────────────────────────────
 // PAYROLL COMPUTATION
 // ─────────────────────────────────────────────────────────────
@@ -1229,8 +937,7 @@ function _openingDayFill(keepers, pool, cap, players, inbound = []) {
  * @returns {Number} payroll in $K (same unit as contractSalary)
  */
 export function computePayroll(state) {
-  // §78: everyone the club is paying — active roster and IL, and farm players
-  // on major-league deals (FinanceEngine.payrollOf is the one definition).
+  // §122 everyone on the roster, active or IL (FinanceEngine.payrollOf is the one definition).
   return payrollOf(state, 'user');
 }
 
@@ -1249,17 +956,11 @@ function _getLeagueTeamRosterIds(state, teamId) {
   return team ? (team.rosterIds || []) : [];
 }
 
-function _getLeagueTeamFarmIds(state, teamId) {
-  const team = (state.leagueTeams || []).find(t => t.id === teamId);
-  return team ? (team.farmIds || []) : [];
-}
-
 function _removeFromTeamRoster(state, playerId, teamId) {
   if (!teamId || teamId === 'user') {
     return {
       userTeam: {
         rosterIds: state.userTeam.rosterIds.filter(id => id !== playerId),
-        farmIds:   (state.userTeam.farmIds || []).filter(id => id !== playerId),
       },
     };
   }
@@ -1270,7 +971,6 @@ function _removeFromTeamRoster(state, playerId, teamId) {
   updatedTeams[idx] = {
     ...team,
     rosterIds: team.rosterIds.filter(id => id !== playerId),
-    farmIds:   (team.farmIds || []).filter(id => id !== playerId),
   };
   return { leagueTeams: updatedTeams };
 }
@@ -1285,128 +985,6 @@ function _addToLeagueTeamRoster(state, playerId, teamId) {
     rosterIds: [...team.rosterIds, playerId],
   };
   return { leagueTeams: updatedTeams };
-}
-
-function _removeFromLeagueTeamFarm(state, playerId, teamId) {
-  const team = (state.leagueTeams || []).find(t => t.id === teamId);
-  if (!team) return {};
-  const idx = state.leagueTeams.indexOf(team);
-  const updatedTeams = [...state.leagueTeams];
-  updatedTeams[idx] = {
-    ...team,
-    farmIds: (team.farmIds || []).filter(id => id !== playerId),
-  };
-  return { leagueTeams: updatedTeams };
-}
-
-function _buildSendToFarmMutation(state, playerId, teamId, currentFarmIds) {
-  const isUserTeam = teamId === 'user';
-  const newFarmIds = [...currentFarmIds, playerId];
-
-  const teamMutation = isUserTeam
-    ? {
-        userTeam: {
-          rosterIds: state.userTeam.rosterIds.filter(id => id !== playerId),
-          farmIds:   newFarmIds,
-        },
-      }
-    : (() => {
-        const team = (state.leagueTeams || []).find(t => t.id === teamId);
-        if (!team) return {};
-        const idx = state.leagueTeams.indexOf(team);
-        const updatedTeams = [...state.leagueTeams];
-        updatedTeams[idx] = {
-          ...team,
-          rosterIds: team.rosterIds.filter(id => id !== playerId),
-          farmIds:   newFarmIds,
-        };
-        return { leagueTeams: updatedTeams };
-      })();
-
-  return {
-    players: {
-      [playerId]: {
-        group:  PLAYER_GROUP.PRACTICE_SQUAD,
-        tier:   'farm',
-        teamId,
-      },
-    },
-    ...teamMutation,
-  };
-}
-
-/**
- * _findDisplacementCandidate(state, incomingPlayerId, farmIds)
- * Section 20.3 overflow displacement rule:
- *   1. Identify which position group is most overstocked relative to minimum coverage
- *   2. The lowest OVR player at that position is the displacement candidate
- *   3. If displacement would violate position minimums, skip and find next-lowest
- *      at a non-critical position
- *   4. Displaced player goes to waivers (caller handles this)
- */
-function _findDisplacementCandidate(state, incomingPlayerId, farmIds) {
-  const incoming = state.players[incomingPlayerId];
-  if (!incoming) return null;
-
-  const farmPlayers = farmIds.map(id => state.players[id]).filter(Boolean);
-  const incomingIsPitcher = ['SP','RP'].includes(incoming.pos);
-
-  // Build position counts
-  const positionCounts = {};
-  for (const p of farmPlayers) {
-    const pos = p.nativePos || p.pos;
-    positionCounts[pos] = (positionCounts[pos] || 0) + 1;
-  }
-
-  // Find candidates — sorted by OVR asc (lowest first)
-  const candidates = farmPlayers
-    .filter(p => {
-      const isPitcher = ['SP','RP'].includes(p.pos);
-      return isPitcher === incomingIsPitcher;
-    })
-    .sort((a, b) => a.ovr - b.ovr);
-
-  for (const candidate of candidates) {
-    const pos = candidate.nativePos || candidate.pos;
-
-    // Check if removing this player would violate position minimums
-    if (_wouldViolateMinimums(farmPlayers, candidate, positionCounts)) continue;
-
-    return candidate.id;
-  }
-
-  // No valid candidate found — should not happen if farm is properly maintained
-  return null;
-}
-
-function _wouldViolateMinimums(farmPlayers, candidate, positionCounts) {
-  const pos = candidate.nativePos || candidate.pos;
-  const isPitcher = ['SP','RP'].includes(candidate.pos);
-
-  if (!isPitcher) {
-    // Check hitter position minimums
-    // CI = corner infield (1B, 3B, 1B/3B), MI = middle infield (2B, SS, 2B/SS)
-    const CI_POSITIONS = ['1B','3B','1B/3B'];
-    const MI_POSITIONS = ['2B','SS','2B/SS'];
-    const OF_POSITIONS = ['OF','DH/OF'];
-    const C_POSITIONS  = ['C'];
-
-    const getGroupCount = (positions) =>
-      farmPlayers.filter(p => p !== candidate && positions.includes(p.nativePos || p.pos)).length;
-
-    if (C_POSITIONS.includes(pos)  && getGroupCount(C_POSITIONS)  < 1) return true;
-    if (CI_POSITIONS.includes(pos) && getGroupCount(CI_POSITIONS) < 1) return true;
-    if (MI_POSITIONS.includes(pos) && getGroupCount(MI_POSITIONS) < 1) return true;
-    if (OF_POSITIONS.includes(pos) && getGroupCount(OF_POSITIONS) < 1) return true;
-  } else {
-    // Check pitcher minimums
-    const remainingSP = farmPlayers.filter(p => p !== candidate && p.pos === 'SP').length;
-    const remainingRP = farmPlayers.filter(p => p !== candidate && p.pos === 'RP').length;
-    if (candidate.pos === 'SP' && remainingSP < FARM_PITCHER_MIN_SP) return true;
-    if (candidate.pos === 'RP' && remainingRP < FARM_PITCHER_MIN_RP) return true;
-  }
-
-  return false;
 }
 
 function _mergeMutations(a, b) {

@@ -347,7 +347,6 @@ export function createUserTeamObject(config = {}) {
 
     // Roster — player IDs only; looked up in state.players
     rosterIds: [],
-    farmIds:   [],   // farm system player IDs
 
     // Fixed 9-slot batting lineup — always C/1B/2B/3B/SS/OF/OF/OF/DH order.
     // Each entry: { slot: String, playerId: String|null }

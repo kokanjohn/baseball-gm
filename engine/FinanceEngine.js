@@ -13,13 +13,12 @@
  *              revenue, the All-Star host's share, cash received in trades.
  *   Money out: salaries — accrued DAILY through the regular season for every
  *              player paid that day, settled on paydays (the 1st and 15th, and
- *              once after the last game); coaching staff the same way; dead
- *              money for players released in season; card costs, signing
- *              bonuses and cash sent in trades at once.
+ *              once after the last game); coaching staff the same way;
+ *              card costs, signing bonuses and cash sent in trades at once.
  *
- * Who is paid: everyone on the active roster or the IL, and players in the
- * farm on a major-league contract (`contractMLB`). Prospects on minor-league
- * deals cost nothing until they're called up (§78.1).
+ * Who is paid (§122): the players on the club's roster — active or on the
+ * injured list — and nobody else. A player dropped (to waivers) or released
+ * costs nothing from that moment: there is no dead money.
  *
  * The owner (§78.4): a soft payroll target, and his patience — archetype +
  * the season's pace against the win target + his trust (+ the Gambler's
@@ -34,8 +33,7 @@
  *   season:  { income: { cat: $K }, spend: { cat: $K } },
  *   history: [{ seasonNum, income, spend, net, fundsEnd, payrollTarget }],
  *   cal:     { seasonNum, startDay, endDay, days, paydays: [ms], paid,
- *              accruedThrough, owed: { payroll, staff, dead }, mediaPer, localPer },
- *   dead:    [{ playerId, salary, endDay }],
+ *              accruedThrough, owed: { payroll, staff }, mediaPer, localPer },
  *   owner:   { stage, mood, order: null|{ amountK, fromPayroll, dueAt, playerId },
  *              targetPenalty, lastReviewAt },
  * }
@@ -60,7 +58,7 @@ const PAID_GROUPS = new Set([PLAYER_GROUP.BENCH_HITTERS, PLAYER_GROUP.STARTING_H
 export const STAGES = Object.freeze(['content', 'watching', 'concerned', 'cuts']);
 export const INCOME_LABELS = Object.freeze({ gate: 'Home gates', media: 'League media share', local: 'Local media & sponsors',
   cards: 'Deals & promotions', allstar: 'All-Star Game', trade: 'Cash in trades', owner: 'Owner covered the shortfall', other: 'Other' });
-export const SPEND_LABELS = Object.freeze({ payroll: 'Player payroll', staff: 'Coaching staff', dead: 'Released players (dead money)',
+export const SPEND_LABELS = Object.freeze({ payroll: 'Player payroll', staff: 'Coaching staff',
   cards: 'Front-office decisions', bonus: 'Signing bonuses', trade: 'Cash in trades',
   facilities: 'Ballpark & facilities', marketing: 'Season-ticket campaign', events: 'Fan events', other: 'Other' });
 
@@ -123,7 +121,7 @@ export function initFinances(team, { payrollTarget, atmosphere = 60, startFundsS
     payrollTarget: P,
     market:        { capacity, perFan: Math.round(perFan * 100) / 100, localAnnual: round(localAnnual) },
     ledger: [], season: { income: {}, spend: {} }, history: team.finances?.history || [],
-    cal: null, dead: [],
+    cal: null,
     owner: { stage: 'content', mood: 0, order: null, targetPenalty: 0, lastReviewAt: null },
   };
   return team.finances;
@@ -236,9 +234,9 @@ export function adjustLocalIncome(fin, pct) {
 // PAYROLL
 // ─────────────────────────────────────────────────────────────
 
-/** Is this player paid by his club today? (active / IL, or a major-league deal in the farm) */
+/** Is this player paid by his club today? (§122 on its roster: active or the IL) */
 export function isPaid(p) {
-  return !!p && (PAID_GROUPS.has(p.group) || (p.group === PLAYER_GROUP.PRACTICE_SQUAD && !!p.contractMLB));
+  return !!p && PAID_GROUPS.has(p.group);
 }
 
 /** The club's annual payroll: everyone it is paying (§78.3). */
@@ -247,7 +245,7 @@ export function payrollOf(state, teamId = 'user') {
   if (!t) return 0;
   const season = state.seasonNum || 1;
   let sum = 0;
-  for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) {
+  for (const id of t.rosterIds || []) {
     const p = state.players[id];
     if (!(p && p.teamId === (teamId === 'user' ? 'user' : t.id) && isPaid(p))) continue;
     // §85 a share another club is still paying this season isn't ours.
@@ -276,57 +274,6 @@ export function retainSalary(draft, payerId, playerId, pct) {
   payer.finances.retained = [...(payer.finances.retained || []).filter(r => r.playerId !== playerId), { playerId, pct, season }];
 }
 
-/** A player released in season is owed the rest of it: dead money on the club's books. */
-export function addDeadMoney(draft, teamId, playerId, atMs) {
-  const t = _club(draft, teamId);
-  const fin = t?.finances, cal = fin?.cal;
-  const p = draft.players[playerId];
-  if (!fin || !cal || !p || !(p.contractSalary > 0)) return;
-  const today = dayOf(atMs);
-  if (today > cal.endDay || today < cal.startDay) return;    // offseason / spring: nothing owed
-  fin.dead = [...(fin.dead || []), { playerId, salary: p.contractSalary, endDay: cal.endDay }];
-}
-
-/**
- * §112.3 A player released in the offseason with seasons left on his deal:
- * each remaining season's salary is owed (fin.deadFuture), and becomes that
- * season's dead money when its pay calendar starts (ensureSeason).
- */
-export function addDeadFuture(draft, teamId, playerId, salary, fromSeason, toSeason, name = '') {
-  const fin = _club(draft, teamId)?.finances;
-  if (!fin || !(salary > 0)) return;
-  const add = [];
-  for (let s = fromSeason; s <= toSeason; s++) add.push({ playerId, name, salary, season: s });
-  fin.deadFuture = [...(fin.deadFuture || []), ...add];
-}
-
-/**
- * §112.3 A released player signs elsewhere: his new salary comes off what the
- * club that released him still owes, season by season while both deals run.
- */
-export function offsetDead(draft, playerId, newSalary, newTeamId = null) {
-  const p = draft.players[playerId];
-  if (!p || !(newSalary > 0)) return;
-  const until = (p.contractExpiry ?? 0) - 1;
-  for (const t of [draft.userTeam, ...(draft.leagueTeams || [])]) {
-    const fin = t?.finances;
-    if (!fin?.deadFuture?.length || (t.id || 'user') === newTeamId) continue;
-    fin.deadFuture = fin.deadFuture
-      .map(d => (d.playerId === playerId && d.season <= until && !d.offset ? { ...d, salary: Math.max(0, d.salary - newSalary), offset: true } : d))
-      .filter(d => d.salary > 0);
-  }
-}
-
-/** Dead money committed to the season payroll is measured for: this one, or next (between seasons). */
-export function deadAhead(state, teamId = 'user') {
-  const fin = _club(state, teamId)?.finances;
-  if (!fin) return 0;
-  const season = (state.seasonNum || 1) + (state.offseason ? 1 : 0);
-  // In season, this season's releases are in fin.dead (moved there when its
-  // pay calendar started); between seasons, next season's are still ahead.
-  return (state.offseason ? 0 : (fin.dead || []).reduce((a, d) => a + (d.salary || 0), 0))
-    + (fin.deadFuture || []).filter(d => d.season === season).reduce((a, d) => a + d.salary, 0);
-}
 
 // ─────────────────────────────────────────────────────────────
 // THE SEASON'S CALENDAR — daily accrual, paydays
@@ -363,16 +310,9 @@ export function ensureSeason(draft, teamId = 'user') {
   fin.cal = {
     seasonNum: draft.seasonNum || 1, startDay: sd.startDay, endDay: sd.endDay,
     days: sd.endDay - sd.startDay + 1, paydays, paid: 0, accruedThrough: sd.startDay - 1,
-    owed: { payroll: 0, staff: 0, dead: 0 },
+    owed: { payroll: 0, staff: 0 },
     mediaPer: FIN_MEDIA_SHARE_K / N, localPer: localAnnual / N,
   };
-  // §112.3 this season's share of offseason releases is now dead money, paid like any.
-  const season = draft.seasonNum || 1;
-  const due = (fin.deadFuture || []).filter(d => d.season === season);
-  if (due.length) {
-    fin.dead = [...(fin.dead || []), ...due.map(d => ({ playerId: d.playerId, salary: d.salary, endDay: sd.endDay }))];
-    fin.deadFuture = (fin.deadFuture || []).filter(d => d.season > season);
-  }
   return true;
 }
 
@@ -391,14 +331,13 @@ export function dueSteps(state, clockMs, teamId = 'user') {
   return out.sort((a, b) => a.at - b.at);
 }
 
-/** accrueDay(draft, day, teamId) — one season day's salaries, staff and dead money are owed. */
+/** accrueDay(draft, day, teamId) — one season day's salaries and staff are owed. */
 export function accrueDay(draft, day, teamId = 'user') {
   const t = _club(draft, teamId);
   const fin = t?.finances, cal = fin?.cal;
   if (!cal || day !== cal.accruedThrough + 1) return;
   cal.owed.payroll += payrollOf(draft, teamId) / cal.days;
   cal.owed.staff   += staffAnnual(t) / cal.days;
-  for (const d of fin.dead || []) if (day <= d.endDay) cal.owed.dead += d.salary / cal.days;
   cal.accruedThrough = day;
 }
 
@@ -410,17 +349,15 @@ export function payday(draft, i, atMs, teamId = 'user') {
   const t = _club(draft, teamId);
   const fin = t?.finances, cal = fin?.cal;
   if (!cal || i !== cal.paid) return null;
-  const paid = { payroll: round(cal.owed.payroll), staff: round(cal.owed.staff), dead: round(cal.owed.dead) };
+  const paid = { payroll: round(cal.owed.payroll), staff: round(cal.owed.staff) };
   post(fin, -paid.payroll, 'payroll', 'Payday — player salaries', atMs);
   post(fin, -paid.staff,   'staff',   'Payday — coaching staff', atMs);
-  post(fin, -paid.dead,    'dead',    'Payday — released players', atMs);
-  cal.owed = { payroll: 0, staff: 0, dead: 0 };
+  cal.owed = { payroll: 0, staff: 0 };
   const received = { media: round(cal.mediaPer), local: round(cal.localPer) };
   post(fin, received.media, 'media', 'League media share', atMs);
   post(fin, received.local, 'local', 'Local media & sponsors', atMs);
   cal.paid += 1;
-  if (cal.paid >= cal.paydays.length) fin.dead = [];   // the season's dead money is settled
-  return { paid, received, total: received.media + received.local - paid.payroll - paid.staff - paid.dead };
+  return { paid, received, total: received.media + received.local - paid.payroll - paid.staff };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -515,9 +452,8 @@ export function projection(state, teamId = 'user') {
   if (!fin) return 0;
   if (!cal || cal.paid >= cal.paydays.length) return fin.funds || 0;
   const remDays = Math.max(0, cal.endDay - cal.accruedThrough);
-  const owed = cal.owed.payroll + cal.owed.staff + cal.owed.dead;
-  const remPay = (payrollOf(state, teamId) + staffAnnual(t)) * remDays / cal.days
-               + (fin.dead || []).reduce((a, d) => a + d.salary * Math.max(0, d.endDay - cal.accruedThrough) / cal.days, 0);
+  const owed = cal.owed.payroll + cal.owed.staff;
+  const remPay = (payrollOf(state, teamId) + staffAnnual(t)) * remDays / cal.days;
   const remPaydays = cal.paydays.length - cal.paid;
   // Home games played this season = home gates banked (any club).
   const playedHome = (fin.ledger || []).filter(e => e.cat === 'gate' && e.label === 'Home gate').length;
@@ -561,8 +497,7 @@ export function strain(state, teamId = 'user') {
   const u = _club(state, teamId) || {};
   const fin = u.finances || {};
   const target = seasonTarget(fin) || 1;
-  // §112.3 money owed to released players is payroll to the owner too.
-  const payroll = payrollOf(state, teamId) + deadAhead(state, teamId);
+  const payroll = payrollOf(state, teamId);
   const projected = projection(state, teamId);
   // Money the club is projected to have covers some of the payroll over the
   // target — as much as this owner's personality allows.
@@ -624,7 +559,7 @@ export function canAddSalary(state, addK, outK = 0, teamId = 'user') {
 export function payrollRoom(state, teamId = 'user') {
   const fin = _club(state, teamId)?.finances || {};
   // §112.3 money still owed to released players is spent before anyone new is paid.
-  return seasonTarget(fin) * (1 + tolerance(state, teamId)) - payrollOf(state, teamId) - deadAhead(state, teamId);
+  return seasonTarget(fin) * (1 + tolerance(state, teamId)) - payrollOf(state, teamId);
 }
 
 /** Can the club spend this much now (a bonus)? A happy owner lets funds dip a little. */
@@ -725,7 +660,6 @@ export function seasonEndReview(draft, atMs, teamId = 'user') {
   fin.history = [...(fin.history || []), summary];
   fin.ledger = [];
   fin.season = { income: {}, spend: {} };
-  fin.dead = [];
   fin.seasonTargetAdj = 0;     // a mid-season loosening (or tightening) lasts the season
   fin.retained = [];           // §85 salary kept on traded players runs out with the season
   fin.promo = null;

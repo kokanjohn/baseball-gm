@@ -208,7 +208,7 @@ function _units(state, season) {
   // young players — what a teacher shows in.
   const year = baseballYear(state) + 1;
   const grow = { arms: 0, bats: 0, armsN: 0, batsN: 0 };
-  for (const id of [...(state.userTeam?.rosterIds || []), ...(state.userTeam?.farmIds || [])]) {
+  for (const id of state.userTeam?.rosterIds || []) {
     const p = state.players[id];
     if (!p || computeAge(p.dob, year) > 26 || !Number.isFinite(p._ovrChange)) continue;
     if (isPitcher(p)) { grow.arms += p._ovrChange; grow.armsN++; } else { grow.bats += p._ovrChange; grow.batsN++; }

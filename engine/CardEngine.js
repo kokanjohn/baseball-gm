@@ -61,13 +61,13 @@ import {
   clearInjuryUpdate, ilMinDays,
 } from './InjuryEngine.js';
 import {
-  activateFromIL, placeOnWaivers, sendToFarm, reconcileRoster, applyRosterMutation, reserveGroup,
+  activateFromIL, placeOnWaivers, reconcileRoster, applyRosterMutation, reserveGroup,
   HITTER_TARGET, PITCHER_TARGET,
   defaultActiveGroup, nextCalendarDay, computePayroll,
 } from './RosterEngine.js';
 import { evaluateTrade, queueTrade, generateCPUCashSale, tradeWindow, tradeBlockers, startCooldown, busyWithUs, evaluateForUser, evaluateForClub, clubBar } from './TradeEngine.js';
 import {
-  getRosterNeeds, rankCallupCandidates, callUp, decisionDeadlineAfter, rosterIsFull, sideOf, cancelCallUps,
+  getRosterNeeds, rankPickups, signPickup, decisionDeadlineAfter, rosterIsFull, sideOf, releasePickups, dropPlayer,
 } from './TransactionEngine.js';
 import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
@@ -581,7 +581,7 @@ export function deliverInjuryAct2(playerId, atMs = clockNow()) {
   const seasonEnding = inj.severity === 'season';
   const ilDays     = Math.max(inj.days, ilMinDays(player));
   const eligibleAt = inj.injuredAt + ilDays * 86_400_000;
-  const best       = rankCallupCandidates(state, 'user', _needFor(player))[0] || null;
+  const best       = rankPickups(state, 'user', _needFor(player))[0] || null;
   const dtd        = dayToDayAllowed(player);
   const deadline   = decisionDeadlineAfter(state, atMs);
 
@@ -914,7 +914,7 @@ function _lineupNudges(atMs) {
 /** Open roster spot — one card per open spot, tied to the current deadline. */
 function _deliverNeedCard(state, need, index, needs, atMs) {
   const deadline = needs.deadlineAt;
-  const best     = rankCallupCandidates(state, 'user', need)[0] || null;
+  const best     = rankPickups(state, 'user', need)[0] || null;
   const what     = need.pos ? (need.side === 'pitcher' ? (need.pos === 'SP' ? 'a starting pitcher' : 'a reliever') : `a ${need.pos}`)
                             : (need.side === 'pitcher' ? 'a pitcher' : 'a position player');
   const card = _rosterCard(state, {
@@ -1042,11 +1042,6 @@ function _rosterEventCards(ev, atMs) {
       if (deliverInjuryAct1(ev.playerId, (ev.atMs ?? atMs) + _randBetween(5, 20) * 60_000)) delivered++;
     } else if (ev.type === 'MANAGER_FILL') {
       if (_deliverManagerFillCard(ev)) delivered++;
-    } else if (ev.type === 'FARM_SIGNING' && ev.teamId === 'user') {
-      // r135 news, not a decision: the Recent feed.
-      const st = StateManager.get();
-      const p  = st.players[ev.playerId];
-      if (p) _ourNews(`Farm Director signed ${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr}) to a minor-league deal`, ev.atMs ?? atMs);
     } else if (ev.type === 'WAIVER_CLAIMED' && ev.userClaimed) {
       // §73: how our waiver claim came out.
       const st = StateManager.get();
@@ -1821,7 +1816,7 @@ export function deliverSeedTradeOffer(context) {
   const tryCall = () => {
     for (const t of shuffle(st.leagueTeams || [])) {
       for (const need of LeagueTrades.clubNeeds(st, t.id).slice(0, 2)) {
-        const fits = [...(st.userTeam.rosterIds || []), ...(st.userTeam.farmIds || [])].map(id => st.players[id])
+        const fits = (st.userTeam.rosterIds || []).map(id => st.players[id])
           .filter(p => LeagueTrades.movable(p, atMs, st) && LeagueTrades.fillsNeed(p, need) && (p.ovr || 0) >= need.ovr + LEAGUE_TRADES.upgradeMin)
           .sort((x, y) => (y.ovr || 0) - (x.ovr || 0)).slice(0, 3);
         for (const p of shuffle(fits)) {
@@ -1838,7 +1833,7 @@ export function deliverSeedTradeOffer(context) {
     const ourNeed = LeagueTrades.clubNeeds(st, 'user')[0] || null;
     const cands = [];
     for (const t of st.leagueTeams || []) {
-      for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) {
+      for (const id of t.rosterIds || []) {
         const p = st.players[id];
         if (!LeagueTrades.movable(p, atMs, st) || !wouldStart(p, st, 'user')) continue;
         if (ourNeed && !LeagueTrades.fillsNeed(p, ourNeed)) continue;
@@ -2733,7 +2728,7 @@ export function deliverAllStarTradeOffer(context) {
   const cands = [];
   for (const t of st.leagueTeams || []) {
     if (busyWithUs(st, t.id, atMs)) continue;
-    for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) {
+    for (const id of t.rosterIds || []) {
       const p = st.players[id];
       if ((p?.allStarSeasons || []).includes(season) && LeagueTrades.movable(p, atMs, st) && wouldStart(p, st, 'user')) cands.push({ t, p });
     }
@@ -3928,7 +3923,7 @@ export function deliverFreeAgentCards(atMs, springAt) {
     const room = Offseason.displacementFor(state, 'user', p);
     // §78: only free agents ownership would pay for (a displaced major-league
     // contract is still paid in the farm — no credit for him).
-    const outK = room && !room.contractMLB ? (room.contractSalary || 0) : 0;
+    const outK = room ? (room.contractSalary || 0) : 0;   // §122 a dropped player costs nothing from then on
     if (!Finance.canAddSalary(state, terms.salary, outK)) continue;
     const age = computeAge(p.dob, baseballYear(state) + 1);
     const from = (state.leagueTeams || []).find(x => x.id === p._faFrom)?.name || (p._faFrom === 'user' ? 'us' : null);
@@ -4313,13 +4308,14 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     const p = s.players[playerId];
     if (p && p.injury?.status === 'evaluating') Object.assign(p, placeOnILUpdate(p));
   });
+  // §122 the open spot is filled from the free agents (the one the card named, else the best fit).
   const callUpBest = (preferredId, need) => {
     const st = StateManager.get();
-    const ranked = rankCallupCandidates(st, 'user', need);
+    const ranked = rankPickups(st, 'user', need);
     const pick = ranked.find(p => p.id === preferredId) || ranked[0];
     if (!pick) return null;
     let res = null;
-    StateManager.mutate(s => { res = callUp(s, pick.id, 'user', atMs, 'gm'); });
+    StateManager.mutate(s => { res = signPickup(s, pick.id, 'user', atMs, 'gm'); });
     return res?.ok ? pick.id : null;
   };
 
@@ -4375,9 +4371,9 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     case 'mfill_keep':
       break;
     case 'mfill_sendback':
-      // Back to the farm before they report; the vacancy clock opens the spot
-      // again with a new deadline (always ahead of now) and the open-spot card.
-      StateManager.mutate(s => { cancelCallUps(s, instance._fillIds || [], 'user', atMs); });
+      // §122 let go before they report (free agents again); the vacancy clock opens
+      // the spot again with a new deadline (always ahead of now) and the open-spot card.
+      StateManager.mutate(s => { releasePickups(s, instance._fillIds || [], 'user', atMs); });
       reconcileUser();
       break;
 
@@ -4386,7 +4382,7 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
       const st = StateManager.get();
       const player = st.players[playerId];
       if (!player || !(st.ilReturnQueue || []).includes(playerId)) break;
-      // §114 a full roster: the player the GM picked goes down to the farm
+      // §114 a full roster: the player the GM picked goes on waivers (§122)
       // first, or nobody comes off the IL. (A pick that's no longer possible —
       // traded, hurt, moved — leaves the player on the IL; the card comes
       // back with today's choices.)
@@ -4395,7 +4391,7 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
           && (st.userTeam.rosterIds || []).includes(id) && _sendDownChoices(st, player).some(c => c.key === id); };
         const pick = instance._pick || (instance._choices?.length === 1 ? instance._choices[0].key : null);
         if (!pick || !ok(pick)) break;
-        StateManager.mutate(s => applyRosterMutation(s, sendToFarm(s, pick, 'user')));
+        StateManager.mutate(s => { dropPlayer(s, pick, 'user', atMs, { reason: 'corresponding move' }); });
         if (rosterIsFull(StateManager.get(), 'user', sideOf(player))) break;   // (still no room: stays on the IL)
       }
       const act = activateFromIL(StateManager.get(), playerId, reserveGroup(player));
@@ -4438,11 +4434,10 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
       break;
     }
 
-    case 'il_return_farm': {
+    case 'il_return_farm': {   // §122 no farm: letting him go means waivers (a card from before r140)
       if (!playerId) break;
-      const mutations = sendToFarm(state, playerId, 'user');
       StateManager.mutate(s => {
-        applyRosterMutation(s, mutations);
+        dropPlayer(s, playerId, 'user', atMs);
         Object.assign(s.players[playerId], clearInjuryUpdate());
         s.ilReturnQueue = (s.ilReturnQueue || []).filter(id => id !== playerId);
       });

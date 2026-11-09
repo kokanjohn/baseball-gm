@@ -7,7 +7,7 @@
  *   - computeOVR() is the single place OVR is ever calculated.
  *     Engines that need OVR call this — they never compute it inline.
  *   - createPlayer() is the single entry point for all player creation.
- *     League rosters, user rosters, and farm systems all use this.
+ *     League rosters, user rosters and the free agents all use this.
  */
 
 import {
@@ -203,7 +203,7 @@ function _createPlayer(config) {
     // Each entry: { gameIndex: Number, date: String, stats: Object }
     _impGameLog: [],
 
-    // Tier (Section 20.1) — 'active'|'waivers'|'farm'|'retired'
+    // Tier (Section 20.1) — 'active'|'waivers'|'freeAgent'|'retired'
     // Source of truth for which system owns this player right now.
     // Distinct from group (which describes roster slot within a tier).
     tier: _initialTier(group),
@@ -214,18 +214,13 @@ function _createPlayer(config) {
     // Injury report (Section 21.3 — pre-generated at injury time, filtered by gmRelationship)
     injuryReport: null,   // { vagueText, detailedText, generatedAt } | null
 
-    // Farm story arc (Section 20.4) — set at send-down, cleared at callup
-    _farmArc:        null,   // 'motivation'|'decline'|'stable'|null
-    _farmArcStart:   null,   // Unix ms — when arc began
-    _farmArcOvrDelta: 0,     // cumulative OVR delta from arc (permanent on callup)
-
     // Ownership
     teamId,
   };
 }
 
 function _initialTier(group) {
-  if (group === PLAYER_GROUP.PRACTICE_SQUAD) return 'farm';
+  if (group === PLAYER_GROUP.FREE_AGENT)     return 'freeAgent';   // §122 the opening pool
   if (group === PLAYER_GROUP.IL)             return 'active'; // IL is still active tier
   // PITCHER_BENCH, STARTING_HITTERS, BENCH_HITTERS, STARTING_PITCHERS, BULLPEN = active
   return 'active';
@@ -343,10 +338,6 @@ function _generateTrait(age, ovr) {
 
 function _generateContractLength(ovr, group) {
   const r = _rand();
-  if (group === PLAYER_GROUP.PRACTICE_SQUAD) {
-    // Farm players always get short deals
-    return r < 0.6 ? 1 : 2;
-  }
   if (ovr >= 80) return r < 0.15 ? 1 : r < 0.55 ? 2 : r < 0.85 ? 3 : 4;
   if (ovr >= 65) return r < 0.28 ? 1 : r < 0.72 ? 2 : 3;
   return r < 0.50 ? 1 : r < 0.85 ? 2 : 3;
@@ -426,8 +417,7 @@ export function computeAge(dob, seasonYear = null) {
 
 function _isPitcherGroup(group) {
   return group === PLAYER_GROUP.STARTING_PITCHERS
-      || group === PLAYER_GROUP.BULLPEN
-      || group === PLAYER_GROUP.PRACTICE_SQUAD; // farm pitchers
+      || group === PLAYER_GROUP.BULLPEN;
 }
 
 /** Integer random inclusive [lo, hi] */

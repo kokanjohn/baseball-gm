@@ -15,8 +15,8 @@
 
 import { clock, seedRandom } from './shims.js';           // MUST be first (installs globals)
 import * as SM from '../../store/StateManager.js';
-import { startNewGame, tick, commitGame, buildCardContext, advanceClock, gmCallUp } from '../../engine/GameEngine.js';
-import { getRosterNeeds, auditRosters, rankCallupCandidates } from '../../engine/TransactionEngine.js';
+import { startNewGame, tick, commitGame, buildCardContext, advanceClock } from '../../engine/GameEngine.js';
+import { getRosterNeeds, auditRosters, rankPickups, signPickup, fillShortRosters } from '../../engine/TransactionEngine.js';
 import { CARD_ACTIONS } from '../../engine/CardActions.js';
 import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
@@ -37,7 +37,7 @@ import {
   GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP,
   SPRING_TRAINING_GAME_COUNT, REGULAR_SEASON_GAME_COUNT,
   NEW_TEAM_SEED_CARDS, OFFSEASON_DAYS, ALL_STAR_BREAK_AFTER_GAME, ALLSTAR_ANNOUNCE_GAME_MIN, ALLSTAR_ANNOUNCE_GAME_MAX,
-  ALLSTAR_SQUAD_SIZE, ALLSTAR_STARTER_INNINGS, LINEUP_SLOTS,
+  ALLSTAR_SQUAD_SIZE, ALLSTAR_STARTER_INNINGS, LINEUP_SLOTS, FA_POOL_MAX,
 } from '../../data/constants.js';
 import * as Roster from '../../engine/RosterEngine.js';
 import * as WxClimate from '../../engine/WeatherClimate.js';
@@ -101,7 +101,7 @@ async function checkComposeTruth(st, at) {
   const st2 = { ...st, composeLog: [{ topicId: 'sc_prospect', channelId: 'scouting', atMs: at - 86_400_000, memo: first.memo }] };
   const second = writeComposeReply(st2, { topicId: 'sc_prospect', channelId: 'scouting', atMs: at + 86_400_000 });
   check(`compose: a second prospect report covers someone new (${st.players[first.memo.playerId]?.name} → ${st.players[second.memo.playerId]?.name})`,
-        (st.userTeam.farmIds || []).length < 2 || second.memo.playerId !== first.memo.playerId);
+        !first.memo.playerId || !second.memo.playerId || second.memo.playerId !== first.memo.playerId);
   // The GM's own decision, in the reply of the person it concerned.
   const dec = { instanceId: 'test-dec', cardId: 'test_tarp', tag: 'FACILITIES', subject: 'Tarp replacement — the old one is torn', resolved: true, choice: 'no', resolvedAtMs: at - 2 * 86_400_000 };
   const st3 = { ...st, inbox: [...(st.inbox || []), dec] };
@@ -126,7 +126,7 @@ async function checkComposeTruth(st, at) {
 // ── §65: a simulated GM living between games ─────────────────────
 // Walks the virtual clock through every card delivery before first pitch so
 // the GM can read and answer roster cards in real time — sometimes in the
-// inbox, sometimes on the Team screen (gmCallUp), sometimes not at all (the
+// inbox, sometimes from the free agents (signPickup), sometimes not at all (the
 // deadline then runs). After every action the inbox must have no ghosts.
 const gm = { review: null, milestones: [], talks: [], calls: [], offers: [], counters: [], cardIdsSeen: new Set(), ourNews: new Set(), payrollSamples: [], paydays: 0, openingFunds: 0, arms: new Map(), chainSeen: new Map(), seen: new Set(), acted: 0, ignored: 0, teamScreen: 0, tradesAccepted: [], ghostFails: [], playerCards: [], awayInLineup: [] };
 function ghostCards(st) {
@@ -166,8 +166,6 @@ function cardDidIt(action, c, st) {
     case 'ill2_sick_start': return !!p?.condition;
     case 'retain_active_pitcher': case 'retain_active_hitter': return !!p?.pendingContract;
     case 'release_active_pitcher': case 'release_active_hitter': return !!p?._willWalk;
-    case 'sp11_callup': return !!tp('farm_pitcher')?._isKeeper && u.rosterIds.includes(tp('farm_pitcher').id);
-    case 'sp11b_callup': return !!tp('farm_hitter')?._isKeeper && u.rosterIds.includes(tp('farm_hitter').id);
     case 'callup_hitter': return (st.transactions || []).some(t => t.status === 'pending' && t.playerId === c._tokenPlayers.prospect_hitter);
     case 'audition_promote': return inLineup(c._tokenPlayers.audition_hitter);
     case 'move_to_dh': return (u.lineupSlots || []).find(sl => sl.slot === 'DH')?.playerId === p?.id;
@@ -175,9 +173,9 @@ function cardDidIt(action, c, st) {
     // §73 outside players
     case 'sign_acquire_hitter': case 'sign_veteran_hitter': case 'sign_dfa':
       return joining(c._tokenPlayers.acq_hitter || c._tokenPlayers.dfa_player);
-    case 'sign_acquire_pitcher': case 'sign_prospect_pitcher': return (u.farmIds || []).includes(c._tokenPlayers.acq_pitcher);
-    case 'sign_intl_player': case 'sign_intl_flyer': return (u.farmIds || []).includes(c._tokenPlayers.intl_player);
-    case 'indie_sign': return (u.farmIds || []).includes(c._targetPlayerId);
+    case 'sign_acquire_pitcher': case 'sign_prospect_pitcher': return joining(c._tokenPlayers.acq_pitcher);
+    case 'sign_intl_player': case 'sign_intl_flyer': return joining(c._tokenPlayers.intl_player);
+    case 'indie_sign': return joining(c._targetPlayerId);
     case 'waiver_dfa': return !!st.players[c._tokenPlayers.dfa_player]?._userClaim;
     case 'trade_acquire_pitcher': case 'trade_acquire_hitter': case 'dl3_acquire':
       return (st.transactions || []).some(t => t.kind === 'trade' && t.offer?.incomingIds?.includes(c._offer?.incomingIds?.[0]));
@@ -259,9 +257,9 @@ function gmActs() {
     }
     if (c.cardId === 'os_release' && !gm.released) {
       const p0 = SM.get().players[c._targetPlayerId];
-      gm.released = { id: c._targetPlayerId, salary: p0.contractSalary, expiry: p0.contractExpiry, season: SM.get().seasonNum, room0: Finance.payrollRoom(SM.get()) };
+      gm.released = { id: c._targetPlayerId, salary: p0.contractSalary, expiry: p0.contractExpiry, season: SM.get().seasonNum, room0: Finance.payrollRoom(SM.get()), pay0: Finance.payrollOf(SM.get(), 'user') };
       resolveCard(c.instanceId, 'no'); gm.acted++; advanceClock(clock.get());
-      gm.released.room1 = Finance.payrollRoom(SM.get()); gm.released.dead1 = Finance.deadAhead(SM.get());
+      gm.released.room1 = Finance.payrollRoom(SM.get()); gm.released.pay1 = Finance.payrollOf(SM.get(), 'user');
       continue;
     }
     // §112.2 let the first coach go every run, so the hiring path is always exercised.
@@ -277,9 +275,11 @@ function gmActs() {
     }
     const r = Math.random();
     if (c._rosterKind === 'need' && r < 0.3) {
-      // Team screen path: pick from the dashed spot instead of the card.
-      const pick = rankCallupCandidates(SM.get(), 'user', c._need)[1] || rankCallupCandidates(SM.get(), 'user', c._need)[0];
-      if (pick && gmCallUp(pick.id, clock.get()).ok) { gm.teamScreen++; assertNoGhosts('after Team-screen call-up'); continue; }
+      // §122 the Players list path: sign a free agent for the open spot instead of answering the card.
+      const list = rankPickups(SM.get(), 'user', c._need), pick = list[1] || list[0];
+      let res = null;
+      if (pick) { SM.mutate(d => { res = signPickup(d, pick.id, 'user', clock.get(), 'gm'); }); advanceClock(clock.get()); }
+      if (res?.ok) { gm.teamScreen++; assertNoGhosts('after a free-agent signing'); continue; }
     }
     if (r < 0.75) { resolveCard(c.instanceId, Math.random() < 0.6 ? 'yes' : 'no'); gm.acted++; }
     else gm.ignored++;
@@ -322,7 +322,7 @@ function gmProposes() {
   if (!want) return;
   const need = Trades.valueToClub(want, st, team.id, false) * (Math.random() < 0.2 ? 0.4 : 1.0);   // fair value (a lowball now and then)
   const keyIds = new Set([...(st.userTeam.lineupSlots || []).map(sl => sl.playerId), ...(st.userTeam.rotation?.order || [])]);
-  const pool = [...st.userTeam.rosterIds, ...(st.userTeam.farmIds || [])].map(id => st.players[id])
+  const pool = st.userTeam.rosterIds.map(id => st.players[id])
     .filter(p => usable(p) && !keyIds.has(p.id))
     .map(p => ({ p, v: Trades.valueToClub(p, st, team.id, true) })).sort((a, b) => b.v - a.v);
   const give = [];
@@ -453,7 +453,7 @@ async function runOffseasonChecks() {
   const teams = [st.userTeam, ...st.leagueTeams];
   const where = new Map();
   let dup = 0;
-  for (const t of teams) for (const id of [...(t.rosterIds || []), ...(t.farmIds || [])]) { if (where.has(id)) dup++; where.set(id, t.id); }
+  for (const t of teams) for (const id of t.rosterIds || []) { if (where.has(id)) dup++; where.set(id, t.id); }
   check('offseason: no player on two lists', dup === 0, `${dup}`);
   const offList = [...where.keys()].filter(id => [PLAYER_GROUP.RETIRED, PLAYER_GROUP.DEPARTED, PLAYER_GROUP.FREE_AGENT].includes(st.players[id]?.group));
   check('offseason: no retired / departed / free-agent player on a club', offList.length === 0, offList.length);
@@ -462,14 +462,15 @@ async function runOffseasonChecks() {
   const upAfter = [...where.keys()].filter(id => Offseason.yearsLeft(st.players[id], st.seasonNum) < 1);
   check('offseason: every player on a club is under contract for season 2', upAfter.length === 0,
         upAfter.slice(0, 5).map(id => `${st.players[id].name} exp ${st.players[id].contractExpiry} ${where.get(id)}/${st.players[id].group}/${st.players[id].tier}/${st.players[id]._amateurSigning || ''}${st.players[id]._depthSigning ? 'D' : ''}`).join(', '));
-  // Players let go once spring has opened (a waiver that clears, a farm
-  // overflow) are free agents in their own right; the offseason's unsigned are gone.
+  // §122 the market carries over: the unsigned stay free agents (trimmed to its size at the new season).
   const fas = Object.values(st.players).filter(p => p.group === PLAYER_GROUP.FREE_AGENT);
-  const leftover = fas.filter(p => !(p._faSince >= os.springAt));
   const poolSet = new Set(st.freeAgentPool || []);
-  check(`offseason: free-agent pool empties at spring (unsigned players leave; ${fas.length - leftover.length} let go since)`,
-        leftover.length === 0 && fas.every(p => poolSet.has(p.id)) && [...poolSet].every(id => st.players[id]?.group === PLAYER_GROUP.FREE_AGENT),
-        leftover.slice(0, 4).map(p => `${p.name} ${p.tier} from=${p._faFrom} since=${p._faSince} ${p._faReason}`).join(', '));
+  check(`offseason: the free-agent pool carries into season 2 (${fas.length} free agents, at most ${FA_POOL_MAX} + those let go since spring opened)`,
+        fas.every(p => poolSet.has(p.id)) && [...poolSet].every(id => st.players[id]?.group === PLAYER_GROUP.FREE_AGENT)
+        && fas.filter(p => !(p._faSince >= os.springAt)).length <= FA_POOL_MAX && fas.length >= 100,
+        `${fas.length} in pool`);
+  const klass = fas.concat(Object.values(st.players).filter(p => p._classOf === 2 && p.teamId)).filter(p => p._classOf === 2);
+  check(`offseason: a new free-agent class arrives (${klass.length} players; ${klass.filter(p => p.teamId).length} signed by spring)`, klass.length >= 20);
   check(`offseason: one re-sign card per expiring user player (${resignCards.size}/${expiringUser.filter(id => SM.get().players[id]?.group !== PLAYER_GROUP.RETIRED).length})`,
         expiringUser.filter(id => st.players[id]?.retiredSeason !== 1).every(id => resignCards.has(id)),
         expiringUser.filter(id => st.players[id]?.retiredSeason !== 1 && !resignCards.has(id)).map(id => { const p = st.players[id], q = pre.players[id]; return `${p.name} pre:${q.group}/${q.isInjured ? 'inj' : ''}/exp${q.contractExpiry} now:${p.teamId}/${p.group}/${p._faReason || ''}`; }).join(', '));
@@ -535,7 +536,6 @@ async function runOffseasonChecks() {
           resign.filter(c => !/Without /.test(c.body)).map(c => c.subject).join(', '));
     const GEN = /\b(he|him|his|she|her|guys?|men|man)\b/i;
     check('contracts: the new cards are gender-neutral', !cards.some(c => GEN.test(c.body) || GEN.test(c.preview || '')), cards.filter(c => GEN.test(c.body)).map(c => c.body.match(GEN)[0]).join(','));
-    const ids = (st.userTeam.rosterIds || []).concat(st.userTeam.farmIds || []);
     check(`contracts: extension offers go only to young core players under contract (${ext.map(c => st.players[c._targetPlayerId]?.name + ' ' + st.players[c._targetPlayerId]?.ovr).join(', ') || 'none'})`,
           ext.every(c => { const q = pre.players[c._targetPlayerId]; return q && computeAge(q.dob, year1 + 1) <= 27 && !Offseason.contractIsUp(q, 1); }));
     if (gm.extended) {
@@ -545,15 +545,10 @@ async function runOffseasonChecks() {
     }
     if (gm.released) {
       const R = gm.released, q = st.players[R.id];
-      const fin = st.userTeam.finances;
-      const owedNow = [...(fin.dead || []), ...(fin.deadFuture || [])].filter(d => d.playerId === R.id);
-      // Offset: another club signed the player (Finance.offsetDead marks the entry) — whether or not
-      // the player is still there now.
-      const offset = owedNow.some(d => d.offset);
-      check(`contracts: a release leaves the money owed, season by season (${q?.name}, ${R.salary}K through ${R.expiry - 1}; now owed ${owedNow.map(d => `${d.salary}K${d.season ? ` s${d.season}` : ''}`).join(', ') || 'nothing'}${offset ? ', offset by a signing elsewhere' : ''})`,
-            q && q.teamId !== 'user' && owedNow.length === R.expiry - 2 && (offset ? owedNow.some(d => d.salary < R.salary) && owedNow.every(d => d.salary <= R.salary) : owedNow.every(d => d.salary === R.salary)));
-      check(`contracts: released money still counts against payroll room (room ${Math.round(R.room0)}K → ${Math.round(R.room1)}K, dead ahead ${Math.round(R.dead1)}K)`,
-            R.dead1 >= R.salary && R.room1 <= R.room0 + R.salary * 0.5);
+      // §122 no dead money: a released player's salary leaves our payroll the moment he goes.
+      check(`contracts: a release takes the whole salary off our books (${q?.name}, ${R.salary}K through ${R.expiry - 1}; payroll ${Math.round(R.pay0)}K → ${Math.round(R.pay1)}K)`,
+            q && q.teamId !== 'user' && Math.round(R.pay0 - R.pay1) === Math.round(R.salary) && !('dead' in st.userTeam.finances));
+      check(`contracts: and the room opens by as much (room ${Math.round(R.room0)}K → ${Math.round(R.room1)}K)`, R.room1 - R.room0 >= R.salary * 0.99);
     } else console.log('  contracts: no overpaid player to release this winter');
   }
   {
@@ -585,14 +580,6 @@ async function runOffseasonChecks() {
   const cpuBad = st.leagueTeams.filter(t => Offseason.activeCount(st, t.id) !== ROSTER_LIMITS.ACTIVE_TOTAL);
   check('offseason: every CPU club opens camp with a full 28', cpuBad.length === 0,
         cpuBad.map(t => `${t.abbr} ${Offseason.activeCount(st, t.id)}`).join(', '));
-  const farmBad = teams.filter(t => {
-    const f = (t.farmIds || []).map(id => st.players[id]).filter(Boolean);
-    const h = f.filter(p => !['SP', 'RP'].includes(p.pos)).length;
-    return h > ROSTER_LIMITS.FARM_HITTER_MAX || f.length - h > ROSTER_LIMITS.FARM_PITCHER_MAX;
-  });
-  check('offseason: farm caps hold after amateur signings', farmBad.length === 0, farmBad.map(t => t.abbr || 'USR').join(','));
-  const prospects = Object.values(st.players).filter(p => p._amateurSigning === 2).length;
-  check(`offseason: amateur prospects join every farm (${prospects})`, prospects >= 20);
   const recs = teams.every(t => !t.wins && !t.losses && !t.springWins && !t.postseasonWins);
   check('season 2: every record starts at zero', recs && st.standings === null && st.playoffBracket === null && st.currentGameIndex === 0);
   {
@@ -957,10 +944,9 @@ function runFaultInjection(base) {
     if (cpu) {
       forceInjureSlot(st, cpu, 'C') || forceInjureSlot(st, cpu, 'SS')
         || forceInjureSlot(st, cpu, 'OF');
-      const mut = reconcileRoster(st, cpu.id, { autoManage: true, atMs: clock.get() });
-      applyRosterMutation(st, mut);
+      fillShortRosters(st, clock.get());   // §122 the club signs a free agent for the spot
       const t = teamOf(st, cpu.id);
-      check('fault(cpu hitter): active + arriving back to 28 (call-up reports tomorrow)',
+      check('fault(cpu hitter): active + arriving back to 28 (a free-agent signing reports tomorrow)',
             rosterSpotsHeld(st, cpu.id) === ROSTER_LIMITS.ACTIVE_TOTAL, `got ${rosterSpotsHeld(st, cpu.id)}`);
       check('fault(cpu hitter): lineup still fields nine (manager covers today)',
             t.lineupSlots.every(sl => sl.playerId));
@@ -978,7 +964,7 @@ function runFaultInjection(base) {
       if (gone) {
         t0.rosterIds = t0.rosterIds.filter(id => id !== gone);
         delete st.players[gone];
-        applyRosterMutation(st, reconcileRoster(st, cpu.id, { autoManage: true, atMs: clock.get() }));
+        fillShortRosters(st, clock.get());
         const t = teamOf(st, cpu.id);
         check('fault(cpu departure): departed id gone from lineup',
               !t.lineupSlots.some(s => s.playerId === gone));
@@ -1110,7 +1096,7 @@ async function checkTradeEngine(st) {
   const team = c0.leagueTeams.find(t => (t.rosterIds || []).length >= 20);
   const ok = (p) => p && !p.isInjured && p.group !== PLAYER_GROUP.IN_TRANSIT && p.group !== PLAYER_GROUP.IL && !p._acquiredAtMs;
   const theirs = team.rosterIds.map(id => c0.players[id]).filter(ok);
-  const ours = [...c0.userTeam.rosterIds, ...(c0.userTeam.farmIds || [])].map(id => c0.players[id]).filter(ok);
+  const ours = c0.userTeam.rosterIds.map(id => c0.players[id]).filter(ok);
   // A fair deal: one of their spare pieces for one of ours worth a bit more to them.
   const y = theirs.filter(p => !(team.lineupSlots || []).some(sl => sl.playerId === p.id) && !(team.rotation?.order || []).includes(p.id))
     .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
@@ -1249,7 +1235,7 @@ async function checkFreeAgency(st) {
       const arriving = (c.transactions || []).some(t => t.kind === 'arrival' && t.status === 'pending' && t.playerId === vet.id && t.teamId === 'user');
       check(`free agency: the signing reports the next day; the one we chose goes down; still ${before} (${held(c)})`,
             arriving && !(c.freeAgentPool || []).includes(vet.id) && v.teamId === 'user'
-            && (!drop || (c.userTeam.farmIds || []).includes(drop) || c.players[drop]?.onWaivers) && held(c) === before,
+            && (!drop || c.players[drop]?.onWaivers || c.players[drop]?.group === PLAYER_GROUP.FREE_AGENT) && held(c) === before,
             `${v.group} drop:${c.players[drop]?.group}`);
       check('free agency: their salary is on our payroll', Finance.payrollOf(c, 'user') > 0 && v.contractExpiry > (c.seasonNum || 1));
     } else check(`free agency: a signing we can make goes through (${why})`, false);
@@ -1541,7 +1527,7 @@ async function main() {
     const o     = trade[0]?._tradeOffer;
     const prop  = (st0.leagueTeams || []).find(t => t.id === trade[0]?._proposingTeamId);
     check('new team: exactly one seeded (real) trade offer', trade.length === 1, `got ${trade.length}`);
-    const org = (t) => [...(t.rosterIds || []), ...(t.farmIds || [])];
+    const org = (t) => t.rosterIds || [];
     check('new team: seeded trade direction — user sends own player, receives CPU player',
           !!o && o.outgoingIds.every(id => org(st0.userTeam).includes(id))
               && !!prop && o.incomingIds.every(id => org(prop).includes(id)),
@@ -1852,9 +1838,7 @@ async function main() {
       if (gone.length) console.log(`g${idx}: left active:`, gone.map(id => { const p = post.players[id]; return `${p.name}/${p.pos} grp=${p.group} team=${p.teamId} inj=${p.injury?.status}`; }).join(' | '));
       globalThis.__prevActive = ids;
     }
-    if (post.phase === PHASE.SPRING_TRAINING) {
-      check(`game ${idx} (spring): active roster 28–38`, ac >= ROSTER_LIMITS.ACTIVE_TOTAL && ac <= ROSTER_LIMITS.SPRING_TOTAL, `got ${ac}`);
-    } else {
+    {   // §122 spring too: 28, no camp invitees
       const held = rosterSpotsHeld(post, 'user');
       // A spot can be open while its decision deadline is still ahead (§65).
       const openWithDeadline = held < ROSTER_LIMITS.ACTIVE_TOTAL && post.userTeam.vacancyDeadlineAt > clock.get();
@@ -1865,7 +1849,7 @@ async function main() {
       }
       check(`game ${idx} (${post.phase}): active + arriving = ${ROSTER_LIMITS.ACTIVE_TOTAL} (or a spot open before its deadline)`,
             held === ROSTER_LIMITS.ACTIVE_TOTAL || openWithDeadline,
-            `active ${ac} + arriving ${held - ac}; dl ${post.userTeam.vacancyDeadlineAt}; farm ${post.userTeam.farmIds.map(id => post.players[id]?.pos).join('')}; phase ${post.phase}; clock ${clock.get()} next ${post.schedule[post.currentGameIndex]?.gameTime}`);
+            `active ${ac} + arriving ${held - ac}; dl ${post.userTeam.vacancyDeadlineAt}; phase ${post.phase}; clock ${clock.get()} next ${post.schedule[post.currentGameIndex]?.gameTime}`);
       const cpuBad = post.leagueTeams.filter(t => rosterSpotsHeld(post, t.id) !== ROSTER_LIMITS.ACTIVE_TOTAL);
       check(`game ${idx}: every CPU club active + arriving = 28`, cpuBad.length === 0,
             cpuBad.map(t => `${t.abbr} ${rosterSpotsHeld(post, t.id)}`).join(', '));
@@ -2333,7 +2317,7 @@ async function main() {
         const rot = (t) => (t.rotation?.order || []).map(id => P(id)?.ovr || 0);
         console.log('WORST', worst.abbr, `${worst.wins}-${worst.losses}`, JSON.stringify(grp),
           'lineup', avg(lineup(worst)), 'lg', lgAvg(lineup), 'rot', avg(rot(worst)), 'lg', lgAvg(rot),
-          'farm', (worst.farmIds || []).length, 'emptySlots', (worst.lineupSlots || []).filter(sl => !sl.playerId).length,
+          'emptySlots', (worst.lineupSlots || []).filter(sl => !sl.playerId).length,
           'tx', (st.transactions || []).filter(t => t.teamId === worst.id || t.fromTeamId === worst.id).map(t => t.reason).join(','));
         let rs = 0, ra = 0, g = 0;
         for (const gm2 of Object.values(st.leagueSchedule.dayMap).flat()) {
@@ -2406,8 +2390,8 @@ async function main() {
   if (process.env.DBG) {
     const st = SM.get();
     for (const t of [st.userTeam, ...st.leagueTeams]) {
-      const f = (t.farmIds || []).map(id => st.players[id]);
-      console.log(`${t.abbr || 'USR'} farm H${f.filter(p => !['SP','RP'].includes(p.pos)).length} P${f.filter(p => ['SP','RP'].includes(p.pos)).length}`);
+      const f = (t.rosterIds || []).map(id => st.players[id]);
+      console.log(`${t.abbr || 'USR'} roster H${f.filter(p => !['SP','RP'].includes(p.pos)).length} P${f.filter(p => ['SP','RP'].includes(p.pos)).length}`);
     }
     console.log('FA pool', (st.freeAgentPool || []).length, 'waivers', (st.waiverPool || []).length,
       (st.freeAgentPool || []).map(id => { const p = st.players[id]; return `${p.pos}/${p.tier}/${p.teamId}/${p.isInjured ? 'inj' : ''}`; }).join(' '));

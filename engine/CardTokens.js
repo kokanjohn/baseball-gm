@@ -547,11 +547,18 @@ function _cardFit(cardDef, state) {
   return out;
 }
 
-/** The farm's best healthy player on one side. */
+/** §122 our young reserves on one side (25 or younger, healthy, not starting) — where the farm used to be. */
+function _youngReserves(state, pitchers) {
+  const u = state.userTeam || {};
+  const year = baseballYear(state);
+  const starting = new Set([...(u.lineupSlots || []).map(s => s.playerId), ...(u.rotation?.order || [])]);
+  return (u.rosterIds || []).map(id => state.players?.[id])
+    .filter(p => p && isAvailable(p) && !starting.has(p.id) && p.group !== PLAYER_GROUP.IL
+              && ['SP', 'RP'].includes(p.pos) === pitchers && computeAge(p.dob, year) <= 25);
+}
+/** The best of them. */
 function _bestFarm(state, pitchers) {
-  return (state.userTeam?.farmIds || []).map(id => state.players?.[id])
-    .filter(p => p && isAvailable(p) && ['SP', 'RP'].includes(p.pos) === pitchers)
-    .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0] || null;
+  return _youngReserves(state, pitchers).sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0] || null;
 }
 
 /** The weakest healthy bench bat (not in the lineup). */
@@ -592,8 +599,7 @@ function _pickActivePlayerByPos(state, pos) {
   return _roster(state).find(p => (p.nativePos || p.pos) === pos) || null;
 }
 function _pickFarm(state, pitchers) {
-  const farm = (state.userTeam?.farmIds || []).map(id => state.players?.[id]).filter(Boolean);
-  return _pick(farm.filter(p => ['SP', 'RP'].includes(p.pos) === pitchers));
+  return _pick(_youngReserves(state, pitchers));
 }
 
 function _setPitcher(values, prefix, p, fallback) {

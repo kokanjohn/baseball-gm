@@ -42,52 +42,45 @@ const offseason = (state) => state.phase === PHASE.OFFSEASON || state.phase === 
 
 /**
  * The terms a free agent signs for with us: the market ask in the offseason
- * (§70), a short in-season deal otherwise (§73). Prospects sign to the farm
- * with a bonus.
+ * (§70), a one-year deal at his situational price in season (§122,
+ * MarketEngine.signingTerms). A young find signs for the minimum with a bonus.
  */
 export function termsFor(state, p) {
-  if (offseason(state)) return { ...(p._ask || marketTerms(state, p)), toFarm: false, bonus: 0 };
+  if (offseason(state)) return { ...(p._ask || marketTerms(state, p)), bonus: 0 };
   return signingTerms(state, p);
 }
 
 /**
- * roomFor(state, p, { farm }) — does the player need someone to go down, and
+ * roomFor(state, p) — does adding the player need someone to make room, and
  * who could? { needsDrop, candidates: [{ player, starter, outcome }] }.
  * Candidates are our active players on his side (pitcher for a pitcher,
- * hitter for a hitter — §76), healthy or not, weakest first. `outcome` says
- * what happens to each: { kind: 'farm' | 'released', waives? } — to the farm,
- * or (farm side full) what that costs.
+ * hitter for a hitter — §76), healthy or not, weakest first. `outcome`:
+ * §122 { kind: 'waivers' } in season (any club may claim him for 72 hours,
+ * then he's a free agent), { kind: 'released' } between seasons (straight to
+ * free agency). Either way his salary leaves our payroll at once.
  */
-export function roomFor(state, p, { toFarm = false } = {}) {
-  if (!p || toFarm) return { needsDrop: false, candidates: [] };
+export function roomFor(state, p) {
+  if (!p) return { needsDrop: false, candidates: [] };
   const needsDrop = offseason(state) ? !hasRoomFor(state, 'user', p) : rosterIsFull(state, 'user', sideOf(p));
   const u = state.userTeam;
   const starters = new Set([...(u.lineupSlots || []).map(s => s.playerId), ...(u.rotation?.order || [])]);
-  const farmSide = (u.farmIds || []).map(id => state.players[id]).filter(x => x && isP(x) === isP(p));
-  const farmFull = farmSide.length >= (isP(p) ? ROSTER_LIMITS.FARM_PITCHER_MAX : ROSTER_LIMITS.FARM_HITTER_MAX);
-  const weakestFarm = farmSide.sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0];
-  // farm: he goes down; released: farm full in the offseason (no waivers run
-  // then — OffseasonEngine.signFreeAgent); waives: farm full in season, so
-  // the farm's weakest on his side goes on waivers (RosterEngine.sendToFarm).
-  const outcome = !farmFull ? { kind: 'farm' }
-    : offseason(state) ? { kind: 'released' }
-    : weakestFarm ? { kind: 'farm', waives: weakestFarm.name } : { kind: 'farm' };
+  const outcome = { kind: offseason(state) ? 'released' : 'waivers' };
   const candidates = (u.rosterIds || []).map(id => state.players[id])
     .filter(x => x && isP(x) === isP(p) && x.group !== PLAYER_GROUP.IL && x.group !== PLAYER_GROUP.IN_TRANSIT)
     .sort((a, b) => (a.ovr || 0) - (b.ovr || 0))
     .map(x => ({ player: x, starter: starters.has(x.id), outcome }));
-  return { needsDrop, candidates, farmFull, weakestFarm: weakestFarm || null };
+  return { needsDrop, candidates };
 }
 
-/** Is `dropId` someone who can go down for `p`? */
+/** Is `dropId` someone who can make room for `p`? */
 function _validDrop(state, p, dropId) {
   return roomFor(state, p).candidates.some(c => c.player.id === dropId);
 }
 
-/** Salary our owner must approve: his salary, less a dropped player's on a minor-league deal (§78). */
+/** Salary our owner must approve: his salary, less the salary of the player making room (§122 it goes with him). */
 function _affords(state, salaryK, dropId) {
   const d = dropId ? state.players[dropId] : null;
-  const outK = d && !d.contractMLB ? (d.contractSalary || 0) : 0;
+  const outK = d ? (d.contractSalary || 0) : 0;   // §122 his salary goes with him
   return Finance.canAddSalary(state, salaryK, outK);
 }
 
@@ -97,10 +90,10 @@ export function signBlocker(state, playerId, dropId = null) {
   if (!p || p.group !== PLAYER_GROUP.FREE_AGENT) return 'not a free agent any more';
   if (POSTSEASON.has(state.phase)) return 'rosters are set for the postseason — signings open again in the offseason';
   const t = termsFor(state, p);
-  const room = roomFor(state, p, { toFarm: !!t.toFarm });
-  if (room.needsDrop && !dropId) return 'choose a player to send down to make room';
-  if (room.needsDrop && !_validDrop(state, p, dropId)) return 'that player can\'t go down to make room';
-  if (!t.toFarm && !_affords(state, t.salary || 0, room.needsDrop ? dropId : null)) return 'ownership won\'t approve the added payroll';
+  const room = roomFor(state, p);
+  if (room.needsDrop && !dropId) return 'choose a player to let go to make room';
+  if (room.needsDrop && !_validDrop(state, p, dropId)) return 'that player can\'t make room';
+  if (!_affords(state, t.salary || 0, room.needsDrop ? dropId : null)) return 'ownership won\'t approve the added payroll';
   if (t.bonus && !Finance.canSpend(state, t.bonus)) return 'club funds can\'t cover the signing bonus';
   return null;
 }
@@ -112,15 +105,16 @@ export function claimBlocker(state, playerId, dropId = null, nowMs = clockNow())
   if (p._waivedBy === 'user') return 'we put this player on waivers';
   if (waiverEndsAt(p) <= nowMs) return 'the claim window has closed';
   const room = roomFor(state, p);
-  if (room.needsDrop && !dropId) return 'choose a player to send down if the claim is awarded';
-  if (room.needsDrop && !_validDrop(state, p, dropId)) return 'that player can\'t go down to make room';
+  if (room.needsDrop && !dropId) return 'choose a player to let go if the claim is awarded';
+  if (room.needsDrop && !_validDrop(state, p, dropId)) return 'that player can\'t make room';
   if (!_affords(state, p.contractSalary || 0, room.needsDrop ? dropId : null)) return 'ownership won\'t approve the added payroll';
   return null;
 }
 
 /**
  * sign(draft, playerId, atMs, dropId) — we sign a free agent. The player we
- * chose goes down first if his side is full. Returns events. Mutates draft.
+ * chose is let go first if his side is full (§122 waivers in season, free
+ * agency between seasons). Returns events. Mutates draft.
  */
 export function sign(draft, playerId, atMs, dropId = null) {
   const p = draft.players[playerId];
@@ -130,7 +124,7 @@ export function sign(draft, playerId, atMs, dropId = null) {
     const r = signFreeAgent(draft, playerId, 'user', atMs, { displaceId: dropId });
     if (r) events.push(...(Array.isArray(r) ? r : [r]));
   } else {
-    events.push(...signToClub(draft, playerId, 'user', atMs, { toFarm: !!t.toFarm, displaceId: dropId, terms: t }));
+    events.push(...signToClub(draft, playerId, 'user', atMs, { displaceId: dropId, terms: t }));
   }
   if (t.bonus) Finance.post(draft.userTeam.finances, -t.bonus, 'bonus', `Signing bonus — ${p.name}`, atMs);
   return events;
@@ -139,7 +133,7 @@ export function sign(draft, playerId, atMs, dropId = null) {
 /**
  * claim(draft, playerId, dropId) — we put in a claim. It's decided when the
  * window closes, in claiming order (TransactionEngine._resolveWaiver); if it's
- * ours, `dropId` goes down to make room then. Mutates draft.
+ * ours, `dropId` is let go to make room then. Mutates draft.
  */
 export function claim(draft, playerId, dropId = null) {
   const p = draft.players[playerId];

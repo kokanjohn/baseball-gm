@@ -37,7 +37,7 @@ import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.j
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
 import { eligibleSlotsFor, reconcileRoster, applyRosterMutation }
   from '../../engine/RosterEngine.js';
-import { getRosterNeeds, rankCallupCandidates } from '../../engine/TransactionEngine.js';
+import { getRosterNeeds, rankPickups } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as Coach from '../../engine/CoachEngine.js';
 
@@ -918,7 +918,6 @@ function _renderFinances(state) {
   const payroll = Finance.payrollOf(state, 'user');
   const target = Finance.seasonTarget(fin);
   const room = Math.max(0, Math.round(Finance.payrollRoom(state)));
-  const dead = Math.round(Finance.deadAhead(state));   // §112.3 still owed to released players
   const stage = fin.owner?.stage || 'content';
   const [stageName, stageText] = _OWNER_STAGE_TEXT[stage] || _OWNER_STAGE_TEXT.content;
   const order = fin.owner?.order;
@@ -969,7 +968,6 @@ function _renderFinances(state) {
       <div class="fin-card">
         <div class="fin-row-head"><span class="fin-label">Payroll</span><span>${formatMoney(payroll)} / ${formatMoney(target)} target</span></div>
         <div class="fin-bar"><div class="${barCls}" style="width:${pct}%"></div></div>
-        ${dead > 0 ? `<div class="fin-sub">Still owed to released players${state.offseason ? ' next season' : ''}: ${formatMoney(dead)} (counts against the room).</div>` : ''}
         <div class="fin-sub">${room > 0 ? `Ownership would approve about ${formatMoney(room)} more in salary right now.` : 'Ownership won\'t approve more salary right now.'}</div>
       </div>
 
@@ -1108,9 +1106,9 @@ function _attachListeners(state) {
       const s     = StateManager.get();
       const need  = getRosterNeeds(s, 'user').needs[Number(el.dataset.need)];
       if (!need) { refresh(); return; }
-      const ranked = rankCallupCandidates(s, 'user', need);
+      const ranked = rankPickups(s, 'user', need);   // §122 stage 3 rebuilds this picker
       if (!ranked.length) {
-        App.showToast('Nobody on the farm fits that spot right now.', 'negative');
+        App.showToast('No free agent fits that spot right now.', 'negative');
         return;
       }
       _openReplacementPicker(

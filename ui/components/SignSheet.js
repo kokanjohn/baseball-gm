@@ -76,7 +76,7 @@ function _render(playerId, kind) {
   // Payroll after the move, against ownership's target (§78).
   const d = _drop ? st.players[_drop] : null;
   const addK = terms.toFarm ? 0 : (terms.salary || 0);
-  const outK = room.needsDrop && d && !d.contractMLB ? (d.contractSalary || 0) : 0;
+  const outK = room.needsDrop && d ? (d.contractSalary || 0) : 0;
   const payroll = Finance.payrollOf(st, 'user') + addK - outK;
   const target = Finance.seasonTarget(st.userTeam.finances) || 0;
 

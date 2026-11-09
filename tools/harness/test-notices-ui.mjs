@@ -28,19 +28,19 @@ const made = await page.evaluate(async (theme) => {
   const RE = await import('/baseball-gm/engine/RosterEngine.js');
   SM.mutate(s => { s.settings.theme = theme; });
   const now = Date.now();
-  // A bench bat leaves; the deadline passed; the manager called up a farm hitter.
+  // A bench bat leaves; the deadline passed; the manager signed a free-agent hitter (§122).
   let picked = null;
   SM.mutate(s => {
     const u = s.userTeam, lineup = u.lineupSlots.map(sl => sl.playerId);
     const out = u.rosterIds.find(x => !['SP', 'RP'].includes(s.players[x].pos) && !lineup.includes(x));
     u.rosterIds = u.rosterIds.filter(x => x !== out);
-    s.players[out].teamId = null; s.players[out].group = 'free_agent';
-    picked = u.farmIds.find(x => !['SP', 'RP'].includes(s.players[x].pos));
-    TE.callUp(s, picked, 'user', now, 'manager');
+    Object.assign(s.players[out], { teamId: null, group: 'freeAgent', tier: 'freeAgent' });
+    s.freeAgentPool = [...(s.freeAgentPool || []), out];
+    picked = TE.managerPick(s, 'user', { side: 'hitter', pos: null }, new Set([out]))?.id;
+    TE.signPickup(s, picked, 'user', now, 'manager');
   });
   CE.syncRosterCards([
     { type: 'MANAGER_FILL', playerIds: [picked], atMs: now, penalty: { ownerTrust: -2, atmosphere: -1 } },
-    { type: 'FARM_SIGNING', teamId: 'user', playerId: SM.get().userTeam.farmIds[0], atMs: now - 40 * 60_000 },
     { type: 'DEV_DONE', teamId: 'user', playerId: SM.get().userTeam.rosterIds[0], planId: 'p1', realized: 3, planned: 2, profile: 'steady', atMs: now - 15 * 60_000 },
   ], now);
   await CE.deliverAllStarMvpCard(SM.get().userTeam.rosterIds[1], now - 5 * 60_000);
@@ -57,8 +57,8 @@ await page.waitForTimeout(500);
 await page.click('#recent-toggle').catch(() => {});
 await page.waitForTimeout(300);
 const recent = await page.evaluate(() => document.getElementById('recent-wrap')?.innerText || '');
-check('Recent carries the minor-league signing, the development result and the MVP',
-      /minor-league deal/.test(recent) && /development plan/.test(recent) && /All-Star Game MVP/.test(recent), recent);
+check('Recent carries the development result and the MVP',
+      /development plan/.test(recent) && /All-Star Game MVP/.test(recent), recent);
 const rw = await page.$('#recent-wrap');
 if (rw) await rw.screenshot({ path: `${out}/notices-recent-${theme}.png` });
 
@@ -66,7 +66,7 @@ if (rw) await rw.screenshot({ path: `${out}/notices-recent-${theme}.png` });
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('decisions'); });
 await page.waitForTimeout(500);
 const list = await page.evaluate(() => [...document.querySelectorAll('.ml-row')].map(r => r.innerText.replace(/\s+/g, ' ')).join(' || '));
-check('the inbox lists the call-up, not the news', /called up/.test(list) && !/minor-league deal|development plan|All-Star Game MVP/.test(list), list);
+check('the inbox lists the call-up, not the news', /called up/.test(list) && !/development plan|All-Star Game MVP/.test(list), list);
 await page.screenshot({ path: `${out}/notices-inbox-${theme}.png` });
 await page.click(`[data-open="${made.card}"]`);
 await page.waitForTimeout(500);

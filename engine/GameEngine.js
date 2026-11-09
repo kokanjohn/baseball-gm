@@ -48,9 +48,6 @@ import {
 
 import {
   checkDepth,
-  autoResolveSpringCuts,
-  applySpringCuts,
-  toggleKeeperTag,
   computePayroll,
   reconcileRoster,
   applyRosterMutation,
@@ -60,7 +57,7 @@ import {
   teamRating, recordRating,
 } from './RosterEngine.js';
 
-import { rosterClock, applyDue, hasDue, callUp, cpuSalaryMove } from './TransactionEngine.js';
+import { rosterClock, applyDue, hasDue, cpuSalaryMove, cpuFreeAgentLook } from './TransactionEngine.js';
 import {
   seedDivision, buildBracket, prepareRound, recordGame, roundComplete, roundSeries,
   roundForPhase, nextRound, seriesGames, ROUND_PHASE, ROUND_LABEL,
@@ -114,6 +111,7 @@ import {
   PLAYOFF_WORLD_SERIES_BEST_OF,
   REGULAR_SEASON_GAME_COUNT,
   SPRING_TRAINING_GAME_COUNT,
+  FA_CPU_LOOK_HOUR,
   ALL_STAR_BREAK_AFTER_GAME,
   ALLSTAR_SELECTION_AFTER_GAME,
   ALLSTAR_POST_GLOW_GAMES,
@@ -193,139 +191,6 @@ export function getLiveTimeScale() {
 // SPRING TRAINING INVITEES
 // ─────────────────────────────────────────────────────────────
 
-/**
- * _addSpringInvitees(s)
- * Moves the top farm players into the spring roster as invitees.
- * Called at startNewGame (season 1) and at advancePhase(SPRING_TRAINING)
- * for subsequent seasons.
- *
- * Selection is position-scarcity aware:
- *   - For each position slot (C, 1B, 2B, 3B, SS, OF×3, DH, SP, RP),
- *     count how many current active+bench roster players cover it.
- *   - Rank farm players by (scarcity of their position DESC, OVR DESC).
- *   - Pick top 5 hitters and top 5 pitchers from the result.
- *
- * Mutates `s` directly (called inside StateManager.mutate).
- */
-function _addSpringInvitees(s) {
-  const players  = s.players;
-  const farmIds  = s.userTeam.farmIds || [];
-  if (!farmIds.length) return;
-
-  // Build coverage map: how many current roster players cover each slot
-  const rosterIds  = s.userTeam.rosterIds || [];
-  const coverage   = {
-    C:0, '1B':0, '2B':0, '3B':0, SS:0,
-    OF:0, OF2:0, OF3:0, DH:0, SP:0, RP:0,
-  };
-
-  // Eligible slots per player (mirrors _eligibleSlots in TeamScreen)
-  const _slots = (p) => {
-    const nat = p.nativePos || p.pos;
-    if (nat === 'C')      return ['C','DH'];
-    if (nat === '1B')     return ['1B','DH'];
-    if (nat === '2B')     return ['2B','DH'];
-    if (nat === '3B')     return ['3B','DH'];
-    if (nat === 'SS')     return ['SS','DH'];
-    if (nat === 'OF')     return ['OF','DH'];
-    if (nat === 'DH/OF')  return ['OF','DH'];
-    if (nat === '2B/SS')  return ['2B','SS','DH'];
-    if (nat === '1B/3B')  return ['1B','3B','DH'];
-    if (nat === 'SS/OF')  return ['SS','OF','DH'];
-    if (nat === '1B/OF')  return ['1B','OF','DH'];
-    if (nat && nat.includes('/')) return [...new Set([...nat.split('/'),'DH'])];
-    return [nat, 'DH'];
-  };
-
-  // Count coverage for each slot (treat OF as 3 separate slots)
-  let ofCount = 0;
-  for (const id of rosterIds) {
-    const p = players[id];
-    if (!p || ['SP','RP'].includes(p.pos)) continue;
-    const slots = _slots(p);
-    for (const slot of slots) {
-      if (slot === 'OF') {
-        ofCount++;
-      } else if (coverage[slot] !== undefined) {
-        coverage[slot]++;
-      }
-    }
-  }
-  // Distribute OF count across the 3 OF slots
-  coverage['OF']  = Math.min(ofCount, 1);
-  coverage['OF2'] = Math.min(Math.max(ofCount - 1, 0), 1);
-  coverage['OF3'] = Math.min(Math.max(ofCount - 2, 0), 1);
-
-  // Count SP/RP coverage from roster
-  for (const id of rosterIds) {
-    const p = players[id];
-    if (!p) continue;
-    if (p.pos === 'SP') coverage['SP']++;
-    if (p.pos === 'RP') coverage['RP']++;
-  }
-
-  // Score a farm player by the scarcity of their position(s)
-  // Lower coverage = higher scarcity = higher priority
-  const scarcityScore = (p) => {
-    const slots = _slots(p);
-    // Use the minimum coverage among their eligible slots as their scarcity
-    const minCov = Math.min(...slots.map(s => {
-      if (s === 'OF') return (coverage['OF'] + coverage['OF2'] + coverage['OF3']) / 3;
-      return coverage[s] ?? 99;
-    }));
-    return -minCov; // higher score = more scarce
-  };
-
-  const farmPlayers = farmIds.map(id => players[id]).filter(Boolean);
-
-  // Split into hitters and pitchers
-  const farmHitters = farmPlayers
-    .filter(p => !['SP','RP'].includes(p.pos))
-    .sort((a, b) => {
-      const sd = scarcityScore(b) - scarcityScore(a);
-      return sd !== 0 ? sd : b.ovr - a.ovr;
-    });
-
-  const farmPitchers = farmPlayers
-    .filter(p => ['SP','RP'].includes(p.pos))
-    .sort((a, b) => {
-      const sd = scarcityScore(b) - scarcityScore(a);
-      return sd !== 0 ? sd : b.ovr - a.ovr;
-    });
-
-  // §114 camp holds 38: invitees fill what's left of it (a club that ends the
-  // winter with more than 28 — a player back from the IL — invites fewer).
-  const room = Math.max(0, ROSTER_LIMITS.SPRING_TOTAL - rosterIds.length);
-  const hitRoom = Math.min(ROSTER_LIMITS.SPRING_INVITEE_HITTERS, Math.ceil(room / 2));
-  const inviteeHitters  = farmHitters.slice(0, hitRoom);
-  const inviteePitchers = farmPitchers.slice(0, Math.min(ROSTER_LIMITS.SPRING_INVITEE_PITCHERS, room - inviteeHitters.length));
-  const allInvitees     = [...inviteeHitters, ...inviteePitchers];
-
-  if (!allInvitees.length) return;
-
-  // Move invitees from farmIds → rosterIds, set flags and active group
-  const inviteeIds = allInvitees.map(p => p.id);
-  s.userTeam.farmIds   = farmIds.filter(id => !inviteeIds.includes(id));
-  s.userTeam.rosterIds = [...rosterIds, ...inviteeIds];
-
-  for (const p of allInvitees) {
-    const isPitcher = ['SP','RP'].includes(p.pos);
-    players[p.id] = {
-      ...p,
-      group:            isPitcher ? PLAYER_GROUP.PITCHER_BENCH : PLAYER_GROUP.BENCH_HITTERS,
-      _isSpringInvitee: true,
-      _isKeeper:        false,
-    };
-  }
-
-  // Default: tag all existing regular roster players as keepers
-  for (const id of rosterIds) {
-    if (players[id] && !players[id]._isSpringInvitee) {
-      players[id] = { ...players[id], _isKeeper: true };
-    }
-  }
-}
-
 // ─────────────────────────────────────────────────────────────
 // LINEUP SLOT MIGRATION
 // ─────────────────────────────────────────────────────────────
@@ -404,7 +269,7 @@ export async function startNewGame(config) {
     bannerColor: config.bannerColor,
   });
 
-  // Build the full league — all 10 teams, all rosters, farm systems
+  // Build the full league — all 10 teams' rosters and the opening free-agent pool (§122)
   const state    = StateManager.get();
   const uuidFn   = () => crypto.randomUUID();
   // The league's year (§70): fixed now, advanced one per season.
@@ -447,8 +312,8 @@ export async function startNewGame(config) {
 
     // User team
     s.userTeam.rosterIds   = league.rosterIds;
-    s.userTeam.farmIds     = league.farmIds;
     s.userTeam.lineupSlots = league.lineupSlots;
+    s.freeAgentPool        = league.freeAgentIds;   // §122 anyone can sign them
     s.leagueTalentOffset   = league.leagueOffset ?? 0;   // §69 — league talent level
     s.baseYear             = baseYear;                   // §70 — the league's year for season 1
     s.userTeam.finances.payroll = league.payroll;
@@ -470,15 +335,6 @@ export async function startNewGame(config) {
 
     // League teams
     s.leagueTeams = league.leagueTeams;
-
-    // §78: everyone on a club's active roster now is on a major-league deal
-    // (paid wherever he is); the farm and the spring invitees are not.
-    for (const t of [s.userTeam, ...s.leagueTeams]) {
-      for (const id of t.rosterIds || []) if (s.players[id]) s.players[id].contractMLB = true;
-    }
-
-    // Add spring training invitees
-    _addSpringInvitees(s);
 
     // Generate coaching staff names from the staff name pool.
     // Names are drawn sequentially without replacement for this franchise.
@@ -1266,34 +1122,8 @@ function _applyPhase(newPhase) {
   });
 
   switch (newPhase) {
-    case PHASE.SPRING_TRAINING:
-      // Add spring invitees from farm — fires each season (not just season 1)
-      StateManager.mutate(s => {
-        _addSpringInvitees(s);
-        settleRoster(s, 'user');   // §112.6 an invitee can take an open rotation turn or lineup spot
-      });
-      break;
-
-    case PHASE.REGULAR_SEASON: {
-      // Opening Day only (§65): the regular season is re-entered after the
-      // trade deadline and must not re-run spring cuts. Cuts count the ACTIVE
-      // roster — players on the IL keep their 40-man spot, not a 28-man one.
-      // applySpringCuts reads _isKeeper flags directly; autoResolveSpringCuts
-      // handles the case where none are tagged.
-      if (fromPhase !== PHASE.SPRING_TRAINING) break;
-      const preState = StateManager.get();
-      const activeIds = preState.userTeam.rosterIds.filter(id => preState.players[id]?.group !== PLAYER_GROUP.IL);
-      if (activeIds.length + pendingArrivals(preState, 'user').length > ROSTER_LIMITS.ACTIVE_TOTAL) {
-        const anyTagged = preState.userTeam.rosterIds.some(
-          id => preState.players[id]?._isKeeper
-        );
-        const cutMutations = anyTagged
-          ? applySpringCuts(preState)
-          : autoResolveSpringCuts(preState);
-        StateManager.mutate(s => _applyMutations(s, cutMutations));
-      }
-      break;
-    }
+    // §122 spring is the 28 (no camp invitees, no cut-down): a club short of
+    // 28 fills it from the free agents through the roster clock like any time.
 
     case PHASE.ALL_STAR_BREAK:
       // Activity feed entry
@@ -1706,7 +1536,6 @@ export function buildCardContext() {
 
     // Roster
     rosterIds:          userTeam.rosterIds,
-    farmIds:            userTeam.farmIds || [],
     depthIssues:        checkDepth(state),
     ilReturnQueue:      state.ilReturnQueue || [],
 
@@ -1902,6 +1731,22 @@ function _ensureWeatherPlans(clockMs) {
  * likely during the game, the manager asks about the starter: the one in turn
  * as planned, or hold that pitcher a day and start the next one who's rested.
  */
+/**
+ * _nextFaLook(st, uptoMs) — §122 the next daily moment (FA_CPU_LOOK_HOUR,
+ * local) after the last look, by `uptoMs`, while clubs sign players (spring
+ * and the regular season — postseason rosters are set; the offseason has its
+ * own free-agency days). The first look counts from when the clock first runs.
+ */
+const _FA_LOOK_PHASES = new Set([PHASE.SPRING_TRAINING, PHASE.REGULAR_SEASON, PHASE.ALL_STAR_BREAK, PHASE.TRADE_DEADLINE]);
+function _nextFaLook(st, uptoMs) {
+  if (!_FA_LOOK_PHASES.has(st.phase) || st.faLookAt == null) return null;
+  const d = new Date(st.faLookAt);
+  d.setHours(FA_CPU_LOOK_HOUR, 0, 0, 0);
+  let t = d.getTime();
+  if (t <= st.faLookAt) { d.setDate(d.getDate() + 1); d.setHours(FA_CPU_LOOK_HOUR, 0, 0, 0); t = d.getTime(); }
+  return t <= uptoMs ? t : null;
+}
+
 /** r139 §121 when the manager next asks about rain (first pitch minus the lead), if by `uptoMs`. */
 function _wxNextAsk(st, uptoMs) {
   const sched = st.schedule || [];
@@ -2400,7 +2245,7 @@ function _payday(i, atMs) {
     s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
       buildActivityFeedEntry('payday', s.userTeam.abbr,
         `Payday: ${formatK(res.paid.payroll)} in salaries${res.paid.staff ? `, ${formatK(res.paid.staff)} staff` : ''}`
-        + `${res.paid.dead ? `, ${formatK(res.paid.dead)} dead money` : ''} · `
+        + ` · `
         + `${formatK(res.received.media + res.received.local)} media & sponsors (${sign}${formatK(Math.abs(res.total))})`, atMs)]);
     // The owner orders cuts: name the contract to move, due the next payday.
     if (review.stage === 'cuts' && !s.userTeam.finances.owner.order) {
@@ -2888,6 +2733,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
   // r139 a save from before r139 has no roster-step mark: its roster clock counts from now on
   // (rather than replaying every due moment since the save began as a new event).
   if (state.rosterStepAt == null) StateManager.mutate(s => { s.rosterStepAt = clockMs; });
+  if (state.faLookAt == null) StateManager.mutate(s => { s.faLookAt = clockMs; });   // §122 daily looks count from here
   let overdueRun = false;
   for (let guard = 0; guard < 12000; guard++) {
     _ensureWeatherPlans(clockMs);   // §102.3 every game's weather, a few hours ahead
@@ -2904,7 +2750,10 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     // asked only if the app happened to be open then; reopened later, "too late to ask").
     const askAt = _wxNextAsk(st, clockMs);
     const ask = askAt != null ? { kind: 'wxask', at: askAt } : null;
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask].filter(Boolean);
+    // §122 each day, the CPU clubs look at the free agents.
+    const lookAt = _nextFaLook(st, clockMs);
+    const look = lookAt != null ? { kind: 'falook', at: lookAt } : null;
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, look].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     // r139 §121 the cards due by this moment arrive before it (a card the event withdraws, after it, never does).
@@ -2925,6 +2774,9 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'desk') events.push(..._runTradeDesk(next.at));
     else if (next.kind === 'roster') { /* the roster step above was the event */ }
     else if (next.kind === 'wxask') _wxUserCards(next.at);
+    else if (next.kind === 'falook') {
+      StateManager.mutate(s => { s.faLookAt = next.at; events.push(...cpuFreeAgentLook(s, next.at)); });
+    }
     else events.push(..._runOffseasonStep(next.step, next.at));
     events.push(..._seasonProgress(next.at));
     });
@@ -3048,6 +2900,17 @@ function _runOffseasonStep(step, atMs) {
   }
 
   if (/^day([5-9]|10)$/.test(step)) {
+    // §122 free agency opens with this year's class: the only time new players join the league.
+    if (step === 'day5') {
+      StateManager.mutate(s => {
+        const ev = Offseason.newFreeAgentClass(s, atMs)[0];
+        const n = ev?.playerIds?.length || 0;
+        if (!n) return;
+        const line = `Free agency opens — this year's class: ${n} new players join the market`;
+        s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('milestone', 'LEAGUE', line, atMs)]);
+        _wireAdd(s, [{ atMs, kind: 'signing', teamIds: [], text: line }]);
+      });
+    }
     _cpuFreeAgencyRound(atMs);
     // §112.5 the winter meetings (days 6–7): every club in one hotel — the
     // trade desk opens twice a day, busier, with more calls to us; Pro
@@ -3333,25 +3196,6 @@ function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
     changed: expired > 0 || applied.changed || cards.delivered > 0 || cards.withdrawn > 0,
     events:  applied.events,
   };
-}
-
-/**
- * gmCallUp(playerId, nowMs)
- * The GM calls a farm player up (Team screen dashed spot or farm row). Same
- * ledger path as an inbox call-up: he reports the next calendar day, and the
- * roster clock withdraws whatever inbox card was asking for that spot.
- * @returns {{ ok: Boolean, error?: String, tx?: Object }}
- */
-export function gmCallUp(playerId, nowMs = clockNow()) {
-  let res = { ok: false, error: 'No team loaded.' };
-  if (!StateManager.get()?.userTeam) return res;
-  StateManager.mutate(s => { res = callUp(s, playerId, 'user', nowMs, 'gm'); });
-  if (res.ok) {
-    const rec = reconcileRoster(StateManager.get(), 'user');
-    StateManager.mutate(s => applyRosterMutation(s, rec));
-    advanceClock(nowMs);
-  }
-  return res;
 }
 
 /**

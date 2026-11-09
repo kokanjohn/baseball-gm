@@ -4,8 +4,10 @@
  *
  * Responsibilities:
  *   - Initialize the name registry (shuffle pool, assign draws)
- *   - Generate all 9 CPU team rosters (active + farm)
+ *   - Generate all 9 CPU team rosters (28 each)
  *   - Generate the user team roster per archetype parameters
+ *   - §122 Generate the opening free-agent pool (~200 players nobody has
+ *     signed: veterans, depth, young players with upside) — there is no farm
  *   - Apply archetype GM relationship adjustments
  *   - Enforce payroll cap at generation time (proportional salary compression)
  *
@@ -13,8 +15,7 @@
  *   - Pure functions. No state reads or writes. Caller (GameEngine) applies results.
  *   - All UUIDs generated here via the uuid param function — callers supply
  *     crypto.randomUUID so this module stays testable without the Web Crypto API.
- *   - Farm players draw from PLAYER_NAME_POOL (same pool as active players).
- *     No separate farm name pools.
+ *   - Free agents draw from PLAYER_NAME_POOL (same pool as active players).
  */
 
 import { PLAYER_SURNAMES } from '../data/player-names.js';
@@ -31,6 +32,7 @@ import {
   GM_RELATIONSHIP_DEFAULT,
   SUB_RATING_MIN,
   SUB_RATING_MAX,
+  MARKET_KINDS,
 } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -107,8 +109,15 @@ const SP_COUNT                 = 5;
 const BP_COUNT                 = 5;   // active bullpen (locked: 5 RP)
 const PITCHER_BENCH_SP_COUNT   = 2;   // SP bench slots
 const PITCHER_BENCH_RP_COUNT   = 2;   // RP bench slots
-const FARM_HITTER_POSITIONS    = ['C','1B','2B/SS','1B/3B','SS','OF','OF','OF','2B','3B'];
-const FARM_PITCHER_COUNT       = 10;  // 10 hitters + 10 pitchers = 20 farm per team
+// §122 the opening free-agent pool (200): who's left unsigned when the league begins.
+// Kinds (MarketEngine.MARKET_KINDS: OVR relative to the league level, ages):
+// veterans who can still help, depth, young players with upside, independent-league finds.
+const FA_POOL_MIX = Object.freeze([
+  { kind: 'veteran', n: 40 }, { kind: 'depth', n: 100 }, { kind: 'prospect', n: 40 }, { kind: 'indie', n: 20 },
+]);
+const FA_HITTER_POSITIONS = ['C','C','1B','2B','3B','SS','OF','OF','OF','2B/SS','1B/3B'];   // cycled for hitters
+const FA_HITTER_SHARE     = 0.55;
+const FA_SP_SHARE         = 0.45;   // of the pitchers
 
 const SP_HANDS = ['R','R','R','L','R'];
 const BP_HANDS = ['R','R','L','R','R'];  // 5 bullpen arms
@@ -124,11 +133,11 @@ const BP_HANDS = ['R','R','L','R','R'];  // 5 bullpen arms
  * Allocation:
  *   [0–27]    → user team (28: 9 starters + 5 bench + 5 SP + 5 RP + 2 SP bench + 2 RP bench)
  *   [28–279]  → 9 CPU teams × 28 = 252 (same composition)
- *   [280–479] → 10 farm systems × 20 = 200
+ *   [280–479] → the opening free-agent pool (200)
  *   [480–615] → card/acquisition reserve (136)
  *   [616+]    → mid-season reserve
  *
- * @returns {{ userNames, cpuNames, farmNames, reserveNames }}
+ * @returns {{ userNames, cpuNames, faNames, reserveNames }}
  */
 export function initNameRegistry() {
   const shuffled = [...PLAYER_SURNAMES];   // §82: every surname distinct — no repeats in a new league
@@ -137,7 +146,7 @@ export function initNameRegistry() {
   return {
     userNames:    shuffled.slice(0,   28),
     cpuNames:     shuffled.slice(28,  280),
-    farmNames:    shuffled.slice(280, 480),
+    faNames:      shuffled.slice(280, 480),
     reserveNames: shuffled.slice(480),
   };
 }
@@ -147,34 +156,29 @@ export function initNameRegistry() {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn)
- * Generates all 9 CPU team rosters (active + farm) and returns:
+ * buildLeagueRosters(cpuNames, seasonNum, uuidFn)
+ * Generates all 9 CPU team rosters (28 each) and returns:
  *   - players: Object — { [playerId]: PlayerObject } for all CPU players
  *   - leagueTeams: LeagueTeamObject[] — team metadata with rosterIds
  *
  * @param {String[]} cpuNames    — 252 names (28 per team)
- * @param {String[]} farmNames   — 200 names (20 per team, first 90 used for CPU farm = 9×10 hitters+10 pitchers)
  * @param {Number}   seasonNum
  * @param {Function} uuidFn      — () => String UUID
  * @returns {{ players: Object, leagueTeams: Object[] }}
  */
-export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamDefs, leagueOffset = 0, seasonYear = new Date().getFullYear()) {
+export function buildLeagueRosters(cpuNames, seasonNum, uuidFn, teamDefs, leagueOffset = 0, seasonYear = new Date().getFullYear()) {
   const teamsToUse = teamDefs || LEAGUE_TEAMS;
   const players    = {};
   const leagueTeams = [];
 
   let cpuNameIdx  = 0;
-  let farmNameIdx = 0;
 
   for (const teamDef of teamsToUse) {
     const teamNames = cpuNames.slice(cpuNameIdx, cpuNameIdx + 28);
     cpuNameIdx += 28;
 
-    const teamFarmNames = farmNames.slice(farmNameIdx, farmNameIdx + 20);
-    farmNameIdx += 20;
-
-    const { rosterIds, farmIds, lineupSlots } = _buildCPURoster(
-      teamDef, teamNames, teamFarmNames, seasonNum, uuidFn, players, leagueOffset, seasonYear
+    const { rosterIds, lineupSlots } = _buildCPURoster(
+      teamDef, teamNames, seasonNum, uuidFn, players, leagueOffset, seasonYear
     );
 
     // Build initial rotation order from SP playerIds
@@ -194,7 +198,6 @@ export function buildLeagueRosters(cpuNames, farmNames, seasonNum, uuidFn, teamD
       ties:       0,
       streak:     0,
       rosterIds,
-      farmIds,
       lineupSlots,
       gmRelationship: GM_RELATIONSHIP_DEFAULT,
       rotation: {
@@ -225,14 +228,13 @@ function _spreadTargets(n, min, max) {
   return out;
 }
 
-function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playersOut, leagueOffset = 0, seasonYear = new Date().getFullYear()) {
+function _buildCPURoster(teamDef, teamNames, seasonNum, uuidFn, playersOut, leagueOffset = 0, seasonYear = new Date().getFullYear()) {
   const str      = teamDef.str;
   // League talent is set relative to the user's archetype (§69): `str` keeps
   // each club's place in the pecking order (compressed into a realistic band),
   // the offset sets how good the league is around the user.
   const baseOvr  = Math.round(CPU_STR_CENTER * 100 + (str - CPU_STR_CENTER) * 100 * CPU_STR_SPREAD) + leagueOffset;
   const rosterIds = [];
-  const farmIds   = [];
   let ni = 0;
 
   const _make = (name, pos, group, hand, ovrMin, ovrMax, ageMin, ageMax) => {
@@ -296,24 +298,8 @@ function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playe
     rosterIds.push(_make(teamNames[ni++], 'RP', PLAYER_GROUP.PITCHER_BENCH, Math.random() < 0.75 ? 'R' : 'L', pbOvrMin, pbOvrMax, 22, 34));
   }
 
-  // Farm hitters
-  const fhOvrMin = clamp(baseOvr - 22, SUB_RATING_MIN, SUB_RATING_MAX);
-  const fhOvrMax = clamp(baseOvr - 5,  SUB_RATING_MIN, SUB_RATING_MAX);
-  for (let i = 0; i < FARM_HITTER_POSITIONS.length; i++) {
-    farmIds.push(_make(farmNames[i], FARM_HITTER_POSITIONS[i], PLAYER_GROUP.PRACTICE_SQUAD, null, fhOvrMin, fhOvrMax, 21, 26));
-  }
-
-  // Farm pitchers
-  const fpOvrMin = clamp(baseOvr - 22, SUB_RATING_MIN, SUB_RATING_MAX);
-  const fpOvrMax = clamp(baseOvr - 5,  SUB_RATING_MIN, SUB_RATING_MAX);
-  for (let i = 0; i < FARM_PITCHER_COUNT; i++) {
-    const hand = Math.random() < 0.75 ? 'R' : 'L';
-    const pos  = i < 4 ? 'SP' : 'RP';
-    farmIds.push(_make(farmNames[FARM_HITTER_POSITIONS.length + i], pos, PLAYER_GROUP.PRACTICE_SQUAD, hand, fpOvrMin, fpOvrMax, 21, 26));
-  }
-
   const lineupSlots = _buildLineupSlots(activeHitterIds, playersOut);
-  return { rosterIds, farmIds, lineupSlots };
+  return { rosterIds, lineupSlots };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -321,17 +307,16 @@ function _buildCPURoster(teamDef, teamNames, farmNames, seasonNum, uuidFn, playe
 // ─────────────────────────────────────────────────────────────
 
 /**
- * buildUserRoster(archetypeId, userNames, farmNames, seasonNum, uuidFn)
- * Generates the user team's active roster and farm system per archetype parameters.
+ * buildUserRoster(archetypeId, userNames, seasonNum, uuidFn)
+ * Generates the user team's 28-man roster per archetype parameters.
  * Enforces payroll cap: if total salary exceeds payrollCap, salaries are compressed
  * proportionally. This is a generation constraint, not a runtime patch.
  *
  * @param {String}   archetypeId
  * @param {String[]} userNames    — 28 names for active roster
- * @param {String[]} farmNames    — 20 names for farm system
  * @param {Number}   seasonNum
  * @param {Function} uuidFn
- * @returns {{ players: Object, rosterIds: String[], farmIds: String[], payroll: Number }}
+ * @returns {{ players: Object, rosterIds: String[], payroll: Number }}
  */
 
 // ─────────────────────────────────────────────────────────────
@@ -372,19 +357,18 @@ function _buildLineupSlots(activeHitterIds, players) {
   return slots;
 }
 
-export function buildUserRoster(archetypeId, userNames, farmNames, seasonNum, uuidFn, seasonYear = new Date().getFullYear()) {
+export function buildUserRoster(archetypeId, userNames, seasonNum, uuidFn, seasonYear = new Date().getFullYear()) {
   const arch     = ARCHETYPE[archetypeId];
   if (!arch) throw new Error(`buildUserRoster: unknown archetype '${archetypeId}'`);
 
   const players   = {};
   const rosterIds = [];
-  const farmIds   = [];
 
   const ovrMin = arch.starterOvrMin;
   const ovrMax = arch.starterOvrMax;
 
   // Age skew per archetype
-  const { hitterAgeMin, hitterAgeMax, pitcherAgeMin, pitcherAgeMax, farmAgeMin, farmAgeMax }
+  const { hitterAgeMin, hitterAgeMax, pitcherAgeMin, pitcherAgeMax }
     = _archetypeAgeRanges(archetypeId);
 
   let ni = 0;
@@ -447,21 +431,9 @@ export function buildUserRoster(archetypeId, userNames, farmNames, seasonNum, uu
     rosterIds.push(_make(userNames[ni++], 'RP', PLAYER_GROUP.PITCHER_BENCH, Math.random() < 0.75 ? 'R' : 'L', pbOvrMin, pbOvrMax, pitcherAgeMin, pitcherAgeMax + 2, cLen));
   }
 
-  // Farm — always younger, always shorter deals
-  for (let i = 0; i < FARM_HITTER_POSITIONS.length; i++) {
-    farmIds.push(_make(farmNames[i], FARM_HITTER_POSITIONS[i], PLAYER_GROUP.PRACTICE_SQUAD, null,
-      SUB_RATING_MIN, Math.max(ovrMin - 8, SUB_RATING_MIN), farmAgeMin, farmAgeMax));
-  }
-  for (let i = 0; i < FARM_PITCHER_COUNT; i++) {
-    const hand = Math.random() < 0.75 ? 'R' : 'L';
-    const pos  = i < 4 ? 'SP' : 'RP';
-    farmIds.push(_make(farmNames[FARM_HITTER_POSITIONS.length + i], pos, PLAYER_GROUP.PRACTICE_SQUAD, hand,
-      SUB_RATING_MIN, Math.max(ovrMin - 8, SUB_RATING_MIN), farmAgeMin, farmAgeMax));
-  }
-
   // Enforce payroll cap: compress salaries proportionally if needed
   const payrollCap = arch.payrollCap;
-  const activeIds  = rosterIds; // farm doesn't count against payroll cap at generation
+  const activeIds  = rosterIds;
   let totalPayroll = activeIds.reduce((sum, id) => sum + players[id].contractSalary, 0);
 
   if (totalPayroll > payrollCap) {
@@ -475,7 +447,7 @@ export function buildUserRoster(archetypeId, userNames, farmNames, seasonNum, uu
   // Build lineupSlots from the 9 active hitter IDs
   const lineupSlots = _buildLineupSlots(activeHitterIds, players);
 
-  return { players, rosterIds, farmIds, payroll: totalPayroll, lineupSlots };
+  return { players, rosterIds, payroll: totalPayroll, lineupSlots };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -562,16 +534,12 @@ export function applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams) {
  *   players:    Object,        // all players keyed by id
  *   leagueTeams: Object[],
  *   rosterIds:  String[],      // user team active roster
- *   farmIds:    String[],      // user team farm
+ *   freeAgentIds: String[],    // §122 the opening free-agent pool
  *   payroll:    Number,
  * }}
  */
 export function buildFullLeague({ archetypeId, seasonNum, seasonYear = new Date().getFullYear(), uuidFn, userTeam, region, leagueOffsetOverride = null }) {
-  const { userNames, cpuNames, farmNames } = initNameRegistry();
-
-  // Split farmNames: first 180 for CPU teams (9×20), next 20 for user team
-  const cpuFarmNames  = farmNames.slice(0, 180);
-  const userFarmNames = farmNames.slice(180, 200);
+  const { userNames, cpuNames, faNames } = initNameRegistry();
 
   // Select team set for this region — falls back to north if unknown
   const regionTeams = LEAGUE_TEAMS_BY_REGION[region] || LEAGUE_TEAMS_BY_REGION.north;
@@ -583,22 +551,60 @@ export function buildFullLeague({ archetypeId, seasonNum, seasonYear = new Date(
     ? leagueOffsetOverride
     : (LEAGUE_TALENT_OFFSET_BY_ARCHETYPE[archetypeId] ?? 0);
   const { players: cpuPlayers, leagueTeams } = buildLeagueRosters(
-    cpuNames, cpuFarmNames, seasonNum, uuidFn, regionTeams, leagueOffset, seasonYear
+    cpuNames, seasonNum, uuidFn, regionTeams, leagueOffset, seasonYear
   );
 
   // Build user roster
-  const { players: userPlayers, rosterIds, farmIds, payroll, lineupSlots } = buildUserRoster(
-    archetypeId, userNames, userFarmNames, seasonNum, uuidFn, seasonYear
+  const { players: userPlayers, rosterIds, payroll, lineupSlots } = buildUserRoster(
+    archetypeId, userNames, seasonNum, uuidFn, seasonYear
   );
 
+  // §122 the opening free-agent pool
+  const { players: faPlayers, freeAgentIds } = buildFreeAgentPool(faNames, seasonNum, uuidFn, leagueOffset, seasonYear);
+
   // Merge all players into one registry
-  const players = { ...cpuPlayers, ...userPlayers };
+  const players = { ...cpuPlayers, ...userPlayers, ...faPlayers };
 
   // Apply archetype values to userTeam object
   applyArchetypeToUserTeam(userTeam, archetypeId, leagueTeams);
   userTeam.finances.payroll = payroll;
 
-  return { players, leagueTeams, rosterIds, farmIds, payroll, lineupSlots, leagueOffset };
+  return { players, leagueTeams, rosterIds, freeAgentIds, payroll, lineupSlots, leagueOffset };
+}
+
+/**
+ * buildFreeAgentPool(names, seasonNum, uuidFn, leagueOffset, seasonYear)
+ * §122 The players nobody signed before the league began: the free agents any
+ * club can sign (FA_POOL_MIX — veterans, depth, young players with upside,
+ * independent-league finds; hitters at every position, starters and relievers).
+ * This is the only time players appear in season: from here on the pool
+ * changes through clubs dropping and signing players, and new players arrive
+ * with the offseason's free-agent class (OffseasonEngine).
+ * @returns {{ players: Object, freeAgentIds: String[] }}
+ */
+export function buildFreeAgentPool(names, seasonNum, uuidFn, leagueOffset = 0, seasonYear = new Date().getFullYear()) {
+  const players = {}, freeAgentIds = [];
+  let ni = 0, hi = 0, pi = 0;
+  for (const { kind, n } of FA_POOL_MIX) {
+    const prof = MARKET_KINDS[kind];
+    for (let k = 0; k < n && ni < names.length; k++) {
+      const hitter = Math.random() < FA_HITTER_SHARE;
+      const pos = hitter ? FA_HITTER_POSITIONS[hi++ % FA_HITTER_POSITIONS.length] : (pi++ % 100 < FA_SP_SHARE * 100 ? 'SP' : 'RP');
+      const id = uuidFn();
+      const p = createPlayer({
+        id, name: names[ni++], pos, group: PLAYER_GROUP.FREE_AGENT,
+        hand: hitter ? null : (Math.random() < 0.72 ? 'R' : 'L'),
+        targetOvr: leagueOffset + _rng(prof.ovrMin, prof.ovrMax),
+        ageMin: prof.ageMin, ageMax: prof.ageMax,
+        seasonNum, seasonYear, contractLengthOverride: 1, teamId: null, leagueLevel: leagueOffset,
+        rand: Math.random,   // §118 league setup happens once and is never replayed
+      });
+      Object.assign(p, { tier: 'freeAgent', _faFrom: null, _faSince: null, _faReason: 'pool', _marketKind: kind });
+      players[id] = p;
+      freeAgentIds.push(id);
+    }
+  }
+  return { players, freeAgentIds };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -607,12 +613,12 @@ export function buildFullLeague({ archetypeId, seasonNum, seasonYear = new Date(
 
 function _archetypeAgeRanges(archetypeId) {
   const ranges = {
-    ember:       { hitterAgeMin:22, hitterAgeMax:27, pitcherAgeMin:22, pitcherAgeMax:28, farmAgeMin:20, farmAgeMax:24 },
-    contender:   { hitterAgeMin:24, hitterAgeMax:32, pitcherAgeMin:24, pitcherAgeMax:32, farmAgeMin:21, farmAgeMax:25 },
-    empire:      { hitterAgeMin:28, hitterAgeMax:35, pitcherAgeMin:27, pitcherAgeMax:35, farmAgeMin:22, farmAgeMax:26 },
-    gambler:     { hitterAgeMin:23, hitterAgeMax:34, pitcherAgeMin:23, pitcherAgeMax:34, farmAgeMin:21, farmAgeMax:26 },
-    lab:         { hitterAgeMin:22, hitterAgeMax:29, pitcherAgeMin:22, pitcherAgeMax:29, farmAgeMin:20, farmAgeMax:24 },
-    institution: { hitterAgeMin:27, hitterAgeMax:34, pitcherAgeMin:27, pitcherAgeMax:34, farmAgeMin:22, farmAgeMax:26 },
+    ember:       { hitterAgeMin:22, hitterAgeMax:27, pitcherAgeMin:22, pitcherAgeMax:28 },
+    contender:   { hitterAgeMin:24, hitterAgeMax:32, pitcherAgeMin:24, pitcherAgeMax:32 },
+    empire:      { hitterAgeMin:28, hitterAgeMax:35, pitcherAgeMin:27, pitcherAgeMax:35 },
+    gambler:     { hitterAgeMin:23, hitterAgeMax:34, pitcherAgeMin:23, pitcherAgeMax:34 },
+    lab:         { hitterAgeMin:22, hitterAgeMax:29, pitcherAgeMin:22, pitcherAgeMax:29 },
+    institution: { hitterAgeMin:27, hitterAgeMax:34, pitcherAgeMin:27, pitcherAgeMax:34 },
   };
   return ranges[archetypeId] || ranges.contender;
 }

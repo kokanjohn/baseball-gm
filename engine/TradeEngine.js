@@ -555,7 +555,7 @@ function _holeCost(p, state, teamId) {
   const t = _club(state, teamId);
   if (!t) return 0;
   const score = (ovr) => _ovrScore(ovr, state);
-  const org = [...(t.rosterIds || []), ...(t.farmIds || [])].map(id => state.players[id])
+  const org = (t.rosterIds || []).map(id => state.players[id])
     .filter(x => x && x.id !== p.id && !x.isInjured);
   let fits;
   if (p.pos === 'SP') {
@@ -653,7 +653,7 @@ export function tradeBlockers(offer, state, atMs, teamId) {
   if (ins.length > TRADE.maxPerSide || outs.length > TRADE.maxPerSide) return `a deal can have at most ${TRADE.maxPerSide} players a side`;
   if (!ins.length && !outs.length) return 'there is nothing in the deal';
   const cpu = _club(state, teamId), user = state.userTeam;
-  const on = (t, id) => (t?.rosterIds || []).includes(id) || (t?.farmIds || []).includes(id);
+  const on = (t, id) => (t?.rosterIds || []).includes(id);
   for (const id of outs) if (!on(user, id)) return `${state.players[id]?.name || 'A player'} isn't ours to trade`;
   for (const id of ins) if (!on(cpu, id)) return `${state.players[id]?.name || 'A player'} isn't theirs to trade`;
   for (const id of [...ins, ...outs]) {
@@ -720,7 +720,7 @@ export function buildCounter(offer, state, teamId, gap, ev = evaluateForClub(off
   // One more of ours (prospects and bench pieces it would value).
   if (next.outgoingIds.length < TRADE.maxPerSide) {
     const u = state.userTeam;
-    const pool = [...(u.farmIds || []), ...(u.rosterIds || [])].map(id => state.players[id])
+    const pool = (u.rosterIds || []).map(id => state.players[id])
       .filter(p => p && !next.outgoingIds.includes(p.id) && !_isKey(p, state, 'user') && !p.isInjured && p.group !== PLAYER_GROUP.IN_TRANSIT && !contractRunOut(p, state)
                 && !(p._acquiredAtMs && clockNow() - p._acquiredAtMs < TRADE.noFlipMs));
     for (const p of pool) {
@@ -767,7 +767,6 @@ export function scoutRead(offer, state, teamId, ourBlocker = null) {
     const p = state.players[id];
     if (!p) continue;
     if (wouldStart(p, state, teamId)) lines.push(`${p.name} would play every day for them.`);
-    else if ((state.userTeam.farmIds || []).includes(id)) lines.push(`${p.name} would be a prospect in their system, not a big-leaguer yet.`);
     else lines.push(`${p.name} wouldn't crack their lineup — they won't pay much for depth.`);
   }
   if (!ev.booksOk) lines.push('Their owner won\'t take on that much salary. We would have to keep paying part of it, or take salary back.');

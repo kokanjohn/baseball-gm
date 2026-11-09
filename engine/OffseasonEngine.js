@@ -39,7 +39,6 @@ import {
   RETIREMENT_AGE_HARD,
   RETIREMENT_AGE_SOFT,
   RETIREMENT_OVR_SOFT,
-  RETIREMENT_OVR_FARM,
   WIN_TARGET_MET_WITHIN,
   WIN_TARGET_ADJ_EXCEED_8_PLUS,
   WIN_TARGET_ADJ_EXCEED_3_TO_7,
@@ -55,6 +54,7 @@ import {
   WALK_ABROAD_PROB_UNDER_31,
   PROSPECTS_PER_TEAM_MIN,
   PROSPECTS_PER_TEAM_MAX,
+  FA_POOL_MAX,
   PROSPECT_AGE_MIN,
   PROSPECT_AGE_MAX,
   PROSPECT_OVR_MIN,
@@ -84,6 +84,7 @@ import * as Coach from './CoachEngine.js';
 import { trainingWinterBonus } from './FrontOffice.js';
 import { fillsNeed } from './LeagueTrades.js';
 import { clockNow } from './Clock.js';
+import { fillShortRosters } from './TransactionEngine.js';
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
 
@@ -182,12 +183,11 @@ function _allTeams(draft) {
   return [draft.userTeam, ...(draft.leagueTeams || [])];
 }
 
-/** Remove a player from every list his club keeps (roster, farm, lineup, rotation, queues). */
+/** Remove a player from every list his club keeps (roster, lineup, rotation, queues). */
 function _detach(draft, playerId) {
   for (const t of _allTeams(draft)) {
     if (!t) continue;
     t.rosterIds = (t.rosterIds || []).filter(id => id !== playerId);
-    t.farmIds   = (t.farmIds   || []).filter(id => id !== playerId);
     for (const s of t.lineupSlots || []) if (s.playerId === playerId) { s.playerId = null; delete s.emergency; }
     if (t.rotation?.order) t.rotation.order = t.rotation.order.filter(id => id !== playerId);
   }
@@ -305,11 +305,6 @@ export function applyContract(draft, playerId, terms, { startNow = false } = {})
     contractExpired:       false,
     _contractExpiringNext: false,
     _ask:                  null,
-    // §78: a major-league deal is paid wherever he is; a prospect's minor-league
-    // deal only while he's up (terms.toFarm / terms.mlb === false).
-    // A farm player re-signed keeps his kind of deal.
-    contractMLB:           terms.mlb ?? (terms.toFarm ? false
-                             : p.group === PLAYER_GROUP.PRACTICE_SQUAD ? !!p.contractMLB : true),
   });
 }
 
@@ -323,7 +318,7 @@ export function releaseToFreeAgency(draft, playerId, atMs, { reason = 'contract'
     teamId: null, group: PLAYER_GROUP.FREE_AGENT, tier: 'freeAgent',
     _faFrom: from || p._waivedBy || null, _faSince: atMs, _faReason: reason,
     _ask: p._ask || marketTerms(draft, p),
-    _isKeeper: false, _isSpringInvitee: false, lineupSlot: null,
+    lineupSlot: null,
   });
   draft.freeAgentPool = [...(draft.freeAgentPool || []), playerId];
   return { type: 'FREE_AGENT', playerId, fromTeamId: from, atMs };
@@ -343,8 +338,8 @@ export function departLeague(draft, playerId, atMs, reason = 'abroad') {
 /**
  * signFreeAgent(draft, playerId, teamId, atMs, { displaceId })
  * A club signs a free agent at his asking terms. If the club's 28 is full,
- * `displaceId` (same side, not a starter) is optioned to the farm — or, with
- * the farm full, released to the market.
+ * `displaceId` (same side, not a starter) is let go (§122: between seasons,
+ * straight to free agency).
  */
 export function signFreeAgent(draft, playerId, teamId, atMs, { displaceId = null } = {}) {
   const p = draft.players[playerId];
@@ -354,16 +349,7 @@ export function signFreeAgent(draft, playerId, teamId, atMs, { displaceId = null
   if (displaceId && !hasRoomFor(draft, teamId, p)) {   // no spot on his side (§76)
     const d = draft.players[displaceId];
     if (d && (t.rosterIds || []).includes(displaceId)) {
-      const sideMax = isPitcher(d) ? ROSTER_LIMITS.FARM_PITCHER_MAX : ROSTER_LIMITS.FARM_HITTER_MAX;
-      const sideOnFarm = (t.farmIds || []).filter(id => isPitcher(draft.players[id]) === isPitcher(d)).length;
-      if (sideOnFarm < sideMax) {
-        _detach(draft, displaceId);
-        t.farmIds = [...(t.farmIds || []), displaceId];
-        Object.assign(d, { group: PLAYER_GROUP.PRACTICE_SQUAD, tier: 'farm', teamId });
-        events.push({ type: 'OPTIONED', playerId: displaceId, teamId, atMs });
-      } else {
-        events.push(releaseToFreeAgency(draft, displaceId, atMs, { reason: 'released' }));
-      }
+      events.push(releaseToFreeAgency(draft, displaceId, atMs, { reason: 'released' }));
     }
   }
   const terms = p._ask || marketTerms(draft, p);
@@ -374,7 +360,6 @@ export function signFreeAgent(draft, playerId, teamId, atMs, { displaceId = null
     _faFrom: null, _faSince: null, _faReason: null,
   });
   applyContract(draft, playerId, terms);
-  Finance.offsetDead(draft, playerId, terms.salary, teamId);   // §112.3 his old club pays less
   events.push({ type: 'FA_SIGNED', playerId, teamId, terms, atMs });
   return events;
 }
@@ -534,14 +519,12 @@ function _develop(p, nextYear, seasonNum, staff = null, facility = 0) {
 function _retirements(draft, atMs, nextYear) {
   const events = [];
   const level  = draft.leagueTalentOffset || 0;
-  const farmOf = new Set(_allTeams(draft).flatMap(t => t?.farmIds || []));
   for (const p of Object.values(draft.players || {})) {
     if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
     const age = computeAge(p.dob, nextYear);
     const rel = (p.ovr || 50) - level;
     let retire = age >= RETIREMENT_AGE_HARD;
     if (!retire && age >= RETIREMENT_AGE_SOFT && rel < RETIREMENT_OVR_SOFT) retire = eventRand() < 0.6;
-    if (!retire && farmOf.has(p.id) && age >= 28 && rel < RETIREMENT_OVR_FARM) retire = eventRand() < 0.25;
     if (!retire) continue;
     const teamId = p.teamId || null;
     _detach(draft, p.id);
@@ -606,12 +589,6 @@ export function contractDay(draft, atMs) {
     if (!p || !contractIsUp(p, season)) continue;
     events.push(releaseToFreeAgency(draft, id, atMs));
     Object.assign(p, { onWaivers: false, waiverStartTime: null, _waivedBy: null, _waiveReason: null });
-  }
-  for (const t of _allTeams(draft)) {
-    for (const id of t?.farmIds || []) {
-      const p = draft.players[id];
-      if (p && contractIsUp(p, season)) applyContract(draft, id, { salary: p.contractSalary || 50, years: 1 + (eventRand() < 0.5 ? 1 : 0) });
-    }
   }
   for (const t of draft.leagueTeams || []) {
     for (const id of [...(t.rosterIds || [])]) {
@@ -708,7 +685,6 @@ export function roleWords(draft, p) {
     if ((s.ab || 0) >= 300) return `an everyday ${p.pos === 'DH' ? 'designated hitter' : p.pos}`;
     if ((s.ab || 0) >= 120) return `a part-time ${p.pos === 'DH' ? 'designated hitter' : p.pos}`;
   }
-  if ((u.farmIds || []).includes(p.id)) return 'a player in our farm system';
   if ((s.g || 0) > 0) return isPitcher(p) ? 'a spare arm' : 'a bench player';
   return isPitcher(p) ? 'an arm we barely used' : 'a bench player who barely played';
 }
@@ -721,7 +697,7 @@ export function roleWords(draft, p) {
 export function contractContext(draft, p) {
   const season = draft.seasonNum || 1;
   const u = draft.userTeam;
-  const mine = [...(u.rosterIds || []), ...(u.farmIds || [])].map(id => draft.players[id])
+  const mine = (u.rosterIds || []).map(id => draft.players[id])
     .filter(x => x && x.id !== p.id && _samePos(x, p) && !OFF_ROSTER.has(x.group));
   const internal = mine.sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0] || null;
   const market = freeAgents(draft).filter(x => _samePos(x, p) && (x.ovr || 0) >= (p.ovr || 0) - 2)
@@ -731,7 +707,7 @@ export function contractContext(draft, p) {
     line: seasonLineWords(p, season),
     role: roleWords(draft, p),
     age: computeAge(p.dob, baseballYear(draft) + 1),
-    internal: internal ? { id: internal.id, name: internal.name, ovr: internal.ovr, farm: (u.farmIds || []).includes(internal.id) } : null,
+    internal: internal ? { id: internal.id, name: internal.name, ovr: internal.ovr } : null,
     market: market.slice(0, 3).map(x => ({ id: x.id, name: x.name, ovr: x.ovr, ask: (x._ask || marketTerms(draft, x)).salary })),
     marketN: market.length,
     star: !!R?.stars?.some(x => x.id === p.id),
@@ -787,8 +763,8 @@ export function applyExtension(draft, playerId, terms) {
 export function releaseCandidates(draft, max = 2) {
   const season = draft.seasonNum || 1;
   const u = draft.userTeam;
-  return [...(u.rosterIds || []), ...(u.farmIds || [])].map(id => draft.players[id])
-    .filter(p => p && !contractIsUp(p, season) && !p.pendingContract && (p.contractSalary || 0) > 0 && p.contractMLB !== false)
+  return (u.rosterIds || []).map(id => draft.players[id])
+    .filter(p => p && !contractIsUp(p, season) && !p.pendingContract && (p.contractSalary || 0) > 0)
     .map(p => {
       const market = marketTerms(draft, p).salary;
       const seasonsLeft = yearsLeft(p, season) - 1;
@@ -805,12 +781,10 @@ export function releaseCandidates(draft, max = 2) {
     .sort((a, b) => b.over - a.over).slice(0, max);
 }
 
-/** Release him: his deal's remaining seasons become dead money; he's a free agent. */
+/** Release him: §122 his deal ends and he's a free agent — nothing more is owed. */
 export function applyRelease(draft, playerId, atMs) {
   const p = draft.players[playerId];
   if (!p || p.teamId !== 'user') return null;
-  const next = (draft.seasonNum || 1) + 1;
-  Finance.addDeadFuture(draft, 'user', playerId, p.contractSalary || 0, next, (p.contractExpiry ?? next) - 1, p.name);
   return releaseToFreeAgency(draft, playerId, atMs, { reason: 'released' });
 }
 
@@ -871,10 +845,6 @@ function _cpuSignOne(draft, t, atMs) {
     const best = pool.filter(p => _fits(p, need)).sort(byOvr)[0]
       || pool.filter(p => _fits(p, { side: need.side, pos: null })).sort(byOvr)[0];
     if (!best) return events;
-    const farmBest = (t.farmIds || []).map(id => draft.players[id])
-      .filter(p => p && !p.isInjured && _fits(p, need))
-      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
-    if (farmBest && (farmBest.ovr || 0) >= (best.ovr || 0)) return events;
     events.push(...(signFreeAgent(draft, best.id, t.id, atMs) || []));
   }
   return events;
@@ -1072,24 +1042,25 @@ export function hardGates(state) {
 
 /**
  * openNewSeason(draft, atMs)
- * Spring (the day after the last), after required decisions have auto-resolved: unsigned free agents
- * leave the league, coaches are kept on, amateur prospects join every farm,
- * payroll is recomputed and every record starts over in season N+1.
+ * Spring (the day after the last), after required decisions have auto-resolved:
+ * §122 unsigned free agents stay on the market (the pool trimmed to its size,
+ * the least promising going home), coaches are kept on, every club opens with
+ * 28 (a club short signs free agents), payroll is recomputed and every record
+ * starts over in season N+1.
  * (The calendar and the phase change belong to GameEngine.)
  */
 export function openNewSeason(draft, atMs) {
   const events = [];
-  for (const p of freeAgents(draft)) events.push(departLeague(draft, p.id, atMs, 'unsigned'));
+  events.push(..._trimFreeAgentPool(draft, atMs));
   _settleStaff(draft);
-  for (const t of _allTeams(draft)) events.push(..._signProspects(draft, t, atMs));
   // §113 a new season, a new lineup: nobody is owed last year's spot.
   for (const p of Object.values(draft.players || {})) if (p?._lostSlot) p._lostSlot = null;
 
-  // Anyone who joined a club after contract day (a waiver claim, a late
-  // outright) with his deal up signs on for a year at market — the club
-  // brought him in; nobody opens a season without a contract.
+  // Anyone who joined a club after contract day (a waiver claim) with his
+  // deal up signs on for a year at market — the club brought him in; nobody
+  // opens a season without a contract.
   for (const t of _allTeams(draft)) {
-    for (const id of [...(t?.rosterIds || []), ...(t?.farmIds || [])]) {
+    for (const id of [...(t?.rosterIds || [])]) {
       const p = draft.players[id];
       if (p && contractIsUp(p, draft.seasonNum || 1)) {
         applyContract(draft, id, { ...marketTerms(draft, p), years: 1 });
@@ -1097,6 +1068,11 @@ export function openNewSeason(draft, atMs) {
       }
     }
   }
+
+  // §122 every CPU club opens the season with 28: one short signs free agents
+  // (deals that start with the new season). Our open spots are the GM's —
+  // the open-spot card and its deadline, in spring like any time.
+  events.push(...fillShortRosters(draft, atMs));
 
   draft.seasonNum = (draft.seasonNum || 1) + 1;
   for (const t of _allTeams(draft)) {
@@ -1115,66 +1091,64 @@ export function openNewSeason(draft, atMs) {
   draft.offseason      = null;
   for (const p of Object.values(draft.players || {})) {
     if (!p) continue;
-    p._isKeeper = false;
-    p._isSpringInvitee = false;
     p._ovrChange = undefined;
   }
   return events.filter(Boolean);
 }
 
-function _signProspects(draft, team, atMs) {
-  const events = [];
+/**
+ * newFreeAgentClass(draft, atMs)
+ * §122 New players enter the league once a year, on a named offseason day
+ * (the day free agency opens): this year's class — young players out of the
+ * amateur ranks and from abroad — joins the free agents, where any club can
+ * sign them. About as many as the ten clubs' farms used to sign.
+ * @returns {Object[]} events (one FA_CLASS summary event)
+ */
+export function newFreeAgentClass(draft, atMs) {
   const level = draft.leagueTalentOffset || 0;
-  const n = PROSPECTS_PER_TEAM_MIN + Math.floor(eventRand() * (PROSPECTS_PER_TEAM_MAX - PROSPECTS_PER_TEAM_MIN + 1));
+  const season = draft.seasonNum || 1;
+  const rand0 = dice(diceSeed(draft), 'fa-class', season);
+  const clubs = _allTeams(draft).length;
+  const n = clubs * PROSPECTS_PER_TEAM_MIN + Math.floor(rand0() * (clubs * (PROSPECTS_PER_TEAM_MAX - PROSPECTS_PER_TEAM_MIN) + 1));
   const used = namesInUse(draft.players);
   const HITTER_POS = ['C', 'SS', '2B', '3B', '1B', 'OF', 'OF', 'OF'];
+  const ids = [];
   for (let i = 0; i < n; i++) {
-    const farm = (team.farmIds || []).map(id => draft.players[id]).filter(Boolean);
-    const hitters = farm.filter(p => !isPitcher(p)).length;
-    const pitchers = farm.length - hitters;
-    const wantPitcher = pitchers / ROSTER_LIMITS.FARM_PITCHER_MAX < hitters / ROSTER_LIMITS.FARM_HITTER_MAX;
-    const rand = dice(diceSeed(draft), 'prospect', draft.seasonNum || 1, team.id, i);   // §118
-    const pos = wantPitcher ? (rand() < 0.5 ? 'SP' : 'RP') : HITTER_POS[Math.floor(rand() * HITTER_POS.length)];
+    const rand = dice(diceSeed(draft), 'fa-class', season, i);   // §118
+    const pitcher = rand() < 0.45;
+    const pos = pitcher ? (rand() < 0.5 ? 'SP' : 'RP') : HITTER_POS[Math.floor(rand() * HITTER_POS.length)];
     const name = _newName(used, rand);   // §82 (added to `used`)
     const p = createPlayer({
-      id: diceId(rand), name, pos, group: PLAYER_GROUP.PRACTICE_SQUAD,
-      hand: wantPitcher ? (rand() < 0.28 ? 'L' : 'R') : null,
+      id: diceId(rand), name, pos, group: PLAYER_GROUP.FREE_AGENT,
+      hand: pitcher ? (rand() < 0.28 ? 'L' : 'R') : null,
       targetOvr: level + PROSPECT_OVR_MIN + Math.floor(rand() * (PROSPECT_OVR_MAX - PROSPECT_OVR_MIN + 1)),
       rand,
       ageMin: PROSPECT_AGE_MIN, ageMax: PROSPECT_AGE_MAX,
-      seasonNum: (draft.seasonNum || 1) + 1, seasonYear: baseballYear(draft) + 1,
-      contractLengthOverride: 4, teamId: team.id, leagueLevel: level,
+      seasonNum: season + 1, seasonYear: baseballYear(draft) + 1,
+      contractLengthOverride: 1, teamId: null, leagueLevel: level,
     });
-    p.tier = 'farm';
-    p._amateurSigning = (draft.seasonNum || 1) + 1;
+    Object.assign(p, { tier: 'freeAgent', _faFrom: null, _faSince: atMs, _faReason: 'class',
+                       _marketKind: rand() < 0.3 ? 'intl' : 'prospect', _classOf: season + 1 });
     draft.players[p.id] = p;
-    team.farmIds = [...(team.farmIds || []), p.id];
-    events.push({ type: 'PROSPECT_SIGNED', playerId: p.id, teamId: team.id, atMs });
+    ids.push(p.id);
   }
-  events.push(..._enforceFarmCaps(draft, team, atMs));
-  return events.filter(Boolean);
+  draft.freeAgentPool = [...(draft.freeAgentPool || []), ...ids];
+  return [{ type: 'FA_CLASS', playerIds: ids, season: season + 1, atMs }];
 }
 
 /**
- * Farm composition caps (§20.3), per side: while a side is over its cap the
- * player with the least future — lowest OVR for his age — is released (he
- * leaves the league). New amateur signings are never the ones let go.
+ * _trimFreeAgentPool(draft, atMs) — §122 the market keeps to its size
+ * (FA_POOL_MAX): past it, the free agents with the least future — lowest
+ * OVR for their age — go home. This year's class stays.
  */
-function _enforceFarmCaps(draft, team, atMs) {
+function _trimFreeAgentPool(draft, atMs) {
   const events = [];
   const level = draft.leagueTalentOffset || 0;
   const nextYear = baseballYear(draft) + 1;
   const future = (x) => (x.ovr || 0) - level - computeAge(x.dob, nextYear);
-  for (const pitchers of [false, true]) {
-    const cap = pitchers ? ROSTER_LIMITS.FARM_PITCHER_MAX : ROSTER_LIMITS.FARM_HITTER_MAX;
-    for (let guard = 0; guard < 40; guard++) {
-      const side = (team.farmIds || []).map(id => draft.players[id]).filter(x => x && isPitcher(x) === pitchers);
-      if (side.length <= cap) break;
-      const cut = side.filter(x => x._amateurSigning !== (draft.seasonNum || 1) + 1).sort((a, b) => future(a) - future(b))[0]
-        || side.sort((a, b) => future(a) - future(b))[0];
-      events.push(departLeague(draft, cut.id, atMs, 'released'));
-    }
-  }
+  const pool = freeAgents(draft).filter(p => p._classOf !== (draft.seasonNum || 1) + 1).sort((a, b) => future(a) - future(b));
+  const over = freeAgents(draft).length - FA_POOL_MAX;
+  for (let i = 0; i < over && i < pool.length; i++) events.push(departLeague(draft, pool[i].id, atMs, 'unsigned'));
   return events;
 }
 

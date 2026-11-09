@@ -176,7 +176,8 @@ export function composeFacts(state, atMs) {
   });
   const starterStatus = (p, at = atMs) => ({ rested: starterRested(p, at), lastDays: armStatus(p, at).lastDays });
   const age = (p) => computeAge(p?.dob, year);
-  const farm = once('farm', () => (u.farmIds || []).map(P).filter(p => p && !p.isInjured));
+  // §122 our young players (25 or younger), healthy — the club's future, on its roster (there's no farm).
+  const young = once('young', () => (u.rosterIds || []).map(P).filter(p => p && !p.isInjured && computeAge(p.dob, year) <= 25));
   const devStatus = (p) => developmentStatus(state, p.id);
 
   // ── Weather (what the club can see) ───────────────────────────
@@ -225,7 +226,7 @@ export function composeFacts(state, atMs) {
     upcoming, played, nextGame, liveNow, lastGame, nextHome, nextSeries, homeGamesWithin, offDays, oppTeam, venueId, atHome,
     record, standing, lastN, oneRun, extraInnings,
     ourSide, recentBats, recentArms,
-    roster, lineup, rotation, nextStarters, injured, bullpen, starterStatus, age, farm, devStatus,
+    roster, lineup, rotation, nextStarters, injured, bullpen, starterStatus, age, young, devStatus,
     park, forecastFor, outlook, rainPast, nowAt, homeWeatherEvents, lastHomeGame,
     fin, capacity, homeGates, ledger,
     decisions, gmLog, tradesSince, pastReplies,
