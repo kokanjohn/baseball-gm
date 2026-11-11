@@ -153,7 +153,7 @@ const COMPOSE_CHANNELS = [
     role:     'Front Office',
     priority: 'medium',
     topics: [
-      { id: 'sc_free_agents', label: 'Free agents worth a look', desc: 'The scouts look over the free agents (three a week)' },
+      { id: 'sc_free_agents', label: 'Free agents worth a look', desc: 'The scouts look over the free agents (a few a week, by the director)' },
       { id: 'sc_prospect',   label: 'Young player report',      desc: 'A scouting report on one of our young players' },
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
     ],
@@ -608,7 +608,7 @@ function _composeRecipients(state) {
         <span class="cw-what">${_escape(c._composeLabel || '')}${c._sentAtMs ? ` · sent ${_shortWhen(c._sentAtMs)}` : ''}</span></div>`;
     }).join('')}</div>` : '';
 
-  const STAFF_KEY = { pitching_coach: 'pitchingCoach', hitting_coach: 'hittingCoach', bench_coach: 'benchCoach', bullpen_coach: 'bullpenCoach' };
+  const STAFF_KEY = { pitching_coach: 'pitchingCoach', hitting_coach: 'hittingCoach', bench_coach: 'benchCoach', bullpen_coach: 'bullpenCoach', scouting: 'scoutingDirector' };
   const rows = COMPOSE_CHANNELS.map(ch => {
     // §112.2 an empty chair on the staff: nobody to write to until someone's hired.
     if (state.userTeam?.coachingStaff?.[STAFF_KEY[ch.id]]?.vacant) {

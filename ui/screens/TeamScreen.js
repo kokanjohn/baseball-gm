@@ -708,6 +708,7 @@ function _renderStaff(state) {
     { key: 'hittingCoach', label: 'Hitting Coach',   role: 'Field Staff',  data: staff.hittingCoach  },
     { key: 'benchCoach',   label: 'Bench Coach',     role: 'Field Staff',  data: staff.benchCoach    },
     { key: 'bullpenCoach', label: 'Bullpen Coach',   role: 'Field Staff',  data: staff.bullpenCoach  },
+    { key: 'scoutingDirector', label: 'Scouting Director', role: 'Front Office', data: staff.scoutingDirector },
   ].filter(e => e.data);
 
   if (entries.length === 0) {

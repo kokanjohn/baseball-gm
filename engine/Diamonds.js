@@ -75,6 +75,7 @@ export function cpuView(p, atMs) {
  */
 export function markAvailable(p, atMs, rand, level = 0) {
   if (!p) return;
+  delete p._tipRolled; delete p._tipAt;   // §122.15 a new chance for our director's tip
   if (isDiamond(p, level)) {
     const [lo, hi] = DIAMOND.buzzDays;
     p._buzzAt = atMs + Math.round((lo + rand() * (hi - lo)) * DAY_MS);

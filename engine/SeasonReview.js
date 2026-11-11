@@ -16,6 +16,8 @@ import { clubNeeds, leagueNorms } from './LeagueTrades.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
 import { seasonTarget } from './FinanceEngine.js';
 import { contractIsUp } from './OffseasonEngine.js';
+import { lastSeasonIMP } from './IMPEngine.js';
+import { scoutSpecFor } from './CoachEngine.js';
 
 const isPitcher = (p) => p?.pos === 'SP' || p?.pos === 'RP';
 const era = (er, ip) => (ip > 0 ? (9 * er) / ip : null);
@@ -214,7 +216,36 @@ function _units(state, season) {
     if (isPitcher(p)) { grow.arms += p._ovrChange; grow.armsN++; } else { grow.bats += p._ovrChange; grow.batsN++; }
   }
   out.growth = grow;
+  out.scouting = _scouting(state, season);
   return out;
+}
+
+/**
+ * §122.15 the scouting director's year: the market's diamonds that went
+ * somewhere this season (word got around), how many the scouts were onto first
+ * (a tip or a report before the word), the ones that went to other clubs
+ * without us knowing (by the specialty that reads them), and the players we
+ * signed off the scouts' work.
+ */
+function _scouting(state, season) {
+  const starts = (state.schedule || []).map(g => g.gameTime).filter(Number.isFinite);
+  const from = (starts.length ? Math.min(...starts) : 0) - 60 * 86_400_000;
+  let onto = 0, missed = 0, found = 0, imp = 0, impN = 0;
+  const missedBy = { pro: 0, intl: 0, amateur: 0 };
+  for (const p of Object.values(state.players || {})) {
+    if (!p) continue;
+    if (p._scoutFound === season && p.teamId === 'user') {
+      found++;
+      const e = (p.seasonLog || []).filter(x => x.season === season && x.stats).pop();
+      const v = e ? lastSeasonIMP({ ...p, seasonLog: [e] }) : null;
+      if (v != null) { imp += v; impN++; }
+    }
+    if (!Number.isFinite(p._buzzAt) || p._buzzAt < from || !p.teamId) continue;
+    const knew = [p._tipAt, p._scoutedAt].some(t => Number.isFinite(t) && t < p._buzzAt);
+    if (knew) onto++;
+    else if (p.teamId !== 'user') { missed++; missedBy[scoutSpecFor(p)]++; }
+  }
+  return { onto, missed, missedBy, found, foundImp: impN ? Math.round(imp * 10) / 10 : null };
 }
 
 /** §112.4 The ballpark's season: average attendance and share of seats, sellouts, the gate. */

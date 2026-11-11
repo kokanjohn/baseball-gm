@@ -129,6 +129,10 @@ export function signToClub(draft, playerId, teamId, atMs, { displaceId = null, t
   const events = [];
   const pull = () => { draft.freeAgentPool = (draft.freeAgentPool || []).filter(id => id !== playerId); };
   const k = terms || signingTerms(draft, p);
+  // §122.15 one the scouts found (a tip, or a report in the last 60 days): the director's evaluation counts it.
+  if (teamId === 'user' && (Number.isFinite(p._tipAt) || (Number.isFinite(p._scoutedAt) && atMs - p._scoutedAt < 60 * 86_400_000))) {
+    p._scoutFound = draft.seasonNum || 1;
+  }
   // No room on his side (the 28 full, or his side's share of it — §76) —
   // make room first, from his side.
   const full = draft.phase === PHASE.OFFSEASON || draft.phase === PHASE.SEASON_SUMMARY

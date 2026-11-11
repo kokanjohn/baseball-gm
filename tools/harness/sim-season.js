@@ -176,6 +176,7 @@ function cardDidIt(action, c, st) {
     case 'sign_acquire_pitcher': case 'sign_prospect_pitcher': return joining(c._tokenPlayers.acq_pitcher);
     case 'sign_intl_player': case 'sign_intl_flyer': return joining(c._tokenPlayers.intl_player);
     case 'indie_sign': return joining(c._targetPlayerId);
+    case 'scout_tip_sign': return joining(c._targetPlayerId);
     case 'waiver_dfa': return !!st.players[c._tokenPlayers.dfa_player]?._userClaim;
     case 'trade_acquire_pitcher': case 'trade_acquire_hitter': case 'dl3_acquire':
       return (st.transactions || []).some(t => t.kind === 'trade' && t.offer?.incomingIds?.includes(c._offer?.incomingIds?.[0]));
@@ -596,7 +597,7 @@ async function runOffseasonChecks() {
     check(`rating history: kept across seasons (${h.length} points, seasons ${[...new Set(h.map(p => p.s))].join(',')})`,
           h.length >= 10 && h.some(p => p.s === 1) && h.some(p => p.s === 2) && ordered && changesOnly
           && h[h.length - 1].r === Roster.teamRating(st, 'user') && st.metricHistory === undefined,
-          JSON.stringify(h.slice(-3)));
+          `${JSON.stringify(h.slice(-3))} ordered=${ordered} changesOnly=${changesOnly} now=${Roster.teamRating(st, 'user')} metric=${st.metricHistory !== undefined}`);
   }
   {
     // §78: season 1's books — closed, reconciled to the dollar, salaries truly paid.
@@ -2394,6 +2395,13 @@ async function main() {
   if (composeMid) await checkComposeTruth(composeMid.st, composeMid.at);
   check(`compose: every topic writes a clean reply from the live club (${composeStats.n} replies across the run; slowest ${composeStats.maxMs.toFixed(0)} ms)`,
         composeStats.bad.length === 0 && composeStats.slow === 0, composeStats.bad.slice(0, 3).join(' | '));
+
+  // §122.15 the scouting director's tips arrive through the season's daily market look.
+  {
+    const st = SM.get(), d = st.userTeam.coachingStaff?.scoutingDirector;
+    check(`scouting director: on the staff (${d?.name}, rated ${d?.quality}, ${d?.specialty}); tips came through the season`,
+          !!d?.name && gm.cardIdsSeen.has('scout_tip'), [...gm.cardIdsSeen].filter(x => /scout/.test(x)).join(','));
+  }
 
   if (process.env.DBG) {
     const st = SM.get();

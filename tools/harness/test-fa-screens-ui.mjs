@@ -127,6 +127,16 @@ const inj = await page.evaluate(() => document.body.innerText);
 check('the injury decision: IL + sign, IL and pick, cut', /IL .* — sign /.test(inj) && /I'll pick the replacement/.test(inj) && /Cut /.test(inj), inj.slice(0, 300));
 await page.screenshot({ path: `${out}/injury-decision-${theme}.png` });
 
+// §122.15 the Staff tab: the scouting director with the coaches.
+await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('roster'); });
+await page.waitForTimeout(400);
+await page.click('#tsubtab-staff');
+await page.waitForTimeout(300);
+const staffText = await page.evaluate(() => document.getElementById('team-content')?.innerText || '');
+check('Staff: the scouting director, rated, with a specialty', /Scouting Director/.test(staffText) && /\((\d+)\) · (pro scouting|international|rookies and indie ball)/.test(staffText), staffText.slice(-300));
+check('Staff: no sideways scroll', await noHScroll());
+await page.screenshot({ path: `${out}/staff-${theme}.png`, fullPage: true });
+
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 process.exit(ok ? 0 : 1);

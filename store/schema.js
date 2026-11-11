@@ -14,7 +14,8 @@
  */
 
 import { renameLeague, lastNameOnly } from '../engine/Names.js';
-import { ensureAbilities } from '../engine/CoachEngine.js';
+import { ensureAbilities, startingDirector, salaryFor } from '../engine/CoachEngine.js';
+import { STAFF_NAMES } from '../data/player-names.js';
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso } from '../engine/WeatherClimate.js';
 import {
   SCHEMA_VERSION,
@@ -489,6 +490,24 @@ export function createSlotEnvelope(slotId, state) {
  *
  * To add a migration: append a new entry to MIGRATIONS.
  */
+/**
+ * ensureScoutingDirector(state) — §122.15 a save from before r143 hires its
+ * scouting director once: the archetype's, on a two-year deal (the winter's
+ * staff step handles the rest). Run on every load (StateManager.load): saves
+ * stay at the same schema version, so migrate() alone wouldn't reach them.
+ * @returns {Boolean} whether one was hired
+ */
+export function ensureScoutingDirector(state) {
+  const staff = state?.userTeam?.coachingStaff;
+  if (!staff || staff.scoutingDirector) return false;
+  const taken = new Set(Object.values(staff).map(x => x?.name).concat(state.userTeam.ownerName).filter(Boolean));
+  const name = STAFF_NAMES.find(n => !taken.has(lastNameOnly(n))) || 'Scout';
+  const d = startingDirector(state.archetype, Math.random);
+  staff.scoutingDirector = { name: lastNameOnly(name), relationship: 50, contractExpiry: (state.seasonNum || 1) + 2,
+                             ...d, salary: salaryFor('scoutingDirector', d.quality) };
+  return true;
+}
+
 export function migrate(state) {
   if (!state || typeof state !== 'object') {
     throw new Error('migrate: received non-object state');
@@ -556,6 +575,8 @@ function _fillDefaults(state) {
     ensureAbilities(state.userTeam.coachingStaff);
     state._coachAbilities = true;
   }
+
+  ensureScoutingDirector(state);
 
   for (const key of Object.keys(defaults)) {
     if (state[key] === undefined) {

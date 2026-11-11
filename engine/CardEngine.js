@@ -73,6 +73,7 @@ import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Coach from './CoachEngine.js';
+import { isDiamond, worthOf } from './Diamonds.js';
 import * as FrontOffice from './FrontOffice.js';
 import * as Development from './DevelopmentEngine.js';
 import { CARD_ACTIONS, cardFeasible, reserveChoices } from './CardActions.js';
@@ -1202,7 +1203,7 @@ function _rosterConditionCards(delivered, atMs) {
     if (key.startsWith('os:resign:')) return players[c._targetPlayerId]?.teamId !== 'user';
     // §71: a card about one of our players that can no longer apply (he left,
     // got hurt, or is already away) is withdrawn rather than left as a ghost.
-    if ((!key || key.startsWith('followup:') || key.startsWith('indie:')) && CARD_ACTIONS[c._raw?.onYes]) return !cardFeasible(state, c);
+    if ((!key || key.startsWith('followup:') || key.startsWith('indie:') || key.startsWith('tip:')) && CARD_ACTIONS[c._raw?.onYes]) return !cardFeasible(state, c);
     if (c._tradeOffer)               return !_tradeStillValid(state, c, atMs);
     // §90 a package Pro Scouting put together that can no longer be offered
     // (a player in it moved or got hurt, the window closed, the club cooled off).
@@ -1723,6 +1724,8 @@ function _releaseDue(nowMs) {
     s.inbox = [...(s.inbox || []), ...due.map(c => ({ ...c, arrivedAtMs: c.deliverAtMs }))];
     _sortInbox(s.inbox);
     if (log.length) s.composeLog = [...(s.composeLog || []), ...log].slice(-COMPOSE_LOG_MAX);
+    // §122.15 the players the scouts named to the GM (kept on the player: the log is short).
+    for (const e of log) for (const id of e.memo?.playerIds || []) if (s.players[id]) s.players[id]._scoutedAt = e.atMs;
   });
   return due;
 }
@@ -3887,13 +3890,14 @@ export function deliverManagerContractCard(atMs, expiresAtMs) {
 const MANAGER_EXTENSION_YEARS_UI = 2;
 
 // §112.2 THE COACHES — the day-2 evaluation and the hiring market.
-const _UNIT = { pitchingCoach: 'the pitching staff', hittingCoach: 'the lineup', bullpenCoach: 'the bullpen', benchCoach: 'the bases and the late-game work' };
+const _UNIT = { pitchingCoach: 'the pitching staff', hittingCoach: 'the lineup', bullpenCoach: 'the bullpen', benchCoach: 'the bases and the late-game work',
+                scoutingDirector: 'the scouts' };
 
 /** "a solid coach (rated 64), a command teacher: fewer walks" */
 function _coachRead(role, c) {
   const q = Coach.qualityOf(c);
   const w = Coach.qualityWord(q);
-  return `${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w} coach (rated ${q}), ${Coach.specialtyWords(role, c.specialty)}`;
+  return `${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w} ${Coach.personWord(role)} (rated ${q}), ${Coach.specialtyWords(role, c.specialty)}`;
 }
 
 /**
@@ -3909,7 +3913,7 @@ export function deliverCoachReviewCard(role, kind, atMs, expiresAtMs) {
   const ev = Coach.evaluate(role, U);
   const info = Coach.ROLE_INFO[role];
   const next = (state.seasonNum || 1) + 1;
-  const mgr = _managerName(state);
+  const mgr = info.scout ? 'Front Office' : _managerName(state);   // §122.15 the front office reviews its own director
   const how = ev.facts.length
     ? { good: `It was a good year for ${_UNIT[role]}: ${_listWords(ev.facts)}.`,
         fair: `${Cap(_UNIT[role])} landed in the middle of the league: ${_listWords(ev.facts)}.`,
@@ -3971,7 +3975,7 @@ export function deliverCoachHireCard(role, atMs, expiresAtMs) {
     preview: `${A.name} (rated ${A.quality}, ${Coach.specialtyShort(A.specialty)}) or ${B.name} (rated ${B.quality}, ${Coach.specialtyShort(B.specialty)}).`,
     body: `The ${info.title} job is open${prev ? ` with ${prev} gone` : ''}. What it needs most, from last season: ${Coach.needReason(role, need, U)}. `
         + `Two candidates. ${who(A)} ${who(B)} `
-        + `With no decision by the time spring training opens, ${_managerName(state)} picks ${B.name}.`,
+        + `With no decision by the time spring training opens, ${info.scout ? 'the front office' : _managerName(state)} picks ${B.name}.`,
     yesLabel: `Hire ${A.name} (${formatK(A.salary)})`, noLabel: `Hire ${B.name} (${formatK(B.salary)})`,
     expiresAtMs,
     _raw: { onYes: 'os_hire_a', onNo: 'os_hire_b', onAuto: 'os_hire_b' },
@@ -4301,7 +4305,7 @@ function _addDropChoices(state, instance) {
   const id = instance._targetPlayerId;
   const p = id && state.players[id];
   // (the signings whose action reads the pick — CardActions.dropFor)
-  const signs = /^(sign_acquire_pitcher|sign_prospect_pitcher|sign_intl_player|sign_intl_flyer|indie_sign|sp15_callup)$/.test(instance._raw?.onYes || '');
+  const signs = /^(sign_acquire_pitcher|sign_prospect_pitcher|sign_intl_player|sign_intl_flyer|indie_sign|sp15_callup|scout_tip_sign)$/.test(instance._raw?.onYes || '');
   if (!p || p.group !== PLAYER_GROUP.FREE_AGENT || !signs) return;
   const side = sideOf(p);
   if (!rosterIsFull(state, 'user', side)) return;
@@ -4330,6 +4334,91 @@ function _deliverIndieReport(playerId, atMs) {
     yesLabel: `Sign (${formatK(terms.bonus)})`, noLabel: 'Pass',
     expiresAtMs: atMs + 3 * 86_400_000,
     _raw: { onYes: 'indie_sign', onNo: 'indie_pass', onAuto: 'indie_pass' },
+    _autoLabel: 'No answer — passed',
+  });
+  _addDropChoices(state, card);
+  return _deliverAt(card, atMs);
+}
+
+// ─────────────────────────────────────────────────────────────
+// §122.15 THE SCOUTING DIRECTOR'S TIPS
+// ─────────────────────────────────────────────────────────────
+
+const TIP_PHASES = new Set([PHASE.SPRING_TRAINING, PHASE.REGULAR_SEASON, PHASE.ALL_STAR_BREAK, PHASE.TRADE_DEADLINE]);
+const TIP_GAP_MS = 3 * 86_400_000;   // a few days between tips (one open at a time)
+
+/**
+ * directorTips(atMs) — once a day (with the CPU clubs' look at the market,
+ * first): the director may hear about a diamond on the market before word gets
+ * around. Each diamond gets one chance (Coach.tipChance: quality, specialty);
+ * the tip arrives Coach.tipLeadDays later and only if that's still ahead of the
+ * word. One tip open at a time. Tips on a player who has signed are withdrawn.
+ */
+export function directorTips(atMs) {
+  const st = StateManager.get();
+  const tipKeys = (c) => (c._rosterKey || '').startsWith('tip:');
+  _withdraw(c => tipKeys(c) && st.players[c._targetPlayerId]?.group !== PLAYER_GROUP.FREE_AGENT);
+  const staff = st.userTeam?.coachingStaff;
+  const d = staff?.scoutingDirector;
+  if (!d || d.vacant || !TIP_PHASES.has(st.phase)) return 0;
+  const open = [...(st.inbox || []).filter(c => !c.resolved), ...(st.scheduledCards || [])].some(tipKeys);
+  if (open || atMs - (st.userTeam._lastTipAt ?? -Infinity) < TIP_GAP_MS) return 0;
+  const level = st.leagueTalentOffset || 0;
+  const cands = (st.freeAgentPool || []).map(id => st.players[id])
+    .filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT && !p._tipRolled && Number.isFinite(p._buzzAt) && p._buzzAt > atMs && isDiamond(p, level))
+    .sort((a, b) => worthOf(b) - worthOf(a) || String(a.id).localeCompare(String(b.id)));
+  const rolled = [];
+  let pick = null;
+  const lead = Coach.tipLeadDays(staff) * 86_400_000;
+  for (const p of cands) {
+    rolled.push(p.id);
+    if (atMs + lead > p._buzzAt - 86_400_000) continue;   // too late to beat the word
+    if (eventRand() < Coach.tipChance(staff, p)) { pick = p; break; }
+  }
+  if (!rolled.length) return 0;
+  StateManager.mutate(s => {
+    for (const id of rolled) s.players[id]._tipRolled = true;
+    if (pick) { s.players[pick.id]._tipAt = atMs + lead; s.userTeam._lastTipAt = atMs + lead; }
+  });
+  return pick && _deliverScoutTip(pick.id, atMs + lead) ? 1 : 0;
+}
+
+/** Why the director thinks this player is better than the rating (gender-neutral: name or "they"). */
+function _tipRead(p) {
+  const sr = p.subRatings || {};
+  if (p._ratingGap) {
+    const from = { rookie: 'A rookie, so the ratings are a projection', overseas: 'New to the league from overseas, so the ratings are an estimate',
+                   independent: 'Out of independent ball, so the ratings are mostly an estimate' }[p.origin] || 'New to the league, so the ratings are an estimate';
+    return `${from}, and I think the real player is better than it.`;
+  }
+  if (p.pos === 'RP' && (sr.stamina ?? 99) <= 48) {
+    return `The rating counts stamina (${sr.stamina}), which an inning out of the bullpen barely uses. The stuff (${sr.stuff}) and control (${sr.control}) are the real thing.`;
+  }
+  if (!['SP', 'RP'].includes(p.pos) && (sr.speed ?? 99) <= 48) {
+    return `The rating is dragged down by speed (${sr.speed}). The bat is the real thing: contact ${sr.contact}, power ${sr.power}.`;
+  }
+  return 'More useful than the number suggests.';
+}
+
+function _deliverScoutTip(playerId, atMs) {
+  const state = StateManager.get();
+  const p = state.players[playerId];
+  const d = state.userTeam?.coachingStaff?.scoutingDirector;
+  if (!p || !d || d.vacant || p.group !== PLAYER_GROUP.FREE_AGENT) return null;
+  const terms = signingTerms(state, p);
+  const age = computeAge(p.dob, baseballYear(state));
+  const ask = `${formatK(terms.salary || 0)} a year${terms.bonus ? ` and a ${formatK(terms.bonus)} bonus` : ''}`;
+  const card = _rosterCard(state, {
+    cardId: 'scout_tip', tag: 'SCOUTING', sender: `${d.name}, Scouting Director`, avatar: '🔎', type: 'good',
+    _rosterKey: `tip:${playerId}`, _targetPlayerId: playerId,
+    subject: `Scouting tip: ${p.name}`,
+    preview: `${_who(p)}, ${age}: better than the rating, and nobody else is onto it yet.`,
+    body: `${_who(p)}, ${age}, is on the free-agent market. ${_tipRead(p)} `
+        + `As far as I can tell, nobody else is onto this yet. The ask: ${ask}. `
+        + `If we pass, ${p.name} stays on the market, but once word gets around other clubs will be after this one.`,
+    yesLabel: `Sign ${p.name} (${formatK(terms.salary || 0)})`, noLabel: 'Pass',
+    expiresAtMs: p._buzzAt,
+    _raw: { onYes: 'scout_tip_sign', onNo: 'scout_tip_pass', onAuto: 'scout_tip_pass' },
     _autoLabel: 'No answer — passed',
   });
   _addDropChoices(state, card);

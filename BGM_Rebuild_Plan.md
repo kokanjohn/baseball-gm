@@ -9691,3 +9691,63 @@ The failure dated from r139 (§121), which gave roster cards ids derived from wh
 check-diamonds gained a winter-trim block. It inflates the market far past its size and trims, then checks that every unannounced diamond and a just-reported low-rated player are still there. Both checks fail on the old trim (5 of 10 diamonds kept; the reported player gone). sim-season's sr2 check now looks for the signing.
 
 No fresh team needed.
+
+### 122.15 The scouting director (GM, Nov 10 — r143)
+
+**Decided (GM):** every option from the discussion except other clubs hiring the director away. That belongs in a separate conversation about coaches and staff in general. Standing permission from the GM: commit and push releases when they're ready, without waiting for an OK.
+
+**Before:** the scouts' sharpness was the archetype's `scouting` weight (1.0–1.6). No person was behind it, and the GM had no way to change it.
+
+**The role.** `scoutingDirector` is a fifth staff role in `CoachEngine.COACH_ROLES`, so it gets the coaching staff's whole model: quality 40–90, a specialty, salary by quality (base $90K), two-year contracts, the winter review (renew, let go, keep, or fire with a buyout), the hiring card with two candidates, and the spring settle. The specialties match where a player comes from (`scoutSpecFor`):
+- `pro`: league veterans, and players whose rating hides their role.
+- `intl`: players from abroad.
+- `amateur`: rookies and independent ball.
+
+**The archetype sets the starting director** (`startingDirector`). The mean quality is 58 + (weight − 1) × 40: lab ≈ 78, ember ≈ 70, gambler ≈ 62, the rest ≈ 58. The specialty is pro for lab, amateur for ember, intl for gambler, and random for the rest. The archetype no longer affects scouting directly.
+
+**What quality and specialty change:**
+- **Sharper reads** (`scoutEye`): the scouts' read error is 4 / eye rating points. Eye is 0.6 at 40, 1.0 at 60 and 1.6 at 90, ×1.25 on the specialty. Used by the weekly free-agent report, per player.
+- **More looks** (`scoutLooks`): the weekly report covers 2 players under 50, 3 normally, 4 at 70+, 5 at 82+.
+- **Faster reads on our own untested players** (`scoutExposure`): our players' exposure counts ×0.75 at 40 up to ×1.25 at 90, ×1.2 on the specialty (`GameEngine._expose`).
+- **Tips before word gets around** (`CardEngine.directorTips`):
+  - Runs once a day, just before the CPU clubs' daily market look.
+  - Each diamond on the market gets one chance: `tipChance` is 0.1 at 40 up to 0.7 at 90, ×1.3 on the specialty, capped at 0.85.
+  - The tip arrives `tipLeadDays` later (7 days at 40, 1 day at 90), and only if that is still at least a day before the word.
+  - One tip is open at a time, with 3 days between tips.
+  - The card is a decision. "Sign {name} ($)" uses `scout_tip_sign` (signs at the asking terms, pays any bonus, and offers waive choices when the roster is full). "Pass" leaves the player on the market. The card expires when word gets around, and is withdrawn if the player signs elsewhere.
+  - `markAvailable` gives a player who comes back to the market a new chance.
+
+**The winter review** (`SeasonReview._scouting`, `Coach.evaluate('scoutingDirector')`). It looks at the market's diamonds whose word got around this season:
+- **Onto:** a tip or a scout report came before the word.
+- **Missed:** the player went to another club without us knowing. Misses are counted by the specialty that reads that kind of player, and that is what the hiring card says the job needs.
+- **Found:** players we signed off the scouts' work. A tip counts, and so does a report in the last 60 days (stamped `_scoutFound` in `signToClub`).
+
+Score = 0.25 + 0.6 × onto/(onto + missed) + 0.05 × found (up to 3). The review card comes from the Front Office, not the manager, and the hiring card says "the front office picks" by default. Card wording calls the director a "scout" (`Coach.personWord`).
+
+**Stamps on players:** `_scoutedAt` (named in a scouts' report; the compose log only keeps 80 entries), `_tipAt`, `_tipRolled` and `_scoutFound`. The winter trim also keeps anyone with `_scoutedAt` or `_tipAt` in the last 60 days.
+
+**In the app:**
+- The Staff tab lists the director under the coaches (Front Office), with quality and specialty.
+- Scouting replies in Compose are signed by the director.
+- With the chair empty, the Scouting channel shows "Vacant · hiring".
+- The free-agents topic says "a few a week, by the director".
+
+**Existing saves:** `schema.ensureScoutingDirector` hires the archetype's director once, on a two-year deal, and runs on every load (`StateManager.load`). Saves never change schema version (1.0.0), so `migrate()` and `_fillDefaults` don't run for current saves. **Found along the way:** for the same reason, the §112.2 one-time coach-abilities fill in `_fillDefaults` never ran on a current-version save. It didn't matter, since every team since r126 was created with abilities. Fresh team: not needed.
+
+**Checks:** check-scouting-director (new, 25 checks):
+- the archetype's starting director, and an old save hiring one exactly once;
+- each effect rising with quality and specialty;
+- the report's signature and size;
+- tips: more of them from a great director, about a real diamond before the word, signed by the director, gender-neutral, and signing one counts as a find;
+- the winter: evaluation, the needed specialty, the review and hiring wording.
+
+test-fa-screens-ui checks the Staff tab in dark and light. sim-season checks that tips arrive through a real season's daily look.
+
+**Harness note:** the world clock waits on our live game, so a check that only calls `advanceClock` across days never gets past the first game day. That's why check-scouting-director calls `directorTips` directly, and sim-season covers the hook.
+
+**Suite (r143):** everything passes except two time-dependent results, both seen on r142 as well or explained:
+- **check-message-lookahead failed once.** Window 1, the first day of spring training, app open: a pool card arrived hours earlier than the look-ahead said (r142 failed the same way at the same hour). An hour later both versions passed. It depends on the time of day the check runs, and the window lands near the first spring game. **Open: worth a dedicated look** (where a game day's pool cards get their times when the app is open at camp's first game).
+- **sim-season:**
+  - One run failed rating-history (the last point didn't match the current rating). A second run passed it. The likely cause is the harness's simulated GM answering a roster card without running the clock afterwards; the app always runs the clock after an answer.
+  - The second run failed "club funds: realistic operating net" by a hair: 84–48, just under the .650 "historic" cutoff, with the net at 36% of target against a 35% bound.
+- **check-coaches:** its field-unit grading check now leaves out the director, who has no field unit (check-scouting-director covers the director's evaluation).

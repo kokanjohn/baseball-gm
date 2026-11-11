@@ -22,6 +22,7 @@ import {
   createSlotEnvelope,
   migrate,
   needsMigration,
+  ensureScoutingDirector,
 } from './schema.js';
 import { SAVE_SLOT_LIMIT_FREE } from '../data/constants.js';
 
@@ -271,6 +272,9 @@ export async function load(slotId) {
     // Save the migrated state immediately
     await DB.saveSlot({ ...envelope, state: loadedState });
   }
+
+  // §122.15 one-time repairs that a same-version save needs (saved with the next save).
+  ensureScoutingDirector(loadedState);
 
   _state        = loadedState; _rev++; _inputRev++;
   _activeSlotId = slotId;

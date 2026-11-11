@@ -1167,7 +1167,8 @@ export function _trimFreeAgentPool(draft, atMs) {
   const reported = new Set((draft.composeLog || [])
     .filter(r => atMs - r.atMs < FA_TRIM_SCOUTED_KEEP_MS)
     .flatMap(r => [...(r.memo?.playerIds || []), r.memo?.playerId].filter(Boolean)));
-  const keep = (x) => (Number.isFinite(x._buzzAt) && x._buzzAt > atMs) || reported.has(x.id);
+  const keep = (x) => (Number.isFinite(x._buzzAt) && x._buzzAt > atMs) || reported.has(x.id)
+    || (Number.isFinite(x._scoutedAt) && atMs - x._scoutedAt < FA_TRIM_SCOUTED_KEEP_MS) || (Number.isFinite(x._tipAt) && atMs - x._tipAt < FA_TRIM_SCOUTED_KEEP_MS);
   const pool = freeAgents(draft).filter(p => p._classOf !== (draft.seasonNum || 1) + 1 && !keep(p)).sort((a, b) => future(a) - future(b));
   const over = freeAgents(draft).length - FA_POOL_MAX;
   for (let i = 0; i < over && i < pool.length; i++) events.push(departLeague(draft, pool[i].id, atMs, 'unsigned'));

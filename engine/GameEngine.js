@@ -385,10 +385,18 @@ export async function startNewGame(config) {
         contractExpiry: s.seasonNum + 2,
         relationship:   50,
       },
+      // §122.15 the scouting director: the archetype's (an analytics club starts with a good one).
+      scoutingDirector: {
+        name:           pickStaffName(),
+        salary:         90,
+        contractExpiry: s.seasonNum + 2,
+        relationship:   50,
+        ...Coach.startingDirector(config.archetypeId, eventRand),
+      },
     };
 
     // §112.2 Each coach's quality and specialty, paid by quality; two of the
-    // four on one-year deals (a real staff decision the first winter).
+    // staff on one-year deals (a real staff decision the first winter).
     Coach.ensureAbilities(s.userTeam.coachingStaff);
     const oneYear = [...Coach.COACH_ROLES].sort(() => eventRand() - 0.5).slice(0, 2);
     for (const role of Coach.COACH_ROLES) {
@@ -892,7 +900,7 @@ function _commitAt(gameIndex) {
         }
       }
       // §122.9 every game he plays shows what he really is (spring too).
-      for (const [playerId, gameStats] of Object.entries(perGameDeltas)) exposeRatings(s.players[playerId], _faced(s.players[playerId], gameStats));
+      for (const [playerId, gameStats] of Object.entries(perGameDeltas)) _expose(s, playerId, gameStats);
       // §122.9 Impact's windows are regular-season form: spring and playoff games stay out.
       if (statKey === 'stats') for (const [playerId, gameStats] of Object.entries(perGameDeltas)) {
         const player = s.players[playerId];
@@ -2192,7 +2200,7 @@ function _finishLeagueGame(date, i) {
     if (away) Development.countGame(s, away.id);
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
     recordOutings(s, g.plays, endMs);   // §76: the arms' record
-    for (const [pid, d] of Object.entries(perGame)) exposeRatings(s.players[pid], _faced(s.players[pid], d));   // §122.9
+    for (const [pid, d] of Object.entries(perGame)) _expose(s, pid, d);   // §122.9
     if (statKey === 'stats') for (const [pid, d] of Object.entries(perGame)) {
       if (s.players[pid]) s.players[pid]._impGameLog = appendGameLog(s.players[pid], s.currentGameIndex || 0, date, d, g.gameTime)._impGameLog;
     }
@@ -2629,6 +2637,14 @@ function _timeOn(day, timeStr) {
 
 /** The baseball-calendar date shown for a real day (one offset for the season). */
 /** §122.9 how much of him a game showed: plate appearances, or batters faced. */
+/** §122.9 a game shows what a player really is; §122.15 ours faster (or slower) by the scouting director. */
+function _expose(s, id, d) {
+  const p = s.players[id];
+  if (!p?._ratingGap) return;
+  const k = p.teamId === 'user' ? Coach.scoutExposure(s.userTeam?.coachingStaff, p) : 1;
+  exposeRatings(p, _faced(p, d) * k);
+}
+
 function _faced(p, d) {
   if (!p || !d) return 0;
   if (p.pos === 'SP' || p.pos === 'RP') return Math.round((d.ip || 0) * 3) + (d.h_allowed || 0) + (d.bb || 0) + (d.hbp || 0);
@@ -2791,6 +2807,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'roster') { /* the roster step above was the event */ }
     else if (next.kind === 'wxask') _wxUserCards(next.at);
     else if (next.kind === 'falook') {
+      CardEngine.directorTips(next.at);   // §122.15 our scouting director hears first (or doesn't)
       StateManager.mutate(s => { s.faLookAt = next.at; events.push(...cpuFreeAgentLook(s, next.at)); });
     }
     else events.push(..._runOffseasonStep(next.step, next.at));

@@ -21,6 +21,15 @@
  *   fired (the rest of the deal is paid out). A vacancy brings a hiring card
  *   with two candidates (candidates) fitted to what the unit needs.
  *
+ *   scoutingDirector (§122.15) pro (league veterans) · intl (players from abroad)
+ *                  · amateur (rookies and independent ball). Not a coach on the
+ *                  field: the director's quality and specialty move how sharp
+ *                  the scouts' reads are (scoutEye), how many free agents they
+ *                  look at a week (scoutLooks), how fast an untested player of
+ *                  ours shows what they are (scoutExposure), and the tips on a
+ *                  diamond before word gets around (tipChance / tipLeadDays).
+ *                  Evaluated on the market's diamonds the scouts got onto.
+ *
  *   CPU clubs' staffs are not modelled person by person: their coaching is
  *   league-typical (no effect). An empty chair coaches like a weak coach.
  *
@@ -31,14 +40,17 @@
 import { STAFF_NAMES } from '../data/player-names.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
 import { eventRand } from './Dice.js';
+import { PLAYER_ORIGIN, ARCHETYPE_CARD_WEIGHTS } from '../data/constants.js';
 
-export const COACH_ROLES = ['pitchingCoach', 'hittingCoach', 'bullpenCoach', 'benchCoach'];
+/** Every staff role with a quality and a specialty (the manager is separate). */
+export const COACH_ROLES = ['pitchingCoach', 'hittingCoach', 'bullpenCoach', 'benchCoach', 'scoutingDirector'];
 
 export const ROLE_INFO = {
   pitchingCoach: { label: 'Pitching Coach', title: 'pitching coach', base: 125, specialties: ['command', 'power', 'youth'] },
   hittingCoach:  { label: 'Hitting Coach',  title: 'hitting coach',  base: 125, specialties: ['contact', 'power', 'youth'] },
   bullpenCoach:  { label: 'Bullpen Coach',  title: 'bullpen coach',  base: 75,  specialties: ['command', 'late'] },
   benchCoach:    { label: 'Bench Coach',    title: 'bench coach',    base: 75,  specialties: ['baserunning', 'defense'] },
+  scoutingDirector: { label: 'Scouting Director', title: 'scouting director', base: 90, specialties: ['pro', 'intl', 'amateur'], scout: true },
 };
 
 const SPEC_WORDS = {
@@ -60,11 +72,20 @@ const SPEC_WORDS = {
     baserunning: 'a baserunning coach: more steals, more extra bases',
     defense:     'a defensive coach: cleaner fielding, fewer errors',
   },
+  scoutingDirector: {
+    pro:     'a pro scout: knows the league\'s veterans, and where a rating hides what a player does',
+    intl:    'an international scout: reads players from abroad',
+    amateur: 'an amateur scout: reads rookies and independent-league players',
+  },
 };
-const SPEC_SHORT = { command: 'command', power: 'power', youth: 'young players', contact: 'contact', late: 'late innings', baserunning: 'baserunning', defense: 'defense' };
+const SPEC_SHORT = { command: 'command', power: 'power', youth: 'young players', contact: 'contact', late: 'late innings', baserunning: 'baserunning', defense: 'defense',
+                     pro: 'pro scouting', intl: 'international', amateur: 'rookies and indie ball' };
 
 export const specialtyWords = (role, spec) => SPEC_WORDS[role]?.[spec] || '';
 export const specialtyShort = (spec) => SPEC_SHORT[spec] || spec || '';
+
+/** "coach" or "scout": what a person in this role is called in a sentence. */
+export const personWord = (role) => (ROLE_INFO[role]?.scout ? 'scout' : 'coach');
 
 export function qualityWord(q) {
   return q >= 82 ? 'elite' : q >= 72 ? 'very good' : q >= 62 ? 'solid' : q >= 52 ? 'average' : 'below-average';
@@ -154,6 +175,61 @@ export function winterBonus(staff, player, key, age) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// §122.15 THE SCOUTING DIRECTOR
+// ─────────────────────────────────────────────────────────────
+
+/** The specialty that reads this player best (by where they come from). */
+export function scoutSpecFor(p) {
+  if (p?.origin === PLAYER_ORIGIN.OVERSEAS) return 'intl';
+  if (p?.origin === PLAYER_ORIGIN.ROOKIE || p?.origin === PLAYER_ORIGIN.INDEPENDENT) return 'amateur';
+  return 'pro';
+}
+const _scout = (staff) => staff?.scoutingDirector;
+const _t = (q) => clamp((q - QUALITY_MIN) / (QUALITY_MAX - QUALITY_MIN), 0, 1);   // 0 (40) … 1 (90)
+const _fits = (staff, p) => _spec(_scout(staff), scoutSpecFor(p)) === 1;
+
+/**
+ * scoutEye(staff, p) — how sharp our read on this player is (the error of the
+ * scouts' read is 4 / eye rating points): 0.6 at 40, 1.0 at 60, 1.6 at 90;
+ * ×1.25 on the director's specialty. An empty chair reads like a 45.
+ */
+export function scoutEye(staff, p) {
+  const e = 0.6 + _t(qualityOf(_scout(staff))) * 1.0;
+  return _fits(staff, p) ? e * 1.25 : e;
+}
+
+/** Free agents the scouts look at a week: 2 (under 50) · 3 · 4 (70+) · 5 (82+). */
+export function scoutLooks(staff) {
+  const q = qualityOf(_scout(staff));
+  return q >= 82 ? 5 : q >= 70 ? 4 : q >= 50 ? 3 : 2;
+}
+
+/** How fast an untested player of ours shows what they are (× their playing): 0.75 (40) … 1.25 (90), ×1.2 on the specialty. */
+export function scoutExposure(staff, p) {
+  const f = 0.75 + 0.5 * _t(qualityOf(_scout(staff)));
+  return _fits(staff, p) ? f * 1.2 : f;
+}
+
+/** The chance the director hears about a diamond before the league does: 0.1 (40) … 0.7 (90), ×1.3 on the specialty. */
+export function tipChance(staff, p) {
+  const c = _scout(staff);
+  if (!c || c.vacant) return 0;
+  const x = 0.1 + 0.6 * _t(qualityOf(c));
+  return Math.min(0.85, _fits(staff, p) ? x * 1.3 : x);
+}
+
+/** How many days after a diamond turns up the director's tip comes: 7 (40) … 1 (90). */
+export const tipLeadDays = (staff) => 1 + Math.round(6 * (1 - _t(qualityOf(_scout(staff)))));
+
+/** The archetype's director at a new franchise (an analytics club starts with a good one). */
+export function startingDirector(archetype, rand = eventRand) {
+  const w = ARCHETYPE_CARD_WEIGHTS[archetype]?.scouting ?? 1.0;
+  const quality = rollQuality(rand, 58 + (w - 1) * 40, 8);
+  const specialty = { lab: 'pro', ember: 'amateur', gambler: 'intl' }[archetype] || _pick(ROLE_INFO.scoutingDirector.specialties, rand);
+  return { quality, specialty };
+}
+
+// ─────────────────────────────────────────────────────────────
 // THE OFFSEASON — evaluation, candidates, decisions
 // ─────────────────────────────────────────────────────────────
 
@@ -212,6 +288,13 @@ export function evaluate(role, U) {
     score = 0.5 * _rankScore(U.sbPct, of) + 0.5 * (onePct == null ? 0.5 : clamp((onePct - 0.35) / 0.3, 0, 1));
     if (U.sbN + U.csN > 0) facts.push(`${U.sbN} steals in ${U.sbN + U.csN} tries${U.sbPct?.rank ? ` (success rate ${rk(U.sbPct)})` : ''}`);
     if (one.w + one.l) facts.push(`a ${one.w}–${one.l} record in one-run games`);
+  } else if (role === 'scoutingDirector') {
+    // §122.15 the market's diamonds that went somewhere this season: how many the scouts were onto first.
+    const S = U.scouting || {};
+    const n = (S.onto || 0) + (S.missed || 0);
+    score = n ? 0.25 + 0.6 * (S.onto || 0) / n + 0.05 * Math.min(3, S.found || 0) : 0.5 + 0.05 * Math.min(3, S.found || 0);
+    if (n) facts.push(`the scouts were onto ${S.onto || 0} of the ${n} finds on the market before word got around`);
+    if (S.found) facts.push(`we signed ${S.found} of the players they found${S.foundImp != null ? ` (Impact ${S.foundImp >= 0 ? '+' : ''}${f1(S.foundImp)} between them)` : ''}`);
   }
   score = clamp(score, 0, 1);
   const verdict = score >= 0.62 ? 'good' : score <= 0.38 ? 'poor' : 'fair';
@@ -232,6 +315,11 @@ export function neededSpecialty(role, U, state) {
   if (role === 'hittingCoach')  return bad(U?.obp) ? 'contact' : bad(U?.slg) ? 'power' : young(false) >= 4 ? 'youth' : 'contact';
   if (role === 'bullpenCoach')  return U?.svo && U.bs / U.svo > 0.3 ? 'late' : 'command';
   if (role === 'benchCoach')    return bad(U?.sbPct) ? 'baserunning' : 'defense';
+  if (role === 'scoutingDirector') {
+    const by = U?.scouting?.missedBy || {};
+    const top = Object.entries(by).sort((a, b) => b[1] - a[1])[0];
+    return top && top[1] > 0 ? top[0] : 'pro';
+  }
   return ROLE_INFO[role]?.specialties[0];
 }
 
@@ -240,6 +328,7 @@ const BACKGROUNDS = {
   hittingCoach:  ['hit .280 over a long big-league career', 'was the assistant hitting coach on a pennant winner', 'ran a hitting lab that pro players use in the winter', 'coached hitters in the minors for a decade', 'was a scout before turning to coaching'],
   bullpenCoach:  ['closed games for six seasons', 'caught for nine years and handled a lot of bullpens', 'was a minor-league pitching coach', 'ran a club\'s relief-pitcher program'],
   benchCoach:    ['managed in the minors for eight years', 'was a utility infielder known for reading the game', 'ran a club\'s defensive positioning', 'coached third base on two playoff teams'],
+  scoutingDirector: ['ran a club\'s pro scouting for six years', 'built a scouting network in the Caribbean', 'scouted the independent leagues for a decade', 'was a crosschecker for a club that won a title', 'moved from the analytics department into scouting'],
 };
 
 /**
@@ -327,6 +416,11 @@ export function needReason(role, spec, U) {
   if (role === 'bullpenCoach') {
     if (spec === 'late') return `the late innings: ${U?.bs ?? 0} blown saves in ${U?.svo ?? 0} chances`;
     return 'strike-throwing out of the bullpen';
+  }
+  if (role === 'scoutingDirector') {
+    const by = U?.scouting?.missedBy || {};
+    const where = { pro: 'league veterans', intl: 'players from abroad', amateur: 'rookies and independent-league players' }[spec];
+    return by[spec] ? `${where}: ${by[spec]} of the market's finds among them went elsewhere before we were onto them` : `reading ${where}`;
   }
   if (role === 'benchCoach') {
     if (spec === 'baserunning') return `baserunning: ${U?.sbN ?? 0} steals in ${(U?.sbN ?? 0) + (U?.csN ?? 0)} tries`;

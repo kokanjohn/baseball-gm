@@ -91,7 +91,7 @@ console.log('\nEvaluation');
 const U = (rk, extra = {}) => ({ of: 16, spEra: { v: 4, rank: rk }, bb9: { v: 3, avg: 3.2, rank: rk }, k9: { v: 8, avg: 8, rank: rk },
   ops: { v: .7, rank: rk }, obp: { v: .32, avg: .32, rank: rk }, slg: { v: .4, avg: .4, rank: rk }, rpEra: { v: 4, rank: rk },
   sbPct: { v: .7, rank: rk }, bs: 10, svo: 50, sbN: 80, csN: 30, oneRun: { w: 20, l: 20 }, growth: { arms: 0, bats: 0, armsN: 0, batsN: 0 }, ...extra });
-check('a top unit grades good, a bottom one poor', Coach.COACH_ROLES.filter(r => r !== 'benchCoach').every(r => Coach.evaluate(r, U(1)).verdict === 'good' && Coach.evaluate(r, U(16)).verdict === 'poor'));
+check('a top unit grades good, a bottom one poor', Coach.COACH_ROLES.filter(r => r !== 'benchCoach' && !Coach.ROLE_INFO[r].scout).every(r => Coach.evaluate(r, U(1)).verdict === 'good' && Coach.evaluate(r, U(16)).verdict === 'poor'));
 const cands = Coach.candidates(st, 'pitchingCoach', U(14), { taken: new Set(Object.values(staff0).map(c => c.name)) });
 console.log(`    candidates: ${cands.map(c => `${c.name} ${c.quality} ${c.specialty} ${c.salary}K (${c.background})`).join(' | ')}`);
 check('two candidates: the first fits the need (command — walks ranked 14th), different names, not on the staff',

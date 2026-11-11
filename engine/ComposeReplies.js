@@ -16,7 +16,7 @@ import { MS_HOUR, MS_DAY } from './WeatherClimate.js';
 import { crowdFor } from './FinanceEngine.js';
 import { worthOf, trueOVR, isDiamond } from './Diamonds.js';
 import { signingTerms } from './MarketEngine.js';
-import { ARCHETYPE_CARD_WEIGHTS } from '../data/constants.js';
+import { scoutEye as directorEye, scoutLooks } from './CoachEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -71,7 +71,7 @@ const STAFF = {
   groundskeeper:   { rel: 'groundskeeperRelationship',  role: 'Head Groundskeeper' },
   facilities:      { rel: 'facilitiesRelationship',     role: 'Facilities & Ops' },
   ticket_office:   { rel: 'ticketOfficeRelationship',   role: 'Ticket Office' },
-  scouting:        { role: 'Scouting Director' },
+  scouting:        { key: 'scoutingDirector', role: 'Scouting Director' },
   media_relations: { role: 'Media Relations' },
   community:       { role: 'Community Affairs' },
 };
@@ -463,8 +463,8 @@ const ORIGIN_WORDS = {
   independent: 'out of independent ball, so the ratings are mostly our scouts\' estimate',
 };
 const gauss = (r) => { let u = 0, v = 0; while (u === 0) u = r(); while (v === 0) v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
-/** How sharp this club's scouting eye is: the archetype's scouting strength (1.0 – 1.6). */
-const scoutEye = (f) => ARCHETYPE_CARD_WEIGHTS[f.state.archetype]?.scouting || 1.0;
+/** §122.15 how sharp our read on this player is: the scouting director's quality and specialty. */
+const scoutEye = (f, p) => directorEye(f.state.userTeam?.coachingStaff, p);
 
 /** A coach's or scout's read of an untested player against the ratings: +1 better, −1 worse, 0 about right. */
 function readOfUntested(p, r, sigma) {
@@ -721,28 +721,29 @@ W.sc_prospect = (f, r, who) => {
 };
 
 /**
- * §122.9 the scouts look over the free agents: three players a week, the ones
- * they think are worth more than their ratings. How sharp the eye is depends on
- * the club's scouting (the archetype). An untested player: is he better than the
+ * §122.9 the scouts look over the free agents: a few players a week (2–5, by the
+ * director: scoutLooks), the ones they think are worth more than their ratings.
+ * How sharp the eye is depends on the scouting director (§122.15: quality, and
+ * the specialty that fits where the player comes from). An untested player: is he better than the
  * estimate? A proven one: does his role make him better than his rating? And
  * whether other clubs have caught on yet.
  */
-const FA_LOOKS_PER_WEEK = 3;
 W.sc_free_agents = (f, r, who) => {
   const st = f.state, level = st.leagueTalentOffset || 0;
   const week = f.pastReplies('sc_free_agents').filter(x => f.atMs - x.atMs < 7 * MS_DAY);
   const seenWeek = week.flatMap(x => x.memo?.playerIds || []);
-  const left = FA_LOOKS_PER_WEEK - seenWeek.length;
+  const looks = scoutLooks(st.userTeam?.coachingStaff);
+  const left = looks - seenWeek.length;
   if (left <= 0) {
     const next = Math.min(...week.map(x => x.atMs)) + 7 * MS_DAY;
     const names = seenWeek.map(f.P).filter(p => p && p.group === 'freeAgent').map(p => p.name);
-    return { body: [`We've already looked at our ${FA_LOOKS_PER_WEEK} this week${names.length ? ` (${list(names)}${names.length === 1 ? ' is' : ' are'} still out there)` : ''}. The next look is ${f.onWhen(next)}.`], memo: { playerIds: [] } };
+    return { body: [`We've already looked at our ${looks} this week${names.length ? ` (${list(names)}${names.length === 1 ? ' is' : ' are'} still out there)` : ''}. The next look is ${f.onWhen(next)}.`], memo: { playerIds: [] } };
   }
   const recent = new Set(f.pastReplies('sc_free_agents').filter(x => f.atMs - x.atMs < 30 * MS_DAY).flatMap(x => x.memo?.playerIds || []));
-  const eye = scoutEye(f), sigma = 4 / eye;
+  const sigmaOf = (p) => 4 / scoutEye(f, p);
   const pool = (st.freeAgentPool || []).map(f.P).filter(p => p && p.group === 'freeAgent' && !p.isInjured && !recent.has(p.id));
   if (!pool.length) return { body: ['There\'s nobody new on the market worth the trip right now.'], memo: { playerIds: [] } };
-  const seen = pool.map(p => ({ p, worth: worthOf(p) + gauss(r) * sigma }))
+  const seen = pool.map(p => ({ p, worth: worthOf(p) + gauss(r) * sigmaOf(p) }))
     .map(x => ({ ...x, edge: x.worth - (x.p.ovr || 0) }))
     .filter(x => x.worth - level >= 42)
     .sort((a, b) => (b.edge + 0.3 * (b.worth - level)) - (a.edge + 0.3 * (a.worth - level)))
@@ -755,7 +756,7 @@ W.sc_free_agents = (f, r, who) => {
     const last = (p.seasonLog || []).filter(e => e?.stats).at(-1);
     const lines = [`${p.name} (${p.nativePos || p.pos}, ${f.age(p)}, OVR ${p.ovr}, asking ${ask.salary ? `$${ask.salary}K` : 'the minimum'}${ask.bonus ? ` with a $${ask.bonus}K bonus` : ''}):`];
     if (p._ratingGap) {
-      const read = readOfUntested(p, r, sigma);
+      const read = readOfUntested(p, r, sigmaOf(p));
       lines.push(`${Cap(ORIGIN_WORDS[p.origin] || 'new to the league')}. ${read > 0 ? 'Our read: better than the reports — this could be a real find.' : read < 0 ? 'Our read: not as good as the reports.' : 'Our read: about what the reports say.'}`);
     } else if (p.pos === 'RP' && (sr.stamina ?? 99) <= 48 && edge >= 3) {
       lines.push(`The rating counts stamina (${sr.stamina}), and that's the weak spot. For an inning out of the bullpen, the stuff (${sr.stuff}) and control (${sr.control}) play better than the number.${last?.stats?.ip >= 20 ? ` Last year: a ${eraOf(last.stats.er, last.stats.ip).toFixed(2)} ERA in ${Math.round(last.stats.ip)} innings.` : ''}`);

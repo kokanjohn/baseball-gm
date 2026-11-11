@@ -377,6 +377,28 @@ const indieSign = {
 
 const REGULAR_OR_SPRING = new Set([...REGULAR, PHASE.SPRING_TRAINING]);
 
+/**
+ * §122.15 a free agent the scouting director tipped us to: sign at the asking
+ * terms (a bonus is paid now). With the player's side of the 28 full, the
+ * reserve the GM picked (or the weakest) goes on waivers.
+ */
+const signTarget = {
+  feasible(st, c) {
+    const p = st.players[c._targetPlayerId];
+    if (!p || !isFA(st, p.id) || !REGULAR_OR_SPRING.has(st.phase)) return false;
+    const side = sideOf(p), out = dropFor(st, c, side);
+    if (rosterIsFull(st, 'user', side) && !out) return false;
+    const t = signingTerms(st, p);
+    return Finance.canAddSalary(st, t.salary, out ? salaryOf(st, out) : 0) && spends(st, t.bonus || 0);
+  },
+  apply(d, c, atMs) {
+    const id = c._targetPlayerId;
+    const t = signingTerms(d, d.players[id]);
+    payBonus(d, t.bonus || 0, `Signing bonus — ${d.players[id]?.name}`, atMs);
+    return signToClub(d, id, 'user', atMs, { terms: t, displaceId: dropFor(d, c, sideOf(d.players[id])) });
+  },
+};
+
 // ─────────────────────────────────────────────────────────────
 // LIFE, THE BALLPARK AND THE FRONT OFFICE (§74)
 // ─────────────────────────────────────────────────────────────
@@ -439,6 +461,7 @@ export const CARD_ACTIONS = Object.freeze({
   scouting_indie_tip:    indieTip,
   indie_sign:            indieSign,
   sr2_shakeup:           signStarter,   // §122 the shake-up: a veteran free agent who'd start
+  scout_tip_sign:        signTarget,    // §122.15 the scouting director's tip
   personal_leave:        personalLeave,
   ill5a_crew:            staffShort('crew'),
   ill5b_mascot:          staffShort('mascot'),
