@@ -116,6 +116,9 @@ export function buildTokenMap(cardDef, context, state) {
   values.funds_now      = formatK(fin?.funds || 0);
   values.payroll_target = formatK(fin?.payrollTarget || 0);
   values.record_now     = `${userTeam.wins || 0}–${userTeam.losses || 0}`;
+  // r147 what ownership expects this season (the season-end review holds us to it).
+  values.win_target     = String(userTeam._ownerWinTarget || 75);
+  values.win_target_up  = String((userTeam._ownerWinTarget || 75) + 3);
   // A CPU club whose owner is cutting payroll, and its most expensive contract outside its core.
   const troubled = (state.leagueTeams || []).filter(t => ['cuts', 'concerned'].includes(t.finances?.owner?.stage))
     .sort((a, b) => (b.finances.owner.stage === 'cuts') - (a.finances.owner.stage === 'cuts'))[0];

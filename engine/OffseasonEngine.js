@@ -283,11 +283,16 @@ function _salaryFor(ovr) {
  * league-wide OVR scale, discounted with age; length by age and standing.
  * @returns {{ salary: Number ($K), years: Number }}
  */
+/** r147 how much more an agent who was turned down asks of us (×). */
+export const AGENT_GRUDGE_MARKUP = 1.1;
+
 export function marketTerms(draft, player) {
   const age = computeAge(player.dob, baseballYear(draft) + 1);
   const rel = (player.ovr || 50) - (draft.leagueTalentOffset || 0);
   const ageFactor = age >= 34 ? 0.7 : age >= 32 ? 0.85 : 1;
-  const salary = Math.max(20, Math.round(_salaryFor(player.ovr || 50) * ageFactor / 5) * 5);
+  // r147 an agent who was turned down (a bonus refused) asks us for more at the next negotiation.
+  const grudge = player._agentGrudge && player.teamId === 'user' ? AGENT_GRUDGE_MARKUP : 1;
+  const salary = Math.max(20, Math.round(_salaryFor(player.ovr || 50) * ageFactor * grudge / 5) * 5);
   const years = age >= 34 ? 1
     : age >= 31 ? (rel >= 60 ? 2 : 1)
     : age >= 28 ? (rel >= 60 ? 3 : 2)
@@ -303,6 +308,7 @@ export function applyContract(draft, playerId, terms, { startNow = false } = {})
   const p = draft.players[playerId];
   if (!p) return;
   const start = (draft.seasonNum || 1) + (startNow ? 0 : 1);
+  delete p._agentGrudge;   // r147 a new deal settles it
   Object.assign(p, {
     contractSalary:        terms.salary,
     contractYears:         terms.years,

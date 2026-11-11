@@ -22,23 +22,23 @@ export const MOMENT_CARDS = Object.freeze({
 
   // ── The day the GM takes over ───────────────────────────────────────────
   takeover: [
-    {id:'mo_take_presser',type:'good',tag:'CULTURE',sender:'PR Dept.',avatar:'🎤',
+    {id:'mo_take_presser', _promise:{yes:{kind:'presser_winner',when:'season_end'}},type:'good',tag:'CULTURE',sender:'PR Dept.',avatar:'🎤',
      subject:'Your introductory press conference is set',
      preview:'The media wants to meet the new GM of the {team_name}…',
-     body:"The {team_city} press corps wants its first look at the new GM. PR has a podium, a backdrop and a short list of questions they expect: the roster, the payroll and what fans should expect this year. Promise a winner out loud and the fan base will love it, though ownership would rather you not set a public bar on day one. Keep it measured and the stands stay quieter, but ownership will like the restraint.",
+     body:"The {team_city} press corps wants its first look at the new GM. PR has a podium, a backdrop and a short list of questions they expect: the roster, the payroll and what fans should expect this year. Promise a winner out loud and the fan base will love it today, but they will hold you to it: at the end of the season, a winning record pays off with the fans, and a losing one costs you with them and with ownership. Keep it measured and the stands stay quieter, and nobody has a promise to remember.",
      yesLabel:'Promise a Winner',noLabel:'Keep It Measured',
      yesEffect:{atmo:4,ownerTrust:-2},noEffect:{atmo:1,ownerTrust:2},
      yesMsg:'Headline tomorrow: "New GM: We\'re Here to Win Now." The phones lit up.',
      noMsg:'A steady first impression. One columnist called it "refreshingly honest."'},
 
     {id:'mo_take_owner_dinner',type:'normal',tag:'OWNERSHIP',sender:'{owner_name}',avatar:'🍽️',_when:{archetypes:['empire','contender']},
-     subject:'Dinner with ownership — they want to hear the plan',
-     preview:'{owner_name} wants your plan for the {team_nickname} over dinner…',
-     body:"{owner_name}: \"Welcome aboard. I didn't bring you here to rebuild — I brought you here to win. Dinner at my club. Bring the plan.\" Walk in with a bold, specific plan for this season and ownership is won over (the players will hear about it, too). Ask for the first month to evaluate the roster instead, and {owner_name} will take it as hedging.",
-     yesLabel:'Bring a Bold Plan',noLabel:'Ask for a Month to Evaluate',
-     yesEffect:{ownerTrust:4,morale:1},noEffect:{ownerTrust:-2},
-     yesMsg:'Ownership loved it. "That\'s what I want to hear." Now it has to happen.',
-     noMsg:'"A month," ownership repeated, not smiling. "Fine. Use it well."'},
+     subject:'Dinner with ownership — what are we promising?',
+     preview:'{owner_name} wants to know what to expect from the {team_nickname} this year…',
+     body:"{owner_name}, over dinner at the club: \"Welcome aboard. I didn't bring you here to rebuild — I brought you here to win. So tell me: what should I expect this year?\" Ownership's target for this season is {win_target} wins, and the season-end review holds you to it. Telling {owner_name} we're here to win wins ownership over tonight (and the players will hear about it), but the target goes up to {win_target_up}. Asking for patience keeps the target at {win_target}, and {owner_name} won't love hearing it on your first night.",
+     yesLabel:'Tell Ownership We\'re Here to Win',noLabel:'Ask for Patience',
+     yesEffect:{ownerTrust:4,morale:1,winTarget:3},noEffect:{ownerTrust:-2},
+     yesMsg:'Ownership loved it. "That\'s what I want to hear." The target is {win_target_up} wins now.',
+     noMsg:'"Patience," ownership repeated, not smiling. "Fine. {win_target} wins, and I\'ll be counting."'},
 
     {id:'mo_take_owner_note',type:'normal',tag:'OWNERSHIP',sender:'{owner_name}',avatar:'✉️',_when:{archetypes:['ember','lab','institution']},
      subject:'A handwritten note from ownership',
@@ -98,10 +98,10 @@ export const MOMENT_CARDS = Object.freeze({
 
   // ── First day of camp (seasons after the first) ─────────────────────────
   camp_open: [
-    {id:'mo_camp_win_hangover',type:'normal',tag:'COACHING',sender:'{manager_name} (Manager)',avatar:'📋',_when:{last:'winning'},
+    {id:'mo_camp_win_hangover', _promise:{no:{kind:'hangover',afterDays:21}},type:'normal',tag:'COACHING',sender:'{manager_name} (Manager)',avatar:'📋',_when:{last:'winning'},
      subject:'Camp opens — {manager_name} on avoiding a hangover',
      preview:'Coming off {last_record}, the manager is worried about a comfortable clubhouse…',
-     body:"{manager_name}: \"Coming off {last_record}, everybody walked in smiling. That's what scares me. I want to open camp with a hard week — set the tone that last year is over. Or we ride the good feeling and ease them in.\" A hard week is what {manager_name} wants, though the players won't enjoy it. Riding the good feeling keeps the room happy.",
+     body:"{manager_name}: \"Coming off {last_record}, everybody walked in smiling. That's what scares me. I want to open camp with a hard week — set the tone that last year is over. Or we ride the good feeling and ease them in.\" A hard week is what {manager_name} wants, though the players won't enjoy it. Riding the good feeling keeps the room happy, and {manager_name} will be watching the first three weeks of results: a good start proves you right; a bad one, and the manager will say so.",
      yesLabel:'Hard Week — Last Year Is Over',noLabel:'Ride the Good Feeling',
      yesEffect:{manConf:3,morale:-1},noEffect:{morale:3},
      yesMsg:'First day: 7 a.m. fielding drills. Nobody\'s smiling now, and that was the point.',
@@ -145,7 +145,7 @@ export const MOMENT_CARDS = Object.freeze({
      noMsg:'Full camp. "Noted," the CFO said.',
      _budgetCost:{no:'misc_cost_sm'}},
 
-    {id:'mo_camp_flush',type:'good',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🛠️',_when:{funds:'flush'},
+    {id:'mo_camp_flush', _promise:{no:{kind:'deferred_work',when:'winter',params:{sender:'Stadium Ops.',avatar:'🏗️',tag:'FACILITIES',subject:'The spring complex work you pushed to this winter',intro:'Last spring we pushed the new hitting tunnels and recovery room to the winter. Here it is, and the contractor\'s price went up.',yesLabel:'Build It Now',noLabel:'Push It Again',yesText:'Building it now gives the players the new facilities when they report.',noText:'Pushing it again keeps the money, and the players will be back in the old tunnels, which they will mention.',yesEffect:{morale:2},noEffect:{morale:-2},yesMsg:'Construction starts this week. Done before report day.',noMsg:'Pushed again. The old tunnels it is.',markup:1.1}}},type:'good',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🛠️',_when:{funds:'flush'},
      subject:'The spring complex upgrade is ready to go',
      preview:'With the books healthy, ops wants to finish the new hitting tunnels before camp…',
      body:"With the books healthy, Stadium Ops can finish the new hitting tunnels and recovery room at the spring complex before the first workout ({misc_cost_sm}). Finishing now gives the players better facilities from day one, and the fans hear about it. Pushing it to next winter keeps the money in the bank.",

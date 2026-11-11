@@ -2870,6 +2870,8 @@ function _runOffseasonStep(step, atMs) {
     CardEngine.deliverPriorityCard(cardAt(1, OFFSEASON_REVIEW_HOUR), Offseason.dayStart(os, 5));
     // §112.4 a champion's city wants its parade now, not on day 9.
     if (StateManager.get().offseason?.review?.outcome === 'champion') CardEngine.deliverFanEventCard(cardAt(1, 15), Offseason.dayStart(os, 4));
+    // r147 promises judged on the season's record (a podium promise, a roster called set).
+    CardEngine.keepPromises('season_end', cardAt(1, 14));
     done();
     return events;
   }
@@ -2901,6 +2903,8 @@ function _runOffseasonStep(step, atMs) {
         });
       }
     }
+    // r147 the bills put off until the winter come due (decide before spring); a sponsor who didn't renew.
+    CardEngine.keepPromises('winter', cardAt(2, 16), springAt);
     done();
     return events;
   }
@@ -2943,6 +2947,8 @@ function _runOffseasonStep(step, atMs) {
         s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('milestone', 'LEAGUE', line, atMs)]);
         _wireAdd(s, [{ atMs, kind: 'signing', teamIds: [], text: line }]);
       });
+      // r147 a player the scouts saw at our ballpark is in the class.
+      CardEngine.keepPromises('fa_opens', atMs + 2 * 3600_000);
     }
     _cpuFreeAgencyRound(atMs);
     // §112.5 the winter meetings (days 6–7): every club in one hotel — the
@@ -2992,6 +2998,8 @@ function _runOffseasonStep(step, atMs) {
       s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
         buildActivityFeedEntry('milestone', s.userTeam.abbr, `Spring training opens — Season ${s.seasonNum}`, atMs)]);
     });
+    // r147 promises for "next spring": the staff remembers, the boosters come back.
+    CardEngine.keepPromises('spring', atMs + 10 * 3600_000);
     return events;
   }
   return events;

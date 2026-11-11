@@ -58,8 +58,10 @@ import {
 
 import {
   confirmDiagnosis, placeOnILUpdate, dayToDayUpdate, dayToDayAllowed,
-  clearInjuryUpdate, ilMinDays,
+  clearInjuryUpdate, ilMinDays, beginInjury,
 } from './InjuryEngine.js';
+import { resolvePromise, PROMISE_WHEN } from './Promises.js';
+import { exposeRatings } from './Diamonds.js';
 import {
   activateFromIL, placeOnWaivers, reconcileRoster, applyRosterMutation, reserveGroup,
   HITTER_TARGET, PITCHER_TARGET,
@@ -328,6 +330,7 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
   // Handle roster actions
   _applyRosterAction(instance, choice, StateManager.get(), { atMs: clockNow(), feasible: actionOk });
   _maybeChainFollowup(instance, choice, clockNow());
+  _makePromise(instance, choice, clockNow());
 }
 
 /**
@@ -337,6 +340,114 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
  * the same players, a few days later (delays were written in games; the
  * league plays about one a day).
  */
+// ─────────────────────────────────────────────────────────────
+// r147 PROMISES — a decision whose words say something will happen later
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * _makePromise(instance, choice, atMs) — the card's `_promise[choice]`, if any:
+ * an agent's grudge is marked at once; a promise judged N days later is
+ * parked as a placeholder message now; one judged at a moment of the year
+ * (season's end, the winter, free agency, next spring) waits in
+ * state.promises for that moment (keepPromises). See engine/Promises.js.
+ */
+function _makePromise(instance, choice, atMs) {
+  const def = instance._raw?._promise?.[choice === 'auto' ? (instance.autoResolve === 'yes' ? 'yes' : 'no') : choice];
+  if (!def) return;
+  const st = StateManager.get();
+  const tp = instance._tokenPlayers || {};
+  const playerId = (def.player && tp[def.player]) || instance._targetPlayerId || Object.values(tp)[0] || null;
+  if (def.kind === 'agent_grudge') {
+    if (playerId) StateManager.mutate(s => { if (s.players[playerId]) s.players[playerId]._agentGrudge = true; });
+    return;
+  }
+  const rec = {
+    id: diceId(dice(diceSeed(st), 'promise', instance.instanceId, choice)),
+    kind: def.kind, cardId: instance.cardId, choice: choice === 'auto' ? (instance.autoResolve === 'yes' ? 'yes' : 'no') : choice,
+    madeAtMs: atMs, season: st.seasonNum || 1, playerId,
+    costK: instance._budgetCost || null, costNoK: instance._budgetCostNo || null,
+    params: def.params || null, when: def.when || null, redeal: def.redeal || null,
+  };
+  if (def.afterDays) { _schedulePromise(rec, atMs + def.afterDays * 86_400_000); return; }
+  StateManager.mutate(s => { s.promises = [...(s.promises || []), rec]; });
+}
+
+function _schedulePromise(rec, atMs, expiresAtMs = null) {
+  const st = StateManager.get();
+  return _deliverAt(_rosterCard(st, {
+    cardId: `promise_${rec.kind}`, _rosterKey: `promise:${rec.id}`, _promiseRec: rec,
+    tag: 'NOTE', noLabel: null, yesLabel: 'Understood', autoResolve: 'skip',
+    expiresAtMs: expiresAtMs || atMs + 24 * 3600_000, _raw: {},
+  }), atMs);
+}
+
+/**
+ * keepPromises(when, atMs, expiresAtMs) — the moment of the year has come:
+ * every promise waiting for it becomes a message at `atMs` (staggered a few
+ * minutes apart). A promise "for next spring" made last season, one "for the
+ * season's end" made this season. A re-deal promise brings its card back.
+ */
+export function keepPromises(when, atMs, expiresAtMs = null) {
+  if (!PROMISE_WHEN.includes(when)) return 0;
+  const st = StateManager.get();
+  const season = st.seasonNum || 1;
+  const due = (st.promises || []).filter(r => r.when === when && (when === 'spring' ? r.season < season : r.season <= season));
+  if (!due.length) return 0;
+  StateManager.mutate(s => { const ids = new Set(due.map(r => r.id)); s.promises = (s.promises || []).filter(r => !ids.has(r.id)); });
+  due.forEach((rec, i) => {
+    const at = atMs + i * 7 * 60_000;
+    if (rec.redeal) _deliverFollowupDef(rec.redeal, {}, at);
+    else _schedulePromise(rec, at, expiresAtMs);
+  });
+  return due.length;
+}
+
+/**
+ * The placeholder lands: written from the world as it is now. Returns the
+ * message (or null) and what lands with it; `_landPromises` applies those
+ * inside the release, `_afterLanding` does what needs its own step (an injury).
+ */
+function _writePromise(state, c) {
+  const rec = c._promiseRec;
+  const res = resolvePromise(state, rec, c.deliverAtMs);
+  if (!res) return { card: null, land: null };
+  if (!res.card) return { card: null, land: res.land };
+  const f = res.card;
+  const decision = !!f._decision;
+  const card = {
+    ...c, ...f, _promiseRec: undefined, _promiseKind: rec.kind,
+    preview: f.preview || String(f.body || '').split('. ')[0] + '.',
+    type: f.type || 'normal',
+    ...(decision ? { autoResolve: 'no', _raw: {}, expiresAtMs: c.expiresAtMs } : { noLabel: null, yesLabel: 'Understood' }),
+  };
+  delete card._decision;
+  return { card, land: res.land };
+}
+
+function _landPromises(s, landed, atMs) {
+  for (const { land, card } of landed) {
+    if (!land) continue;
+    if (land.effects) _applySoftEffects(s, land.effects, 'yes', card || {});
+    if (land.fundsK) Finance.post(s.userTeam.finances, land.fundsK, 'cards', land.fundsLabel || card?.subject || 'Front office', atMs);
+    if (land.dip && s.players[land.dip]) Development.setCondition(s, land.dip, { amount: 2, games: 3, reason: 'promise' });
+    if (land.scouted && s.players[land.scouted]) s.players[land.scouted]._scoutedAt = atMs;
+    if (land.sharpen && s.players[land.sharpen]) exposeRatings(s.players[land.sharpen], 300);
+    if (land.feed) s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('ours', s.userTeam.abbr, land.feed, atMs)]);
+  }
+}
+
+function _afterLanding(landed, atMs) {
+  for (const { land } of landed) {
+    if (!land?.injure) continue;
+    const id = land.injure;
+    const st = StateManager.get();
+    const p = st.players[id];
+    if (!p || p.isInjured) continue;
+    StateManager.mutate(s => { Object.assign(s.players[id], beginInjury(s.players[id], atMs, 'minor', dice(diceSeed(s), 'promise-injury', id, atMs))); });
+    deliverInjuryAct2(id, atMs);
+  }
+}
+
 function _maybeChainFollowup(instance, choice, atMs) {
   const f = instance._raw?._followup;
   if (!f || (f.on && f.on !== choice) || eventRand() >= (f.chance ?? 1)) return;
@@ -416,6 +527,7 @@ export function expire(instanceId, atMs = clockNow()) {
     _applyChoiceMoney(s, instance, def);
     _applySoftEffects(s, tax, 'auto', instance);
   });
+  _makePromise(instance, def, atMs);   // r147 the default's promise, too
   // §74: an unanswered card that resolves to "no" does what "no" does (e.g.
   // a player on personal leave still goes, for the minimum).
   const onNo = instance._raw?.onNo;
@@ -1701,6 +1813,14 @@ function _releaseDue(nowMs) {
   const ids = new Set(due.map(c => c.instanceId));
   // §106 a staff reply is written now, as of the moment it was sent back.
   const log = [];
+  // r147 a promise lands: written now, from the world as it is (or nothing to say).
+  const landed = [];
+  due = due.map(c => {
+    if (!c._promiseRec) return c;
+    const w = _writePromise(state, c);
+    landed.push({ ...w, atMs: c.deliverAtMs });
+    return w.card;
+  }).filter(Boolean);
   due = due.map(c => {
     if (!c._composeWrite) return c;
     const reply = writeComposeReply(state, { topicId: c._composeTopic, channelId: c._composeChannel, atMs: c.deliverAtMs,
@@ -1729,7 +1849,9 @@ function _releaseDue(nowMs) {
     if (log.length) s.composeLog = [...(s.composeLog || []), ...log].slice(-COMPOSE_LOG_MAX);
     // §122.15 the players the scouts named to the GM (kept on the player: the log is short).
     for (const e of log) for (const id of e.memo?.playerIds || []) if (s.players[id]) s.players[id]._scoutedAt = e.atMs;
+    for (const l of landed) _landPromises(s, [l], l.atMs);   // r147 what a promise brings, as it lands
   });
+  for (const l of landed) _afterLanding([l], l.atMs);
   for (const fn of _releaseHooks) fn(StateManager.get(), due);
   return due;
 }
@@ -1987,6 +2109,8 @@ export function deliverCardById(cardId) {
     PREGAME_POOL,
     INGAME_POOL,
     BETWEEN_GAMES_POOL,
+    MONEY_BETWEEN, MONEY_PREGAME,                 // r147 the money cards
+    ...Object.values(MOMENT_CARDS),               // and the moments, too
   ];
 
   let cardDef = null;
@@ -2017,6 +2141,7 @@ export function deliverCardById(cardId) {
     s.inbox = [...(s.inbox || []), { ...instance, _debugInjected: true, arrivedAtMs: clockNow() }];
     _sortInbox(s.inbox);
   });
+  return instance;
 }
 
 /**
@@ -2589,6 +2714,8 @@ function _applySoftEffects(state, effects, choice, instance) {
 
   if (effects.morale     !== undefined) state.userTeam.morale           = clamp((state.userTeam.morale     || 50) + effects.morale,     0, 100);
   if (effects.atmo       !== undefined) state.userTeam.atmosphere       = clamp((state.userTeam.atmosphere || 50) + effects.atmo,       0, 100);
+  // r147 what ownership expects this season: the win target the season-end review holds us to.
+  if (effects.winTarget  !== undefined) state.userTeam._ownerWinTarget  = clamp((state.userTeam._ownerWinTarget || 75) + effects.winTarget, 50, 110);
   if (effects.atmosphere !== undefined) state.userTeam.atmosphere       = clamp((state.userTeam.atmosphere || 50) + effects.atmosphere, 0, 100);
   if (effects.ownerTrust !== undefined) state.userTeam.ownerTrust       = clamp((state.userTeam.ownerTrust || 60) + effects.ownerTrust, 0, 100);
   // Manager confidence: cards were written with both spellings (§78.8 audit —
@@ -3806,7 +3933,7 @@ export function deliverResignCard(playerId, atMs, expiresAtMs) {
     preview: `${X.line ? `${X.line}. ` : ''}Asking ${formatK(terms.salary)} a year for ${_years(terms.years)}.`,
     body: `${_who(p)}, ${X.age} next season, becomes a free agent unless we re-sign. `
         + _contractSentences(state, p, X) + ' '
-        + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)} (up from ${formatK(p.contractSalary || 0)}). `
+        + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)} (up from ${formatK(p.contractSalary || 0)})${p._agentGrudge ? `, and the agent hasn't forgotten the bonus we turned down: about 10% more than the market` : ''}. `
         + `That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))}; payroll is ${formatK(payroll)} against ownership's ${formatK(target)} target. `
         + `If we let ${p.name} walk, every club gets a shot on the free-agent market. No answer by the time spring training opens means the same thing.`,
     yesLabel: `Re-sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: `Let ${p.name} walk`,

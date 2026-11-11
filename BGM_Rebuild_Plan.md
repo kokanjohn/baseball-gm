@@ -9863,3 +9863,68 @@ Checks:
 No fresh team needed. The legends derive from the save's seed, and new card text applies to cards dealt from now on.
 
 **Suite (r146):** everything passes: the full season 3674/3674 (the named-player audit and the meetings included), three seasons 52/52, every check and screen test in dark and light, and test-dashboard-radar. The exception is one intermittent miss in check-diamonds ("players from abroad are older than rookies, with no league record"). It passed the next seven runs and r145 passes it too. The check now names the players it objects to (age, seasons, how they reached the pool), so a recurrence explains itself. The likeliest cause is an overseas player who reached the pool another way than the opening class.
+
+### 122.19 Decisions keep their word (GM, Nov 11 — r147)
+
+**The question:** does "Ask for a Month to Evaluate" at the ownership dinner cause anything a month later? No. And the "Bring a Bold Plan" choice offered a plan the GM never saw. An audit found 37 choices whose label or outcome talks about later. About 15 promised a consequence that never came.
+
+**GM's decisions:**
+- **Dinner: option C** — tone, not a plan. **Every empty promise made real: option 1** (not reworded).
+
+**The dinner (mo_take_owner_dinner):**
+- The card states ownership's win target for the season ({win_target}, new tokens `win_target` / `win_target_up`), and says the season-end review holds you to it.
+- "Tell Ownership We're Here to Win": owner trust +4, morale +1, and the target goes up 3 (new effect `winTarget`, clamped to 50–110).
+- "Ask for Patience": owner trust −2, and the target stays.
+
+**Promises (new engine/Promises.js, pure):**
+- A card declares `_promise: { yes?, no? }` with a `kind`, plus either `afterDays: N` or `when: 'season_end' | 'winter' | 'fa_opens' | 'spring'`.
+- `CardEngine._makePromise` records it when the GM answers, or when the card resolves by default, which keeps the default's promise too.
+- `afterDays` promises are parked at once as placeholder messages. `when` promises wait in `state.promises` until `keepPromises(when, at, expires)` runs:
+  - offseason day 1 (14:00): `season_end`;
+  - day 2 (16:00): `winter`, with decisions due by spring;
+  - day 5, two hours after the new class: `fa_opens`;
+  - the spring step (+10h): `spring`, for promises made in an earlier season.
+- A placeholder is written as it lands (`_writePromise`, like a staff reply), from the world as it is then. It becomes a notice, a decision, or nothing ("nothing to say": the player was traded, the luck held).
+- What lands with it (`_landPromises`) is applied in the same release: effects, money, a player's dip, a scouted mark and a sharper read, a feed line. An injury goes through the normal injury path (`beginInjury` + `deliverInjuryAct2`).
+- The randomness is the promise's own stream (dice on its id), so the look-ahead and the real clock agree.
+
+The promises:
+
+| Card (choice) | Kind | What happens |
+|---|---|---|
+| mo_take_presser ("Promise a Winner") | presser_winner, season end | Winning record: atmo +4. Losing: atmo −5, owner trust −2. |
+| mon_profit_empire ("Bank It — Roster Is Set") | discipline, season end | At or above the win target: owner trust +3. Below: −3. |
+| sp12 ("Promise a Starting Role") | starter_role, +14 days | Starting: morale +2. On the team, healthy and benched: morale −4. Traded or hurt: nothing. |
+| mon_bonus_ask ("The Contract Is the Contract") | agent_grudge | `_agentGrudge`: our next negotiation asks ×1.1 (`AGENT_GRUDGE_MARKUP`, in `marketTerms` while on our roster). The re-sign card says so. A new contract clears it. |
+| bg7 / mo_camp_flush / fn5_hi / ms_5 (put off) | deferred_work, winter | A decision due by spring: do it now at the old cost ×1.25 / 1.1 / 1.1 / 1.2, or put it off again (atmo −3 / morale −2 / morale −1 / atmo −2). |
+| mon_post_bonus (either) | staff_remembers, next spring | Shared: morale +2. Banked: morale −1. |
+| ig_suite_complaint ("Formal Apology + Credit") | suite_sponsor, winter | The sponsor doesn't renew: −$60K (`SUITE_LEASE_K`). |
+| rv3 ("Host the game") | college_look, FA opens | A rookie from the new class (one of the class's best five, by the promise's dice) is named by the scouting director, marked `_scoutedAt`, and their read sharpened (`exposeRatings` 300). |
+| rv2_clubhouse_issue ("File the insurance claim") | insurance, +21 days | The absorb cost comes back (+$8K). |
+| hr1 / hr3 ("Play Through It" / "No Days Off") | worn_down, +6 / +5 days | 60%: a minor injury, through the normal diagnosis card. 40%: nothing. |
+| ls1 ("Push through to the end") | tired_regular, +7 days | A regular in the lineup dips (2 points, 3 games). |
+| mo_camp_win_hangover ("Ride the Good Feeling") | hangover, +21 days | Results since: losing means manager confidence −3 ("I said a loose camp was a risk"); otherwise morale +1, manager confidence +1. Fewer than 5 games: nothing. |
+| fr1 ("Decline") | redeal, next spring | The booster club's card comes back. |
+
+**Card text says it up front:** each of these cards' bodies now tells the GM what will come later, and when ("the bill comes back in the winter, about a quarter higher"; "the next time we negotiate…, expect the ask to be about 10% higher"). ms_8_followup's "heading into next season" was reworded; it wasn't a promise. bg7's outcome line names the winter bill. `deliverCardById` (debug) now finds the moment and money cards too, and returns the card.
+
+**check-promises (new, 23 checks):**
+- **The lint:** any choice whose label or outcome says something later must have a promise, a follow-up, an action, a re-deal, or an allow-list reason. The allow list holds 3, each with its reason.
+- **Every promise kind has a writer.**
+- **Each promise, driven to its moment** with the right outcome:
+  - the dinner target;
+  - the podium promise judged on a losing season;
+  - a starting role broken;
+  - the agent's +10%;
+  - the maintenance bill at 1.25×, charged;
+  - the insurance payout;
+  - the boosters back in spring;
+  - the college player in the class;
+  - the worn-down catcher (hurt with the diagnosis card, or the luck held);
+  - the camp judged on a losing start;
+  - the tired regular, the suite sponsor, the staff and ownership's discipline verdict;
+  - nothing left waiting.
+
+No fresh team needed. Promises begin with decisions made from r147 on; the dinner card is a first-day card, so it shows on a new franchise.
+
+**Suite (r147):** everything passes — check-promises 23/23, the full season 3674/3674, three seasons 52/52, every check and screen test in dark and light.

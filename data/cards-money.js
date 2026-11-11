@@ -17,11 +17,11 @@
 export const MONEY_BETWEEN = [
 
   // ── The owner, pleased: a winning season that is also paying ────────────
-  {id:'mon_profit_empire',_family:'own_profit',_when:{archetypes:['empire'],pace:'winning',funds:'flush'},_requiresRegular:true,_minGames:70,
+  {id:'mon_profit_empire', _promise:{no:{kind:'discipline',when:'season_end'}},_family:'own_profit',_when:{archetypes:['empire'],pace:'winning',funds:'flush'},_requiresRegular:true,_minGames:70,
    autoResolve:'no',type:'good',tag:'OWNERSHIP',sender:'{owner_name}',avatar:'🏆',
    subject:'Ownership likes what it sees — and wants more',
    preview:'Winning and making money. {owner_name} wants to know why we would stop here…',
-   body:"{owner_name} called after the last homestand: \"{record_now}, and the books have never looked better. This is what an empire is supposed to feel like. If there is a piece that wins us the whole thing, go get it — I'll raise this season's payroll target 5%.\" Taking the extra room gives you money to add a piece, and the players would love the push. Banking the profit and keeping the roster as it is earns more of ownership's trust.",
+   body:"{owner_name} called after the last homestand: \"{record_now}, and the books have never looked better. This is what an empire is supposed to feel like. If there is a piece that wins us the whole thing, go get it — I'll raise this season's payroll target 5%.\" Taking the extra room gives you money to add a piece, and the players would love the push. Banking the profit and calling the roster set earns ownership's respect now, and {owner_name} will judge it at the season's end: reach the win target and the discipline paid off; miss it and ownership remembers who said the roster was set.",
    yesLabel:'Take the Extra Room',noLabel:'Bank It — Roster Is Set',
    yesEffect:{target:0.05,ownerTrust:1,morale:2},noEffect:{ownerTrust:2},
    yesMsg:'Payroll room raised 5% for the season. Ownership expects a move.',
@@ -198,11 +198,11 @@ export const MONEY_BETWEEN = [
    noMsg:'We let it go.'},
 
   // ── Postseason money ─────────────────────────────────────────────────────
-  {id:'mon_post_bonus',_family:'post_money',_when:{postseason:true},
+  {id:'mon_post_bonus', _promise:{yes:{kind:'staff_remembers',when:'spring'},no:{kind:'staff_remembers',when:'spring'}},_family:'post_money',_when:{postseason:true},
    autoResolve:'no',type:'good',tag:'FINANCE',sender:'{cfo_name} (CFO)',avatar:'🎉',
    subject:'Playoff gates are in — a bonus pool for the staff?',
    preview:'October crowds paid. The CFO asks what to do with some of it…',
-   body:"The playoff gates have been huge. {cfo_name}: \"It's customary to share some of this with the people who made it happen — the clubhouse attendants, the grounds crew, the trainers. A bonus pool of {misc_cost_sm} would mean a lot to them.\" Sharing it lifts the clubhouse, and word gets around town. Banking it all keeps the money, and the staff will notice.",
+   body:"The playoff gates have been huge. {cfo_name}: \"It's customary to share some of this with the people who made it happen — the clubhouse attendants, the grounds crew, the trainers. A bonus pool of {misc_cost_sm} would mean a lot to them.\" Sharing it lifts the clubhouse now, and the staff come back next spring still talking about it. Banking it all keeps the money, and when spring comes a couple of the longtime staff may not.",
    yesLabel:'Share It With the Staff',noLabel:'Bank It',
    yesEffect:{morale:4,atmo:2},noEffect:{morale:-1},
    yesMsg:'Bonus pool announced. The clubhouse staff will remember this October.',
@@ -240,11 +240,11 @@ export const MONEY_BETWEEN = [
    noMsg:'Refused. They moved half our games to a secondary channel, and sponsors are asking about it.'},
 
   // ── Contracts and money: a big year wants paying ─────────────────────────
-  {id:'mon_bonus_ask',_family:'bonus_ask',_when:{funds:['flush','steady'],pace:['winning','middling']},_requiresRegular:true,_minGames:50,
+  {id:'mon_bonus_ask', _promise:{no:{kind:'agent_grudge',player:'active_hitter'}},_family:'bonus_ask',_when:{funds:['flush','steady'],pace:['winning','middling']},_requiresRegular:true,_minGames:50,
    autoResolve:'no',type:'normal',tag:'ROSTER',sender:'Player Rep.',avatar:'💼',
    subject:'{active_hitter_name}\'s agent asks for a performance bonus',
    preview:'A big year, a healthy balance sheet — the agent has noticed both…',
-   body:'{active_hitter_name} ({active_hitter_pos}) is having the kind of year agents build cases on, and everyone can read the attendance numbers. The agent is asking for a one-time performance bonus of {misc_cost_sm} — not a new deal, just recognition. Paying keeps the clubhouse happy; saying no is within our rights.',
+   body:"{active_hitter_name} ({active_hitter_pos}) is having the kind of year agents build cases on, and everyone can read the attendance numbers. The agent is asking for a one-time performance bonus of {misc_cost_sm} — not a new deal, just recognition. Paying keeps the clubhouse happy. Saying no is within our rights, but the agent will remember it: the next time we negotiate with {active_hitter_name}, expect the ask to be about 10% higher.",
    yesLabel:'Pay the Bonus',noLabel:'The Contract Is the Contract',
    yesEffect:{morale:3},noEffect:{morale:-2},
    yesMsg:'Bonus paid. {active_hitter_name} sent a thank-you through the agent.',
