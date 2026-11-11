@@ -9673,6 +9673,6 @@ The harness's farm checks become free-agent checks (`sim-season`, `check-il-retu
 
 **Found in the final suite:** the winter roster call never went out. The roster step only runs when `hasDue` says something is due, and in the winter nothing else was. `hasDue` now counts the camp call, and an open spot's deadline as `vacancyDeadline`. Checked from a winter save: the call goes out 3 days before camp, the manager's signings report when camp opens, and we open camp at 28 (before the fix: 18 active, 10 still arriving the next day).
 
-### 122.13 The check-weather-cards failure, explained and fixed (Nov 9 — not yet released)
+### 122.13 The check-weather-cards failure, explained and fixed — r141 (Nov 9–10)
 
 The failure dated from r139 (§121), which gave roster cards ids derived from what they are about (so the look-ahead and the real clock agree). `CardEngine._deliverAt` parked the card under the new id but returned the original object, which still had its random id. In the app every caller only checks that a card went out, so players never saw anything wrong. The check looked the card up by the returned id and didn't find it. `_deliverAt` now returns the card as parked. check-weather-cards 11/11; full season 3668/3668; the roster, injury, look-ahead and push checks pass.
