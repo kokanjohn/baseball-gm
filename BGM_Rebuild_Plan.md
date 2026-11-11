@@ -9676,3 +9676,18 @@ The harness's farm checks become free-agent checks (`sim-season`, `check-il-retu
 ### 122.13 The check-weather-cards failure, explained and fixed — r141 (Nov 9–10)
 
 The failure dated from r139 (§121), which gave roster cards ids derived from what they are about (so the look-ahead and the real clock agree). `CardEngine._deliverAt` parked the card under the new id but returned the original object, which still had its random id. In the app every caller only checks that a card went out, so players never saw anything wrong. The check looked the card up by the returned id and didn't find it. `_deliverAt` now returns the card as parked. check-weather-cards 11/11; full season 3668/3668; the roster, injury, look-ahead and push checks pass.
+
+### 122.14 Two gaps closed: the shake-up card, the winter trim (Nov 10)
+
+**The shake-up card (sr2) could never fire.** Its only action was calling up our top prospect, and §122 removed the farm, so the prospect token never resolved and the delivery guard held it back every time. It is now a free-agent signing. The manager pulls the GM aside during a losing streak below .500 (games 85–115, once a season) and names a veteran free agent who would start over the weakest regular, with the price. "Sign {name}" signs that player (`sr2_shakeup` → `signStarter`, the same path as the other "would start" cards: arrives the next day and takes the slot). "Stay the course" costs nothing more than the ride. `CardTokens` names the replaced starter for sr2 (`replaced_starter`).
+
+**A new token, `drop_hitter_note`.** When the hitters' side of the 28 is full, a signing puts the last bench bat on waivers. The note says so ("To make room, Cabrales (1B/3B, OVR 59) would go on waivers."). With room on the roster it is empty. sr2 and both tiers of the veteran-starter card (s1) use it. Those two previously said "sent down to make room", which was farm wording and wrong since §122.
+
+**The winter trim could send a diamond home.** `_trimFreeAgentPool` kept the market at `FA_POOL_MAX` by sending home the free agents with the least future, ranked by shown OVR for age. A diamond's shown OVR understates them, so they ranked among the first to go. Three changes:
+- It ranks by what the league sees (`cpuView`). A diamond the league has heard about counts at their worth.
+- A diamond whose word hasn't got around yet (`_buzzAt` still ahead) is never trimmed. The GM can still find them.
+- Anyone the scouts named to the GM in the last 60 days (`FA_TRIM_SCOUTED_KEEP_MS`: any compose memo's `playerIds` / `playerId`) is never trimmed. A report shouldn't point at a player who went home.
+
+check-diamonds gained a winter-trim block. It inflates the market far past its size and trims, then checks that every unannounced diamond and a just-reported low-rated player are still there. Both checks fail on the old trim (5 of 10 diamonds kept; the reported player gone). sim-season's sr2 check now looks for the signing.
+
+No fresh team needed.

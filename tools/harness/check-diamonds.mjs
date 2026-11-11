@@ -7,6 +7,8 @@ import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { lastSeasonIMP, computePlayerIMP } from '../../engine/IMPEngine.js';
 import { isDiamond, worthOf, trueOVR, cpuView, exposeRatings, playingRating, markAvailable } from '../../engine/Diamonds.js';
 import { cpuFreeAgentLook } from '../../engine/TransactionEngine.js';
+import { _trimFreeAgentPool } from '../../engine/OffseasonEngine.js';
+import { FA_POOL_MAX } from '../../data/constants.js';
 import { PLAYER_ORIGIN, DIAMOND } from '../../data/constants.js';
 
 let pass = 0, fail = 0;
@@ -85,6 +87,24 @@ check(`hidden diamonds (rated ≤ 43 over the level): word getting around gets t
 const rel = { ...pool.find(p => p.origin === PLAYER_ORIGIN.LEAGUE && !isDiamond(p, L)) };
 markAvailable(rel, now, () => 0.5, L);
 check('a released ordinary player gets no date', !Number.isFinite(rel._buzzAt));
+
+console.log('The winter trim');
+// Push the market far over its size so the trim sends home everyone it may; the kept ones are what's left.
+const trimmed = SM.speculate(() => {
+  const low = pool.filter(p => !isDiamond(p, L) && p._classOf == null).sort((a, b) => a.ovr - b.ovr)[0];
+  SM.mutate(dr => {
+    dr.composeLog = [...(dr.composeLog || []), { topicId: 'sc_free_agents', atMs: now - 86_400_000, memo: { playerIds: [low.id] } }];
+    for (let i = 0; dr.freeAgentPool.length < FA_POOL_MAX + 2 * pool.length; i++) {
+      const c = structuredClone(dr.players[pool[i % pool.length].id]); c.id = `${c.id}_x${i}`; delete c._buzzAt;
+      dr.players[c.id] = c; dr.freeAgentPool.push(c.id);
+    }
+    _trimFreeAgentPool(dr, now);
+  });
+  const left = new Set(SM.get().freeAgentPool);
+  return { low: left.has(low.id), lowName: low.name, D: D.filter(p => left.has(p.id)).length };
+});
+check(`diamonds word hasn't got around about stay (${trimmed.D} of ${D.length})`, trimmed.D === D.length);
+check(`a player the scouts just reported stays, however low (${trimmed.lowName})`, trimmed.low);
 
 console.log('Impact');
 const reg = rostered.filter(p => (p.seasonLog || []).at(-1)?.stats?.ab >= 400);

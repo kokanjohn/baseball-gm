@@ -32,6 +32,7 @@ import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
 // §118 phase 2 seeds card creation (the tokens' draws, the market players they name).
 import { marketCandidate, signingTerms, rentalTarget, prospectToSend } from './MarketEngine.js';
 import { eligibleSlotsFor } from './RosterEngine.js';
+import { rosterIsFull } from './TransactionEngine.js';
 import {
   CARD_TOKEN_POOLS,
   CARD_TOKEN_MONEY,
@@ -193,6 +194,9 @@ export function buildTokenMap(cardDef, context, state) {
   for (const [k, pl] of [['prospect_hitter', prospectHitter], ['drop_hitter', dropHitter], ['audition_hitter', auditionHitter]]) {
     values[`${k}_desc`] = pl ? `${pl.name} (${pl.nativePos || pl.pos}, OVR ${pl.ovr})` : values[`${k}_name`];
   }
+  // A signing with the hitters' side of the 28 full puts the last bench bat on waivers (signStarter).
+  values.drop_hitter_note = dropHitter && rosterIsFull(state, 'user', 'hitter')
+    ? ` To make room, ${values.drop_hitter_desc} would go on waivers.` : '';
 
   // ── Phrase pools (one pick per token per card) ────────────────────────
   for (const [key, pool] of Object.entries(CARD_TOKEN_POOLS)) {
@@ -379,6 +383,7 @@ export function bullpenRecentERA(state) {
 const MARKET_ACTIONS = Object.freeze({
   sign_acquire_hitter:   { kind: 'veteran',  side: 'hitter',  starter: true },
   sign_veteran_hitter:   { kind: 'veteran',  side: 'hitter',  starter: true },
+  sr2_shakeup:           { kind: 'veteran',  side: 'hitter',  starter: true },
   sign_acquire_pitcher:  { kind: 'prospect', side: 'pitcher' },
   sign_prospect_pitcher: { kind: 'prospect', side: 'pitcher' },
   sign_dfa:              { pool: 'released' },
@@ -452,6 +457,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       const vet = take('acq_hitter', marketCandidate(state, { kind: spec.kind, side: 'hitter', pos: weakest.slot, minOvr: (weakest.p.ovr || 0) + 2, rand: eventRand }));
       if (vet) { vet._startAt = weakest.slot; money('sign_cost', signingTerms(state, vet).salary); }
       out.players.replaced_starter = weakest.p.id;
+      _playerTokens(values, 'replaced_starter', weakest.p, state);   // (sr2 names who'd sit)
     }
   } else if (spec.kind && !spec.nri && !spec.intl && !spec.indie) {
     const pros = take(side === 'pitcher' ? 'acq_pitcher' : 'acq_hitter', marketCandidate(state, { kind: spec.kind, side, rand: eventRand }));

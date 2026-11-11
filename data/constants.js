@@ -1665,6 +1665,7 @@ export const FA_ASK = Object.freeze({
 export const FA_CPU_UPGRADE_MARGIN = 5;   // a CPU club signs a free agent this many OVR better than its weakest at the role
 export const FA_CPU_LOOK_HOUR      = 10;  // when each CPU club looks at the free agents, every day (local hour)
 export const FA_POOL_MAX          = 260; // the free-agent market's size at the new season (the least promising go home past it)
+export const FA_TRIM_SCOUTED_KEEP_MS = 60 * 86_400_000; // §122.14 a player the scouts reported this long ago or less isn't sent home by the trim
 
 
 // ─────────────────────────────────────────────────────────────

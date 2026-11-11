@@ -58,6 +58,7 @@ import {
   PROSPECTS_PER_TEAM_MIN,
   PROSPECTS_PER_TEAM_MAX,
   FA_POOL_MAX,
+  FA_TRIM_SCOUTED_KEEP_MS,
   PROSPECT_AGE_MIN,
   PROSPECT_AGE_MAX,
   PROSPECT_OVR_MIN,
@@ -1151,14 +1152,23 @@ export function newFreeAgentClass(draft, atMs) {
 /**
  * _trimFreeAgentPool(draft, atMs) — §122 the market keeps to its size
  * (FA_POOL_MAX): past it, the free agents with the least future — lowest
- * OVR for their age — go home. This year's class stays.
+ * OVR for their age, as the league sees it (cpuView) — go home. This year's
+ * class stays, and so do diamonds word hasn't got around about yet and anyone
+ * the scouts reported to the GM in the last FA_TRIM_SCOUTED_KEEP_MS.
  */
-function _trimFreeAgentPool(draft, atMs) {
+export function _trimFreeAgentPool(draft, atMs) {
   const events = [];
   const level = draft.leagueTalentOffset || 0;
   const nextYear = baseballYear(draft) + 1;
-  const future = (x) => (x.ovr || 0) - level - computeAge(x.dob, nextYear);
-  const pool = freeAgents(draft).filter(p => p._classOf !== (draft.seasonNum || 1) + 1).sort((a, b) => future(a) - future(b));
+  // Ranked by what the league sees (§122.10): a diamond word has got around about counts at his worth.
+  const future = (x) => cpuView(x, atMs) - level - computeAge(x.dob, nextYear);
+  // Kept regardless: a diamond word hasn't got around about yet (the GM can still find him), and
+  // anyone the scouts named to the GM lately (a report shouldn't point at a player who went home).
+  const reported = new Set((draft.composeLog || [])
+    .filter(r => atMs - r.atMs < FA_TRIM_SCOUTED_KEEP_MS)
+    .flatMap(r => [...(r.memo?.playerIds || []), r.memo?.playerId].filter(Boolean)));
+  const keep = (x) => (Number.isFinite(x._buzzAt) && x._buzzAt > atMs) || reported.has(x.id);
+  const pool = freeAgents(draft).filter(p => p._classOf !== (draft.seasonNum || 1) + 1 && !keep(p)).sort((a, b) => future(a) - future(b));
   const over = freeAgents(draft).length - FA_POOL_MAX;
   for (let i = 0; i < over && i < pool.length; i++) events.push(departLeague(draft, pool[i].id, atMs, 'unsigned'));
   return events;

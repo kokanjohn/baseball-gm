@@ -185,7 +185,7 @@ function cardDidIt(action, c, st) {
     case 'scouting_indie_tip': return (st.scheduledCards || []).some(x => x.cardId === 'indie_report');
     case 'personal_leave': return p?.unavailable?.reason === 'leave' && !inLineup(p.id) && !inRot(p.id);
     case 'media_boost': case 'scouting_suppress': return (u.scoutingQuietUntil || 0) > clock.get();
-    case 'sr2_shakeup': return (st.transactions || []).some(t => t.status === 'pending' && t.playerId === c._tokenPlayers.prospect_hitter);
+    case 'sr2_shakeup': return joining(c._tokenPlayers.acq_hitter);
     default: return true;
   }
 }

@@ -438,7 +438,7 @@ export const CARD_ACTIONS = Object.freeze({
   scouting_intl_trip:    intlTrip,
   scouting_indie_tip:    indieTip,
   indie_sign:            indieSign,
-  sr2_shakeup:           callupHitter,
+  sr2_shakeup:           signStarter,   // §122 the shake-up: a veteran free agent who'd start
   personal_leave:        personalLeave,
   ill5a_crew:            staffShort('crew'),
   ill5b_mascot:          staffShort('mascot'),
