@@ -35,6 +35,7 @@ import * as FreeAgency from '../../engine/FreeAgency.js';
 import * as Roster from '../../engine/RosterEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { PHASE } from '../../data/constants.js';
+import * as When from '../../engine/When.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -332,7 +333,7 @@ function _renderMoves(state) {
     return `${head}<div class="lw-empty">${all.length ? 'Nothing here yet.' : 'No moves yet. Trades, signings, waiver claims and releases around the league appear here as they happen.'}</div>`;
   }
   const dayKey = (ms) => new Date(ms).toDateString();
-  const dayLabel = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const dayLabel = (ms) => When.agoDay(ms, Date.now());   // r149 relative: "Today", "Yesterday", "3 days ago"
   const KIND = { trade: 'Trade', signing: 'Signing', claim: 'Waiver claim', release: 'Free agent', retire: 'Retirement' };
   let html = head, last = null;
   for (const e of shown.slice(0, 200)) {

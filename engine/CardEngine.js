@@ -61,6 +61,7 @@ import {
   clearInjuryUpdate, ilMinDays, beginInjury,
 } from './InjuryEngine.js';
 import { resolvePromise, PROMISE_WHEN } from './Promises.js';
+import * as When from './When.js';
 import { exposeRatings } from './Diamonds.js';
 import {
   activateFromIL, placeOnWaivers, reconcileRoster, applyRosterMutation, reserveGroup,
@@ -562,7 +563,8 @@ function _applyChoiceMoney(s, instance, choice) {
 
 const _hand = (p) => (['SP', 'RP'].includes(p?.pos) ? ` ${PITCHER_HAND_DISPLAY[p.hand] || '(R)'}` : '');
 const _clock = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-const _day   = (ms) => new Date(ms).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+// r149 relative to the moment the card lands, never a calendar date: "tomorrow", "Saturday", "in 9 days".
+const _day   = (ms, fromMs) => When.untilDay(ms, fromMs);
 const _randBetween = (lo, hi) => lo + Math.floor(eventRand() * (hi - lo + 1));
 
 function _rosterCard(state, fields) {
@@ -709,7 +711,7 @@ export function deliverInjuryAct2(playerId, atMs = clockNow()) {
 
   const ilLine = seasonEnding
     ? `${player.name} is out for the rest of the season.`
-    : `On the ${ilMinDays(player)}-day IL (backdated to the injury), ${player.name} is eligible to return ${_day(eligibleAt)}.`;
+    : `On the ${ilMinDays(player)}-day IL (backdated to the injury), ${player.name} is eligible to return ${_day(eligibleAt, atMs)}.`;
   const moneyLine = ` On the IL ${player.name} stays on our payroll (${formatK(salary)} a year), and a replacement is paid on top of that. `
     + `Cut ${player.name} instead and the salary comes off at once: ${player.name} goes on waivers, where a club may make a claim${seasonEnding ? '' : ' and wait out the injury'}.`;
   const dtdLine = dtd
@@ -719,7 +721,7 @@ export function deliverInjuryAct2(playerId, atMs = clockNow()) {
     ? ` Best fits among the free agents: ${_list(picks.map(p => `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}, ${formatK(signingTerms(state, p).salary || 0)} a year)`))}. A signing reports tomorrow.`
     : ' No healthy free agent fits right now.';
   const dlLine = deadline
-    ? ` We need a decision by ${_clock(deadline)} (${_day(deadline)}) or ${_managerName(state)} will put ${player.name} on the IL and sign someone.`
+    ? ` We need a decision by ${_clock(deadline)} (${_day(deadline, atMs)}) or ${_managerName(state)} will put ${player.name} on the IL and sign someone.`
     : '';
 
   const ilChoices = [
@@ -881,7 +883,7 @@ function _deliverILReturnCard(playerId, atMs) {
                     ? ` We're carrying ${_overSide(state, player)} ${sideOf(player) === 'pitcher' ? 'pitchers' : 'position players'}, more than the 14 a roster carries, so ${sideOf(player) === 'pitcher' ? 'pitchers' : 'position players'} have to go on waivers before ${player.name} can be activated (one at a time; this message comes back until there's room).`
                     : ` The active roster is full, so someone has to go on waivers before ${player.name} can be activated. Whoever goes comes off the payroll at once; any club can put in a claim over the next 72 hours.`)
                   + (choices.length ? ` These are our lowest-rated ${sideOf(player) === 'pitcher' ? 'arms' : 'bats'} off ${reserve}.` : ` Nobody on ${reserve} can go right now.`)
-                  + (choices.length && deadline ? ` If you haven't chosen by ${_clock(deadline)} (${_day(deadline)}), ${_managerName(state)} will waive ${choices[0].name} and activate ${player.name}.` : ` ${player.name} stays on the injured list until you choose.`)
+                  + (choices.length && deadline ? ` If you haven't chosen by ${_clock(deadline)} (${_day(deadline, atMs)}), ${_managerName(state)} will waive ${choices[0].name} and activate ${player.name}.` : ` ${player.name} stays on the injured list until you choose.`)
                 : ' There is room on the active roster.')
             + ` ${player.name} rejoins on ${reserve}; ${sideOf(player) === 'pitcher'
                 ? `a return to ${player.pos === 'SP' ? 'the rotation' : 'the bullpen'} is your call.`
@@ -994,7 +996,7 @@ function _deliverLineupNudge(state, player, n, atMs) {
   const vote = diff >= -1
     ? `My vote: ${X.name} back ${K.where}, ${Y.name} to ${K.bench}.`
     : `Honestly, ${Y.name} has earned a longer look. ${X.name} can wait on ${K.bench} until the job opens up again.`;
-  const when = `${_day(game.gameTime)} at ${_clock(game.gameTime)}`;
+  const when = When.untilFull(game.gameTime, atMs);
   const card = _rosterCard(state, {
     cardId: 'lineup_return', tag: 'LINEUP', sender, avatar: spot.kind === 'lineup' ? '🏏' : '⚾', type: 'normal',
     _rosterKey: `lineup:${X.id}:${_nudgeEpisode(X)}:${n}`, _targetPlayerId: X.id, _spotKind: spot.kind, _nudge: n,
@@ -1072,13 +1074,13 @@ function _deliverNeedCard(state, need, index, needs, atMs) {
     _need:    need,
     _choices: choices.length ? choices : null,
     subject:  needs.short > 1 ? `${needs.short} open roster spots` : 'Open roster spot',
-    preview:  winter ? `Camp opens ${_day(state.offseason.springAt)}: we're ${needs.short} short of 28.` : `We're ${needs.short} short of 28 — I need ${what}.`,
-    body:     (winter ? `Camp opens ${_day(state.offseason.springAt)}, and we have ${28 - needs.short} players under contract for it. I need ${what}.`
+    preview:  winter ? `Camp opens ${_day(state.offseason.springAt, atMs)}: we're ${needs.short} short of 28.` : `We're ${needs.short} short of 28 — I need ${what}.`,
+    body:     (winter ? `Camp opens ${_day(state.offseason.springAt, atMs)}, and we have ${28 - needs.short} players under contract for it. I need ${what}.`
                       : `We're carrying ${28 - needs.short} active players. I need ${what}.`)
             + (picks.length ? ` These are the best free agents who fit, with what they're asking for a one-year deal (paid only for the days on our roster). ${winter ? 'A signing reports when camp opens.' : 'A signing reports tomorrow.'}`
                             : ' No free agent fits right now — look at the waiver wire or make a trade.')
             + ` Or pick anyone in League → Players.`
-            + (deadline ? ` If nothing's done by ${_clock(deadline)} (${_day(deadline)}), I'll sign someone myself.` : ''),
+            + (deadline ? ` If nothing's done by ${_clock(deadline)} (${_day(deadline, atMs)}), I'll sign someone myself.` : ''),
     yesLabel: picks.length ? `Sign ${picks[0].name}` : 'Understood',
     noLabel:  `I'll choose in League → Players`,
     expiresAtMs: deadline,
@@ -3154,13 +3156,13 @@ export function deliverOwnerCutOrder(playerId, amountK, atMs) {
   const order = state.userTeam.finances?.owner?.order;
   if (!p || !order) return null;
   const owner = state.userTeam.ownerName || 'Ownership';
-  const due = new Date(order.dueAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+  const due = When.untilDay(order.dueAt, atMs);   // r149 relative
   return _deliverAt(_rosterCard(state, {
     cardId: 'owner_cut_order', tag: 'OWNERSHIP', sender: owner, avatar: '💼', type: 'urgent',
     _rosterKey: `owner:order:${state.seasonNum}:${order.dueAt}`, _targetPlayerId: playerId,
     subject: `${owner} wants ${formatK(amountK)} off the payroll`,
-    preview: `"${_voice(state, 'concerned')}" Due by ${due}.`,
-    body: `"${_voice(state, 'concerned')}" Ownership wants ${formatK(amountK)} a year off the payroll by the payday on ${due}. `
+    preview: `"${_voice(state, 'concerned')}" Due ${due.startsWith('in ') ? due : `by ${due}`}.`,
+    body: `"${_voice(state, 'concerned')}" Ownership wants ${formatK(amountK)} a year off the payroll by the payday ${due === 'today' || due === 'tomorrow' || due.startsWith('in ') ? due : `on ${due}`}. `
         + `The obvious contract is ${_who(p)}, at ${formatK(p.contractSalary)} a year. We can find a club to take the contract — it's a salary dump, nothing much comes back but the savings — `
         + `or release ${p.name}: waivers, and the salary comes off the payroll at once. Or tell ownership we're keeping ${p.name} and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
     _choices: [

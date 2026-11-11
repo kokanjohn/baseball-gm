@@ -15,9 +15,12 @@ import { teamRating } from '../../engine/RosterEngine.js';
 const W = 340, H = 190;                       // viewBox; scales to the sheet width
 const PAD = { l: 30, r: 12, t: 22, b: 26 };
 
+import * as When from '../../engine/When.js';
+
 const _esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const _day = (ms) => new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-const _dayYear = (ms) => new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+// r149 relative, never a calendar date ("3 weeks ago"; the axis's start, "2 months ago").
+const _day = (ms) => When.agoDay(ms, Date.now());
+const _dayYear = _day;
 
 /** The points to draw: the history, then today's rating at this moment. */
 function _series(state, nowMs) {
@@ -115,7 +118,7 @@ export function openRatingHistory(state) {
     content = `
       <div class="rh-summary">
         <div class="rh-now">${last.r}</div>
-        <div class="rh-sub">Rating now · ${delta === 0 ? 'unchanged' : `${delta > 0 ? '+' : '−'}${Math.abs(delta)}`} since ${_dayYear(first.t)}</div>
+        <div class="rh-sub">Rating now · ${delta === 0 ? 'unchanged' : `${delta > 0 ? '+' : '−'}${Math.abs(delta)}`} over ${When.spanText(Date.now() - first.t)}</div>
       </div>
       <div class="rh-stats">
         <div><span class="rh-k">High</span> ${hi.r} <span class="rh-d">${_day(hi.t)}</span></div>

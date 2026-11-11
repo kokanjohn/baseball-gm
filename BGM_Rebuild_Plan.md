@@ -9948,3 +9948,45 @@ Elsewhere, real dates still show:
 Candidates for the same treatment if they read as confusing.
 
 test-fa-screens-ui: an open message says "Today at …"; a message from two days ago reads "2 days ago"; the list shows no month names.
+
+### 122.21 Every real moment is relative (GM, Nov 11 — r149)
+
+Following §122.20, "consistent throughout": no real moment anywhere in the app is shown as a calendar date. One helper, **engine/When.js** (pure), used by the UI and the engine:
+- `agoDay` / `agoShort` / `agoFull`: "Today at 8:40 PM", "Yesterday", "3 days ago", "1 week ago", "2 weeks ago", "3 months ago", "1 year ago".
+- `untilDay` / `untilFull`: "today", "tonight at 7:05 PM", "tomorrow", "Saturday" (within the week), "in 9 days", "in 4 weeks".
+- `relDay`, `spanText` ("6 weeks"), and `clockText`.
+
+Every function takes the moment it is relative to:
+- the UI passes now;
+- **the engine passes the moment its text is written** (the card's delivery `atMs`, or the push's send time), so the words are right when they arrive.
+
+Changed:
+
+| Where | Before | Now |
+|---|---|---|
+| Messages (InboxScreen) | §122.20's helpers | When.js |
+| Team: IL "Elig." | Sat, Nov 14 | "Elig. Saturday" / "Elig. in 9 days" / "Eligible now" |
+| Team: "reports …" (a trade or signing) | a date | "reports tomorrow" |
+| Finances: ledger | Nov 11 | "Today", "3 days ago" |
+| Finances: next payday | a date | "in 20 days" |
+| Finances: payroll-cut order | by Nov 30 | "by Friday" / "in 12 days" |
+| League → Moves day headings | a date | "Today", "Yesterday", "3 days ago" |
+| Rating history | axis, high/low, the changes list, the tooltip dated | relative; "+3 over 6 weeks" in place of "since Mar 2, 2026" |
+| All-Star card | the game's date | "Saturday at 7:05 PM" / "In 12 days" |
+| Team select: last played | a date | "2 weeks ago" |
+| Cards (CardEngine `_day(ms, atMs)`) | "eligible to return Saturday, Nov 14" | "eligible to return Saturday"; "by 11:00 PM (today)"; "Camp opens in 6 days"; "Our next game is tonight at 7:05 PM"; the owner's cut order "by the payday Friday" / "in 12 days" |
+| Push notifications (GamePushes) | a date | "Makeup: tomorrow at 1:05 PM"; "It resumes tomorrow at 6:10 PM" |
+
+Unchanged:
+- **Due labels** ("Due 11:00 PM", "Due Fri 8:40 PM": a weekday and a time, no date). The GM said these read fine.
+- **The season's calendar:** the Schedule's game dates, and a weather makeup date (`GameEngine._wxDay`, from the game's ISO date).
+
+**check-relative-times (new):**
+- **The words:** the past, the future, and a list stamp.
+- **A source sweep of ui/ and engine/:** any `toLocale(Date)String` with a month or a day of the month fails, except When.js and `_wxDay`.
+
+test-fa-screens-ui: Finances' payday and ledger read relatively, with no month names.
+
+**Suite note (r149):** r148's new Messages-time check switched tabs, which closed the open report before the next step tapped a name in it. The test crashed (a timeout, not a FAIL line), and a FAIL-line grep missed it. The check now runs at the end, after reopening the report. Test only; the app was unaffected. check-game-pushes now expects the relative makeup time.
+
+**Suite (r149):** everything passes: check-relative-times 4/4, the full season 3657/3657, three seasons 52/52, check-game-pushes 8/8 and test-fa-screens-ui 30/30 in dark and light, each re-run after its fix.

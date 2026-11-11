@@ -14,6 +14,7 @@ import { releaseDueCards, getPushSchedule } from '../../engine/CardEngine.js';
 import { lookAhead } from '../../engine/LookAhead.js';
 import { GAME_STATUS } from '../../data/constants.js';
 import { gamePushes } from '../../engine/GamePushes.js';
+import * as When from '../../engine/When.js';
 
 const N = parseInt(process.argv[2] || '70', 10);
 const SEED = parseInt(process.argv[3] || '1', 10);
@@ -93,7 +94,8 @@ for (let n = 0; n < N; n++) {
     const it = items.find(i => i.kind === r.kind && i.deliverAt === r.at);
     if (!it) { bad.push(`game ${g0.index}: no push for the real ${r.what} at ${new Date(r.at).toISOString()}`); continue; }
     samples[r.what.split(' ')[0]] ||= `${it.title} — ${it.body}`;
-    if (r.makeup && !it.body.includes(new Date(r.makeup).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }))) bad.push(`game ${g0.index}: postponed push without the real makeup date (${it.body})`);
+    // r149 the makeup reads relative to the push ("tomorrow at 4:05 PM"), never a calendar date.
+    if (r.makeup && !it.body.includes(`Makeup: ${When.untilFull(r.makeup, r.at)}`)) bad.push(`game ${g0.index}: postponed push without the real makeup time (${it.body})`);
     if (r.resume && !it.body.includes(new Date(r.resume).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }))) bad.push(`game ${g0.index}: suspended push without the real resume date (${it.body})`);
     if (r.kind === 'final') {
       const [u, t] = r.what.split(' ')[1].split('-');

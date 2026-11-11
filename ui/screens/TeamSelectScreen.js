@@ -25,6 +25,7 @@
 import * as StateManager from '../../store/StateManager.js';
 import { SAVE_SLOT_LIMIT_FREE } from '../../data/constants.js';
 import { formatTeamRecord } from '../formatters.js';
+import * as When from '../../engine/When.js';
 
 // ─────────────────────────────────────────────────────────────
 // PUBLIC API
@@ -265,7 +266,7 @@ function _timeAgo(ms) {
   if (hrs  < 24)  return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   if (days < 7)   return `${days}d ago`;
-  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return When.agoDay(ms, Date.now());   // r149 "2 weeks ago"
 }
 
 function _esc(str) {

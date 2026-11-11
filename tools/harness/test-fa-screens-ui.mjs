@@ -188,6 +188,11 @@ await page.waitForTimeout(300);
 await page.click('#head-budget'); await page.waitForTimeout(600);
 const fin = await page.evaluate(() => ({ tab: document.querySelector('.tab-content.active')?.id, sub: document.querySelector('#tsubtab-finances')?.classList.contains('active') }));
 check('the club funds pill opens Team → Finances', fin.tab === 'tab-roster' && fin.sub, JSON.stringify(fin));
+// r149 Finances: the payday and the ledger are relative — no calendar dates.
+const finText = await page.evaluate(() => document.getElementById('team-content')?.innerText || '');
+check('Finances: next payday and the ledger read relatively, no calendar dates',
+      /Next payday: (today|tomorrow|Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|in \d+)/i.test(finText) && !/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/.test(finText), finText.slice(0, 400));
+await page.screenshot({ path: `${out}/finances-${theme}.png` });
 
 // r146 League → Teams: a tap opens the club's sheet (standing, the roster as a lineup card reads).
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('league'); });
@@ -223,7 +228,18 @@ await page.waitForTimeout(500);
 const links = await page.evaluate(() => [...document.querySelectorAll('.msg-player')].map(b => b.textContent));
 check(`a scouts' report links every player it names (${links.join(', ')})`, rep.named >= 1 && links.length >= rep.named, JSON.stringify(rep));
 await page.screenshot({ path: `${out}/report-links-${theme}.png` });
+
+if (links.length) {
+  await page.click('.msg-player'); await page.waitForTimeout(500);
+  check('a name opens that player\'s card', await page.evaluate((n) => document.body.innerText.includes(n) && /Asking|Career|no league record/i.test(document.body.innerText), links[0]));
+  await page.evaluate(async () => { const PC = await import('/baseball-gm/ui/components/PlayerCard.js'); PC.closePlayerCard(); });
+}
+
 // r148 times in Messages are relative ("Today at 8:40 PM", "Yesterday", "3 days ago"), never a calendar date.
+await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('dashboard'); App.switchTab('decisions'); });
+await page.waitForTimeout(400);
+await page.click(`[data-open="${rep.id}"]`).catch(() => {});
+await page.waitForTimeout(400);
 const stamp = await page.evaluate(() => document.querySelector('.mr-to')?.textContent || '');
 check(`the open message says when relatively (${stamp.trim()})`, /to me · (Today|Yesterday|\d+ days ago) at \d{1,2}:\d\d [AP]M/.test(stamp));
 await page.evaluate(async () => {   // an older message, two days back
@@ -235,12 +251,6 @@ await page.waitForTimeout(500);
 const list = await page.evaluate(() => document.getElementById('decisions-content')?.innerText || document.body.innerText);
 check('the list says "2 days ago" and shows no calendar dates', /2 days ago/.test(list) && !/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/.test(list), list.slice(0, 300));
 await page.screenshot({ path: `${out}/inbox-relative-${theme}.png` });
-if (links.length) {
-  await page.click('.msg-player'); await page.waitForTimeout(500);
-  check('a name opens that player\'s card', await page.evaluate((n) => document.body.innerText.includes(n) && /Asking|Career|no league record/i.test(document.body.innerText), links[0]));
-  await page.evaluate(async () => { const PC = await import('/baseball-gm/ui/components/PlayerCard.js'); PC.closePlayerCard(); });
-}
-
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 process.exit(ok ? 0 : 1);

@@ -36,6 +36,7 @@ import { eligibleSlotsFor, reconcileRoster, applyRosterMutation }
 import { getRosterNeeds } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as Coach from '../../engine/CoachEngine.js';
+import * as When from '../../engine/When.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -555,7 +556,7 @@ function _renderILGroup(ilPlayers, state, gameIdx) {
     const inj         = player.injury;
     const statusText  = player._pendingILReturn ? 'Cleared'
       : inj?.severity === 'season' ? 'Season'
-      : Number.isFinite(inj?.eligibleAt) ? `Elig. ${_dayText(inj.eligibleAt)}`
+      : Number.isFinite(inj?.eligibleAt) ? (inj.eligibleAt <= Date.now() ? 'Eligible now' : `Elig. ${_dayText(inj.eligibleAt)}`)
       : 'TBD';
     const penaltyNote = player.injuryPenalty
       ? `${player.injuryPenalty.subRating} −${player.injuryPenalty.amount}`
@@ -681,8 +682,9 @@ function _clockText(ms) {
   const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   return d.toDateString() === today.toDateString() ? time : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
 }
+/** r149 relative, never a calendar date: "tomorrow", "Saturday", "in 9 days". */
 function _dayText(ms) {
-  return new Date(ms).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  return When.untilDay(ms, Date.now());
 }
 /** Between seasons (§70): flag a player whose deal is up — a decision is due. */
 function _contractNote(player) {
@@ -695,10 +697,7 @@ function _contractNote(player) {
 }
 
 function _whenText(ms) {
-  const d = new Date(ms);
-  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-  if (d.toDateString() === tomorrow.toDateString() && d.getHours() === 0) return 'tomorrow';
-  return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}`;
+  return When.untilDay(ms, Date.now());   // r149 "tomorrow", "Saturday", "in 9 days"
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -815,7 +814,7 @@ function _renderFinances(state) {
 
   const recent = [...(fin.ledger || [])].slice(-10).reverse().map(e => `
     <div class="fin-line">
-      <span>${_escape(e.label)}<span class="fin-when">${new Date(e.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span></span>
+      <span>${_escape(e.label)}<span class="fin-when">${When.agoDay(e.at, Date.now())}</span></span>
       <span class="${e.k < 0 ? 'fin-neg' : 'fin-pos'}">${e.k < 0 ? '−' : '+'}${formatMoney(Math.abs(e.k))}</span>
     </div>`).join('');
 
@@ -829,13 +828,13 @@ function _renderFinances(state) {
         <div class="fin-label">Club funds</div>
         <div class="fin-big ${funds < 0 ? 'fin-neg' : ''}">${m(funds)}</div>
         ${inSeason ? `<div class="fin-sub">Projected at season's end: <b class="${projected < 0 ? 'fin-neg' : ''}">${m(projected)}</b></div>` : ''}
-        ${nextPay ? `<div class="fin-sub">Next payday: ${new Date(nextPay).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</div>` : ''}
+        ${nextPay ? `<div class="fin-sub">Next payday: ${When.untilDay(nextPay, Date.now())}</div>` : ''}
       </div>
 
       <div class="fin-card">
         <div class="fin-row-head"><span class="fin-label">Ownership</span><span class="fin-stage fin-stage-${stage}">${stageName}</span></div>
         <div class="fin-sub">${_escape(stageText)}</div>
-        ${order ? `<div class="fin-order">Ordered: ${formatMoney(order.amountK)} off the payroll by ${new Date(order.dueAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>` : ''}
+        ${order ? `<div class="fin-order">Ordered: ${formatMoney(order.amountK)} off the payroll ${(() => { const u = When.untilDay(order.dueAt, Date.now()); return u.startsWith('in ') ? u : `by ${u}`; })()}</div>` : ''}
       </div>
 
       <div class="fin-card">

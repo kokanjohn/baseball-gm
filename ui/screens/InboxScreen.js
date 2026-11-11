@@ -27,6 +27,7 @@ import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../formatters.js';
+import * as When from '../../engine/When.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -319,31 +320,9 @@ function _renderToDo(inbox, state) {
 // (the real calendar and the season's calendar differ; a date here would
 // contradict the Schedule): the time today, "Yesterday", "3 days ago",
 // "2 weeks ago"; in full when the card is open ("Today at 8:40 PM").
-function _clock(ms) {
-  return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-}
-function _daysAgo(ms) {
-  const day = (x) => { const y = new Date(x); y.setHours(0, 0, 0, 0); return y.getTime(); };
-  return Math.round((day(Date.now()) - day(ms)) / 86_400_000);
-}
-function _ago(days) {
-  if (days === 1) return 'Yesterday';
-  if (days < 7)   return `${days} days ago`;
-  if (days < 14)  return '1 week ago';
-  if (days < 30)  return `${Math.floor(days / 7)} weeks ago`;
-  if (days < 60)  return '1 month ago';
-  return `${Math.floor(days / 30)} months ago`;
-}
-function _shortWhen(ms) {
-  const days = _daysAgo(ms);
-  return days <= 0 ? _clock(ms) : _ago(days);
-}
-function _longWhen(ms) {
-  const days = _daysAgo(ms);
-  if (days <= 0) return `Today at ${_clock(ms)}`;
-  if (days < 7)  return `${_ago(days)} at ${_clock(ms)}`;
-  return _ago(days);
-}
+function _clock(ms) { return When.clockText(ms); }
+const _shortWhen = (ms) => When.agoShort(ms, Date.now());
+const _longWhen  = (ms) => When.agoFull(ms, Date.now());
 
 // §115 a sender's initials in a colored circle (text, not an icon): the same
 // sender is always the same color.

@@ -25,6 +25,7 @@
  */
 
 import { pushTimeFor } from './CardScheduler.js';
+import * as When from './When.js';
 
 /** The kinds a GM can turn off, as Settings shows them (and the inbox's). */
 export const PUSH_ALERTS = Object.freeze({
@@ -76,7 +77,7 @@ export function gamePushes(state, L, nowMs) {
           `The start is held — ${why} at the park.`, { tag: `${key}:wx`, live: true });
     }
     const when = p.cancelled ? (L.isSpring ? 'Spring games aren\'t made up.' : 'It won\'t be made up.')
-      : `Makeup: ${_day(p.makeupTime)}${p.doubleheader ? ', part of a doubleheader' : ''}.`;
+      : `Makeup: ${_day(p.makeupTime, L.gameTime)}${p.doubleheader ? ', part of a doubleheader' : ''}.`;
     const how = p.calledBy === 'forecast' && !p.startHeld ? `With ${why} in the forecast, today's game is off.`
       : p.calledBy === 'curfew' ? `The ${why} never let up before the curfew.`
       : p.startHeld ? `Called off after the start was held for ${why}.`
@@ -116,7 +117,7 @@ export function gamePushes(state, L, nowMs) {
           `${p.description} (${p.half === 'TOP' ? 'Top' : 'Bottom'} ${ORD(p.inning)}, ${match}.) The Head Trainer will report.`);
     } else if (p.type === 'game_suspended') {
       const s = L.suspended;
-      const resume = s?.resumeTime ? ` It resumes ${_day(s.resumeTime)}, right where it stopped.` : ' It will be finished another day.';
+      const resume = s?.resumeTime ? ` It resumes ${_day(s.resumeTime, p._timestamp)}, right where it stopped.` : ' It will be finished another day.';
       add(PUSH_ALERTS.calledOff, p._timestamp, `${key}:susp`, `Suspended: ${match}`,
           `${p.description} ${_score(score, us, them)}.${resume}`);
     } else if (p.type === 'game_end') {
@@ -153,9 +154,10 @@ function _length(mins) {
   return r ? `${h} hr ${r} min` : `${h}-hour`;
 }
 
-function _day(ms) {
+/** r149 relative to when the push is sent, never a calendar date: "tomorrow at 1:05 PM", "in 9 days". */
+function _day(ms, fromMs) {
   if (!Number.isFinite(ms)) return 'a later date';
-  return new Date(ms).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return When.untilFull(ms, Number.isFinite(fromMs) ? fromMs : ms);
 }
 
 /** "W: Miura · L: Bray · S: Ortiz" from the box score's decisions. */

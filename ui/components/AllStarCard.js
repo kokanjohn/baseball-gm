@@ -14,6 +14,7 @@
 
 import * as AllStar from '../../engine/AllStarEngine.js';
 import { GAME_STATUS, ALL_STAR_BREAK_AFTER_GAME } from '../../data/constants.js';
+import * as When from '../../engine/When.js';
 
 const AFTERGLOW_MS = 18 * 3600_000;   // the final stays up until the next morning
 
@@ -93,8 +94,8 @@ function _where(state, g) {
 }
 
 function _when(g) {
-  const d = new Date(g.gameTime);
-  return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} · ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  const s = When.untilFull(g.gameTime, Date.now());   // r149 "Saturday at 7:05 PM", "in 12 days"
+  return s[0].toUpperCase() + s.slice(1);
 }
 
 /** The ribbon above the card. */
