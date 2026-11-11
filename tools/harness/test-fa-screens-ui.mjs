@@ -223,6 +223,18 @@ await page.waitForTimeout(500);
 const links = await page.evaluate(() => [...document.querySelectorAll('.msg-player')].map(b => b.textContent));
 check(`a scouts' report links every player it names (${links.join(', ')})`, rep.named >= 1 && links.length >= rep.named, JSON.stringify(rep));
 await page.screenshot({ path: `${out}/report-links-${theme}.png` });
+// r148 times in Messages are relative ("Today at 8:40 PM", "Yesterday", "3 days ago"), never a calendar date.
+const stamp = await page.evaluate(() => document.querySelector('.mr-to')?.textContent || '');
+check(`the open message says when relatively (${stamp.trim()})`, /to me · (Today|Yesterday|\d+ days ago) at \d{1,2}:\d\d [AP]M/.test(stamp));
+await page.evaluate(async () => {   // an older message, two days back
+  const SM = await import('/baseball-gm/store/StateManager.js');
+  SM.mutate(s => { const c = s.inbox.find(x => !x.resolved && x._composeTopic !== 'sc_free_agents'); if (c) c.arrivedAtMs = Date.now() - 2 * 86_400_000 - 3600_000; });
+  const App = await import('/baseball-gm/ui/App.js'); App.switchTab('dashboard'); App.switchTab('decisions');
+});
+await page.waitForTimeout(500);
+const list = await page.evaluate(() => document.getElementById('decisions-content')?.innerText || document.body.innerText);
+check('the list says "2 days ago" and shows no calendar dates', /2 days ago/.test(list) && !/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/.test(list), list.slice(0, 300));
+await page.screenshot({ path: `${out}/inbox-relative-${theme}.png` });
 if (links.length) {
   await page.click('.msg-player'); await page.waitForTimeout(500);
   check('a name opens that player\'s card', await page.evaluate((n) => document.body.innerText.includes(n) && /Asking|Career|no league record/i.test(document.body.innerText), links[0]));

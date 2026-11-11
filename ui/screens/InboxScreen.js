@@ -315,22 +315,34 @@ function _renderToDo(inbox, state) {
   return `<div class="ml-list">${section('Important', important)}${section('Everything else', rest)}</div>`;
 }
 
-// §94 when a message reached the inbox: the time today, "Yesterday", the
-// weekday this week, the date before that; in full when the card is open.
+// §94 when a message reached the inbox — r148 relative, never a calendar date
+// (the real calendar and the season's calendar differ; a date here would
+// contradict the Schedule): the time today, "Yesterday", "3 days ago",
+// "2 weeks ago"; in full when the card is open ("Today at 8:40 PM").
 function _clock(ms) {
   return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
-function _shortWhen(ms) {
-  const d = new Date(ms), now = new Date();
+function _daysAgo(ms) {
   const day = (x) => { const y = new Date(x); y.setHours(0, 0, 0, 0); return y.getTime(); };
-  const days = Math.round((day(now) - day(d)) / 86_400_000);
-  if (days <= 0) return _clock(ms);
+  return Math.round((day(Date.now()) - day(ms)) / 86_400_000);
+}
+function _ago(days) {
   if (days === 1) return 'Yesterday';
-  if (days < 7) return d.toLocaleDateString('en-US', { weekday: 'short' });
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (days < 7)   return `${days} days ago`;
+  if (days < 14)  return '1 week ago';
+  if (days < 30)  return `${Math.floor(days / 7)} weeks ago`;
+  if (days < 60)  return '1 month ago';
+  return `${Math.floor(days / 30)} months ago`;
+}
+function _shortWhen(ms) {
+  const days = _daysAgo(ms);
+  return days <= 0 ? _clock(ms) : _ago(days);
 }
 function _longWhen(ms) {
-  return `${new Date(ms).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${_clock(ms)}`;
+  const days = _daysAgo(ms);
+  if (days <= 0) return `Today at ${_clock(ms)}`;
+  if (days < 7)  return `${_ago(days)} at ${_clock(ms)}`;
+  return _ago(days);
 }
 
 // §115 a sender's initials in a colored circle (text, not an icon): the same

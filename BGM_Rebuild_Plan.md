@@ -9928,3 +9928,23 @@ The promises:
 No fresh team needed. Promises begin with decisions made from r147 on; the dinner card is a first-day card, so it shows on a new franchise.
 
 **Suite (r147):** everything passes — check-promises 23/23, the full season 3674/3674, three seasons 52/52, every check and screen test in dark and light.
+
+### 122.20 Times in Messages are relative (GM, Nov 11 — r148)
+
+The game has two calendars: the real one (when a message arrives) and the season's (the Schedule's game dates). A message stamped "Tue, Nov 10 at 8:40 PM" next to a Schedule in the baseball season reads as a contradiction.
+
+Times in Messages are now relative (`InboxScreen._shortWhen` / `_longWhen` / `_ago`), never a calendar date:
+- **The list:** the time today ("8:40 PM"), then "Yesterday", "3 days ago", "1 week ago", "2 weeks ago", "1 month ago", "2 months ago".
+- **An open message**, its decision, and the "sent" line in Compose: "Today at 8:40 PM", "Yesterday at 8:40 PM", "3 days ago at 8:40 PM", then the same "2 weeks ago".
+- **Due labels are unchanged** ("Due 11:00 PM", "Due Fri 8:40 PM"): a weekday and a time, no date.
+
+Elsewhere, real dates still show:
+- Finances (the ledger, next payday);
+- League (moves);
+- Team (IL return dates);
+- the rating history;
+- the All-Star card.
+
+Candidates for the same treatment if they read as confusing.
+
+test-fa-screens-ui: an open message says "Today at …"; a message from two days ago reads "2 days ago"; the list shows no month names.
