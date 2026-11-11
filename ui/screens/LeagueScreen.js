@@ -481,18 +481,12 @@ function _renderPlayers(state) {
     ...leagueTeams.map(t => opt(t.id, _escape(t.name), f.team)),
   ].join('');
   const healthSel = [opt('all', 'Health: All', f.health), opt('il', 'IL-eligible', f.health), opt('healthy', 'Healthy', f.health)].join('');
-  const sortSel = [
-    opt('ovr', 'Sort: OVR', _playerSort.col),
-    ...(showMarket ? [opt('price', 'Sort: Price', _playerSort.col)] : []),
-    opt('imp', 'Sort: Impact', _playerSort.col),
-  ].join('');
 
   const rosterFilterBar = `
     <div class="lp-roster-bar">
       <select class="lp-sel" id="lp-view-select" aria-label="Filter">${viewSel}</select>
       ${['rosters', 'all'].includes(f.view) ? `<select class="lp-sel" id="lp-team-select" aria-label="Team">${teamSel}</select>` : ''}
       <select class="lp-sel" id="lp-health-select" aria-label="Health">${healthSel}</select>
-      <select class="lp-sel" id="lp-sort-select" aria-label="Sort">${sortSel}</select>
     </div>
     <div class="lp-roster-bar">
       <input id="lp-search" type="search" placeholder="Last name…" value="${_escape(_lpSearch)}"
@@ -601,7 +595,7 @@ function _renderPlayers(state) {
 /** The stats a row shows: this season's, or — with none yet — last season's (and its year). */
 function _statsShown(p) {
   const s = p.stats || {};
-  if ((s.ab || 0) > 0 || (s.ip || 0) > 0) return { p, year: null };
+  if ((s.ab || 0) > 0 || (s.ip || 0) > 0 || (s.outs || 0) > 0) return { p, year: null };
   const last = (p.seasonLog || []).filter(e => e?.stats).at(-1);
   return last ? { p: { ...p, stats: last.stats }, year: last.year } : { p, year: null };
 }
@@ -695,10 +689,18 @@ function _playerStatVal(player, key) {
   }
 }
 
+/**
+ * Sorts by the line the row shows (r145: this season's, or last season's when
+ * there's nothing yet — spring, a free agent — it used to sort this season's
+ * zeros, so only Rating and Impact seemed to sort). The first tap shows the
+ * best first (ERA: lowest); a second tap flips it. A row with no sample for the
+ * column (no at-bats, no innings, no Impact) sorts last either way.
+ */
 function _sortPlayers(players, { col, dir }, impScores = {}, state = null) {
+  const val = new Map(players.map(p => [p.id, _sortVal(_statsShown(p).p, col, impScores, state)]));
   return [...players].sort((a, b) => {
-    let va = _sortVal(a, col, impScores, state);
-    let vb = _sortVal(b, col, impScores, state);
+    const va = val.get(a.id), vb = val.get(b.id);
+    if (va == null || vb == null) return (va == null) - (vb == null);
     const cmp = typeof va === 'string' ? va.localeCompare(vb) : (vb - va);
     return dir === 'asc' ? -cmp : cmp;
   });
@@ -706,6 +708,10 @@ function _sortPlayers(players, { col, dir }, impScores = {}, state = null) {
 
 function _sortVal(player, col, impScores = {}, state = null) {
   const s = player.stats || {};
+  const ab = s.ab || 0, ip = s.outs ? s.outs / 3 : (s.ip || 0);
+  if (['hab', 'avg', 'r', 'hr', 'rbi', 'sb'].includes(col) && !ab) return null;
+  if (['ip', 'h_allowed', 'er', 'era', 'k', 'w', 'svhd', 'sv'].includes(col) && !ip) return null;
+  if (col === 'bb' && !ab && !ip) return null;
   switch (col) {
     case 'ovr':  return player.ovr || 0;
     case 'hab':  return s.ab ? (s.h||0) / s.ab : 0; // sort by avg for H/AB
@@ -716,15 +722,15 @@ function _sortVal(player, col, impScores = {}, state = null) {
     case 'sb':   return s.sb  || 0;
     case 'h_allowed': return s.h_allowed || 0;
     case 'er':   return s.er  || 0;
-    case 'era':  return s.outs > 0 ? (s.er||0)/(s.outs/3)*9 : s.ip ? (s.er||0)/s.ip*9 : 99;
+    case 'era':  return -((s.er || 0) / ip * 9);   // lowest first
     case 'ip':   return s.outs ? s.outs/3 : s.ip || 0;
     case 'bb':   return s.bb   || 0;
     case 'svhd': return (s.sv || 0) + (s.hld || 0);
     case 'w':    return s.w    || s.wins || 0;
     case 'k':    return s.k    || 0;
     case 'sv':   return s.sv   || 0;
-    case 'imp':  return impScores[player.id]?.impS ?? lastSeasonIMP(player) ?? -99;   // no sample sorts last
-    // §122.7 the market sorts: cheapest first, longest unsigned first (waivers: least time left)
+    case 'imp':  return impScores[player.id]?.impS ?? lastSeasonIMP(player) ?? null;   // no sample sorts last
+    // §122.7 the market sort: cheapest first
     case 'price': return -(player.group === 'freeAgent' && state ? (FreeAgency.termsFor(state, player).salary || 0) : (player.contractSalary || 0));
     case 'name': return player.name || '';
     default:     return 0;
@@ -774,7 +780,6 @@ function _attachListeners(state) {
   sel('lp-view-select',   (v) => { _playerFilter.view = v; if (!['available', 'waivers', 'fa'].includes(v) && _playerSort.col === 'price') _playerSort = { col: 'ovr', dir: 'desc' }; });
   sel('lp-team-select',   (v) => { _playerFilter.team = v; });
   sel('lp-health-select', (v) => { _playerFilter.health = v; });
-  sel('lp-sort-select',   (v) => { _playerSort = { col: v, dir: 'desc' }; });
 
   // Add from the row: sign a free agent, claim off waivers, or withdraw our claim (the sign sheet asks who goes when full)
   document.querySelectorAll('.lp-add-btn[data-add]').forEach(btn => {

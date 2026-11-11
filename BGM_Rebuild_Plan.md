@@ -9773,3 +9773,34 @@ Now:
 - While Recent is open, `_fitRadar` keeps the fit it had with Recent collapsed (`_radarFitted`).
 
 So opening Recent only adds the list. The page may scroll to show it, and closing it returns to the no-scroll layout. test-dashboard-radar gained a check at five phone heights that the radar is the same before, during and after opening Recent. It fails on r143 at four of the five heights: a Radar button, or the fitted 92px radar on an 844px phone, became the full 180px radar. test-fa-screens-ui checks the filter has no counts, has no DAYS column, and shows a waived player's time beside the name.
+
+### 122.17 UI batch 2 (GM, Nov 11 — r145)
+
+**The club funds pill** in the header is a button. From any tab it opens Team → Finances (`TeamScreen.showFinances`).
+
+**League → Players:**
+- **The Sort dropdown is gone.** The column headers sort: the first tap shows the best first (ERA lowest first), and a second tap flips it. ASK sorts by price, cheapest first.
+- **Why headers only seemed to sort Impact and Rating:** in spring, and for free agents, a row shows last season's line (§122.9 `_statsShown`), but the sort read this season's stats, which were all zeros. Every stat column sorted a column of ties. Impact and Rating already fell back to last season.
+- Now `_sortPlayers` sorts by the line the row shows. A row with no sample for the column (no at-bats for the hitting columns, no innings for the pitching ones, no Impact) sorts last whichever way the column is sorted.
+
+**Team → Staff:**
+- A card shows the name, the job, salary and contract only.
+- Tapping a card opens the staff member's sheet:
+  - Rating, as a word and the number.
+  - Specialty, and what it does (from `Coach.specialtyWords`).
+  - Background, when there is one (staff hired in the winter).
+  - Salary.
+  - Contract: years left, through which season.
+  - "Relationship with you": Strong (70+), Good (55+), Neutral, or Strained (30 or less).
+  - The old card's Strong/Strained tag moved here.
+
+**The manager has no rating or specialty.** The model has a name, salary, contract, relationship, and `userTeam.managerConfidence` (an internal number, shown only on the debug screen). The manager's sheet shows what exists. Nothing about the manager affects play. Whether to give managers a rating and a style is an open question for the staff conversation.
+
+test-fa-screens-ui:
+- the funds pill opens Finances;
+- no Sort dropdown;
+- tapping HR sorts by last season's line, most first, flips on a second tap, and no-record rows sort last;
+- staff cards without ratings;
+- the director's sheet and the manager's sheet.
+
+Dark and light.

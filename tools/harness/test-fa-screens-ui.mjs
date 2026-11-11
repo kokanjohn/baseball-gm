@@ -105,8 +105,26 @@ await page.waitForTimeout(400);
 const ros = await page.evaluate(() => ({ team: !!document.getElementById('lp-team-select'), rows: document.querySelectorAll('.lp-row').length }));
 check('On Rosters: the Team filter appears and rostered players are listed', ros.team && ros.rows > 20, JSON.stringify(ros));
 await page.selectOption('#lp-view-select', 'available');
-await page.selectOption('#lp-sort-select', 'price');
 await page.waitForTimeout(300);
+check('no Sort dropdown (the column headers sort)', (await page.$('#lp-sort-select')) === null);
+// r145 a header sorts by the line the row shows (last season's in spring): HR, best first, then flipped.
+const hrs = async () => page.evaluate(() => {
+  const heads = [...document.querySelectorAll('.lp-th')].map(h => h.dataset.sort);
+  const i = heads.indexOf('hr'), j = heads.indexOf('hab');
+  const rows = [...document.querySelectorAll('.lp-row')].map(r => r.querySelectorAll('.lp-td'));
+  const n = rows.findIndex(c => c[j]?.textContent === '0/0');   // no record: last, either way
+  return { hr: rows.slice(0, n < 0 ? rows.length : n).map(c => +c[i]?.textContent || 0),
+           tailEmpty: n < 0 || rows.slice(n).every(c => c[j]?.textContent === '0/0') };
+});
+await page.click('.lp-th[data-sort="hr"]'); await page.waitForTimeout(300);
+const hrDown = await hrs();
+await page.click('.lp-th[data-sort="hr"]'); await page.waitForTimeout(300);
+const hrUp = await hrs();
+const sortedBy = (a, f) => a.every((x, i) => !i || f(a[i - 1], x));
+check(`tapping HR sorts by it, most first (${hrDown.hr.slice(0, 5).join(', ')}…), and again flips it (${hrUp.hr.slice(0, 3).join(', ')}…); no record sorts last`,
+      hrDown.hr.length > 5 && hrDown.hr[0] > 0 && sortedBy(hrDown.hr, (a, b) => a >= b) && sortedBy(hrUp.hr, (a, b) => a <= b) && hrDown.tailEmpty && hrUp.tailEmpty,
+      JSON.stringify({ down: hrDown.hr.slice(0, 12), up: hrUp.hr.slice(0, 12) }));
+await page.click('.lp-th[data-sort="price"]'); await page.waitForTimeout(300);
 
 // ── Player cards ─────────────────────────────────────────────
 await page.evaluate(async (id) => {
@@ -150,9 +168,26 @@ await page.waitForTimeout(400);
 await page.click('#tsubtab-staff');
 await page.waitForTimeout(300);
 const staffText = await page.evaluate(() => document.getElementById('team-content')?.innerText || '');
-check('Staff: the scouting director, rated, with a specialty', /Scouting Director/.test(staffText) && /\((\d+)\) · (pro scouting|international|rookies and indie ball)/.test(staffText), staffText.slice(-300));
+check('Staff: the cards show name, job, salary and contract only (no rating on the card)',
+      /Scouting Director/.test(staffText) && /\/yr/.test(staffText) && /(yrs? left|Final Year)/.test(staffText) && !/\(\d+\) ·/.test(staffText), staffText.slice(-300));
 check('Staff: no sideways scroll', await noHScroll());
 await page.screenshot({ path: `${out}/staff-${theme}.png`, fullPage: true });
+await page.click('.staff-card-tap[data-staff="scoutingDirector"]'); await page.waitForTimeout(500);
+const sheet2 = await page.evaluate(() => document.getElementById('ts-swap-modal')?.innerText || '');
+check('tapping one opens the sheet: rating, specialty and what it means, contract, relationship',
+      /Rating/.test(sheet2) && /\(\d+\)/.test(sheet2) && /Specialty/.test(sheet2) && /Contract/.test(sheet2) && /Relationship with you/.test(sheet2), sheet2.slice(0, 300));
+await page.screenshot({ path: `${out}/staff-sheet-${theme}.png` });
+await page.click('#ts-swap-close'); await page.waitForTimeout(300);
+await page.click('.staff-card-tap[data-staff="manager"]'); await page.waitForTimeout(500);
+const mgr = await page.evaluate(() => document.getElementById('ts-swap-modal')?.innerText || '');
+check('the manager\'s sheet: contract and relationship', /Manager/.test(mgr) && /Contract/.test(mgr) && /Relationship with you/.test(mgr), mgr.slice(0, 200));
+await page.click('#ts-swap-close'); await page.waitForTimeout(300);
+// r145 the club funds pill in the header opens Team → Finances (from another tab).
+await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('league'); });
+await page.waitForTimeout(300);
+await page.click('#head-budget'); await page.waitForTimeout(600);
+const fin = await page.evaluate(() => ({ tab: document.querySelector('.tab-content.active')?.id, sub: document.querySelector('#tsubtab-finances')?.classList.contains('active') }));
+check('the club funds pill opens Team → Finances', fin.tab === 'tab-roster' && fin.sub, JSON.stringify(fin));
 
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();

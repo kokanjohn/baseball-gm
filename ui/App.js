@@ -33,7 +33,7 @@ import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r144';
+export const APP_VERSION = 'tfo-v2-r145';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -359,6 +359,12 @@ export async function init() {
 
   // Show main app shell
   _showScreen('app');
+
+  // r145 the club funds pill opens Team → Finances.
+  document.getElementById('head-budget')?.addEventListener('click', async () => {
+    const TS = await import('./screens/TeamScreen.js');
+    TS.showFinances();
+  });
 
   // Wire settings gear button — opens the settings modal
   const gearBtn       = document.getElementById('settings-btn');

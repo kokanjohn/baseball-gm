@@ -190,6 +190,13 @@ export function mount() {
   refresh();
 }
 
+/** r145 the club funds pill in the header: Team → Finances. */
+export function showFinances() {
+  _activeTab = 'finances';
+  App.switchTab('roster');
+  refresh();
+}
+
 export function unmount() {
   _listeners.forEach(({ event, handler }) => EventBus.off(event, handler));
   _listeners = [];
@@ -723,12 +730,6 @@ function _renderStaff(state) {
       ? '<span style="font-size:10px;color:var(--muted);background:var(--surface2);padding:2px 6px;border-radius:4px;">1 yr left</span>'
       : `<span style="font-size:10px;color:var(--muted);background:var(--surface2);padding:2px 6px;border-radius:4px;">${yearsLeft} yrs left</span>`;
 
-    const rel         = data.relationship ?? data.gmRelationship ?? 50;
-    const relTag      = rel >= 70
-      ? '<span style="font-size:10px;color:var(--text);background:var(--chip-green-bg);padding:2px 6px;border-radius:4px;">Strong</span>'
-      : rel <= 30
-      ? '<span style="font-size:10px;color:var(--danger);background:var(--chip-red-bg);padding:2px 6px;border-radius:4px;">Strained</span>'
-      : '';
 
     if (data.vacant) {
       return `
@@ -740,24 +741,18 @@ function _renderStaff(state) {
         <div class="staff-card-meta"><span style="font-size:10px;font-weight:700;color:var(--danger);background:var(--chip-red-bg);padding:2px 6px;border-radius:4px;">Hiring</span></div>
       </div>`;
     }
-    // §112.2 the coach's quality and specialty
-    const ability = Number.isFinite(data.quality) && key !== 'manager'
-      ? `<div class="staff-card-role">${Coach.qualityWord(data.quality)[0].toUpperCase() + Coach.qualityWord(data.quality).slice(1)} (${data.quality}) · ${_escape(Coach.specialtyShort(data.specialty))}</div>`
-      : '';
-
+    // r145 the card: name, job, salary, contract. Rating, specialty and the rest open in a sheet (tap).
     return `
-      <div class="staff-card">
+      <button class="staff-card staff-card-tap" data-staff="${key}" aria-label="${_escape(data.name || label)}, ${label}">
         <div class="staff-card-left">
           <div class="staff-card-name">${_escape(data.name || label)}</div>
           <div class="staff-card-role">${label}</div>
-          ${ability}
         </div>
         <div class="staff-card-meta">
           <span class="staff-salary">${formatSalary(data.salary || 0)}/yr</span>
           ${contractTag}
-          ${relTag}
         </div>
-      </div>
+      </button>
     `;
   }).join('');
 
@@ -878,6 +873,10 @@ function _attachListeners(state) {
   if (fBtn) fBtn.addEventListener('click', () => { _activeTab = 'finances'; refresh(); });
   if (pBtn) pBtn.addEventListener('click', () => { _activeTab = 'players'; refresh(); });
   if (sBtn) sBtn.addEventListener('click', () => { _activeTab = 'staff';   refresh(); });
+  // r145 a staff card opens the staff member's sheet.
+  document.querySelectorAll('.staff-card-tap[data-staff]').forEach(el => {
+    el.addEventListener('click', () => _openStaffSheet(StateManager.get(), el.dataset.staff));
+  });
 
   // Ropt hint button — toast with up to 3 suggested moves, matching v1 format
   document.getElementById('ropt-hint-btn')?.addEventListener('click', e => {
@@ -1204,6 +1203,33 @@ function _openReplacementPicker(title, candidates, onChosen) {
       });
     });
   });
+}
+
+const STAFF_LABELS = { manager: 'Manager', pitchingCoach: 'Pitching Coach', hittingCoach: 'Hitting Coach', benchCoach: 'Bench Coach',
+                       bullpenCoach: 'Bullpen Coach', scoutingDirector: 'Scouting Director' };
+
+/** r145 a staff member's sheet: rating and specialty (coaches and the scouting director), background, pay, contract, the relationship. */
+function _openStaffSheet(state, key) {
+  const d = state.userTeam?.coachingStaff?.[key];
+  if (!d || d.vacant) return;
+  const season = state.seasonNum || 1;
+  const left = (d.contractExpiry || season) - season;
+  const cap = (w) => w ? w[0].toUpperCase() + w.slice(1) : '';
+  const rel = d.relationship ?? d.gmRelationship ?? 50;
+  const relWord = rel >= 70 ? 'Strong' : rel >= 55 ? 'Good' : rel > 30 ? 'Neutral' : 'Strained';
+  const row = (label, value, sub = '') => `
+    <div class="staff-sheet-row"><div class="staff-sheet-label">${label}</div>
+      <div class="staff-sheet-value">${value}${sub ? `<div class="staff-sheet-sub">${sub}</div>` : ''}</div></div>`;
+  const words = Coach.specialtyWords(key, d.specialty);
+  const rows = [
+    Number.isFinite(d.quality) ? row('Rating', `${cap(Coach.qualityWord(d.quality))} (${d.quality})`) : '',
+    d.specialty ? row('Specialty', _escape(cap(Coach.specialtyShort(d.specialty))), words ? _escape(cap(words.replace(/^an? [^:]+: /, ''))) : '') : '',
+    d.background ? row('Background', _escape(cap(d.background))) : '',
+    row('Salary', `${formatSalary(d.salary || 0)} a year`),
+    row('Contract', left <= 0 ? 'Final year' : `${left} year${left === 1 ? '' : 's'} left`, `Through season ${d.contractExpiry || season}`),
+    row('Relationship with you', relWord),
+  ].join('');
+  _showSwapSheet(_escape(d.name || STAFF_LABELS[key]), STAFF_LABELS[key] || '', `<div class="staff-sheet">${rows}</div>`, () => {});
 }
 
 function _showSwapSheet(title, subtitle, rowsHtml, wireRows) {
