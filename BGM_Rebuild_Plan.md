@@ -9751,3 +9751,25 @@ test-fa-screens-ui checks the Staff tab in dark and light. sim-season checks tha
   - One run failed rating-history (the last point didn't match the current rating). A second run passed it. The likely cause is the harness's simulated GM answering a roster card without running the clock afterwards; the app always runs the clock after an answer.
   - The second run failed "club funds: realistic operating net" by a hair: 84–48, just under the .650 "historic" cutoff, with the net at 36% of target against a 35% bound.
 - **check-coaches:** its field-unit grading check now leaves out the director, who has no field unit (check-scouting-director covers the director's evaluation).
+
+### 122.16 UI batch from testing (GM, Nov 11 — r144)
+
+**League → Players:**
+- The Filter dropdown shows no counts ("Available", not "Available (200)").
+- The DAYS column, and the "Sort: Days unsigned" option, are gone. How long a free agent has been unsigned isn't something the GM needs.
+- The time left on waivers still matters. It sits beside the name, small and muted: "Ferrel 2d", or "14h" on the last day (`_waiverLeft`, `.lp-wv-left`). The Available list shows the first 100 rows by the sort, so a low-rated waived player shows up under On Waivers.
+
+**Settings:** no "our" in the notification rows.
+- Weather Delays: "A start held for weather, a rain or lightning delay, and play resuming".
+- Postponed & Suspended: "A game called off, with the makeup date".
+- "Our Injuries" is now **Injuries**: "A player of yours leaving a game hurt".
+- Final Score: "When the game ends, with the decisions".
+
+**Why opening Recent showed the radar.** §93/§100: the idle dashboard (no live game) never scrolls. The radar is fitted to the room left, and on a short phone it steps aside for a Radar button on the next-game card. `_syncScrollRoom` treated an open Recent list as "not idle". That dropped the idle layout (the compact card styles on short phones), and `_fitRadar` skipped fitting, so the radar came back at full height (180px) every time Recent opened.
+
+Now:
+- `dash-idle` depends only on a live game.
+- An open list adds `recent-open`, which gives the list its bottom margin.
+- While Recent is open, `_fitRadar` keeps the fit it had with Recent collapsed (`_radarFitted`).
+
+So opening Recent only adds the list. The page may scroll to show it, and closing it returns to the no-scroll layout. test-dashboard-radar gained a check at five phone heights that the radar is the same before, during and after opening Recent. It fails on r143 at four of the five heights: a Radar button, or the fitted 92px radar on an 844px phone, became the full 180px radar. test-fa-screens-ui checks the filter has no counts, has no DAYS column, and shows a waived player's time beside the name.

@@ -469,9 +469,9 @@ function _renderPlayers(state) {
 
   const opt = (v, label, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${label}</option>`;
   const viewSel = [
-    opt('available', `Available (${waivers.length + fas.length})`, f.view),
-    opt('waivers', `On Waivers (${waivers.length})`, f.view),
-    opt('fa', `Free Agents (${fas.length})`, f.view),
+    opt('available', 'Available', f.view),
+    opt('waivers', 'On Waivers', f.view),
+    opt('fa', 'Free Agents', f.view),
     opt('rosters', 'On Rosters', f.view),
     opt('all', 'All', f.view),
   ].join('');
@@ -483,7 +483,7 @@ function _renderPlayers(state) {
   const healthSel = [opt('all', 'Health: All', f.health), opt('il', 'IL-eligible', f.health), opt('healthy', 'Healthy', f.health)].join('');
   const sortSel = [
     opt('ovr', 'Sort: OVR', _playerSort.col),
-    ...(showMarket ? [opt('price', 'Sort: Price', _playerSort.col), opt('days', 'Sort: Days unsigned', _playerSort.col)] : []),
+    ...(showMarket ? [opt('price', 'Sort: Price', _playerSort.col)] : []),
     opt('imp', 'Sort: Impact', _playerSort.col),
   ].join('');
 
@@ -500,9 +500,9 @@ function _renderPlayers(state) {
       <button class="lp-reset-btn" id="lp-reset-btn" title="Reset filters">Reset</button>
     </div>`;
 
-  // Columns: for players we could add, the add button, the asking price and how long
-  // they've been unsigned (or the time left on waivers) come first.
-  const market = showMarket ? [{ key: 'add', label: '' }, { key: 'price', label: 'ASK' }, { key: 'days', label: 'DAYS' }] : [];
+  // Columns: for players we could add, the add button and the asking price come first.
+  // (Time left on waivers sits beside the name: "2d".)
+  const market = showMarket ? [{ key: 'add', label: '' }, { key: 'price', label: 'ASK' }] : [];
   const statCols = [...market, ...(isPitcherView
     ? [
         { key:'ip',   label:'IP'   },
@@ -528,7 +528,7 @@ function _renderPlayers(state) {
         { key:'ovr',  label:'RTG'  },
       ])];
 
-  const extra = (k) => k === 'hab' ? ' lp-th-hab' : k === 'imp' ? ' lp-td-imp' : k === 'add' ? ' lp-td-add' : k === 'price' || k === 'days' ? ' lp-td-mkt' : '';
+  const extra = (k) => k === 'hab' ? ' lp-th-hab' : k === 'imp' ? ' lp-td-imp' : k === 'add' ? ' lp-td-add' : k === 'price' ? ' lp-td-mkt' : '';
   const heads = statCols.map(c => {
     const isActive = c.key === _playerSort.col;
     return `<div class="lp-th${extra(c.key)} ${isActive ? 'lp-th-active' : ''}" ${c.key === 'add' ? '' : `data-sort="${c.key}"`}>${c.label}</div>`;
@@ -552,7 +552,6 @@ function _renderPlayers(state) {
           ? `<button class="lp-add-btn${p._userClaim ? ' on' : ''}" data-add="${p.id}" data-kind="${kind}">${label}</button>` : ''}</div>`;
       }
       if (c.key === 'price') return `<div class="lp-td lp-td-mkt">${p.group === 'freeAgent' ? _askText(state, p) : p.onWaivers ? _money(p.contractSalary || 0) : '—'}</div>`;
-      if (c.key === 'days') return `<div class="lp-td lp-td-mkt">${p.onWaivers ? _waiverLeft(p) : p.group === 'freeAgent' ? _daysUnsigned(p) : '—'}</div>`;
       if (c.key === 'imp') {
         const now = impScores[p.id]?.impS;
         const v = now ?? lastSeasonIMP(p);
@@ -568,7 +567,7 @@ function _renderPlayers(state) {
     return `
       <div class="lp-row ${isUser ? 'user-player-row' : ''}" data-player="${p.id}">
         <div class="lp-td-name">
-          <div class="lp-name-line">${_escape(p.name)}</div>
+          <div class="lp-name-line">${_escape(p.name)}${p.onWaivers ? ` <span class="lp-wv-left" title="Time left on waivers">${_waiverLeft(p)}</span>` : ''}</div>
           <div class="lp-name-sub">${_escape(teamAbbr)} · ${p.nativePos || p.pos}${shown.year ? ` · <span class="lp-lyline">'${String(shown.year).slice(-2)} stats</span>` : ''}${dtd}</div>
         </div>
         ${statVals}
@@ -618,13 +617,11 @@ function _askText(state, p) {
   const t = FreeAgency.termsFor(state, p);
   return _money(t.salary || 0);
 }
-function _daysUnsigned(p) {
-  return Number.isFinite(p._faSince) ? String(Math.max(0, Math.floor((Date.now() - p._faSince) / 86_400_000))) : '—';
-}
+/** Time left on waivers, beside the name: "2d", or "14h" on the last day. */
 function _waiverLeft(p) {
   const left = Math.max(0, FreeAgency.waiverEndsAt(p) - Date.now());
   const h = Math.floor(left / 3_600_000);
-  return h >= 24 ? `${Math.floor(h / 24)}d left` : `${h}h left`;
+  return h >= 24 ? `${Math.floor(h / 24)}d` : `${h}h`;
 }
 
 /** §30.6 the Impact leaders: the season's top five hitters and pitchers (labels with the number). */
@@ -729,7 +726,6 @@ function _sortVal(player, col, impScores = {}, state = null) {
     case 'imp':  return impScores[player.id]?.impS ?? lastSeasonIMP(player) ?? -99;   // no sample sorts last
     // §122.7 the market sorts: cheapest first, longest unsigned first (waivers: least time left)
     case 'price': return -(player.group === 'freeAgent' && state ? (FreeAgency.termsFor(state, player).salary || 0) : (player.contractSalary || 0));
-    case 'days':  return player.onWaivers ? -(FreeAgency.waiverEndsAt(player)) / 86_400_000 : Number.isFinite(player._faSince) ? -player._faSince : -Infinity;
     case 'name': return player.name || '';
     default:     return 0;
   }
@@ -775,7 +771,7 @@ function _attachListeners(state) {
 
   // §122.7 Filter / Team / Health / Sort
   const sel = (id, fn) => document.getElementById(id)?.addEventListener('change', (e) => { fn(e.target.value); refresh(); });
-  sel('lp-view-select',   (v) => { _playerFilter.view = v; if (!['available', 'waivers', 'fa'].includes(v) && ['price', 'days'].includes(_playerSort.col)) _playerSort = { col: 'ovr', dir: 'desc' }; });
+  sel('lp-view-select',   (v) => { _playerFilter.view = v; if (!['available', 'waivers', 'fa'].includes(v) && _playerSort.col === 'price') _playerSort = { col: 'ovr', dir: 'desc' }; });
   sel('lp-team-select',   (v) => { _playerFilter.team = v; });
   sel('lp-health-select', (v) => { _playerFilter.health = v; });
   sel('lp-sort-select',   (v) => { _playerSort = { col: v, dir: 'desc' }; });
@@ -1135,7 +1131,8 @@ function _injectCSS() {
     .lp-add-btn{font-size:10px;font-weight:800;padding:4px 6px;border-radius:6px;border:1px solid var(--text);
       background:var(--text);color:var(--bg);font-family:inherit;cursor:pointer;}
     .lp-add-btn.on{background:transparent;color:var(--text);}
-    .lp-dtd{color:#fbbf24;font-weight:700;} .lp-il{color:var(--danger);font-weight:700;}
+    .lp-dtd{color:#fbbf24;font-weight:700;}
+    .lp-wv-left{font-size:10px;font-weight:700;color:var(--muted);margin-left:3px;} .lp-il{color:var(--danger);font-weight:700;}
     .lp-lyline{color:var(--soft);}
     .lp-ly{font-size:8px;font-weight:700;margin-left:2px;opacity:.75;}
     .lp-leaders{margin:8px 10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);}

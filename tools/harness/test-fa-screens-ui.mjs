@@ -36,6 +36,14 @@ const made = await page.evaluate(async (theme) => {
     Object.assign(s.players[outId], { teamId: null, group: 'freeAgent', tier: 'freeAgent', _faSince: now });
     s.freeAgentPool = [...(s.freeAgentPool || []), outId];
   });
+  // A CPU club's reserve put on waivers (r144: the time left shows beside the name).
+  SM.mutate(s => {
+    const t = s.leagueTeams[0], lineup = new Set((t.lineupSlots || []).map(sl => sl.playerId));
+    const id = t.rosterIds.find(x => !['SP', 'RP'].includes(s.players[x].pos) && !lineup.has(x));
+    t.rosterIds = t.rosterIds.filter(x => x !== id);
+    Object.assign(s.players[id], { group: 'waivers', tier: 'waivers', onWaivers: true, waiverStartTime: now, teamId: null, _waivedBy: t.id });
+    s.waiverPool = [...(s.waiverPool || []), id];
+  });
   // A starter hurt: the diagnosis.
   const hurt = SM.get().userTeam.lineupSlots.find(sl => sl.slot === 'SS').playerId;
   SM.mutate(s => { Object.assign(s.players[hurt], IE.beginInjury(s.players[hurt], now, 'moderate', Math.random)); });
@@ -67,9 +75,18 @@ await page.screenshot({ path: `${out}/team-${theme}.png`, fullPage: false });
 await page.click('.vacancy-row[data-need]');
 await page.waitForTimeout(700);
 const lp = await page.evaluate(() => ({ text: document.getElementById('league-content')?.innerText || '',
-  view: document.getElementById('lp-view-select')?.value, adds: document.querySelectorAll('.lp-add-btn').length }));
-check('the open spot opens League → Players on Available, with Add buttons and asking prices',
-      lp.view === 'available' && lp.adds > 0 && /ASK/.test(lp.text) && /DAYS/.test(lp.text), JSON.stringify({ view: lp.view, adds: lp.adds }));
+  view: document.getElementById('lp-view-select')?.value, adds: document.querySelectorAll('.lp-add-btn').length,
+  opts: [...document.querySelectorAll('#lp-view-select option')].map(o => o.textContent) }));
+check('the open spot opens League → Players on Available, with Add buttons and asking prices, no DAYS column',
+      lp.view === 'available' && lp.adds > 0 && /ASK/.test(lp.text) && !/DAYS/.test(lp.text), JSON.stringify({ view: lp.view, adds: lp.adds }));
+check(`the filter shows no counts (${lp.opts.join(' / ')})`, lp.opts.length >= 5 && lp.opts.every(o => !/\(\d+\)/.test(o)));
+await page.selectOption('#lp-view-select', 'waivers');
+await page.waitForTimeout(400);
+const wv = await page.evaluate(() => [...document.querySelectorAll('.lp-wv-left')].map(e => e.textContent));
+check(`a player on waivers shows the time left beside the name (${wv.join(', ')})`, wv.length >= 1 && wv.every(x => /^\d+[dh]$/.test(x)));
+await page.screenshot({ path: `${out}/players-waivers-${theme}.png` });
+await page.selectOption('#lp-view-select', 'available');
+await page.waitForTimeout(400);
 check('League: no sideways page scroll', await noHScroll());
 await page.screenshot({ path: `${out}/players-available-${theme}.png` });
 

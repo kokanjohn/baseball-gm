@@ -1361,16 +1361,18 @@ function _wireRecent() {
 
 /**
  * §93 the dashboard only scrolls when it has to. With no game in progress
- * and Recent collapsed, nothing trails the last card (no bottom padding or
- * margin), so a dashboard that fits the screen doesn't scroll by those few
- * pixels. A live game or an open Recent list gets its room back. (A screen
- * too short for the cards still scrolls — nothing is ever cut off.)
+ * nothing trails the last card (no bottom padding or margin), so a dashboard
+ * that fits the screen doesn't scroll by those few pixels. A live game gets
+ * its room back. Opening Recent only adds its list (the page may scroll to
+ * it): the idle layout and the radar's fit stay as they were — r144, opening
+ * Recent used to drop the idle layout, and the radar came back at full height.
  */
 function _syncScrollRoom() {
   const tab = document.getElementById('tab-dashboard');
   if (!tab) return;
   const live = !!document.querySelector('#dashboard-content .live-game-wrap');
-  tab.classList.toggle('dash-idle', !live && !_recentOpen);
+  tab.classList.toggle('dash-idle', !live);
+  tab.classList.toggle('recent-open', _recentOpen);
   _fitRadar();
 }
 
@@ -1379,14 +1381,19 @@ function _syncScrollRoom() {
  * full height when it fits, shorter on shorter screens; with too little room
  * the card steps aside and the next-game card shows a Radar button instead.
  */
+let _radarFitted = false;   // fitted with Recent collapsed (the fit an open list keeps)
 function _fitRadar() {
   const tab = document.getElementById('tab-dashboard');
   if (!_radar || !tab || !_radar.root.isConnected) return;
+  const idle = tab.classList.contains('dash-idle');
+  // Fitted to the dashboard with Recent collapsed: while the list is open the radar keeps that fit.
+  if (idle && _recentOpen && _radarFitted) return;
   let hidden = _radar.setMapHeight(RADAR_MAP_H);
-  if (tab.classList.contains('dash-idle')) {
+  if (idle) {
     const over = tab.scrollHeight - tab.clientHeight;
     if (over > 0) hidden = _radar.setMapHeight(RADAR_MAP_H - over);
   }
+  _radarFitted = !_recentOpen;
   document.querySelectorAll('#dashboard-content .ngc-radar').forEach(b => { b.hidden = !hidden; });
 }
 
@@ -1646,6 +1653,7 @@ function _injectCSS() {
     .ngc-radar{font:inherit;font-size:13px;font-weight:700;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:7px 12px;cursor:pointer;}
     .ngc-radar[hidden]{display:none;}
     #tab-dashboard.dash-idle .recent-wrap{margin-bottom:0;}
+    #tab-dashboard.dash-idle.recent-open .recent-wrap{margin-bottom:16px;}
     /* Short phones: the idle dashboard tightens instead of scrolling (it never scrolls when idle). */
     @media (max-height: 740px) {
       #tab-dashboard.dash-idle .week-banner{padding:6px 12px;margin-bottom:6px;}

@@ -86,6 +86,17 @@ for (const h of [932, 844, 760, 700, 640]) {
     check(`${h}px tall: the Radar button opens the full radar`, true);
     await p2.click('.rs-done'); await p2.waitForTimeout(300);
   }
+  // r144 opening Recent only adds its list: the radar keeps its fit (it used to come back at full height).
+  const fit = () => p2.evaluate(() => { const c = document.querySelector('.radar-card'), b = document.querySelector('.ngc-radar');
+    return { folded: c.style.display === 'none', button: !!b && !b.hidden, map: Math.round(c.querySelector('.rc-map').getBoundingClientRect().height),
+             idle: document.getElementById('tab-dashboard').classList.contains('dash-idle') }; });
+  const f0 = await fit();
+  await p2.click('#recent-toggle'); await p2.waitForTimeout(400);
+  const f1 = await fit();
+  await p2.click('#recent-toggle'); await p2.waitForTimeout(400);
+  const f2 = await fit();
+  check(`${h}px tall: opening Recent leaves the radar as it was (${f0.folded ? 'a Radar button' : `map ${f0.map}px`} → ${f1.folded ? 'a Radar button' : `map ${f1.map}px`}), and closing it too`,
+        JSON.stringify(f0) === JSON.stringify(f1) && JSON.stringify(f0) === JSON.stringify(f2), JSON.stringify({ f0, f1, f2 }));
   if (h === 640 || h === 760) await p2.screenshot({ path: `${out}/dash-${h}-${theme}.png` });
   await c2.close();
 }
