@@ -207,10 +207,7 @@ export const CARD_TOKEN_POOLS = Object.freeze({
     'the franchise’s first decade', 'the club’s last championship run',
     'the old ballpark years', 'the franchise’s original uniforms',
   ],
-  legend_era: [
-    'the franchise’s first pennant team', 'the club’s championship years',
-    'the old ballpark era', 'the early expansion years',
-  ],
+
   corp_event_name: [
     'Vantage Financial Group', 'Helix Pharmaceuticals', 'Crestline Energy', 'Apex Digital',
   ],
@@ -248,3 +245,18 @@ export const CARD_TOKEN_POOLS = Object.freeze({
   // Name pool for one-off people (attendant, legends, outside coaches). Kept
   // separate from STAFF_NAMES so they never collide with the coaching staff.
 });
+
+// ─────────────────────────────────────────────────────────────
+// r146 FRANCHISE LEGENDS — who a card's {legend_name} is
+// ─────────────────────────────────────────────────────────────
+// Each club has three, fixed for the save (CardTokens.franchiseLegends): a name
+// from PERSON_NAMES and one of these. `who` follows the name on first mention
+// ("{legend_name}, {legend_who}, is in town"); `era` is when they played.
+export const LEGEND_ROLES = Object.freeze([
+  { who: 'the shortstop who anchored the franchise’s first pennant team', era: 'the franchise’s first pennant team' },
+  { who: 'the club’s all-time hits leader, fourteen seasons here', era: 'the old ballpark era' },
+  { who: 'the ace of the championship years and still the club’s all-time wins leader', era: 'the club’s championship years' },
+  { who: 'a fan-favorite catcher from the old ballpark era, famous for playing hurt', era: 'the old ballpark era' },
+  { who: 'the closer who got the final out in the club’s championship run', era: 'the club’s championship years' },
+  { who: 'the slugger whose home run record still stands', era: 'the early expansion years' },
+]);

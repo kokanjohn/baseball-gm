@@ -32,6 +32,8 @@ import {
 } from '../formatters.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as FreeAgency from '../../engine/FreeAgency.js';
+import * as Roster from '../../engine/RosterEngine.js';
+import * as Finance from '../../engine/FinanceEngine.js';
 import { PHASE } from '../../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -46,6 +48,8 @@ let _listeners  = [];
 let _playerFilter = { pos: 'batters', view: 'available', team: 'all', health: 'all' };   // §122.7
 let _playerSort   = { col: 'ovr', dir: 'desc' };
 let _lpSearch     = '';
+let _rowLimit     = 100;   // r146 the list shows this many; "Show more" adds the next hundred
+let _limitKey     = '';    // the filters the limit was raised for (new filters start at 100 again)
 // §90 Moves tab filter: 'all' | 'trades' | 'ours'
 let _wireFilter   = 'all';
 
@@ -404,6 +408,8 @@ function _renderPlayers(state) {
   const f             = _playerFilter;
 
   const isSearching = _lpSearch.trim().length > 0;
+  const limitKey = JSON.stringify([f, _lpSearch.trim()]);
+  if (limitKey !== _limitKey) { _limitKey = limitKey; _rowLimit = 100; }
   const waivers = FreeAgency.waiverList(state), fas = FreeAgency.freeAgentList(state);
   const rostered = () => [...(state.userTeam?.rosterIds || []), ...leagueTeams.flatMap(t => t.rosterIds || [])].map(id => players[id]).filter(Boolean);
 
@@ -528,7 +534,7 @@ function _renderPlayers(state) {
     return `<div class="lp-th${extra(c.key)} ${isActive ? 'lp-th-active' : ''}" ${c.key === 'add' ? '' : `data-sort="${c.key}"`}>${c.label}</div>`;
   }).join('');
 
-  const rows = allPlayers.slice(0, 100).map(p => {
+  const rows = allPlayers.slice(0, _rowLimit).map(p => {
     const isUser   = userRosterIds.has(p.id);
     const teamAbbr = isUser
       ? ((state.userTeam?.abbr || '').toUpperCase() || '—')
@@ -586,7 +592,7 @@ function _renderPlayers(state) {
           f.view === 'waivers' ? 'No one on waivers fits these filters right now. A club puts a player on waivers to clear a roster spot; any club can claim for 72 hours, worst record first.'
           : f.view === 'fa' || f.view === 'available' ? 'No free agents fit these filters right now.'
           : 'No players match these filters.'}</div>`}</div>
-        ${allPlayers.length > 100 ? `<div style="padding:8px 16px;font-size:11px;color:var(--muted);">Showing 100 of ${allPlayers.length}</div>` : ''}
+        ${allPlayers.length > _rowLimit ? `<button class="lp-more-btn" id="lp-more-btn">Show ${Math.min(100, allPlayers.length - _rowLimit)} more <span>(${_rowLimit} of ${allPlayers.length} shown)</span></button>` : ''}
       </div>
     </div>
   `;
@@ -755,7 +761,20 @@ function _attachListeners(state) {
     return;
   }
 
+  // r146 Teams and Standings: tap a team → its sheet (these used to sit below the
+  // players-only return, so a tap did nothing).
+  const openTeam = (teamId) => {
+    if (!teamId) return;
+    const s = StateManager.get();
+    const team = teamId === 'user' ? s.userTeam : (s.leagueTeams || []).find(t => t.id === teamId);
+    if (team) _openLeagueTeamModal(team, s);
+  };
+  document.querySelectorAll('.lgt-card[data-team]').forEach(el => el.addEventListener('click', () => openTeam(el.dataset.team)));
+  document.querySelectorAll('.lg-stand-row[data-team-id], .standing-row[data-team-id]').forEach(el => el.addEventListener('click', () => openTeam(el.dataset.teamId)));
+
   if (_activeTab !== 'players') return;
+
+  document.getElementById('lp-more-btn')?.addEventListener('click', () => { _rowLimit += 100; refresh(); });
 
   // Reset button — clears all filters, search, and sort back to defaults
   document.getElementById('lp-reset-btn')?.addEventListener('click', () => {
@@ -828,31 +847,6 @@ function _attachListeners(state) {
     });
   });
 
-  // Teams tab — team card click → team detail modal
-  document.querySelectorAll('.lgt-card[data-team]').forEach(el => {
-    el.addEventListener('click', () => {
-      const teamId = el.dataset.team;
-      if (!teamId || teamId === 'user') return;
-      const s = StateManager.get();
-      const team = (s.leagueTeams || []).find(t => t.id === teamId);
-      if (team) _openLeagueTeamModal(team, s);
-    });
-  });
-
-  // Standings tab — standing row click → team roster modal
-  document.querySelectorAll('.lg-stand-row[data-team-id], .standing-row[data-team-id]').forEach(el => {
-    el.addEventListener('click', () => {
-      const teamId = el.dataset.teamId;
-      if (!teamId) return;
-      const s = StateManager.get();
-      if (teamId === 'user') {
-        _openLeagueTeamModal(s.userTeam, s);
-      } else {
-        const team = (s.leagueTeams || []).find(t => t.id === teamId);
-        if (team) _openLeagueTeamModal(team, s);
-      }
-    });
-  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -893,57 +887,90 @@ function _buildTeamList(userTeam, leagueTeams, standings) {
 // TEAM DETAIL MODAL
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * r146 a club's sheet (League → Teams or Standings): where it stands (place,
+ * record, games back, streak), its rating and payroll, and the roster the way
+ * a lineup card reads — the lineup by position, the rotation in order, the
+ * bullpen, the bench, the injured list — each with its line (this season's,
+ * or last season's before there is one). A row opens the player's card.
+ */
 function _openLeagueTeamModal(team, state) {
   document.getElementById('league-team-modal')?.remove();
+  const players = state.players || {};
+  const isUser  = team === state.userTeam || team.id === 'user' || !team.id;
+  const id      = isUser ? 'user' : team.id;
+  const name    = isUser ? `${team.city || ''} ${team.nickname || ''}`.trim() : (team.name || team.abbr || '?');
+  const P       = (pid) => players[pid];
+  const roster  = (team.rosterIds || []).map(P).filter(Boolean);
 
-  const rosterIds = team.rosterIds || [];
-  const players   = state.players || {};
-  const isUser    = team.id === 'user' || !team.id;
+  // Where it stands.
+  const st = state.standings || {};
+  const div = [...(st.divA || []), ...(st.divB || [])].some(e => e.id === id)
+    ? ((st.divA || []).some(e => e.id === id) ? st.divA : st.divB) : null;
+  const place = div ? div.findIndex(e => e.id === id) : -1;
+  const entry = place >= 0 ? div[place] : null;
+  const ord = (n) => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+  const gp = (team.wins || 0) + (team.losses || 0);
+  const standLine = [
+    entry ? `${ord(place + 1)} in Division ${team.divisionId || entry.divisionId || ''}`.trim() : '',
+    entry && place > 0 ? `${formatGB(entry.gb)} GB` : '',
+    team.streak ? `Streak ${formatStreak(team.streak)}` : '',
+  ].filter(Boolean).join(' · ');
+  let rating = null, payroll = null;
+  try { rating = Roster.teamRating(state, id); } catch { /* not rated */ }
+  try { payroll = Finance.payrollOf(state, id); } catch { /* no books */ }
 
-  const hitters  = rosterIds.map(id => players[id])
-    .filter(p => p && !['SP','RP'].includes(p.pos)).sort((a,b) => b.ovr - a.ovr);
-  const pitchers = rosterIds.map(id => players[id])
-    .filter(p => p && ['SP','RP'].includes(p.pos)).sort((a,b) => b.ovr - a.ovr);
+  // The roster, as a lineup card reads.
+  const used = new Set();
+  const take = (p) => { if (p && !used.has(p.id)) { used.add(p.id); return p; } return null; };
+  const injured = roster.filter(p => p.isInjured || p.group === 'il').map(take).filter(Boolean);
+  const lineup = (team.lineupSlots || []).map(sl => ({ slot: sl.slot, p: take(P(sl.playerId)) })).filter(x => x.p);
+  const rotation = (team.rotation?.order || []).map(pid => take(P(pid))).filter(Boolean);
+  const bullpen = roster.filter(p => p.pos === 'RP' || p.pos === 'SP').filter(p => !used.has(p.id)).sort((a, b) => b.ovr - a.ovr).map(take).filter(Boolean);
+  const bench = roster.filter(p => !used.has(p.id)).sort((a, b) => b.ovr - a.ovr).map(take).filter(Boolean);
 
-  const avgOvr = rosterIds.length
-    ? Math.round(rosterIds.map(id => players[id]?.ovr || 0).reduce((a,b) => a+b, 0) / rosterIds.length)
-    : 0;
-
-  const playerRow = (p) => `
-    <div class="lgt-player-row" data-player-id="${p.id}"
-      style="display:flex;align-items:center;gap:10px;padding:10px 20px;
-             border-bottom:1px solid var(--border);cursor:pointer;">
-      <span style="flex:1;font-size:13px;font-weight:600;color:var(--text);">${_escape(p.name)}</span>
-      <span style="font-size:11px;color:var(--muted);margin-right:4px;">${p.nativePos || p.pos}</span>
-      <span style="font-size:13px;font-weight:700;min-width:26px;text-align:right;
-        color:${p.ovr >= 75 ? 'var(--text)' : p.ovr >= 60 ? 'var(--text)' : 'var(--muted)'};">${p.ovr}</span>
-      <span style="font-size:11px;color:var(--border);margin-left:2px;">›</span>
-    </div>`;
-
-  const sectionHead = (label) =>
-    `<div style="padding:8px 20px 4px;font-size:10px;font-weight:700;letter-spacing:2px;
-      text-transform:uppercase;color:var(--muted);background:var(--surface2);">${label}</div>`;
+  const line = (p) => {
+    const sh = _statsShown(p), x = sh.p.stats || {}, ly = sh.year ? ` <span class="ltm-ly">'${String(sh.year).slice(-2)}</span>` : '';
+    if (['SP', 'RP'].includes(p.pos)) {
+      const ip = x.outs ? x.outs / 3 : (x.ip || 0);
+      return ip ? `${formatERA(x.er || 0, ip)} ERA · ${Math.floor(ip)} IP${ly}` : 'No innings yet';
+    }
+    return x.ab ? `${formatAVG(x.h || 0, x.ab)} · ${x.hr || 0} HR${ly}` : 'No at-bats yet';
+  };
+  const row = (p, tag) => `
+    <button class="ltm-row" data-player-id="${p.id}">
+      <span class="ltm-tag">${_escape(tag)}</span>
+      <span class="ltm-name">${_escape(p.name)}${p.injury?.status === 'dtd' ? ' <span class="lp-dtd">DTD</span>' : ''}</span>
+      <span class="ltm-line">${line(p)}</span>
+      <span class="ltm-ovr">${p.ovr}</span>
+    </button>`;
+  const section = (label, rows) => rows.length ? `<div class="ltm-head">${label}</div>${rows.join('')}` : '';
 
   const overlay = document.createElement('div');
   overlay.id = 'league-team-modal';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:86dvh;display:flex;flex-direction:column;">
+    <div class="modal-sheet" style="max-height:88dvh;display:flex;flex-direction:column;">
       <div class="modal-handle" style="flex-shrink:0;"></div>
       <div class="modal-header" style="flex-shrink:0;">
-        <div>
-          <div style="font-size:18px;font-weight:800;">${_escape(team.name || team.abbr || '?')}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px;">
-            ${team.wins || 0}–${team.losses || 0} · Avg OVR ${avgOvr}
-            ${isUser ? ' · <span style="color:var(--text);font-weight:700;">Your Team</span>' : ''}
-          </div>
+        <div style="min-width:0;">
+          <div class="modal-title">${_escape(name)}</div>
+          <div class="ltm-sub">${formatRecord(team.wins || 0, team.losses || 0)}${gp ? ` (${((team.wins || 0) / gp).toFixed(3).replace(/^0/, '')})` : ''}${standLine ? ` · ${standLine}` : ''}${isUser ? ' · <b>Your team</b>' : ''}</div>
         </div>
         <button class="modal-close" id="league-team-close">×</button>
       </div>
+      <div class="ltm-stats">
+        ${rating != null ? `<div><div class="ltm-k">Team rating</div><div class="ltm-v">${rating}</div></div>` : ''}
+        ${payroll != null ? `<div><div class="ltm-k">Payroll</div><div class="ltm-v">${_money(payroll)}</div></div>` : ''}
+        <div><div class="ltm-k">Roster</div><div class="ltm-v">${roster.length}</div></div>
+      </div>
       <div class="modal-divider" style="flex-shrink:0;"></div>
       <div style="overflow-y:auto;flex:1;padding-bottom:max(16px,env(safe-area-inset-bottom));">
-        ${hitters.length  ? sectionHead('Hitters')  + hitters.map(playerRow).join('')  : ''}
-        ${pitchers.length ? sectionHead('Pitchers') + pitchers.map(playerRow).join('') : ''}
+        ${section('Lineup', lineup.map(x => row(x.p, x.slot)))}
+        ${section('Rotation', rotation.map((p, i) => row(p, `SP${i + 1}`)))}
+        ${section('Bullpen', bullpen.map(p => row(p, p.pos)))}
+        ${section('Bench', bench.map(p => row(p, p.nativePos || p.pos)))}
+        ${section('Injured', injured.map(p => row(p, p.nativePos || p.pos)))}
       </div>
     </div>`;
 
@@ -951,14 +978,8 @@ function _openLeagueTeamModal(team, state) {
   requestAnimationFrame(() => overlay.classList.add('open'));
   overlay.querySelector('#league-team-close')?.addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-
-  // Wire player row taps → PlayerCard
-  overlay.querySelectorAll('.lgt-player-row[data-player-id]').forEach(row => {
-    row.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const playerId = row.dataset.playerId;
-      if (playerId) openPlayerCard(playerId, StateManager.get());
-    });
+  overlay.querySelectorAll('.ltm-row[data-player-id]').forEach(r => {
+    r.addEventListener('click', (e) => { e.stopPropagation(); openPlayerCard(r.dataset.playerId, StateManager.get()); });
   });
 }
 
@@ -1137,6 +1158,21 @@ function _injectCSS() {
       background:var(--text);color:var(--bg);font-family:inherit;cursor:pointer;}
     .lp-add-btn.on{background:transparent;color:var(--text);}
     .lp-dtd{color:#fbbf24;font-weight:700;}
+    .lp-more-btn{display:block;margin:10px auto 14px;padding:9px 16px;font:inherit;font-size:13px;font-weight:700;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:10px;cursor:pointer;}
+    .lp-more-btn span{font-weight:500;color:var(--muted);font-size:11px;}
+    .ltm-sub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.4;}
+    .ltm-sub b{color:var(--text);font-weight:700;}
+    .ltm-stats{display:flex;gap:22px;padding:0 20px 12px;flex-shrink:0;}
+    .ltm-k{font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);}
+    .ltm-v{font-size:17px;font-weight:800;color:var(--text);margin-top:1px;}
+    .ltm-head{padding:8px 20px 4px;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);background:var(--surface2);}
+    .ltm-row{display:flex;align-items:center;gap:10px;width:100%;padding:9px 20px;border:0;border-bottom:1px solid var(--border);background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;}
+    .ltm-row:active{background:var(--surface2);}
+    .ltm-tag{width:30px;flex-shrink:0;font-size:10px;font-weight:700;color:var(--muted);}
+    .ltm-name{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ltm-line{font-size:11px;color:var(--soft);white-space:nowrap;}
+    .ltm-ly{color:var(--muted);font-size:10px;}
+    .ltm-ovr{width:24px;text-align:right;font-size:13px;font-weight:800;color:var(--text);}
     .lp-wv-left{font-size:10px;font-weight:700;color:var(--muted);margin-left:3px;} .lp-il{color:var(--danger);font-weight:700;}
     .lp-lyline{color:var(--soft);}
     .lp-ly{font-size:8px;font-weight:700;margin-left:2px;opacity:.75;}

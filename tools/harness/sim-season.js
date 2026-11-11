@@ -18,7 +18,7 @@ import * as SM from '../../store/StateManager.js';
 import { startNewGame, tick, commitGame, buildCardContext, advanceClock } from '../../engine/GameEngine.js';
 import { getRosterNeeds, auditRosters, rankPickups, signPickup, fillShortRosters } from '../../engine/TransactionEngine.js';
 import { CARD_ACTIONS } from '../../engine/CardActions.js';
-import { HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
+import { onRelease, HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation, playRuns } from '../../engine/SimEngine.js';
 import * as Offseason from '../../engine/OffseasonEngine.js';
@@ -33,6 +33,9 @@ import { buildTokenMap, applyTokens, formatK } from '../../engine/CardTokens.js'
 import * as CardPools from '../../data/cards-pool.js';
 import { fillsNeed as LeagueTradesFills } from '../../engine/LeagueTrades.js';
 import { writeComposeReply, COMPOSE_TOPICS } from '../../engine/ComposeReplies.js';
+import * as FreeAgencyLists from '../../engine/FreeAgency.js';
+import { PLAYER_SURNAMES, STAFF_NAMES, PERSON_NAMES } from '../../data/player-names.js';
+const SURNAMES = new Set(PLAYER_SURNAMES);
 import {
   GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP,
   SPRING_TRAINING_GAME_COUNT, REGULAR_SEASON_GAME_COUNT,
@@ -80,9 +83,40 @@ function composeAudit(st, atMs, where) {
     composeStats.n++; composeStats.maxMs = Math.max(composeStats.maxMs, ms); if (ms > 500) composeStats.slow++;
     const why = !r ? 'no reply' : /undefined|NaN|null|\[object|\$\{|Infinity/.test(r.body) ? 'broken text' : G.test(r.body) ? `gendered (${r.body.match(G)[0]})` : '';
     if (why) composeStats.bad.push(`${where} ${topicId}: ${why}${r ? ` — ${r.body.replace(/\s+/g, ' ').slice(0, 160)}` : ''}`);
+    if (r) namedAudit(st, { topicId, memo: r.memo }, r.named || [], r.body, `${where} reply ${topicId}`);
     if (process.env.COMPOSE_DUMP && r) console.log(`\n━━ ${where} ${topicId}\n${r.body}`);
   }
 }
+
+// r146 every player a message names is in the league, and where the message says: a free agent the
+// scouts report is on the market as the reply lands; no message names a player who isn't anyone.
+const namedStats = { cards: 0, named: 0, bad: [] };
+const OUTSIDE = new Set([...STAFF_NAMES, ...PERSON_NAMES]);
+function namedAudit(st, card, ids, text, where) {
+  namedStats.cards++;
+  for (const id of ids) {
+    namedStats.named++;
+    if (!st.players?.[id]) namedStats.bad.push(`${where}: names player ${id}, who isn't in the league`);
+  }
+  if (card?._composeTopic === 'sc_free_agents' || card?.topicId === 'sc_free_agents') {
+    const market = new Set(FreeAgencyLists.freeAgentList(st).map(p => p.id));
+    for (const id of card._playerIds || card.memo?.playerIds || []) {
+      if (!market.has(id)) namedStats.bad.push(`${where}: the scouts report ${st.players[id]?.name || id}, who isn't on the market (${st.players[id]?.group}, ${st.players[id]?.teamId || 'no team'})`);
+    }
+  }
+  const names = new Set(Object.values(st.players || {}).map(p => p?.name));
+  const people = new Set([...Object.values(st.userTeam?.coachingStaff || {}).map(x => x?.name), st.userTeam?.ownerName, st.userTeam?.gmName]);
+  for (const w of String(text || '').match(/\b[A-Z][a-zA-Z'-]+\b/g) || []) {
+    if (SURNAMES.has(w) && !names.has(w) && !OUTSIDE.has(w) && !people.has(w)) namedStats.bad.push(`${where}: "${w}" reads as a player's name, but nobody in the league has it`);
+  }
+}
+onRelease((st, due) => {
+  for (const c of due) {
+    const ids = [c._targetPlayerId, ...Object.values(c._tokenPlayers || {}), ...(c._playerIds || []),
+                 ...(c._choices || []).map(x => String(x.key || '').split(':').pop()).filter(k => /^[0-9a-f-]{20,}$/.test(k))].filter(Boolean);
+    namedAudit(st, c, [...new Set(ids)], `${c.subject || ''} ${c.body || ''}`, `${c.cardId}${c._composeTopic ? `/${c._composeTopic}` : ''}`);
+  }
+});
 
 // §106 the replies tell the truth: the forecast the GM sees, what this person said last time, the GM's own calls,
 // and the whole trip — sent, waiting, written when it comes back, remembered.
@@ -2395,6 +2429,8 @@ async function main() {
   if (composeMid) await checkComposeTruth(composeMid.st, composeMid.at);
   check(`compose: every topic writes a clean reply from the live club (${composeStats.n} replies across the run; slowest ${composeStats.maxMs.toFixed(0)} ms)`,
         composeStats.bad.length === 0 && composeStats.slow === 0, composeStats.bad.slice(0, 3).join(' | '));
+  check(`messages name real players: ${namedStats.cards} messages and replies, ${namedStats.named} players named, every one in the league (a scouts' report: on the market as it lands)`,
+        namedStats.bad.length === 0 && namedStats.named > 50, [...new Set(namedStats.bad)].slice(0, 4).join(' | '));
 
   // §122.15 the scouting director's tips arrive through the season's daily market look.
   {

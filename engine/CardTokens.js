@@ -37,8 +37,9 @@ import {
   CARD_TOKEN_POOLS,
   CARD_TOKEN_MONEY,
   BROADCAST_MARKET_MULTIPLIER,
+  LEGEND_ROLES,
 } from '../data/card-tokens.js';
-import { eventRand } from './Dice.js';
+import { eventRand, dice, diceSeed } from './Dice.js';
 
 // Matches any {token}. Digits are allowed (e.g. {sp2_items}, {bg11_team}).
 export const TOKEN_PATTERN = /\{([a-z0-9_]+)\}/gi;
@@ -120,13 +121,16 @@ export function buildTokenMap(cardDef, context, state) {
     .sort((a, b) => (b.finances.owner.stage === 'cuts') - (a.finances.owner.stage === 'cuts'))[0];
   values.troubled_team = troubled?.name || 'one of the clubs in the league';
   values._troubledTeamId = troubled?.id || null;
-  values.scout_name          = _pickPerson(state);
+  // r146 the scouting director, when the chair is filled (a card's scout is ours).
+  const sd = userTeam.coachingStaff?.scoutingDirector;
+  values.scout_name          = sd && !sd.vacant && sd.name ? sd.name : _pickPerson(state);
 
-  // One-off outside people — distinct names within this card.
-  const people = _shuffle(_outsideNames(state));
+  // One-off outside people — distinct names within this card (never one of the club's legends).
+  const legends = franchiseLegends(state);
+  const legendNames = new Set(legends.map(l => l.name));
+  const people = _shuffle(_outsideNames(state).filter(n => !legendNames.has(n)));
   values.coach_name     = people[0] || 'A veteran coach';
   values.attendant_name = people[1] || 'Our head attendant';
-  values.legend_name    = people[2] || 'A franchise legend';
 
   // ── Schedule / league context ──────────────────────────────────────────
   const teams    = state.leagueTeams || [];
@@ -203,6 +207,12 @@ export function buildTokenMap(cardDef, context, state) {
     if (key === 'person_name') continue;
     values[key] = _pick(pool) ?? '';
   }
+
+  // r146 a franchise legend: always the same person, described the same way.
+  const legend = _pick(legends);
+  values.legend_name = legend?.name || 'A franchise legend';
+  values.legend_who  = legend?.who  || 'one of the best players in club history';
+  values.legend_era  = legend?.era  || 'the club’s early years';
 
   // Outside players (§73): free agents, the waiver wire, a CPU club's player,
   // non-roster invitees, international / independent prospects — real ones.
@@ -321,6 +331,24 @@ function _nextRoadCity(state, nextGame) {
   if (!g) return null;
   const team = (state.leagueTeams || []).find(t => t.name === g.opponent);
   return team?.city || null;
+}
+
+/**
+ * r146 the club's three franchise legends, fixed for the save (from its seed —
+ * nothing stored): a name from PERSON_NAMES (never a staff member's) and who
+ * they were (LEGEND_ROLES). A card that names one introduces them.
+ */
+export function franchiseLegends(state) {
+  const r = dice(diceSeed(state), 'legends');
+  const names = PERSON_NAMES.filter(n => n !== state.userTeam?.ownerName);   // never a staff name (STAFF_NAMES is another list)
+  const roles = LEGEND_ROLES.slice();
+  const out = [];
+  for (let i = 0; i < 3 && names.length && roles.length; i++) {
+    const name = names.splice(Math.floor(r() * names.length), 1)[0];
+    const role = roles.splice(Math.floor(r() * roles.length), 1)[0];
+    out.push({ name, ...role });
+  }
+  return out;
 }
 
 function _outsideNames(state) {

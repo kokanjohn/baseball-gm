@@ -409,9 +409,32 @@ function _renderRow(card) {
 // ─────────────────────────────────────────────────────────────
 
 /** The body as paragraphs (a blank line, or a long run of sentences split near its middle). */
-function _paragraphs(text) {
+function _paragraphs(text, players = []) {
   const blocks = String(text || '').split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
-  return blocks.map(b => `<p>${_escape(b).replace(/\n/g, '<br>')}</p>`).join('');
+  return blocks.map(b => `<p>${_linkPlayers(_escape(b), players).replace(/\n/g, '<br>')}</p>`).join('');
+}
+
+/**
+ * r146 the players a message is about: its target, the players its text names
+ * (tokens), a reply's report (memo), its choices. Each name in the text opens
+ * that player's card, so anyone a message mentions can be found in one tap.
+ */
+function _messagePlayers(card, state) {
+  const ids = new Set([card._targetPlayerId, ...Object.values(card._tokenPlayers || {}), ...(card._playerIds || []),
+    ...(card._choices || []).map(c => String(c.key || '').split(':').pop())].filter(Boolean));
+  const ps = [...ids].map(id => state.players?.[id]).filter(p => p?.name);
+  // A name two of them share would be ambiguous: leave it plain.
+  const count = {};
+  for (const p of ps) count[p.name] = (count[p.name] || 0) + 1;
+  return ps.filter(p => count[p.name] === 1);
+}
+
+function _linkPlayers(html, players) {
+  if (!players.length) return html;
+  const byName = new Map(players.map(p => [_escape(p.name), p.id]));
+  const names = [...byName.keys()].sort((a, b) => b.length - a.length).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp(`(?<![\\w'&#;-])(${names.join('|')})(?![\\w-])`, 'g');
+  return html.replace(re, (m) => `<button class="msg-player" data-msg-player="${byName.get(m)}">${m}</button>`);
 }
 
 function _renderReading(card, inbox, state) {
@@ -459,7 +482,7 @@ function _renderReading(card, inbox, state) {
           <div class="mr-to">to me${Number.isFinite(card.arrivedAtMs) ? ` · ${_longWhen(card.arrivedAtMs)}` : ''}</div>
         </div>
       </div>
-      <div class="mr-body">${_paragraphs(card.body || card.preview || '')}</div>
+      <div class="mr-body">${_paragraphs(card.body || card.preview || '', _messagePlayers(card, state))}</div>
       <div class="mr-reply">
         <div class="mr-reply-h">
           <span>Your decision</span>
@@ -550,7 +573,7 @@ function _renderThread(card, state) {
             <div class="mr-to">to me${Number.isFinite(card.arrivedAtMs) ? ` · ${_longWhen(card.arrivedAtMs)}` : ''}</div>
           </div>
         </div>
-        <div class="mr-body">${_paragraphs(card.body || card.preview || '')}</div>
+        <div class="mr-body">${_paragraphs(card.body || card.preview || '', _messagePlayers(card, state))}</div>
       </div>
       ${d.read ? '' : `
       <div class="mt-msg mt-reply${d.auto ? ' auto' : ''}">
@@ -704,6 +727,13 @@ function _attachTabListeners(state) {
   // §115 open a message (the reading view), back to the list, newer / older
   document.querySelectorAll('[data-open]').forEach(el => {
     el.addEventListener('click', () => _openMessage(el.dataset.open));
+  });
+  // r146 a player named in a message opens their card.
+  document.querySelectorAll('.msg-player[data-msg-player]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      import('../components/PlayerCard.js').then(PC => PC.openPlayerCard(el.dataset.msgPlayer, StateManager.get()));
+    });
   });
   document.querySelectorAll('[data-goto]').forEach(el => {
     el.addEventListener('click', () => _openMessage(el.dataset.goto, { keepScroll: true }));

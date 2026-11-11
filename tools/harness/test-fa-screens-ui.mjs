@@ -189,6 +189,46 @@ await page.click('#head-budget'); await page.waitForTimeout(600);
 const fin = await page.evaluate(() => ({ tab: document.querySelector('.tab-content.active')?.id, sub: document.querySelector('#tsubtab-finances')?.classList.contains('active') }));
 check('the club funds pill opens Team → Finances', fin.tab === 'tab-roster' && fin.sub, JSON.stringify(fin));
 
+// r146 League → Teams: a tap opens the club's sheet (standing, the roster as a lineup card reads).
+await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('league'); });
+await page.waitForTimeout(300);
+await page.click('#ltab-teams'); await page.waitForTimeout(400);
+await page.click('.lgt-card[data-team]:not([data-team="user"])'); await page.waitForTimeout(600);
+const tm = await page.evaluate(() => ({ text: document.getElementById('league-team-modal')?.innerText || '', rows: document.querySelectorAll('#league-team-modal .ltm-row').length }));
+check('Teams: tapping a club opens its sheet — standing, rating, payroll, lineup, rotation, bullpen, bench',
+      /Division/.test(tm.text) && /Team rating/i.test(tm.text) && /Payroll/i.test(tm.text) && /Lineup/i.test(tm.text) && /Rotation/i.test(tm.text) && /Bullpen/i.test(tm.text) && tm.rows >= 20, tm.text.slice(0, 300));
+await page.screenshot({ path: `${out}/team-sheet-${theme}.png` });
+await page.click('#league-team-modal .ltm-row'); await page.waitForTimeout(500);
+check('a row on the sheet opens the player card', await page.evaluate(() => /Career|Season|OVR|Contract/i.test(document.querySelector('.pc-overlay, #player-card-overlay, .player-card')?.innerText || document.body.innerText)));
+await page.evaluate(async () => { const PC = await import('/baseball-gm/ui/components/PlayerCard.js'); PC.closePlayerCard(); document.getElementById('league-team-modal')?.remove(); });
+await page.click('#ltab-standings'); await page.waitForTimeout(400);
+await page.click('.standing-row[data-team-id]'); await page.waitForTimeout(500);
+check('Standings: tapping a club opens the same sheet', !!(await page.$('#league-team-modal')));
+await page.evaluate(() => document.getElementById('league-team-modal')?.remove());
+
+// r146 a scouts' report: each player it names is a link to the player's card.
+const rep = await page.evaluate(async () => {
+  const CE = await import('/baseball-gm/engine/CardEngine.js');
+  const SM = await import('/baseball-gm/store/StateManager.js');
+  SM.mutate(s => { s.composeCooldowns = {}; });
+  const inst = CE.deliverComposeCard('sc_free_agents', 'scouting', { topicLabel: 'Free agents worth a look', nowMs: Date.now() - 6 * 3600_000 });
+  CE.releaseDueCards(Math.max(Date.now(), inst?.deliverAtMs || 0));
+  const c = CE.getInbox().find(x => x._composeTopic === 'sc_free_agents');
+  return { id: c?.instanceId, named: (c?._playerIds || []).length };
+});
+await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('decisions'); });
+await page.waitForTimeout(400);
+await page.click(`[data-open="${rep.id}"]`).catch(() => {});
+await page.waitForTimeout(500);
+const links = await page.evaluate(() => [...document.querySelectorAll('.msg-player')].map(b => b.textContent));
+check(`a scouts' report links every player it names (${links.join(', ')})`, rep.named >= 1 && links.length >= rep.named, JSON.stringify(rep));
+await page.screenshot({ path: `${out}/report-links-${theme}.png` });
+if (links.length) {
+  await page.click('.msg-player'); await page.waitForTimeout(500);
+  check('a name opens that player\'s card', await page.evaluate((n) => document.body.innerText.includes(n) && /Asking|Career|no league record/i.test(document.body.innerText), links[0]));
+  await page.evaluate(async () => { const PC = await import('/baseball-gm/ui/components/PlayerCard.js'); PC.closePlayerCard(); });
+}
+
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 process.exit(ok ? 0 : 1);

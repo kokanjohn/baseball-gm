@@ -41,7 +41,8 @@ check('most free agents have a record (≥ 65%)', withRecord / pool.length >= 0.
 check('a free agent with no record says why (rookie / overseas / independent)',
   pool.filter(p => !(p.seasonLog || []).length).every(p => [PLAYER_ORIGIN.ROOKIE, PLAYER_ORIGIN.OVERSEAS, PLAYER_ORIGIN.INDEPENDENT].includes(p.origin)));
 const intl = pool.filter(p => p.origin === PLAYER_ORIGIN.OVERSEAS);
-check('players from abroad are older than rookies, with no league record', intl.length > 0 && intl.every(p => age(p) >= 23 && !(p.seasonLog || []).length));
+check('players from abroad are older than rookies, with no league record', intl.length > 0 && intl.every(p => age(p) >= 23 && !(p.seasonLog || []).length),
+  `${intl.length} from abroad; off: ${intl.filter(p => age(p) < 23 || (p.seasonLog || []).length).map(p => `${p.name} age ${age(p)}, ${(p.seasonLog || []).length} seasons, kind ${p._faKind || p._poolKind || '?'}, ${p._waivedBy ? 'waived by ' + p._waivedBy : 'opening pool'}`).join('; ')}`);
 check('last season\'s Impact on opening day for most rostered players (≥ 85%)',
   rostered.filter(p => lastSeasonIMP(p) != null).length / rostered.length >= 0.85);
 

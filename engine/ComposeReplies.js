@@ -16,6 +16,7 @@ import { MS_HOUR, MS_DAY } from './WeatherClimate.js';
 import { crowdFor } from './FinanceEngine.js';
 import { worthOf, trueOVR, isDiamond } from './Diamonds.js';
 import { signingTerms } from './MarketEngine.js';
+import { formatK } from './CardTokens.js';
 import { scoutEye as directorEye, scoutLooks } from './CoachEngine.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -754,7 +755,7 @@ W.sc_free_agents = (f, r, who) => {
     const ask = signingTerms(st, p);
     const sr = p.subRatings || {};
     const last = (p.seasonLog || []).filter(e => e?.stats).at(-1);
-    const lines = [`${p.name} (${p.nativePos || p.pos}, ${f.age(p)}, OVR ${p.ovr}, asking ${ask.salary ? `$${ask.salary}K` : 'the minimum'}${ask.bonus ? ` with a $${ask.bonus}K bonus` : ''}):`];
+    const lines = [`${p.name} (${p.nativePos || p.pos}, ${f.age(p)}, OVR ${p.ovr}, asking ${ask.salary ? formatK(ask.salary) : 'the minimum'}${ask.bonus ? ` with a ${formatK(ask.bonus)} bonus` : ''}):`];
     if (p._ratingGap) {
       const read = readOfUntested(p, r, sigmaOf(p));
       lines.push(`${Cap(ORIGIN_WORDS[p.origin] || 'new to the league')}. ${read > 0 ? 'Our read: better than the reports — this could be a real find.' : read < 0 ? 'Our read: not as good as the reports.' : 'Our read: about what the reports say.'}`);
@@ -876,5 +877,29 @@ export function writeComposeReply(state, { topicId, channelId, atMs, subject = n
   const open = _open(who.rel, r, TOPIC_LABELS[topicId] || 'that');
   const body = [open, ...paras, _sign(who)].join('\n\n');
   return { sender: who.sender, subject: subject || `Re: ${Cap(TOPIC_LABELS[topicId] || 'your message')}`, body,
-           preview: paras[0].split('\n')[0], memo: res.memo || {}, decision: res.decision || null };
+           preview: paras[0].split('\n')[0], memo: res.memo || {}, decision: res.decision || null,
+           named: namedPlayers(state, paras.join('\n'), [...(res.memo?.playerIds || []), res.memo?.playerId, res.decision?.playerId]) };
+}
+
+/**
+ * r146 the players a reply names: the ones its report is about, and any other
+ * player whose name appears in it and is nobody else's (a name two players
+ * share, or a staff member's, stays unlinked). The app links each to the
+ * player's card; the harness checks each is really in the league.
+ */
+export function namedPlayers(state, text, known = []) {
+  const out = new Set(known.filter(id => id && state.players?.[id]));
+  const staff = new Set(Object.values(state.userTeam?.coachingStaff || {}).map(x => x?.name).filter(Boolean));
+  const byName = new Map();
+  for (const p of Object.values(state.players || {})) {
+    if (!p?.name || staff.has(p.name)) continue;
+    byName.set(p.name, byName.has(p.name) ? null : p.id);
+  }
+  for (const id of out) byName.delete(state.players[id].name);
+  for (const [name, id] of byName) {
+    if (!id || !text.includes(name)) continue;
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(?<![\\w'-])${esc}(?![\\w-])`).test(text)) out.add(id);
+  }
+  return [...out];
 }

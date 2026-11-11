@@ -1707,7 +1707,10 @@ function _releaseDue(nowMs) {
                                              subject: c._composeLabel ? `Re: ${c._composeLabel}` : null });
     if (!reply) return { ...c, _composeWrite: false };
     log.push({ topicId: c._composeTopic, channelId: c._composeChannel, atMs: c.deliverAtMs, memo: reply.memo });
-    const out = { ...c, _composeWrite: false, sender: reply.sender, subject: reply.subject, preview: reply.preview, body: reply.body };
+    // r146 the players the reply names (its report), so each name opens the player's card.
+    const named = reply.named || [];
+    const out = { ...c, _composeWrite: false, sender: reply.sender, subject: reply.subject, preview: reply.preview, body: reply.body,
+                  ...(named.length ? { _playerIds: [...new Set(named)] } : {}) };
     // §122.9 a reply that offers something (a development plan) is a decision.
     const d = reply.decision;
     if (d && state.players[d.playerId]?.teamId === 'user') {
@@ -1727,9 +1730,13 @@ function _releaseDue(nowMs) {
     // §122.15 the players the scouts named to the GM (kept on the player: the log is short).
     for (const e of log) for (const id of e.memo?.playerIds || []) if (s.players[id]) s.players[id]._scoutedAt = e.atMs;
   });
+  for (const fn of _releaseHooks) fn(StateManager.get(), due);
   return due;
 }
 const COMPOSE_LOG_MAX = 80;
+const _releaseHooks = [];
+/** r146 the harness watches each message as it lands (the world as it is then). Never used by the app. */
+export function onRelease(fn) { _releaseHooks.push(fn); }
 
 /**
  * getPushSchedule(state, nowMs = clockNow(), ahead = null, foreseen = null)

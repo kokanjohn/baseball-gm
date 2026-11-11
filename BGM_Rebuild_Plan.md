@@ -9804,3 +9804,62 @@ test-fa-screens-ui:
 - the director's sheet and the manager's sheet.
 
 Dark and light.
+
+### 122.18 Teams sheet, every named player findable, outside people, decision cards that explain themselves (GM, Nov 11 — r146)
+
+**League → Teams / Standings: tap a club.**
+- The handlers existed, but `_attachListeners` returned early on any tab but Players before reaching them, so a tap did nothing. They now attach first.
+- The club's sheet (`_openLeagueTeamModal`, rebuilt) shows:
+  - the record, winning percentage, place in the division, games back and streak;
+  - team rating, payroll and roster size;
+  - the roster the way a lineup card reads: the lineup by position (from `lineupSlots`), the rotation in order (SP1…), the bullpen, the bench, the injured list.
+- Each row has the player's line (last season's, marked '25, before there is one) and rating, and opens the player's card. It works for our own club too.
+
+**Every player a message names can be found.**
+- The GM reported a scouts' report naming a free agent they couldn't find in League. The reply only ever picks free agents on the market at the moment it lands; the audit below confirms it. The likely cause was the League list showing only its first 100 rows, sorted by rating. The scouts report exactly the players rated lower than they are, who sit in the bottom half of roughly 200 available.
+- **"Show 100 more"** (`_rowLimit`, reset when the filters change) replaces the "Showing 100 of N" note.
+- **Names in messages are links** to the player's card (`InboxScreen._messagePlayers` / `_linkPlayers`):
+  - The players come from the card's target, its token players, its choices, and, for a staff reply, `_playerIds`.
+  - `_playerIds` comes from `ComposeReplies.namedPlayers`: the report's players, plus any other player whose name appears and is nobody else's (a shared name or a staff name stays plain).
+  - Whole words only ("Ferrel" doesn't link inside "Ferrelson"); apostrophes and possessives are handled.
+- **The audit** (sim-season `namedAudit`, through a new `CardEngine.onRelease` hook the app never uses) checks every message as it lands, with the world as it is then:
+  - each player it names is in the league;
+  - a scouts' free-agent report's players are on the market;
+  - no capitalized word in its text is a player surname that nobody in the league has.
+- The audit also runs over every staff reply topic every seventh game. First run: 927 messages and replies, 4,489 players named, all real, all where the message says.
+- Fixed along the way: reply prices print as "$1.0M" / "$65K" (`formatK`), not "$1035K".
+
+**Outside people are introduced.**
+- `{legend_name}` came from a pool of names with no identity ("Brannigan is in town").
+- Each club now has three franchise legends (`CardTokens.franchiseLegends`). They're fixed for the save, derived from its seed with nothing stored, named from PERSON_NAMES, and each has a role from `LEGEND_ROLES` ("the shortstop who anchored the franchise's first pennant team", "the club's all-time hits leader, fourteen seasons here"…).
+- New token `{legend_who}`; `{legend_era}` comes from the same legend, so they never contradict. Every card that names a legend introduces them.
+- `{scout_name}` is now the scouting director (§122.15) when the chair is filled.
+
+**Decision cards explain the tradeoff (GM: rewrite the card text, card by card; no numbers on the buttons).**
+- All 260 active decision cards were reviewed against what each choice does in the engine:
+  - morale → the clubhouse; atmo → the fans; ownerTrust → ownership; manConf → the manager;
+  - money, payroll room and income → said with the card's own cost and revenue tokens;
+  - ovr → a player's step forward (a development plan) or a few games off form (a condition dip);
+  - roster actions.
+- About 75 bodies were rewritten so both choices' consequences are said in the sender's voice. Example, the spring opener's first pitch: "Half the roster grew up watching {legend_name}, so the clubhouse would get a lift. Or the honor goes to a local youth league coach…, which would mean more to the fans in the stands."
+- Cards that promised something the game never does were made honest:
+  - **coach_pressure_pitching / coach_pressure_hitting:** "Make the change now" / "Replace the hitting coach" replaced nobody. They are now "Back the coach" / "Put the coach on notice", and the text says the staff decision is the winter review's. A meaningless +1 ovr was dropped from the "notice" side.
+  - **c1:** a hitting consultant alongside the coach ("Bring in {coach_name}"). **c3:** "Add the Adviser" / "Keep the Bench as It Is".
+  - **ms_4:** the full renovation said it upgrades the store but lowered atmosphere; now atmosphere +2.
+  - **ls1:** pushing through the late-season fatigue now costs morale −2; it cost nothing while the text warned of a risk.
+  - **fn5_hi:** the "savings" never arrived; it is a travel upgrade the players feel.
+  - **ill3_return** had no subject or body; **s3/s3h** (extension demands) and **dl_rival_activity_card** had no body. All written.
+- Never-dealt cards retired with a reason: coach_contract_* ×3, coach_bench_poaching, mgr_contract_* ×2 (not in any phase pool; staff are renewed in the winter staff review, the manager by the data-driven card).
+
+**Open, found along the way:**
+- **`_relYes` / `_relNo`** (staff and player relationship changes) are set on about 46 cards and applied nowhere in the engine, so the rewritten text doesn't promise them. Worth wiring, or removing, with the staff conversation.
+- **sim-season "meetings: Pro Scouting brings targets… on day 6"** failed once (no target card, no watch card, no "filled" line) on a path where free agency filled the priority. A rerun with instrumentation took a different path and passed. Each run's path depends on the real date and time, and it hasn't reproduced. If it recurs, the instrumentation (`MEETDBG` lines in `deliverMeetingsTargets`) is the place to start.
+
+Checks:
+- test-fa-screens-ui: the team sheet from Teams and from Standings (its sections, a row opens the card); a scouts' report linking every player it names, and a name opening that player.
+- sim-season: the named-player audit.
+- The suite now includes test-dashboard-radar.
+
+No fresh team needed. The legends derive from the save's seed, and new card text applies to cards dealt from now on.
+
+**Suite (r146):** everything passes: the full season 3674/3674 (the named-player audit and the meetings included), three seasons 52/52, every check and screen test in dark and light, and test-dashboard-radar. The exception is one intermittent miss in check-diamonds ("players from abroad are older than rookies, with no league record"). It passed the next seven runs and r145 passes it too. The check now names the players it objects to (age, seasons, how they reached the pool), so a recurrence explains itself. The likeliest cause is an overseas player who reached the pool another way than the opening class.
