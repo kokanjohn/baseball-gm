@@ -10235,3 +10235,44 @@ Fresh team: not needed. Saves pick up the new rule as they are; a player already
 - every UI test in dark and light, including test-team-roster-ui 27/27 and test-swipe-close-ui 13/13.
 
 Fresh team: not needed. The display, the card and the swipe apply to any save. Spring outings apply to the next spring game played.
+
+---
+
+## §122.27 — r155: an × on every sheet
+
+**Asked:** some sheets had an × and some didn't. Every sheet gets one, and swipe-down closing stays.
+
+**Audit:** every bottom sheet in the app.
+- **Already had an ×:** player card, Settings, Scores, a team's roster (Schedule and League), team rating history, forecast, trade composer, another club's live game, the team move/staff sheet, the dashboard play log, the playoff series log, the Franchise Story.
+- **Had none:**
+  - Schedule → a finished game's stats;
+  - the sign / claim / withdraw sheet;
+  - Settings → League Team Names (only "← Settings");
+  - the team picker's "Delete this team?".
+- **Not sheets, left alone:**
+  - the full-screen radar, which has its own Done (text over icons);
+  - the developer menu.
+  - The unused `#confirm-overlay` dialog markup in index.html.
+
+**Decisions:**
+- **One button, one look:** the same `.modal-close` (32px round ×) everywhere.
+- **Placement:** where a header row exists, the × sits at the row's right end, as before. Where it doesn't (the centered score header, the sign sheet's body views, the delete confirm), the new `.modal-close.sheet-x` puts it in the sheet's top-right corner (16px in). `.modal-sheet` is now `position:relative`.
+- **The × never scrolls away:**
+  - the sign sheet used to scroll as a whole;
+  - its scrolling now lives in `#ss-body`, so the × stays put;
+  - the title leaves room for it (`padding-right:40px`).
+- **Same close everywhere:** each × calls the sheet's own close, the one its backdrop tap and the swipe use.
+  - Settings' × is now a real `<button>`.
+  - The League Team Names page has its own ×, which closes Settings; Settings reopens on its main page as before.
+- **Swipe:** unchanged (`SwipeClose.js`). A tap on the × is not a drag, so the two never conflict.
+
+**Checks: test-sheet-close-ui** (new, 30, dark and light). It opens 12 sheets. For each, it checks:
+- exactly one visible ×;
+- that the × is in the sheet's top-right corner;
+- that nothing covers the × (hit-tested) and no text overlaps it;
+- that it is a finger's size;
+- on a long sheet, scrolled to the bottom, that the × is still in the same place;
+- that a touch tap on it closes the sheet;
+- for the delete confirm, that closing it deletes nothing.
+
+Fresh team: not needed (UI only).

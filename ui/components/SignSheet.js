@@ -36,9 +36,11 @@ export function openSignSheet(playerId, kind) {
   const overlay = document.createElement('div');
   overlay.id = 'sign-sheet-overlay';
   overlay.className = 'modal-overlay';
-  overlay.innerHTML = `<div class="modal-sheet ss-sheet"><div class="modal-handle"></div><div id="ss-body"></div></div>`;
+  overlay.innerHTML = `<div class="modal-sheet ss-sheet"><div class="modal-handle"></div>
+    <button class="modal-close sheet-x" id="ss-close" type="button" aria-label="Close">×</button><div id="ss-body"></div></div>`;
   document.body.appendChild(overlay);
   requestAnimationFrame(() => overlay.classList.add('open'));
+  overlay.querySelector('#ss-close').addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
   _render(playerId, kind);
 }
@@ -127,8 +129,9 @@ function _css() {
   const st = document.createElement('style');
   st.id = 'sign-sheet-css';
   st.textContent = `
-    .ss-sheet{max-height:88dvh;overflow-y:auto;padding:4px 18px max(18px,env(safe-area-inset-bottom));}
-    .ss-title{font-size:18px;font-weight:800;color:var(--text);margin:8px 0 8px;}
+    .ss-sheet{max-height:88dvh;overflow:hidden;padding:4px 0 0;}
+    #ss-body{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 18px max(18px,env(safe-area-inset-bottom));}
+    .ss-title{font-size:18px;font-weight:800;color:var(--text);margin:8px 0 8px;padding-right:40px;}
     .ss-text{font-size:14px;line-height:1.55;color:var(--soft);margin-bottom:10px;}
     .ss-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:14px 0 4px;}
     .ss-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;}

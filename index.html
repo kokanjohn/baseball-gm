@@ -859,6 +859,9 @@ button.staff-card:active{background:var(--surface2);}
   border:1px solid var(--border);display:flex;align-items:center;justify-content:center;
   cursor:pointer;font-size:18px;color:var(--soft);transition:background .15s;flex-shrink:0;}
 .modal-close:active{background:var(--border);}
+/* r155 a sheet whose header can't hold the × in its row gets it in the corner, same button. */
+.modal-sheet{position:relative;}
+.modal-close.sheet-x{position:absolute;top:16px;right:16px;z-index:3;}
 .modal-divider{height:1px;background:var(--border);margin:0 20px 20px;}
 .settings-section{padding:12px 0 4px;}
 .settings-section-label{font-size:10px;font-weight:800;letter-spacing:2px;text-transform:uppercase;
@@ -1124,7 +1127,7 @@ button.staff-card:active{background:var(--surface2);}
       <div class="modal-handle" style="flex-shrink:0;"></div>
       <div class="modal-header" style="flex-shrink:0;">
         <div class="modal-title">Settings</div>
-        <div class="modal-close" id="settings-close">×</div>
+        <button class="modal-close" id="settings-close" type="button" aria-label="Close">×</button>
       </div>
       <div class="modal-divider" style="flex-shrink:0;"></div>
       <div style="overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;min-height:0;padding-bottom:max(28px,env(safe-area-inset-bottom));">
@@ -1404,6 +1407,7 @@ button.staff-card:active{background:var(--surface2);}
           <div class="modal-title">League Team Names</div>
           <div style="font-size:11px;color:var(--muted);margin-top:3px;">City · Nickname · Abbr (2–3 letters)</div>
         </div>
+        <button class="modal-close" id="settings-teams-close" type="button" aria-label="Close">×</button>
       </div>
       <div class="modal-divider" style="flex-shrink:0;"></div>
       <div id="league-teams-list" style="overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;padding:4px 16px 8px;"></div>

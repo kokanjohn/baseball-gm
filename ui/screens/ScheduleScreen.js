@@ -583,7 +583,8 @@ function _openResultSheet(game, idx, state) {
   overlay.innerHTML = `
     <div class="modal-sheet" style="max-height:80dvh;">
       <div class="modal-handle"></div>
-      <div style="padding:14px 20px 12px;text-align:center;border-bottom:1px solid var(--border);">
+      <button class="modal-close sheet-x" id="sched-result-close" type="button" aria-label="Close">×</button>
+      <div style="padding:14px 56px 12px;text-align:center;border-bottom:1px solid var(--border);">
         <div style="font-size:12px;color:var(--muted);font-weight:500;">${dateStr} · ${locStr}</div>
         <div style="font-size:13px;font-weight:600;color:var(--soft);margin-top:2px;">${_escape(game.isHome ? `vs ${opp}` : `@ ${opp}`)}</div>
         <div style="font-family:'Bebas Neue',sans-serif;font-size:48px;line-height:1;margin:8px 0 4px;
@@ -597,6 +598,7 @@ function _openResultSheet(game, idx, state) {
 
   document.body.appendChild(overlay);
   requestAnimationFrame(() => overlay.classList.add('open'));
+  overlay.querySelector('#sched-result-close').addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
   App.playSoundOpen();
 }

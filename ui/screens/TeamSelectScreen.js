@@ -197,6 +197,7 @@ function _showDeleteConfirm(slotId, teamName) {
   overlay.innerHTML = `
     <div class="ts-confirm-sheet">
       <div class="ts-confirm-handle"></div>
+      <button class="modal-close sheet-x" id="ts-confirm-close" type="button" aria-label="Close">×</button>
       <div class="ts-confirm-icon">⚠️</div>
       <div class="ts-confirm-title">Delete this team?</div>
       <div class="ts-confirm-body">
@@ -213,6 +214,7 @@ function _showDeleteConfirm(slotId, teamName) {
   requestAnimationFrame(() => overlay.classList.add('open'));
 
   document.getElementById('ts-confirm-cancel')?.addEventListener('click', _removeOverlay);
+  document.getElementById('ts-confirm-close')?.addEventListener('click', _removeOverlay);
   overlay.addEventListener('click', e => { if (e.target === overlay) _removeOverlay(); });
 
   document.getElementById('ts-confirm-delete')?.addEventListener('click', async () => {
@@ -477,6 +479,7 @@ function _injectCSS() {
     .ts-overlay.open { display: flex; }
 
     .ts-confirm-sheet {
+      position: relative;
       background: var(--surface);
       border-radius: 20px 20px 0 0;
       width: 100%;

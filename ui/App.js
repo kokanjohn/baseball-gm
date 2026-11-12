@@ -34,7 +34,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r154';
+export const APP_VERSION = 'tfo-v2-r155';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -379,10 +379,10 @@ export async function init() {
       _refreshSettingsSwatches();
     });
   }
-  if (settingsClose && settingsModal) {
-    settingsClose.addEventListener('click', () => {
-      settingsModal.classList.remove('open');
-    });
+  if (settingsModal) {
+    for (const btn of [settingsClose, document.getElementById('settings-teams-close')]) {
+      btn?.addEventListener('click', () => settingsModal.classList.remove('open'));
+    }
   }
   if (settingsModal) {
     settingsModal.addEventListener('click', (e) => {
