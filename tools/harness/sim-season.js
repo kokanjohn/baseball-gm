@@ -2075,9 +2075,12 @@ async function main() {
           arrived.length > 20, `${arrived.length}`);
     // Pool cards are planned outside quiet hours. Real-time roster cards (an
     // injury after a night game) arrive when they happen; their ALERT waits.
-    const quiet = arrived.filter(c => !c._rosterKey && inQuietHours(c.arrivedAtMs, st.push?.quietStart, st.push?.quietEnd));
+    // A new club's opening cards (_seed) are there the moment the club is made, at
+    // whatever hour that is, and never pushed (r152: in CI's UTC the harness's
+    // starting moment is midnight, which is quiet hours).
+    const quiet = arrived.filter(c => !c._rosterKey && !c._seed && inQuietHours(c.arrivedAtMs, st.push?.quietStart, st.push?.quietEnd));
     check('timed delivery: no pool card arrives during quiet hours', quiet.length === 0,
-          quiet.slice(0, 5).map(c => new Date(c.arrivedAtMs).toISOString()).join(','));
+          quiet.slice(0, 5).map(c => `${c.cardId}${c._seed ? ' (seed)' : ''} ${new Date(c.arrivedAtMs).toISOString()}`).join(', '));
     const hours = new Set(arrived.map(c => new Date(c.arrivedAtMs).getHours()));
     check(`timed delivery: arrival times vary (${hours.size} distinct hours)`, hours.size >= 8);
     const overdue = (st.scheduledCards || []).filter(c => c.deliverAtMs <= clock.get());

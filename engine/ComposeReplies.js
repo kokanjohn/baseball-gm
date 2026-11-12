@@ -1145,12 +1145,18 @@ export function writeComposeReply(state, { topicId, channelId, atMs, subject = n
  * share, or a staff member's, stays unlinked). The app links each to the
  * player's card; the harness checks each is really in the league.
  */
+/**
+ * Surnames that are also words the app's text uses capitalized ("Hall of Fame", "Park District",
+ * "Banks"): linked only when the message is about that player, never from the text alone.
+ */
+export const NAME_SCAN_SKIP = Object.freeze(new Set(['Hall', 'Park', 'Banks', 'Booker', 'Brown', 'Porter', 'Turner', 'Walker', 'Carter']));
+
 export function namedPlayers(state, text, known = []) {
   const out = new Set(known.filter(id => id && state.players?.[id]));
   const staff = new Set(Object.values(state.userTeam?.coachingStaff || {}).map(x => x?.name).filter(Boolean));
   const byName = new Map();
   for (const p of Object.values(state.players || {})) {
-    if (!p?.name || staff.has(p.name)) continue;
+    if (!p?.name || staff.has(p.name) || NAME_SCAN_SKIP.has(p.name)) continue;
     byName.set(p.name, byName.has(p.name) ? null : p.id);
   }
   for (const id of out) byName.delete(state.players[id].name);

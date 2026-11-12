@@ -32,6 +32,16 @@ const deal = await page.evaluate(async () => {
   return TA.dealsOnTable(SM.get(), Date.now())[0] || null;
 });
 check(`a trade is on the table (“${deal?.label}”)`, !!deal);
+// r152 the offer itself: every player in the deal is a link to the player's card.
+await page.click(`[data-open="${deal.instanceId}"]`); await page.waitForTimeout(300);
+const offerLinks = await page.$$eval('.msg-player', bs => bs.map(b => b.dataset.msgPlayer));
+const inDeal = [...deal.offer.incomingIds, ...deal.offer.outgoingIds];
+check(`the offer links every player in the deal (${offerLinks.length} links)`, inDeal.every(id => offerLinks.includes(id)));
+await page.click(`.msg-player[data-msg-player="${inDeal[0]}"]`); await page.waitForTimeout(400);
+check('…and a tap opens the player', await page.evaluate(() => !!document.querySelector('.modal-sheet, .player-modal, [class*="player-card"]')));
+await page.screenshot({ path: `${out}/trade-offer-links-${theme}.png` });
+await page.keyboard.press('Escape'); await page.evaluate(() => document.querySelectorAll('.modal-overlay, .modal-backdrop').forEach(e => e.remove()));
+await page.click('#mr-back').catch(() => {}); await page.waitForTimeout(200);
 await page.click('#itab-compose');
 await page.waitForSelector('.compose-person', { timeout: 5000 });
 

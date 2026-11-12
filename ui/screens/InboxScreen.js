@@ -29,6 +29,7 @@ import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '..
 import { snapshotMetrics } from '../formatters.js';
 import * as When from '../../engine/When.js';
 import { dealsFor, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
+import { namedPlayers } from '../../engine/ComposeReplies.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -416,8 +417,15 @@ function _paragraphs(text, players = []) {
  * that player's card, so anyone a message mentions can be found in one tap.
  */
 function _messagePlayers(card, state) {
-  const ids = new Set([card._targetPlayerId, ...Object.values(card._tokenPlayers || {}), ...(card._playerIds || []),
-    ...(card._choices || []).map(c => String(c.key || '').split(':').pop())].filter(Boolean));
+  // r152 the deal a trade message is about (an offer, a counter, a package), and the talk it belongs to.
+  const talk = card._talkTeamId ? state.tradeTalks?.[card._talkTeamId]?.talk : null;
+  const deals = [card._tradeOffer, card._ideaOffer, card._reviseOffer?.offer,
+    talk && talk.id === card._talkId ? (card.cardId === 'talk_counter' ? talk.counter : talk.offer) : null].filter(Boolean);
+  const tied = [card._targetPlayerId, ...Object.values(card._tokenPlayers || {}), ...(card._playerIds || []),
+    ...(card._choices || []).map(c => String(c.key || '').split(':').pop()),
+    ...deals.flatMap(o => [...(o.incomingIds || []), ...(o.outgoingIds || [])])].filter(id => id && state.players?.[id]);
+  // …and any other player the text names whose name is nobody else's (an older message, any kind of card).
+  const ids = new Set(namedPlayers(state, `${card.subject || ''}\n${card.body || card.preview || ''}`, tied));
   const ps = [...ids].map(id => state.players?.[id]).filter(p => p?.name);
   // A name two of them share would be ambiguous: leave it plain.
   const count = {};

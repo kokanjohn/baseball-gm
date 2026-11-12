@@ -10074,3 +10074,18 @@ D from §122.22, done separately as the GM allowed. Compose → Scouting / Dev �
 - the three buttons.
 
 Fresh team: not needed.
+
+### 122.24 Every player a message names is a link (GM, Nov 11 — r152)
+
+The GM reported that on phone and desktop Chrome, player names in messages weren't tappable. **The cause:** r146 linked only the players a card was *tied to* (its target, token players, a reply's report, its choices). A trade offer keeps its players in `_tradeOffer`, and talk and package cards keep theirs in the talk or `_ideaOffer`, so none of those were linked. Messages written before r146, and any card type that names players only in its text, had no links either.
+
+**The fix (InboxScreen `_messagePlayers`):**
+- The players tied to a message now also include the players in the deal it is about: `_tradeOffer`, `_ideaOffer`, `_reviseOffer.offer`, and the talk's offer or counter.
+- Any other player whose name appears in the subject or body and belongs to nobody else is also linked. This uses the same rule as the engine's `namedPlayers`, so old messages and every card type are covered.
+- New: `NAME_SCAN_SKIP` lists surnames that the app's text also uses as capitalized words (Hall, Park, Banks, Booker, Brown, Porter, Turner, Walker, Carter). These names are linked only when the message is tied to that player, never from the text alone.
+
+**test-trade-advice-ui:** the offer card links every player in the deal, and tapping one opens the player.
+
+Fresh team: not needed.
+
+**CI (r152):** GitHub's "Season Harness" check has failed since at least r149, on one check: "timed delivery: no pool card arrives during quiet hours." The harness's starting moment is 2400-01-01 00:00 UTC. On CI's UTC clock that is midnight, which falls in quiet hours. A new club's opening cards (`_seed`) arrive at that moment by design, since they're there when the club is made and are never pushed. Runs here pass because they use Eastern time. The check now excludes `_seed` cards. This was test-only; the app was unaffected. Reproduced and confirmed fixed with `TZ=UTC`.
