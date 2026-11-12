@@ -10037,3 +10037,40 @@ The GM asked for compose messages that get opinions on trade offers and counter 
 **test-trade-advice-ui (new, 14), dark and light:** Compose → topic → which deal (with its due time) → Send; both waiting; "awaiting reply"; the replies before the deadline; links; the decision's three buttons; Adjust It First opens the composer with the counter; Counter with This makes round 2.
 
 Fresh team: not needed.
+
+### 122.23 What could we get for…? (GM, Nov 11 — r151)
+
+D from §122.22, done separately as the GM allowed. Compose → Scouting / Dev → **What could we get for…?** → **Which player?** (a list of ours who can be traded now: hitters, then pitchers, best first, "Name — POS, OVR n") → Send. A player can't be shopped again for `SHOP_AGAIN_MS` (3 days). With the trade window closed: "The trade window is closed."
+
+**The director calls around** (`TradeAdvice.shopPlayer`):
+- **The clubs that could use the player:** a need the player fills (`LeagueTrades.clubNeeds` / `fillsNeed`), or a spot the player would start at. Clubs already dealing with us (`busyWithUs`) are left out.
+- **The director calls `clubsCalled`** (one more than the free agents looked at in a week: 3 at a 40 … 6 at 82+), the ones the director reads as wanting the player most (the need, with the director's `readError`). So a weak director calls fewer clubs and can miss the best one. In the check: 57 bids from an 85, 31 from a 40.
+- **Each club's bid** (`LeagueTrades.fairBid`, new) uses the same package-builder as every trade (`buildPackage`): the pieces it can spare, plus cash. The bid is fair to us, and its GM would accept it as it stands (its own bar, and no more than it would pay to fill the need). If no fair bid exists, the closest one counts, up to `SHORT_STEPS` (5 / 10 / 15%) of the player's value to us under fair, and it is called "short of what X is worth to us."
+- **A regular nobody bids enough for:** clubs offer only the players they can spare (as the trade desk's calls always have), so a regular's hole is worth more to us than spare pieces. The director says so and points to the trade composer (Compose → Other GMs) to build a bigger deal.
+
+**The reply:**
+- how many clubs could use the player, and how many the director called;
+- each bid (up to 3): what the club needs (who plays there now), what they'd give (each piece with position, age and OVR, plus any cash), and whether it's fair for us;
+- the one to take (or the one that comes closest);
+- the director's read on an untested player we'd shop;
+- the payroll for the best bid (§122.22's paragraph).
+
+**The decision:** **Make the Offer** sends the best bid as our offer (round 1; the club decides then, and the answer comes on its clock). **Adjust It First** opens the composer with it; **Not Now** does nothing. Expires in 2 days. It is withdrawn if it can no longer be made (the existing package-validity rule). A player no longer ours: "isn't ours anymore."
+
+**check-trade-advice:** +12 checks (44):
+- every player can be shopped;
+- every bid is accepted by its club's own answer (`cpuRespond`; 57 of 57);
+- a better director calls more clubs and brings back more offers;
+- the reply's parts, with every name real;
+- the decision;
+- a regular sent to the composer;
+- Make the Offer starts talks and the club agrees;
+- a player who has left.
+
+**test-trade-advice-ui:** +4 checks, dark and light:
+- the player list;
+- Send waits for a player;
+- the reply;
+- the three buttons.
+
+Fresh team: not needed.

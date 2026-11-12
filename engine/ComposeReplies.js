@@ -18,7 +18,7 @@ import { worthOf, trueOVR, isDiamond } from './Diamonds.js';
 import { signingTerms } from './MarketEngine.js';
 import { formatK } from './CardTokens.js';
 import { scoutEye as directorEye, scoutLooks } from './CoachEngine.js';
-import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN } from './TradeAdvice.js';
+import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from './TradeAdvice.js';
 import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart } from './TradeEngine.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -857,7 +857,7 @@ const TOPIC_LABELS = {
   pc_prospect: 'our young pitchers', hc_slump: 'the slump', hc_development: 'our young hitters', hc_lineup: 'the batting order',
   bc_morale: 'our in-game decisions', bpc_health: 'the bullpen', fac_status: 'the ballpark', tix_attendance: 'attendance',
   tix_renewals: 'season-ticket renewals', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
-  sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade',
+  sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
   mr_narrative: 'the coverage', ca_event: 'community commitments',
 };
 
@@ -1049,6 +1049,71 @@ W.sc_trade = (f, r, who, arg) => {
     memo: { playerIds: [...new Set([...(deal.offer.incomingIds || []), ...(deal.offer.outgoingIds || []), ...(a.counter?.incomingIds || [])])], dealKey: deal.key },
     topic: dealTopic(deal),
     trade: a.counter ? { teamId: deal.teamId, offer: a.counter, round: deal.round, dealKey: deal.key, expiresAtMs: deal.expiresAtMs } : null,
+  };
+};
+
+/** What a club needs, in words: "need a third baseman (Diaz is there now, OVR 52)". */
+function needWords(st, need, p) {
+  const inc = need?.incumbentId ? st.players[need.incumbentId] : null;
+  const now = inc ? ` (${inc.name} is there now, ${ovrOf(inc)})` : '';
+  if (!need) return `would play ${p.name} every day`;
+  if (need.kind === 'sp') return `need a starter${inc ? ` (${inc.name} is the weak end of the rotation, ${ovrOf(inc)})` : ''}`;
+  if (need.kind === 'rp') return `need bullpen help${now}`;
+  const noun = { C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder', DH: 'bat at DH' }[need.slot] || 'regular';
+  return `need ${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}${now}`;
+}
+/** What a club would give: "Ruiz (SS, 26, OVR 61) and $50K". */
+function bidWords(f, o, team) {
+  const pieces = (o.incomingIds || []).map(f.P).filter(Boolean).map(q => `${q.name} (${q.nativePos || q.pos}, ${f.age(q)}, ${ovrOf(q)})`);
+  const c = o.cashK || 0;
+  if (c > 0) pieces.push(`${formatK(c)}`);
+  let t = pieces.length ? list(pieces) : 'nothing';
+  if (c < 0) t += `, with us adding ${formatK(-c)}`;
+  for (const [id, share] of Object.entries(o.retain || {})) {
+    const q = f.P(id);
+    if (q) t += `, and ${(o.incomingIds || []).includes(id) ? team : 'we'} keep paying ${Math.round(share * 100)}% of ${poss(q.name)} salary this season`;
+  }
+  return t;
+}
+
+W.sc_shop = (f, r, who, arg) => {
+  const st = f.state;
+  const p = arg?.playerId ? st.players[arg.playerId] : null;
+  if (!p || p.teamId !== 'user') return { body: [`${p?.name || 'That player'} isn't ours anymore, so there's nobody to shop.`], memo: {}, topic: 'that player' };
+  const shop = shopPlayer(st, p.id, r, f.atMs);
+  const out = [];
+  const topic = `what we could get for ${p.name}`;
+  if (!shop.called) {
+    out.push(shop.interested === 0 && !f.state.leagueTeams?.length ? 'There\'s nobody to call right now.'
+      : `I looked around the league, and nobody needs ${p.name} right now: no club has a hole that ${p.name} fills, and nobody would play ${p.name} over who they have.`);
+    return { body: out, memo: { playerId: p.id, shopId: p.id }, topic };
+  }
+  out.push(`${shop.interested === 1 ? 'One club' : `${Cap(num(shop.interested))} clubs`} could use ${p.name}. I called ${shop.called === shop.interested ? (shop.called === 1 ? 'it' : `all ${num(shop.called)}`) : `the ${num(shop.called)} most likely to bite`}.`);
+  if (!shop.bids.length) {
+    out.push(shop.key
+      ? `Nobody would come close to what ${p.name} is worth to us. On a call like this, clubs offer the players they can spare, and for a regular like ${p.name} that isn't enough — it would take one of their own regulars, and that's a deal to build ourselves in the trade composer (Compose → Other GMs).`
+      : `Nobody would come close to what ${p.name} is worth to us right now. I'd keep ${p.name}, or ask again when a club's need gets worse.`);
+  } else {
+    for (const b of shop.bids.slice(0, 3)) {
+      out.push(`${b.team} ${needWords(st, b.need, p)}. They'd give ${bidWords(f, b.offer, b.team)} — ${b.ourNet >= 10 ? 'more than fair for us' : b.ourNet >= 0 ? 'fair value for us' : `short of what ${p.name} is worth to us`}.`);
+    }
+    const b = shop.best;
+    out.push(b.ourNet >= 0
+      ? `If we're moving ${p.name}, ${poss(b.team)} offer is the one I'd take. I think they'd say yes to it as it stands; their GM answers on their own clock.`
+      : `Nobody would give full value. If we want to move ${p.name} anyway, ${poss(b.team)} offer comes closest, and I think they'd say yes to it as it stands.`);
+  }
+  if (p._ratingGap) {
+    const read = readOfUntested(p, r, 4 / scoutEye(f, p));
+    if (read > 0) out.push(`Careful: our read on ${p.name} is better than the rating. The clubs are paying for the rating, so whoever gets ${p.name} gets a bargain.`);
+    else if (read < 0) out.push(`Our read on ${p.name} is not as good as the rating, so the clubs are paying for more than they'd get — a good time to move ${p.name}.`);
+  }
+  if (shop.best) out.push(`On payroll, with ${poss(shop.best.team)} offer: ${payrollWords(f, shop.best.offer)}`);
+  return {
+    body: out,
+    memo: { playerId: p.id, shopId: p.id, playerIds: [p.id, ...shop.bids.slice(0, 3).flatMap(b => b.offer.incomingIds || [])] },
+    topic,
+    trade: shop.best ? { teamId: shop.best.teamId, offer: shop.best.offer, round: null, dealKey: null, expiresAtMs: f.atMs + 2 * MS_DAY,
+                         yesLabel: 'Make the Offer', yesMsg: `Offer sent to ${shop.best.team}. Their answer comes on their clock.` } : null,
   };
 };
 

@@ -19,16 +19,23 @@
  * evaluateForClub / clubBar / cpuRespond), so the director's read is a read of
  * what the club will really do — with the director's error on top.
  *
+ * r151 the director can also shop one of our players: "what could we get for
+ * him?" — the clubs that could use the player, called (more of them by a
+ * better director), and what each would give, fair to us and that its GM
+ * would accept (shopPlayer; the words are sc_shop). The reply is a decision:
+ * make the best offer, adjust it first, or not now.
+ *
  * Pure: never imports StateManager.
  */
 
 import { PLAYER_GROUP, PLAYER_ORIGIN, TRADE } from '../data/constants.js';
 import {
   evaluateForClub, evaluateForUser, clubBar, tradeBlockers, ourSideBlocker, talkWith,
-  playsSlot, isKeyPiece, contractRunOut, cashValue, wouldStart,
+  playsSlot, isKeyPiece, contractRunOut, cashValue, wouldStart, busyWithUs, tradeWindow, valueToClub,
 } from './TradeEngine.js';
+import { clubNeeds, fillsNeed, fairBid, leagueNorms, userOffer, movable } from './LeagueTrades.js';
 import { bullpenRoles, ROLE } from './PitchingEngine.js';
-import { scoutEye } from './CoachEngine.js';
+import { scoutEye, scoutLooks } from './CoachEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
 
@@ -265,4 +272,67 @@ export function suggestCounter(state, deal, rand, atMs) {
   }
   if (!pick) return base;
   return { ...base, counter: pick.o, change: pick.change, after: { slack: pick.slack1, seen: pick.slack1 + err, gain: pick.gain } };
+}
+
+// ─────────────────────────────────────────────────────────────
+// r151 THE DIRECTOR: WHAT COULD WE GET FOR HIM?
+// ─────────────────────────────────────────────────────────────
+
+/** How far short of fair a club's best bid can be and still be worth telling the GM about (a share of the player's value to us). */
+export const SHORT_STEPS = Object.freeze([0.05, 0.10, 0.15]);
+
+/** How long the director won't shop the same player again (a fresh answer needs a fresh week). */
+export const SHOP_AGAIN_MS = 3 * 86_400_000;
+
+/** Our players the director can shop now: the window open, the player movable. */
+export function shoppable(state, atMs) {
+  if (!tradeWindow(state).open) return [];
+  return (state.userTeam?.rosterIds || []).map(id => state.players[id]).filter(p => movable(p, atMs, state));
+}
+
+/** Clubs the director calls about a player: one more than the free agents looked at in a week (3 at a 40 … 6 at 82+). */
+export const clubsCalled = (staff) => scoutLooks(staff) + 1;
+
+/**
+ * shopPlayer(state, playerId, rand, atMs) — the director calls around:
+ *   { player, interested, called, bids: [{ teamId, team, need, offer, ourNet }], best }
+ *   interested  the clubs that could use the player (a need it fills, or a
+ *               spot it would start at), not already dealing with us
+ *   called      how many of them the director called (clubsCalled), the ones
+ *               the director reads as wanting the player most — a read with
+ *               the director's error, so a weak director can miss the best
+ *   bids        what each club called would give: fair to us, and a deal its
+ *               GM would take as it stands (LeagueTrades.fairBid), best for us first
+ */
+export function shopPlayer(state, playerId, rand, atMs) {
+  const p = state.players[playerId];
+  const staff = state.userTeam?.coachingStaff;
+  const out = { player: p, interested: 0, called: 0, bids: [], best: null };
+  if (!p || p.teamId !== 'user' || !movable(p, atMs, state) || !tradeWindow(state).open) return out;
+  const norms = leagueNorms(state);
+  const sd = readError(staff);
+  const worth = valueToClub(p, state, 'user', false);   // what the player is worth to us (a regular: with the hole he'd leave)
+  out.key = isKeyPiece(p, state, 'user');
+  const clubs = [];
+  for (const t of state.leagueTeams || []) {
+    if (busyWithUs(state, t.id, atMs)) continue;
+    const need = clubNeeds(state, t.id, norms).find(n => fillsNeed(p, n)) || null;
+    if (!need && !wouldStart(p, state, t.id)) continue;
+    clubs.push({ teamId: t.id, team: t.name, need, seen: (need?.gap ?? 0) + gauss(rand) * sd });
+  }
+  out.interested = clubs.length;
+  const called = clubs.sort((a, b) => b.seen - a.seen).slice(0, clubsCalled(staff));
+  out.called = called.length;
+  for (const c of called) {
+    // Fair to us if the club will go that far; else the most it would give (short of fair), if it's close.
+    let deal = fairBid(state, c.teamId, playerId, atMs, { need: c.need });
+    for (const share of SHORT_STEPS) { if (deal) break; deal = fairBid(state, c.teamId, playerId, atMs, { need: c.need, ourBar: -share * worth }); }
+    if (!deal) continue;
+    const offer = userOffer(deal);
+    if (!_canGo(state, offer, c.teamId, atMs)) continue;
+    out.bids.push({ teamId: c.teamId, team: c.team, need: c.need, offer, ourNet: evaluateForUser(offer, state).net });
+  }
+  out.bids.sort((a, b) => b.ourNet - a.ourNet);
+  out.best = out.bids[0] || null;
+  return out;
 }

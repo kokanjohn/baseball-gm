@@ -1,4 +1,4 @@
-// r150 the staff weigh in on a trade on the table: the manager's read of the
+// r150 the staff weigh in on a trade on the table (and r151: shop one of our players): the manager's read of the
 // field (and the coaches' on who's coming in), the scouting director's counter
 // (read through the director's eye) with the payroll, the reply before the
 // deal's deadline, the counter sent as the next round, and a counter that goes
@@ -8,7 +8,7 @@ import { clock, seedRandom } from './shims.js';            // MUST be first (ins
 import * as SM from '../../store/StateManager.js';
 import { startNewGame, advanceClock } from '../../engine/GameEngine.js';
 import { releaseDueCards, resolve, getInbox, deliverComposeCard, syncRosterCards } from '../../engine/CardEngine.js';
-import { dealsOnTable, dealsFor, fieldRead, suggestCounter, readError } from '../../engine/TradeAdvice.js';
+import { dealsOnTable, dealsFor, fieldRead, suggestCounter, readError, shopPlayer, shoppable, clubsCalled } from '../../engine/TradeAdvice.js';
 import { writeComposeReply } from '../../engine/ComposeReplies.js';
 import { cpuRespond, evaluateForClub, clubBar } from '../../engine/TradeEngine.js';
 import { talkWith } from '../../engine/Negotiation.js';
@@ -158,6 +158,58 @@ SM.speculate(() => {
   resolve(deal.instanceId, 'no');
   const late = writeComposeReply(S(), { topicId: 'sc_trade', channelId: 'scouting', atMs: t0 + H, arg });
   check(`a deal settled before the reply: says so (“${late.body.split('\n\n')[1]}”)`, /already|settled/.test(late.body) && !late.trade);
+});
+
+// ── r151 What could we get for him? ───────────────────────────
+console.log('Shopping a player');
+const shopAll = (q) => SM.speculate(() => {
+  setDirector(q);
+  const out = [];
+  for (const p of shoppable(S(), t0)) out.push({ p, ...shopPlayer(S(), p.id, lcg(p.id.length * 31 + q), t0) });
+  return out;
+});
+const shops = shopAll(85);
+const withBids = shops.filter(x => x.bids.length);
+check(`the director can shop our players (${shops.length}); clubs bid on ${withBids.length}`, shops.length >= 20 && withBids.length >= 3);
+const replies = withBids.flatMap(x => x.bids.map(b => ({ x, b, r: cpuRespond({ ...b.offer }, S(), b.teamId, { round: 1, atMs: t0 }) })));
+check(`every bid is one its club would accept as it stands (${replies.filter(y => y.r.decision === 'accept').length} of ${replies.length})`,
+      replies.every(y => y.r.decision === 'accept'), replies.filter(y => y.r.decision !== 'accept').map(y => `${y.x.p.name}→${y.b.team}: ${y.r.decision} ${y.r.reason || ''}`).join('; '));
+check('…and fair to us, or said to be short (never more than 15% under)', withBids.every(x => x.bids.every(b => b.ourNet >= -0.15 * 400)));
+check(`a better director calls more clubs (${clubsCalled({ scoutingDirector: { quality: 40 } })} at 40, ${clubsCalled({ scoutingDirector: { quality: 90 } })} at 90)`,
+      clubsCalled({ scoutingDirector: { quality: 90 } }) > clubsCalled({ scoutingDirector: { quality: 40 } }));
+const weakShops = shopAll(40);
+const found = (xs) => xs.reduce((a, x) => a + x.bids.length, 0);
+check(`…and comes back with more offers (${found(shops)} at 85, ${found(weakShops)} at 40)`, found(shops) > found(weakShops));
+const one = withBids.sort((a, b) => b.bids.length - a.bids.length)[0];
+const shopArg = { playerId: one.p.id, label: one.p.name };
+const sr = writeComposeReply(S(), { topicId: 'sc_shop', channelId: 'scouting', atMs: t0 + H, arg: shopArg });
+console.log(`    ${sr.body.replace(/\n\n/g, '\n    ')}`);
+check('the reply: who could use the player, the calls, each bid, the pick, the payroll',
+      /could use/.test(sr.body) && /I called/.test(sr.body) && /They'd give/.test(sr.body) && /the one I'd take|comes closest/.test(sr.body) && /On payroll, with/.test(sr.body));
+check('gender-neutral, nothing missing, every name real', !GEN.test(sr.body) && !BAD.test(sr.body) && sr.named.every(id => S().players[id]), (sr.body.match(GEN) || sr.body.match(BAD) || []).join());
+check('a decision: make the best offer', sr.trade?.yesLabel === 'Make the Offer' && sr.trade.round == null && !sr.trade.dealKey);
+const reg = shops.find(x => !x.bids.length && x.key && x.called);
+if (reg) {
+  const rr = writeComposeReply(S(), { topicId: 'sc_shop', channelId: 'scouting', atMs: t0 + H, arg: { playerId: reg.p.id, label: reg.p.name } });
+  check(`a regular nobody bids enough for: says why, and where to build a bigger deal (${reg.p.name})`, /trade composer/.test(rr.body) && !rr.trade);
+}
+SM.speculate(() => {
+  const c = deliverComposeCard('sc_shop', 'scouting', { topicLabel: `What could we get for ${one.p.name}?`, arg: shopArg, nowMs: t0 });
+  releaseDueCards(c.deliverAtMs);
+  const card = getInbox().find(x => x.instanceId === c.instanceId);
+  check(`it comes back as a decision (“${card?.subject}”: ${card?.yesLabel} / ${card?.noLabel} / ${card?._reviseLabel})`,
+        card?.yesLabel === 'Make the Offer' && card?.noLabel === 'Not Now' && card?._reviseLabel === 'Adjust It First' && !card._adviceDeal);
+  const teamId = card._ideaTeamId;
+  clock.set(c.deliverAtMs + 60_000);
+  resolve(card.instanceId, 'yes');
+  const talk = talkWith(S(), teamId);
+  check(`Make the Offer starts talks (round ${talk?.round}), and they take it (${talk?.status})`, talk?.round === 1 && talk?.status === 'agreed');
+  clock.set(t0);
+});
+SM.speculate(() => {
+  SM.mutate(s => { s.players[one.p.id].teamId = 'X'; });
+  const gone = writeComposeReply(S(), { topicId: 'sc_shop', channelId: 'scouting', atMs: t0 + H, arg: shopArg });
+  check('a player no longer ours: says so', /isn't ours anymore/.test(gone.body) && !gone.trade);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

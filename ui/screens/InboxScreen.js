@@ -28,7 +28,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../formatters.js';
 import * as When from '../../engine/When.js';
-import { dealsFor } from '../../engine/TradeAdvice.js';
+import { dealsFor, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -161,6 +161,7 @@ const COMPOSE_CHANNELS = [
       { id: 'sc_prospect',   label: 'Young player report',      desc: 'A scouting report on one of our young players' },
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
       { id: 'sc_trade',      label: 'Is there a better deal?',  desc: 'The director\'s counter to a trade on the table, and what the deal does to payroll', deal: true },
+      { id: 'sc_shop',       label: 'What could we get for…?',  desc: 'Pick one of our players: the director calls the clubs that could use them', player: true },
     ],
   },
   // Low priority — event-driven
@@ -625,6 +626,17 @@ function _topicState(t, state) {
     }
     return { deals: open };
   }
+  // r151 shopping a player: one of ours who can be traded now, not shopped in the last few days.
+  if (t.player) {
+    const now = Date.now();
+    const recent = new Set([...(state.scheduledCards || []).filter(c => c.isCompose && c._composeTopic === t.id).map(c => c._composeArg?.playerId),
+      ...(state.composeLog || []).filter(e => e.topicId === t.id && now - e.atMs < SHOP_AGAIN_MS).map(e => e.memo?.shopId)]);
+    const ps = shoppable(state, now);
+    if (!ps.length) return { none: 'The trade window is closed' };
+    const open = ps.filter(p => !recent.has(p.id));
+    if (!open.length) return { none: 'Every player was shopped in the last few days' };
+    return { players: open };
+  }
   const gameIdx = state.currentGameIndex || 0, cd = state.composeCooldowns || {};
   const waiting = (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id);
   if (waiting) return { waiting };
@@ -684,19 +696,29 @@ function _composeTopics(state, ch) {
       <div class="compose-deals">${st.deals.map(d => `<button type="button" class="compose-deal${_composeDeal === d.key ? ' selected' : ''}" data-deal="${_escape(d.key)}">
         <span class="cd-label">${_escape(d.label)}</span>
         ${d.expiresAtMs ? `<span class="cd-due">Answer due ${_escape(When.untilFull(d.expiresAtMs, Date.now()))}</span>` : ''}</button>`).join('')}</div>` : '';
+    // r151 shopping: which player (hitters, then pitchers, best first).
+    const byOvr = (a, b) => (b.ovr || 0) - (a.ovr || 0);
+    const opt = (p) => `<option value="${p.id}"${_composeDeal === p.id ? ' selected' : ''}>${_escape(p.name)} — ${_escape(p.nativePos || p.pos)}, OVR ${p.ovr}</option>`;
+    const isP = (p) => p.pos === 'SP' || p.pos === 'RP';
+    const players = isSel && !off && st.players ? `<div class="compose-h compose-deal-h">Which player?</div>
+      <select class="compose-player-select" id="compose-player" aria-label="Which player">
+        <option value=""${_composeDeal ? '' : ' selected'}>Choose a player</option>
+        <optgroup label="Hitters">${st.players.filter(p => !isP(p)).sort(byOvr).map(opt).join('')}</optgroup>
+        <optgroup label="Pitchers">${st.players.filter(isP).sort(byOvr).map(opt).join('')}</optgroup>
+      </select>` : '';
     return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
       <span>${_escape(t.label)}</span>
       <span class="topic-desc">${_escape(note || t.desc)}</span>
-    </div>${deals}`;
+    </div>${deals}${players}`;
   }).join('');
   const sel = ch.topics.find(t => t.id === _composeTopic);
-  const canSend = !!_composeTopic && (!sel?.deal || !!_composeDeal);
+  const canSend = !!_composeTopic && (!(sel?.deal || sel?.player) || !!_composeDeal);
   return `
     <button type="button" class="compose-back" id="compose-back">‹ All recipients</button>
     <div class="compose-to"><span class="compose-to-label">To</span> ${_escape(ch.label)}<span class="compose-to-role">${_escape(ch.role)}</span></div>
     <div class="compose-h">What about?</div>
     <div class="compose-topic-list">${rows}</div>
-    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : _composeTopic ? 'Pick a deal' : 'Pick a topic'}</button>
+    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : !_composeTopic ? 'Pick a topic' : sel?.player ? 'Pick a player' : 'Pick a deal'}</button>
     <div class="compose-cooldown-note">Replies come back later, the way they would from a real staff — field staff answer after the game.</div>`;
 }
 
@@ -853,6 +875,7 @@ function _attachTabListeners(state) {
   document.querySelectorAll('[data-deal]').forEach(el => {
     el.addEventListener('click', () => { _composeDeal = el.dataset.deal; refresh(); });
   });
+  document.getElementById('compose-player')?.addEventListener('change', (e) => { _composeDeal = e.target.value || null; refresh(); });
 
   // Compose send button
   const sendBtn = document.getElementById('compose-send-btn');
@@ -927,9 +950,11 @@ async function _sendCompose(topicId, channelId, state) {
   // r150 a trade topic asks about one deal (no cooldown: one question per deal).
   const deal = topic?.deal ? (_topicState(topic, state).deals || []).find(d => d.key === _composeDeal) : null;
   if (topic?.deal && !deal) { App.showToast('That deal is no longer waiting on us.', 'neutral', 2500); refresh(); return; }
+  const player = topic?.player ? (_topicState(topic, state).players || []).find(p => p.id === _composeDeal) : null;
+  if (topic?.player && !player) { App.showToast('That player can\'t be traded right now.', 'neutral', 2500); refresh(); return; }
 
   // Record cooldown immediately
-  if (!topic?.deal) StateManager.mutate(s => {
+  if (!topic?.deal && !topic?.player) StateManager.mutate(s => {
     s.composeCooldowns = { ...(s.composeCooldowns || {}), [topicId]: gameIdx };
   });
 
@@ -938,6 +963,7 @@ async function _sendCompose(topicId, channelId, state) {
     const { deliverComposeCard } = await import('../../engine/CardEngine.js');
     deliverComposeCard(topicId, channelId, deal
       ? { topicLabel: deal.label, arg: { key: deal.key, label: deal.label, instanceId: deal.instanceId, expiresAtMs: deal.expiresAtMs } }
+      : player ? { topicLabel: `What could we get for ${player.name}?`, arg: { playerId: player.id, label: player.name } }
       : { topicLabel: topic?.label || '' });
     import('../PushClient.js').then(P => P.syncPushSchedule()).catch(() => {});
   } catch (err) {

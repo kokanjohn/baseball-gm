@@ -417,6 +417,18 @@ export function callOffer(state, buyerId, playerId, atMs, { need = null } = {}) 
 }
 
 /**
+ * fairBid(state, buyerId, playerId, atMs, { need, ourBar }) — r151 what a club would
+ * give for one of our players, fair to us (ourBar 0: even; below 0, short of fair), that its GM would
+ * accept as it stands (its own bar, and no more than it would pay to fill the
+ * need). The scouting director's answer to "what could we get for him?".
+ * Returns a deal (deal.a = the buyer, deal.b = 'user') or null.
+ */
+export function fairBid(state, buyerId, playerId, atMs, { need = null, ourBar = 0 } = {}) {
+  if (!state.players[playerId]) return null;
+  return buildPackage(state, buyerId, 'user', [playerId], { atMs, buyerSlack: -clubBar(state, buyerId), ..._needOpts(state, buyerId, need), sellerBar: ourBar });
+}
+
+/**
  * askingOffer(state, sellerId, playerId, atMs, { premium, shedK }) — §91 a
  * CPU club offers us one of its players: what it asks of our spare pieces,
  * a little over its bar when it opens (premium), the least it would take

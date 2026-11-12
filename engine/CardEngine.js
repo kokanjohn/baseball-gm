@@ -1850,11 +1850,11 @@ function _releaseDue(nowMs) {
     const t = reply.trade;
     if (t) {
       Object.assign(out, {
-        tag: 'TRADE', yesLabel: 'Counter with This', noLabel: 'Not Now', autoResolve: 'no',
+        tag: 'TRADE', yesLabel: t.yesLabel || 'Counter with This', noLabel: 'Not Now', autoResolve: 'no',
         expiresAtMs: t.expiresAtMs ?? c.deliverAtMs + 2 * 86_400_000,
-        _ideaTeamId: t.teamId, _ideaOffer: t.offer, _ideaRound: t.round, _adviceDeal: t.dealKey,
+        _ideaTeamId: t.teamId, _ideaOffer: t.offer, _ideaRound: t.round, ...(t.dealKey ? { _adviceDeal: t.dealKey } : {}),
         _reviseOffer: { teamId: t.teamId, offer: t.offer, round: t.round }, _reviseLabel: 'Adjust It First',
-        yesMsg: 'Counter sent. Their answer comes on their clock.', noMsg: 'Holding off on a counter.',
+        yesMsg: t.yesMsg || 'Counter sent. Their answer comes on their clock.', noMsg: t.dealKey ? 'Holding off on a counter.' : 'Holding off.',
         _raw: { ...(c._raw || {}), onYes: 'lt_offer_send', onNo: 'lt_pass', onAuto: 'lt_pass' },
       });
     }

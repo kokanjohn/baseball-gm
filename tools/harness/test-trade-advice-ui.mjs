@@ -127,6 +127,39 @@ if (got.sc.id) {
   check(`Counter with This sends it as round 2 of the talks (${JSON.stringify(sent.talk)}), replacing their offer`, sent.talk?.round === 2 && !sent.offerOpen);
   await page.screenshot({ path: `${out}/trade-counter-sent-${theme}.png` });
 }
+// r151 What could we get for…? — pick one of ours, the director calls around.
+await page.click('#mr-back').catch(() => {}); await page.waitForTimeout(200);
+await page.click('#itab-compose'); await page.waitForTimeout(200);
+await page.click('.compose-person[data-channel="scouting"]');
+await page.click('.compose-topic-btn[data-topic="sc_shop"]'); await page.waitForTimeout(200);
+const opts = await page.$$eval('#compose-player option', os => os.map(o => ({ v: o.value, t: o.textContent })));
+check(`the topic lists our players to shop (${opts.length - 1}), by name, position and rating`, opts.length > 10 && opts.slice(1).every(o => /^\S.* — [A-Z0-9/]+, OVR \d+$/.test(o.t)));
+check(`Send waits for a player (“${await page.textContent('#compose-send-btn')}”)`, (await page.textContent('#compose-send-btn')).trim() === 'Pick a player');
+const target = await page.evaluate(async () => {
+  const TA = await import('/baseball-gm/engine/TradeAdvice.js'); const SM = await import('/baseball-gm/store/StateManager.js');
+  const s = SM.get(); let r = 1;
+  for (const p of TA.shoppable(s, Date.now())) { const x = TA.shopPlayer(s, p.id, () => (r = (r * 9301 + 49297) % 233280) / 233280, Date.now()); if (x.bids.length) return { id: p.id, name: p.name }; }
+  return null;
+});
+await page.selectOption('#compose-player', target.id); await page.waitForTimeout(200);
+await page.screenshot({ path: `${out}/trade-shop-pick-${theme}.png` });
+await page.click('#compose-send-btn'); await page.waitForTimeout(300);
+const shop = await page.evaluate(async () => {
+  const CE = await import('/baseball-gm/engine/CardEngine.js'); const SM = await import('/baseball-gm/store/StateManager.js');
+  const c = (SM.get().scheduledCards || []).find(x => x.isCompose && x._composeTopic === 'sc_shop');
+  CE.releaseDueCards(c.deliverAtMs);
+  const r = SM.get().inbox.find(x => x.instanceId === c.instanceId);
+  return { id: r?.instanceId, subject: r?.subject, body: r?.body, offer: !!r?._ideaOffer };
+});
+check(`the director's answer: “${shop.subject}”`, shop.subject === `Re: What could we get for ${target.name}?` && /I called/.test(shop.body || ''));
+console.log('\n' + shop.body + '\n');
+await page.click('#itab-todo'); await page.waitForTimeout(300);
+if (shop.id) {
+  await page.click(`[data-open="${shop.id}"]`); await page.waitForTimeout(400);
+  const btns = await page.$$eval('[data-resolve], [data-revise]', bs => bs.map(b => b.textContent.trim()));
+  check(`an offer to make (${btns.join(' · ')})`, !shop.offer || ['Make the Offer', 'Not Now', 'Adjust It First'].every(l => btns.includes(l)));
+  await page.screenshot({ path: `${out}/trade-shop-reply-${theme}.png` });
+}
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 console.log(ok ? 'ALL PASS' : 'SOME FAILED');
