@@ -10089,3 +10089,7 @@ The GM reported that on phone and desktop Chrome, player names in messages weren
 Fresh team: not needed.
 
 **CI (r152):** GitHub's "Season Harness" check has failed since at least r149, on one check: "timed delivery: no pool card arrives during quiet hours." The harness's starting moment is 2400-01-01 00:00 UTC. On CI's UTC clock that is midnight, which falls in quiet hours. A new club's opening cards (`_seed`) arrive at that moment by design, since they're there when the club is made and are never pushed. Runs here pass because they use Eastern time. The check now excludes `_seed` cards. This was test-only; the app was unaffected. Reproduced and confirmed fixed with `TZ=UTC`.
+
+**CI flakes (after r152, harness only):** the next CI runs failed two other checks. Each passes here, and a UTC rerun passed 3674/3674, so both depend on the real clock (open item, as in §122.21).
+- **"fault(user SP): rotation restored to 5" (got 4):** the check counted every healthy SP on the roster. The refill only draws on the rotation and the pitcher bench (by design, a user rotation spot otherwise goes to the GM), so an SP working out of the bullpen or in transit after a trade made the count wrong. The check now counts what the refill draws on and names any healthy starter elsewhere.
+- **"the free-agent pool carries into season 2":** failed once in UTC, without saying which part. It now reports free agents missing from the pool, pool entries that aren't free agents, and the pre-spring count, so the next failure can be diagnosed.

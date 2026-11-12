@@ -507,7 +507,10 @@ async function runOffseasonChecks() {
   check(`offseason: the free-agent pool carries into season 2 (${fas.length} free agents, at most ${FA_POOL_MAX} + those let go since spring opened)`,
         fas.every(p => poolSet.has(p.id)) && [...poolSet].every(id => st.players[id]?.group === PLAYER_GROUP.FREE_AGENT)
         && fas.filter(p => !(p._faSince >= os.springAt)).length <= FA_POOL_MAX && fas.length >= 100,
-        `${fas.length} in pool`);
+        (() => { const notIn = fas.filter(p => !poolSet.has(p.id)), wrong = [...poolSet].filter(id => st.players[id]?.group !== PLAYER_GROUP.FREE_AGENT);
+          return `${fas.length} in pool; ${notIn.length} free agents not in the pool (${notIn.slice(0, 3).map(p => `${p.name} ${p.teamId}/${p._faSince ?? ''}/${p.origin}`).join(', ')}); `
+            + `${wrong.length} in the pool not free agents (${wrong.slice(0, 3).map(id => `${st.players[id]?.name} ${st.players[id]?.group}/${st.players[id]?.teamId}`).join(', ')}); `
+            + `${fas.filter(p => !(p._faSince >= os.springAt)).length} from before spring`; })());
   const klass = fas.concat(Object.values(st.players).filter(p => p._classOf === 2 && p.teamId)).filter(p => p._classOf === 2);
   check(`offseason: a new free-agent class arrives (${klass.length} players; ${klass.filter(p => p.teamId).length} signed by spring)`, klass.length >= 20);
   check(`offseason: one re-sign card per expiring user player (${resignCards.size}/${expiringUser.filter(id => SM.get().players[id]?.group !== PLAYER_GROUP.RETIRED).length})`,
@@ -973,10 +976,14 @@ function runFaultInjection(base) {
           !st.userTeam.rotation.order.includes(spId));
     // Five again — or every healthy starter we have (§122: no farm arm to promote; an open
     // rotation spot is the GM's to fill from the free agents).
-    const healthySP = st.userTeam.rosterIds.map(id => st.players[id]).filter(q => q && q.pos === 'SP' && !q.isInjured && q.group !== 'il').length;
+    // (the starters the refill draws on: the rotation and the pitcher bench — r152: a starter working
+    //  out of the bullpen, or one in transit after a trade, isn't one, and CI's runs found both)
+    const spPool = [PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.PITCHER_BENCH];
+    const allSP = st.userTeam.rosterIds.map(id => st.players[id]).filter(q => q && q.pos === 'SP' && !q.isInjured && q.group !== 'il');
+    const healthySP = allSP.filter(q => spPool.includes(q.group)).length;
     check(`fault(user SP): rotation restored to 5 (or every healthy starter: ${healthySP})`,
           st.userTeam.rotation.order.length === Math.min(ROSTER_LIMITS.STARTING_PITCHERS, healthySP),
-          `got ${st.userTeam.rotation.order.length}`);
+          `got ${st.userTeam.rotation.order.length}; healthy starters elsewhere: ${allSP.filter(q => !spPool.includes(q.group)).map(q => `${q.name} ${q.group}`).join(', ') || 'none'}`);
     assertTeamIntegrity(st, st.userTeam, 'fault(user SP)');
   }
 
