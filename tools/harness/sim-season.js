@@ -965,13 +965,21 @@ function runFaultInjection(base) {
     assertTeamIntegrity(st, st.userTeam, 'fault(user hitter)');
   }
 
-  // ── USER: injure a rotation SP → bench SP promoted (manager domain) ──
+  // ── USER: injure a rotation SP → bench SP promoted (manager domain, at the roster deadline — r153) ──
   {
     const st = JSON.parse(JSON.stringify(base));
     const spId = st.userTeam.rotation.order[1];
     const p = st.players[spId];
     p.isInjured = true; p.group = 'il'; p.injury = { status: 'il', days: 20, injuredAt: clock.get(), eligibleAt: clock.get() + 20 * 86400000 };
-    applyRosterMutation(st, reconcileRoster(st, 'user'));
+    // r153 the open turn waits for the GM until the roster deadline; the manager fills it then.
+    const g = (st.schedule || []).find(x => !x._committed && Number.isFinite(x.gameTime));
+    if (g) {
+      const held = JSON.parse(JSON.stringify(st));
+      applyRosterMutation(held, reconcileRoster(held, 'user', { atMs: g.gameTime - 3 * 3600_000 }));
+      check('fault(user SP): before the roster deadline the open turn waits for the GM',
+            held.userTeam.rotation.order.length === 4 && !held.userTeam.rotation.order.includes(spId), `got ${held.userTeam.rotation.order.length}`);
+    }
+    applyRosterMutation(st, reconcileRoster(st, 'user', { fill: true }));
     check('fault(user SP): injured SP dropped from rotation.order',
           !st.userTeam.rotation.order.includes(spId));
     // Five again — or every healthy starter we have (§122: no farm arm to promote; an open
@@ -1853,6 +1861,9 @@ async function main() {
     check(`game ${idx}: plays stripped after commit`, g.plays === undefined, g.plays ? `still ${g.plays.length}` : 'stripped');
     }
     if (box && box.away && box.home) {
+      // r153 an open spot waits for the GM, but never past first pitch: we played with nine.
+      const ours = box.userIsHome ? box.home : box.away;
+      check(`game ${idx}: we fielded nine`, (ours.hitters || []).length >= 9, `${(ours.hitters || []).length} in our box`);
       const userRuns = box.userIsHome ? box.home.runs : box.away.runs;
       const oppRuns  = box.userIsHome ? box.away.runs : box.home.runs;
       check(`game ${idx}: box runs == final score`,
@@ -1903,8 +1914,11 @@ async function main() {
       const cpuBad = post.leagueTeams.filter(t => rosterSpotsHeld(post, t.id) !== ROSTER_LIMITS.ACTIVE_TOTAL);
       check(`game ${idx}: every CPU club active + arriving = 28`, cpuBad.length === 0,
             cpuBad.map(t => `${t.abbr} ${rosterSpotsHeld(post, t.id)}`).join(', '));
-      check(`game ${idx}: every lineup fields nine`, [post.userTeam, ...post.leagueTeams]
-        .every(t => (t.lineupSlots || []).filter(sl => sl.playerId).length === 9));
+      // r153 ours: nine, or an open slot waiting for the GM until the next roster deadline.
+      const ourNine = (post.userTeam.lineupSlots || []).filter(sl => sl.playerId).length === 9;
+      check(`game ${idx}: every lineup fields nine (ours: or a slot open before the roster deadline)`,
+            post.leagueTeams.every(t => (t.lineupSlots || []).filter(sl => sl.playerId).length === 9)
+            && (ourNine || !Roster.managerFillsNow(post, clock.get())));
     }
     // §65: one player, one place — every team, every game.
     const audit = auditRosters(post);

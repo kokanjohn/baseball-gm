@@ -62,17 +62,15 @@ const noHScroll = () => page.evaluate(() => document.documentElement.scrollWidth
 // ── Team ─────────────────────────────────────────────────────
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('roster'); });
 await page.waitForTimeout(400);
-await page.click('[data-group="hitters"]');
-await page.waitForTimeout(300);
 const team = await page.evaluate(() => document.getElementById('team-content')?.innerText || '');
 check('Team: no farm, no keepers', !/farm|keeper/i.test(team), team.slice(0, 200));
-check('Team: the open spot points to the free agents', /tap one to see the free agents who fit/i.test(team) && /tap to find a free agent/i.test(team));
-check('Team: rows show Impact (last season on opening day)', /IMP [+-]?\d+\.\d last yr/.test(team));
+check('Team: the open spot points to the free agents', /tap Add to see the free agents who fit/i.test(team) && !!(await page.$('.tr-need .tr-add')));
+check('Team: rows show Impact (r153 a column; last season on opening day)', await page.evaluate(() => [...document.querySelectorAll('.tr-row .tr-c-imp')].some(x => /^[+-]?\d+\.\d$/.test(x.textContent.trim()))));
 check('Team: no sideways scroll', await noHScroll());
 await page.screenshot({ path: `${out}/team-${theme}.png`, fullPage: false });
 
 // ── An open spot → League → Players ──────────────────────────
-await page.click('.vacancy-row[data-need]');
+await page.click('.tr-need .tr-add');
 await page.waitForTimeout(700);
 const lp = await page.evaluate(() => ({ text: document.getElementById('league-content')?.innerText || '',
   view: document.getElementById('lp-view-select')?.value, adds: document.querySelectorAll('.lp-add-btn').length,

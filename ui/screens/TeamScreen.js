@@ -6,16 +6,15 @@
  *   Players — active roster + IL + pending transactions (§122: no farm)
  *   Staff   — coaching staff with contracts and relationships
  *
- * Roster sections (Section 20.3 — LOCKED order):
- *   ├── Hitters               (collapsible) — STARTING_HITTERS + BENCH_HITTERS
- *   ├── Pitchers              (collapsible) — STARTING_PITCHERS + BULLPEN + PITCHER_BENCH
- *   ├── Injured List          (collapsible) — IL group
- *   └── Pending Transactions  (collapsible) — state.transactions ledger (§65)
- *
- * Swap buttons (promote/demote) apply roster mutations via RosterEngine.
- * Open roster spots render as dashed cards (TransactionEngine.getRosterNeeds —
- * the same source the inbox uses); tapping one opens League → Players with
- * everyone we could add who fits it (§122.4). A signing reports the next day.
+ * Players (r153, ESPN-fantasy style — no collapsible groups):
+ *   Hitters table  — the nine by slot (lineupSlots), the bench, players
+ *                    reporting (Pending), open roster spots, the IL.
+ *   Pitchers table — SP1–SP5, the bullpen by role, the pitcher bench,
+ *                    players reporting, open roster spots, the IL.
+ * Slot, name and MOVE are frozen; the line scrolls; IMP and OVR on the right.
+ * MOVE carries out RosterEngine.moveOptions through GameEngine.gmMove.
+ * Open roster spots (TransactionEngine.getRosterNeeds — the same source the
+ * inbox uses) open League → Players with everyone who fits (§122.4).
  *
  * Screen label is "Team" not "Roster" (Section 1.14 — LOCKED).
  */
@@ -31,8 +30,9 @@ import { bullpenRoles, armStatus, ROLE_ABBR } from '../../engine/PitchingEngine.
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
-import { eligibleSlotsFor, reconcileRoster, applyRosterMutation }
+import { eligibleSlotsFor, moveOptions, tradedAway, managerFillAt }
   from '../../engine/RosterEngine.js';
+import * as GameEngine from '../../engine/GameEngine.js';
 import { getRosterNeeds } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as Coach from '../../engine/CoachEngine.js';
@@ -45,15 +45,6 @@ import * as When from '../../engine/When.js';
 let _activeTab   = 'players';
 let _mounted     = false;
 let _listeners   = [];
-
-// Track which collapsible groups are open
-// Default: hitters open, pitchers open, others closed
-const _groupOpen = {
-  hitters:      false,
-  pitchers:     false,
-  il:           false,
-  pending:      false,
-};
 
 // ─────────────────────────────────────────────────────────────
 // SLOT MODEL
@@ -280,400 +271,283 @@ export function refresh() {
 // PLAYERS TAB
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * r153 The Players tab, ESPN-fantasy style: one table per side, the slot on
+ * the left, the name and MOVE frozen, this season's line scrolling (last
+ * season's, marked, before there is one), Impact and the rating on the right.
+ *   Hitters:  C 1B 2B 3B SS OF OF OF DH (lineupSlots — the source of truth),
+ *             the bench, players reporting (Pending), open roster spots, the IL.
+ *   Pitchers: SP1–SP5 in start order, the bullpen by role, the pitcher bench,
+ *             players reporting, open roster spots, the IL.
+ * Everyone who reports lands on the bench; an open lineup slot, rotation turn
+ * or bullpen spot waits for the GM until the roster deadline (RosterEngine).
+ */
+const HIT_COLS = [['hab', 'H/AB'], ['r', 'R'], ['hr', 'HR'], ['rbi', 'RBI'], ['bb', 'BB'], ['sb', 'SB'], ['avg', 'AVG'], ['ops', 'OPS']];
+const PIT_COLS = [['ip', 'IP'], ['w', 'W'], ['l', 'L'], ['sv', 'SV'], ['era', 'ERA'], ['whip', 'WHIP'], ['k', 'K'], ['bb', 'BB']];
+
 function _renderPlayers(state) {
-  const team       = state.userTeam;
-  const rosterIds  = team.rosterIds  || [];
-  const players    = state.players   || {};
-  const impScores  = state.impScores || {};
-  const lineupSlots = team.lineupSlots || [];
-  const gameIdx    = state.currentGameIndex || 0;
-  const isSpring   = state.phase === PHASE.SPRING_TRAINING;
+  const team      = state.userTeam;
+  const rosterIds = team.rosterIds || [];
+  const players   = state.players || {};
+  const impScores = state.impScores || {};
+  const slots     = team.lineupSlots || [];
+  const isP       = (p) => ['SP', 'RP'].includes(p?.pos);
+  const ours      = rosterIds.map(id => players[id]).filter(Boolean);
 
-  // Starters = players in lineupSlots; bench = BENCH_HITTERS not in lineupSlots
-  const starterIds   = new Set(lineupSlots.map(s => s.playerId).filter(Boolean));
-  const hitterStarters = lineupSlots; // iterate in slot order
-  const hitterBench  = rosterIds.map(id => players[id])
-    .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS && !starterIds.has(p.id));
+  const needs     = getRosterNeeds(state, 'user');
+  const coming    = _comingPlayers(state);
+  const needRows  = (side) => needs.needs.map((n, i) => ({ ...n, index: i })).filter(n => n.side === side);
 
-  const pitchers    = rosterIds.map(id => players[id]).filter(p => p && [PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group));
-  const ilPlayers   = rosterIds.map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.IL);
+  // Hitters
+  const seated    = new Set(slots.map(s => s.playerId).filter(Boolean));
+  const hitBench  = ours.filter(p => !isP(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id)).sort((a, b) => b.ovr - a.ovr);
+  const hitIL     = ours.filter(p => !isP(p) && p.group === PLAYER_GROUP.IL);
+  const hitRows = [
+    ...slots.map((sl, i) => {
+      const p = sl.playerId ? players[sl.playerId] : null;
+      return p ? _row(state, p, sl.slot, impScores[p.id], { oop: !!sl.emergency })
+               : _emptyRow(sl.slot, { slotIdx: i });
+    }),
+    ...hitBench.map((p, i) => _row(state, p, 'Bench', impScores[p.id], { first: i === 0 })),
+    ...coming.filter(c => !isP(c.p)).map((c, i) => _row(state, c.p, 'Bench', impScores[c.p.id], { first: !hitBench.length && i === 0, coming: c })),
+    ...needRows('hitter').map((n, i) => _needRow(n, needs, { first: !hitBench.length && !coming.some(c => !isP(c.p)) && i === 0 })),
+    ...hitIL.map((p, i) => _row(state, p, 'IL', impScores[p.id], { first: i === 0, il: true })),
+  ];
 
-  // §65 — one source for open spots, arrivals and departures (the inbox reads it too).
-  const needs       = getRosterNeeds(state, 'user');
-  const isP         = (p) => ['SP', 'RP'].includes(p?.pos);
-  const arriving    = needs.arrivals;
-  const pending     = _pendingTransactions(state);
-  const spotsHtml   = (side) => _renderOpenSpots(
-    needs.needs.map((n, i) => ({ ...n, index: i })).filter(n => n.side === side),
-    arriving.filter(t => (side === 'pitcher') === isP(players[t.playerId])),
-    needs, state);
-
-  const hitterCount = starterIds.size + hitterBench.length;
+  // Pitchers
+  const rot       = team.rotation || {};
+  const order     = (rot.order || []).map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.STARTING_PITCHERS);
+  const inOrder   = new Set(order.map(p => p.id));
+  const rotation  = [...order, ...ours.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS && !inOrder.has(p.id)).sort((a, b) => b.ovr - a.ovr)];
+  const nextSPId  = order.length ? order[(rot.currentIndex || 0) % order.length].id : null;
+  const roles     = bullpenRoles({ rosterIds }, players);
+  const depth     = [roles.closer, ...roles.setup, ...roles.middle, ...roles.long].filter(Boolean);
+  const byDepth   = (a, b) => (depth.indexOf(a.id) + 1 || 99) - (depth.indexOf(b.id) + 1 || 99) || b.ovr - a.ovr;
+  const pen       = ours.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort(byDepth);
+  const pBench    = ours.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort((a, b) => (a.pos === 'SP' ? 0 : 1) - (b.pos === 'SP' ? 0 : 1) || b.ovr - a.ovr);
+  const pitIL     = ours.filter(p => isP(p) && p.group === PLAYER_GROUP.IL);
+  const comingP   = coming.filter(c => isP(c.p));
+  const pitRows = [
+    ...rotation.map((p, k) => _row(state, p, `SP${k + 1}`, impScores[p.id], { next: p.id === nextSPId })),
+    ...Array.from({ length: Math.max(0, ROSTER_LIMITS.STARTING_PITCHERS - rotation.length) }, (_, k) => _emptyRow(`SP${rotation.length + k + 1}`, { turn: true })),
+    ...pen.map((p, i) => _row(state, p, ROLE_ABBR[roles.roleOf[p.id]] || 'RP', impScores[p.id], { first: i === 0 })),
+    ...Array.from({ length: Math.max(0, ROSTER_LIMITS.BULLPEN - pen.length) }, (_, i) => _emptyRow('RP', { pen: true, first: !pen.length && i === 0 })),
+    ...pBench.map((p, i) => _row(state, p, 'Bench', impScores[p.id], { first: i === 0 })),
+    ...comingP.map((c, i) => _row(state, c.p, 'Bench', impScores[c.p.id], { first: !pBench.length && i === 0, coming: c })),
+    ...needRows('pitcher').map((n, i) => _needRow(n, needs, { first: !pBench.length && !comingP.length && i === 0 })),
+    ...pitIL.map((p, i) => _row(state, p, 'IL', impScores[p.id], { first: i === 0, il: true })),
+  ];
 
   const vacancyBanner = needs.short > 0 ? `
     <div class="vacancy-banner">
-      <span><b>${needs.short} open roster spot${needs.short > 1 ? 's' : ''}</b> — tap one to see the free agents who fit.</span>
+      <span><b>${needs.short} open roster spot${needs.short > 1 ? 's' : ''}</b> — tap Add to see the free agents who fit.</span>
       ${needs.deadlineAt ? `<span class="vacancy-deadline">Due ${_clockText(needs.deadlineAt)} or ${_escape(team.coachingStaff?.manager?.name || 'the manager')} signs someone</span>` : ''}
     </div>` : '';
 
   return `
-    <div style="padding:0 0 16px;">
+    <div class="tr-players">
       ${vacancyBanner}
-      ${_renderGroup('hitters',  'Hitters',              hitterCount,       _renderHitterGroup(hitterStarters, hitterBench, players, impScores, gameIdx, isSpring, rosterIds) + spotsHtml('hitter'))}
-      ${_renderGroup('pitchers', 'Pitchers',             pitchers.length,   _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring, players, rosterIds, team.rotation) + spotsHtml('pitcher'))}
-      ${_renderGroup('il',       'Injured List',         ilPlayers.length,  _renderILGroup(ilPlayers, state, gameIdx))}
-      ${_renderGroup('pending',  'Pending Transactions', pending.length,    _renderPendingGroup(pending, players))}
-    </div>
-  `;
+      ${_table('Hitters', HIT_COLS, hitRows, _seasonLabel(state, ours.filter(p => !isP(p))))}
+      ${_table('Pitchers', PIT_COLS, pitRows, _seasonLabel(state, ours.filter(isP)))}
+    </div>`;
 }
 
-function _renderGroup(key, label, count, bodyHtml) {
-  const isOpen    = _groupOpen[key];
-  const headClass = key === 'hitters' ? 'hitters'
-                  : key === 'pitchers' ? 'pitchers'
-                  : key === 'il' ? 'il-group'
-                  : '';
-
+function _table(title, cols, rows, season) {
   return `
-    <div class="roster-group" id="rg-${key}">
-      <div class="roster-group-head ${headClass}" data-group="${key}">
-        <span>${label}</span>
-        <span class="roster-group-head-right">
-          <span class="roster-group-count">${count}</span>
-          <span class="roster-chevron ${isOpen ? 'open' : ''}">▼</span>
-        </span>
-      </div>
-      <div class="roster-group-body ${isOpen ? 'open' : ''}">
-        ${isOpen ? bodyHtml : ''}
-      </div>
-    </div>
-  `;
-}
-
-// ─────────────────────────────────────────────────────────────
-// HITTER GROUP
-// ─────────────────────────────────────────────────────────────
-
-function _renderHitterGroup(lineupSlots, bench, players, impScores, gameIdx, isSpring = false, rosterIds = []) {
-  if (!lineupSlots.length && !bench.length) {
-    return '<div style="padding:10px 14px;font-size:13px;color:var(--muted);">No hitters on roster</div>';
-  }
-
-  const sortedBench = [...bench].sort((a, b) => b.ovr - a.ovr);
-
-  return `
-    <div class="roster-col-labels">
-      <span>Player</span>
-      <span class="rcl-pos">Pos</span>
-      <span class="rcl-rtg">OVR</span>
-      <span></span>
-    </div>
-    ${lineupSlots.map(slotEntry => {
-      const player = slotEntry.playerId ? players[slotEntry.playerId] : null;
-      if (player) {
-        return _renderHitterRow(player, impScores[player.id], 'starter', slotEntry.slot, gameIdx, isSpring, players, rosterIds, !!slotEntry.emergency);
-      } else {
-        // Dashed vacancy card in this slot position
-        return `
-          <div class="player-row-item vacancy-row" data-vacant-slot="${slotEntry.slot}">
-            <div class="player-info">
-              <div class="player-name vacancy-name">— ${slotEntry.slot} —</div>
-              <div class="player-sub vacancy-sub">Slot empty — tap to fill</div>
-            </div>
-            <div class="player-pos-badge vacancy-pos">${slotEntry.slot}</div>
-            <div class="rating-cell"></div>
-            <div class="row-actions"></div>
-          </div>`;
-      }
-    }).join('')}
-    ${sortedBench.length > 0 ? `<div class="roster-sub-head">Bench</div>` : ''}
-    ${sortedBench.map(p => _renderHitterRow(p, impScores[p.id], 'bench', null, gameIdx, isSpring, players, rosterIds)).join('')}
-  `;
-}
-
-function _renderHitterRow(player, imp, role, slot, gameIdx, isSpring = false, allPlayers = {}, rosterIds = [], emergency = false) {
-  if (!player) return '';
-  const ovrColor  = _ovrColor(player.ovr);
-  const indicator = getHotColdIndicator(imp);
-  const statusEl  = _playerStatusEl(player);
-  const nativePos = player.nativePos || player.pos;
-  // slot is the lineupSlot label (e.g. 'OF', 'DH') — may differ from player's nativePos
-  // Show slot in the pos badge; show nativePos below the name line (like pitchers)
-  const slotLabel = slot || nativePos;
-
-  let swapBtn = '';
-  if (isAvailable(player)) {
-    if (role === 'starter') {
-      // Bench button: disabled if no bench player is eligible for this slot
-      const bench = rosterIds.map(id => allPlayers[id])
-        .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS && isAvailable(p));
-      const hasReplacement = bench.some(b => _eligibleSlots(b).includes(slotLabel));
-      swapBtn = `<button class="swap-btn demote" data-swap="${player.id}" data-role="starter"${hasReplacement ? '' : ' disabled title="No eligible bench player"'}>Bench</button>`;
-    } else if (role === 'bench') {
-      swapBtn = `<button class="swap-btn promote" data-swap="${player.id}" data-role="bench">▲</button>`;
-    }
-  }
-
-  return `
-    <div class="player-row-item" id="pr-${player.id}">
-      <div class="player-info">
-        <div class="player-name">
-          ${_escape(player.name)}
-          ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
-          ${_dotIndicator(player)}
+    <div class="tr-block">
+      <div class="tr-title"><span>${title}</span>${season ? `<span class="tr-season">${season}</span>` : ''}</div>
+      <div class="tr-scroll">
+        <div class="tr-head">
+          <div class="tr-fz"><div class="tr-slot">Slot</div><div class="tr-name">Player</div><div class="tr-act">Action</div></div>
+          ${cols.map(([k, l]) => `<div class="tr-td tr-c-${k}">${l}</div>`).join('')}
+          <div class="tr-td tr-c-imp">IMP</div><div class="tr-td tr-c-ovr">OVR</div>
         </div>
-        <div class="player-sub">${nativePos} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_impNote(player, imp)}${_contractNote(player)}${emergency ? ' · <span class="oop-note">out of position</span>' : ''}</div>
+        ${rows.join('')}
       </div>
-      <div class="player-pos-badge${emergency ? ' oop' : ''}">${slotLabel}</div>
-      <div class="rating-cell">
-        <div class="rating-num ${ovrColor}">${formatOVR(player.ovr)}</div>
-      </div>
-      <div class="row-actions">${swapBtn}${statusEl}</div>
-    </div>
-  `;
+    </div>`;
 }
-
-/** §30.6 the row's Impact: this season's, else last season's (marked). */
-function _impNote(player, imp) {
-  const now = imp?.impS;
-  const v = now ?? lastSeasonIMP(player);
-  if (v == null) return '';
-  const cls = v >= 1 ? 'imp-pos' : v <= -1 ? 'imp-neg' : '';
-  return ` · <span class="imp-note ${cls}">IMP ${v > 0 ? '+' : ''}${v.toFixed(1)}${now == null ? ' last yr' : ''}</span>`;
-}
-
-// ─────────────────────────────────────────────────────────────
-// PITCHER GROUP
-// ─────────────────────────────────────────────────────────────
-
-function _renderPitcherGroup(pitchers, impScores, gameIdx, isSpring = false, allPlayers = {}, rosterIds = [], rotationMeta = null) {
-  if (pitchers.length === 0) return '<div style="padding:10px 14px;font-size:13px;color:var(--muted);">No pitchers on roster</div>';
-
-  // Rotation is shown in its true pitching order (rotation.order), NOT sorted by
-  // OVR — the sim starts rotation.order[currentIndex], so the display must match
-  // or it looks like the wrong pitcher started. The upcoming starter gets a NEXT
-  // badge. Any STARTING_PITCHERS somehow missing from order are appended.
-  const orderIds   = (rotationMeta && Array.isArray(rotationMeta.order)) ? rotationMeta.order : [];
-  const nextSPId   = orderIds.length
-    ? orderIds[(rotationMeta.currentIndex || 0) % orderIds.length]
-    : null;
-  const inOrder    = orderIds.map(id => allPlayers[id])
-    .filter(p => p && p.group === PLAYER_GROUP.STARTING_PITCHERS);
-  const inOrderSet = new Set(inOrder.map(p => p.id));
-  const strays     = pitchers
-    .filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS && !inOrderSet.has(p.id))
-    .sort((a, b) => b.ovr - a.ovr);
-  const rotation   = [...inOrder, ...strays];
-
-  // §76: the manager's bullpen roles — listed closer, setup, middle, long.
-  const roles    = bullpenRoles({ rosterIds }, allPlayers);
-  const depth    = [roles.closer, ...roles.setup, ...roles.middle, ...roles.long].filter(Boolean);
-  const byDepth  = (a, b) => (depth.indexOf(a.id) + 1 || 99) - (depth.indexOf(b.id) + 1 || 99) || b.ovr - a.ovr;
-  const bullpen  = pitchers.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort(byDepth);
-  const pbench   = pitchers.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort(byDepth);
-  const reliefRole = (p) => roles.roleOf[p.id] || null;
-
-  return `
-    <div class="roster-col-labels">
-      <span>Player</span>
-      <span class="rcl-rtg">OVR</span>
-      <span></span>
-    </div>
-    <div class="roster-sub-head">Rotation (SP) — in start order</div>
-    ${rotation.map(p => _renderPitcherRow(p, impScores[p.id], 'rotation', isSpring, allPlayers, rosterIds, p.id === nextSPId)).join('')}
-    ${bullpen.length > 0 ? '<div class="roster-sub-head">Bullpen (RP)</div>' : ''}
-    ${bullpen.map(p => _renderPitcherRow(p, impScores[p.id], 'bullpen', isSpring, allPlayers, rosterIds, false, reliefRole(p))).join('')}
-    ${pbench.length > 0 ? '<div class="roster-sub-head">Pitcher Bench</div>' : ''}
-    ${pbench.map(p => _renderPitcherRow(p, impScores[p.id], 'pbench', isSpring, allPlayers, rosterIds, false, reliefRole(p))).join('')}
-  `;
-}
-
-function _renderPitcherRow(player, imp, role, isSpring = false, allPlayers = [], rosterIds = [], isNext = false, reliefRole = null) {
-  if (!player) return '';
-  // §76: his bullpen role, and whether his arm is ready today.
-  const roleBadge = reliefRole ? `<span class="rp-role rp-role-${reliefRole}" title="${{ closer: 'Closer', setup: 'Setup', middle: 'Middle relief', long: 'Long relief' }[reliefRole]}">${ROLE_ABBR[reliefRole]}</span>` : '';
-  const now = Date.now();
-  let armNote = '';
-  if (isAvailable(player) && role !== 'rotation') {     // starters rest in turn (the rotation)
-    const st = armStatus(player, now).status;
-    if (st === 'down')  armNote = ' · <span class="arm-down">resting today</span>';
-    if (st === 'tired') armNote = ' · <span class="arm-tired">tired</span>';
-  }
-  const ovrColor  = _ovrColor(player.ovr);
-  const indicator = getHotColdIndicator(imp);
-  const statusEl  = _playerStatusEl(player);
-
-  const nextBadge = isNext ? `<span class="sp-next-badge" title="Starts the next game">NEXT</span>` : '';
-
-  const posHand   = `<span class="pitcher-pos-hand">${player.pos} · ${player.hand === 'L' ? 'LHP' : 'RHP'}</span>`;
-
-  let swapBtn = '';
-  if (isAvailable(player)) {
-    if (role === 'rotation' || role === 'bullpen') {
-      // Bench button disabled if no pitcher bench player of same type exists
-      const sameType = role === 'rotation' ? 'SP' : 'RP';
-      const benchPool = rosterIds.map(id => allPlayers[id])
-        .filter(p => p && p.group === PLAYER_GROUP.PITCHER_BENCH
-          && p.pos === sameType && isAvailable(p));
-      const disabled = benchPool.length === 0 ? ' disabled title="No bench pitcher available"' : '';
-      swapBtn = `<button class="swap-btn demote" data-swap="${player.id}" data-role="${role}"${disabled}>Bench</button>`;
-    } else if (role === 'pbench') {
-      swapBtn = `<button class="swap-btn promote" data-swap="${player.id}" data-role="pbench">▲</button>`;
-    }
-  }
-
-  return `
-    <div class="player-row-item" id="pr-${player.id}">
-      <div class="player-info">
-        <div class="player-name">
-          ${_escape(player.name)}
-          ${nextBadge}
-          ${roleBadge}
-          ${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}
-          ${_dotIndicator(player)}
-        </div>
-        <div class="player-sub">${posHand} · ${formatAge(player.dob, baseballYear(StateManager.get()))}y · ${formatSalary(player.contractSalary)}${_impNote(player, imp)}${_contractNote(player)}${armNote}</div>
-      </div>
-      <div class="rating-cell">
-        <div class="rating-num ${ovrColor}">${formatOVR(player.ovr)}</div>
-      </div>
-      <div class="row-actions">${swapBtn}${statusEl}</div>
-    </div>
-  `;
-}
-
-// ─────────────────────────────────────────────────────────────
-// IL GROUP
-// ─────────────────────────────────────────────────────────────
-
-function _renderILGroup(ilPlayers, state, gameIdx) {
-  if (ilPlayers.length === 0) {
-    return '<div style="padding:10px 14px;font-size:13px;color:var(--muted);">No players on IL</div>';
-  }
-
-  return ilPlayers.map(player => {
-    const report      = player.injuryReport;
-    const inj         = player.injury;
-    const statusText  = player._pendingILReturn ? 'Cleared'
-      : inj?.severity === 'season' ? 'Season'
-      : Number.isFinite(inj?.eligibleAt) ? (inj.eligibleAt <= Date.now() ? 'Eligible now' : `Elig. ${_dayText(inj.eligibleAt)}`)
-      : 'TBD';
-    const penaltyNote = player.injuryPenalty
-      ? `${player.injuryPenalty.subRating} −${player.injuryPenalty.amount}`
-      : '';
-
-    return `
-      <div class="player-row-item" style="grid-template-columns:1fr 80px;" id="pr-${player.id}">
-        <div class="player-info">
-          <div class="player-name">${_escape(player.name)}</div>
-          <div style="font-size:11px;color:var(--danger);margin-top:2px;">
-            ${_escape(report?.generalText || 'Injured')}
-            ${penaltyNote ? `<span style="color:var(--muted);margin-left:6px;">${penaltyNote}</span>` : ''}
-          </div>
-        </div>
-        <div style="text-align:right;">
-          <div style="font-size:11px;font-weight:700;color:${player._pendingILReturn ? 'var(--text)' : 'var(--muted)'};">
-            ${statusText}
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
-}
-
-// ─────────────────────────────────────────────────────────────
-// PENDING TRANSACTIONS
-// ─────────────────────────────────────────────────────────────
 
 /**
- * _pendingTransactions(state)
- * The user's moves still in flight, from the transaction ledger: a trade that
- * finalizes after today's game, players reporting to us, players we sent away.
+ * Players on their way to us (§65): signed, claimed or traded (reporting the
+ * next day), and the players coming back in a trade that goes through after
+ * tonight's final out. They report to the bench.
  */
-function _pendingTransactions(state) {
+function _comingPlayers(state) {
   const out = [];
   for (const t of state.transactions || []) {
     if (t.status !== 'pending') continue;
-    if (t.kind === 'trade' && t.teamId === 'user') out.push({ kind: 'trade', tx: t });
-    else if (t.kind === 'arrival' && t.teamId === 'user') out.push({ kind: 'in', tx: t });
-    else if (t.kind === 'arrival' && t.fromTeamId === 'user' && t.reason === 'trade') out.push({ kind: 'out', tx: t });
+    if (t.kind === 'arrival' && t.teamId === 'user') {
+      const p = state.players[t.playerId];
+      if (p) out.push({ p, sub: `Reports ${_whenText(t.effectiveAt)}` });
+    } else if (t.kind === 'trade' && (t.teamId || 'user') === 'user') {
+      for (const id of t.offer?.incomingIds || []) if (state.players[id]) out.push({ p: state.players[id], sub: 'Joins after the game' });
+    }
   }
-  return out.sort((a, b) => a.tx.effectiveAt - b.tx.effectiveAt);
+  return out;
 }
 
-function _renderPendingGroup(pending, players) {
-  if (pending.length === 0) {
-    return '<div style="padding:10px 14px;font-size:13px;color:var(--muted);">No pending transactions</div>';
-  }
-  const state = StateManager.get();
-  const teamName = (id) => (state.leagueTeams || []).find(t => t.id === id)?.name || id;
+/** The line a row shows: this season's, or — with none yet — last season's (and its year). */
+function _statsShown(p) {
+  const s = p.stats || {};
+  if ((s.ab || 0) > 0 || (s.ip || 0) > 0 || (s.outs || 0) > 0) return { s, year: null };
+  const last = (p.seasonLog || []).filter(e => e?.stats).at(-1);
+  return last ? { s: last.stats, year: last.year } : { s, year: null };
+}
 
-  return pending.map(({ kind, tx }) => {
-    if (kind === 'trade') {
-      const names = (ids) => ids.map(id => players[id]?.name).filter(Boolean).join(', ');
-      return `
-        <div class="player-row-item" style="grid-template-columns:1fr auto;">
-          <div class="player-info">
-            <div class="player-name">Trade with ${_escape(teamName(tx.fromTeamId))}</div>
-            <div style="font-size:11px;color:var(--muted);">Get ${_escape(names(tx.offer.incomingIds))} · send ${_escape(names(tx.offer.outgoingIds))} — finalizes after today's game</div>
-          </div>
-          <div class="pending-tag">PENDING</div>
-        </div>`;
+const _f3 = (x) => x.toFixed(3).replace(/^0(?=\.)/, '');
+function _statVal(p, s, key) {
+  const pitcher = ['SP', 'RP'].includes(p.pos);
+  const outs = s.outs || Math.round((s.ip || 0) * 3);
+  const ip = outs / 3;
+  if (pitcher) {
+    if (key === 'ip')   return outs ? `${Math.floor(outs / 3)}.${outs % 3}` : '--';
+    if (key === 'era')  return ip > 0 ? ((s.er || 0) * 9 / ip).toFixed(2) : '--';
+    if (key === 'whip') return ip > 0 ? (((s.h_allowed || 0) + (s.bb || 0)) / ip).toFixed(2) : '--';
+    if (!outs) return '--';
+    return String(s[key] || (key === 'w' ? s.wins || 0 : 0));
+  }
+  const ab = s.ab || 0;
+  if (key === 'hab') return ab ? `${s.h || 0}/${ab}` : '--/--';
+  if (!ab) return '--';
+  if (key === 'avg') return _f3((s.h || 0) / ab);
+  if (key === 'ops') {
+    // (a hit-by-pitch counts in bb as well as hbp — SimEngine)
+    const pa = ab + (s.bb || 0) + (s.sf || 0);
+    const obp = pa ? ((s.h || 0) + (s.bb || 0)) / pa : 0;
+    const tb = s.tb ?? ((s.h || 0) + (s.doubles || 0) + 2 * (s.triples || 0) + 3 * (s.hr || 0));
+    return _f3(obp + tb / ab);
+  }
+  return String(s[key] || 0);
+}
+
+function _statCells(p, imp) {
+  const cols = ['SP', 'RP'].includes(p.pos) ? PIT_COLS : HIT_COLS;
+  const { s } = _statsShown(p);
+  const now = imp?.impS;
+  const v = now ?? lastSeasonIMP(p);
+  const impHtml = v == null ? '<span class="tr-imp">--</span>'
+    : `<span class="tr-imp ${v >= 1 ? 'tr-imp-pos' : v <= -1 ? 'tr-imp-neg' : ''}" title="${now == null ? 'Last season' : 'This season'}">${v > 0 ? '+' : ''}${v.toFixed(1)}</span>`;
+  return cols.map(([k]) => `<div class="tr-td tr-c-${k}">${_statVal(p, s, k)}</div>`).join('')
+    + `<div class="tr-td tr-c-imp">${impHtml}</div>`
+    + `<div class="tr-td tr-c-ovr"><span class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</span></div>`;
+}
+
+const _blankCells = (cols) => cols.map(([k]) => `<div class="tr-td tr-c-${k}"></div>`).join('') + '<div class="tr-td tr-c-imp"></div><div class="tr-td tr-c-ovr"></div>';
+
+/** One of our players: slot, name (with marks and tags), MOVE, the line. */
+function _row(state, p, slot, imp, { first = false, il = false, coming = null, oop = false, next = false } = {}) {
+  const traded = !coming && tradedAway(state, p.id);
+  const canMove = !coming && !il && moveOptions(state, p.id).length > 0;
+  const indicator = getHotColdIndicator(imp);
+  const shown = _statsShown(p);
+  const pitcher = ['SP', 'RP'].includes(p.pos);
+  const pos = pitcher ? `${p.pos} · ${p.hand === 'L' ? 'L' : 'R'}` : (p.nativePos || p.pos);
+  // The sub-line: position (and hand), then what matters about the row today.
+  // A row with a status (reporting, traded, on the IL) shows that alone, so it fits.
+  const subBits = [];
+  if (coming) subBits.push(`<span class="tr-pend">Pending</span>`, _escape(coming.sub.replace(/^Reports /, '')));
+  else if (traded) subBits.push('<span class="tr-hurt">Traded</span>', 'leaves tonight');
+  else if (il) subBits.push(`<span class="tr-hurt">${_escape(_ilText(p))}</span>`);
+  else {
+    subBits.push(pos);
+    if (next) subBits.push('<span class="tr-next" title="Starts the next game">Next</span>');
+    const st = _statusWord(p);
+    if (st) subBits.push(`<span class="tr-hurt">${st}</span>`);
+    if (oop) subBits.push('<span class="tr-hurt">out of position</span>');
+    if (pitcher && isAvailable(p) && slot !== 'Bench' && !slot.startsWith('SP')) {
+      const arm = armStatus(p, Date.now()).status;
+      if (arm === 'down') subBits.push('<span class="tr-hurt">resting today</span>');
+      if (arm === 'tired') subBits.push('<span class="tr-warn">tired</span>');
     }
-    const player = players[tx.playerId];
-    if (!player) return '';
-    const sub = kind === 'in'
-      ? `${tx.reason === 'trade' ? `Acquired from ${teamName(tx.fromTeamId)}` : tx.reason === 'signing' ? (tx.by === 'manager' ? 'Signed by the manager' : 'Signed as a free agent') : 'Claimed off waivers'} — reports ${_whenText(tx.effectiveAt)}`
-      : `Traded to ${teamName(tx.teamId)} — reports ${_whenText(tx.effectiveAt)}`;
-    return `
-      <div class="player-row-item" style="grid-template-columns:1fr auto;" id="pr-${player.id}">
-        <div class="player-info">
-          <div class="player-name">${_escape(player.name)} <span style="font-size:10px;color:var(--muted);">${player.nativePos || player.pos}</span></div>
-          <div style="font-size:11px;color:var(--muted);">${_escape(sub)}</div>
+    const cn = _contractNote(p);
+    if (cn) subBits.push(cn.replace(/^ · /, ''));
+    if (shown.year && _rowMarksYear(state, p)) subBits.push(`<span class="tr-ly">'${String(shown.year).slice(-2)}</span>`);
+  }
+  return `
+    <div class="tr-row${first ? ' tr-first' : ''}${coming ? ' tr-coming' : ''}" data-player="${p.id}">
+      <div class="tr-fz">
+        <div class="tr-slot${oop ? ' tr-oop' : ''}">${slot}</div>
+        <div class="tr-name">
+          <div class="tr-name-line">${_escape(p.name)}${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}${_dotIndicator(p)}</div>
+          <div class="tr-sub">${subBits.join(' · ')}</div>
         </div>
-        <div class="pending-tag ${kind === 'out' ? 'out' : ''}">${kind === 'in' ? 'INCOMING' : 'OUTGOING'}</div>
-      </div>`;
-  }).join('');
+        <div class="tr-act"><button class="tr-move" data-move="${p.id}"${canMove ? '' : ' disabled'}>MOVE</button></div>
+      </div>
+      ${_statCells(p, imp)}
+    </div>`;
+}
+
+/** An open lineup slot, rotation turn or bullpen spot: tap to fill it from the bench. */
+function _emptyRow(slot, { slotIdx = null, turn = false, pen = false, first = false } = {}) {
+  const cols = turn || pen ? PIT_COLS : HIT_COLS;
+  const attr = slotIdx != null ? `data-fill-slot="${slotIdx}"` : turn ? 'data-fill-turn="1"' : 'data-fill-pen="1"';
+  return `
+    <div class="tr-row tr-empty${first ? ' tr-first' : ''}" ${attr}>
+      <div class="tr-fz">
+        <div class="tr-slot">${slot}</div>
+        <div class="tr-name"><div class="tr-name-line tr-muted">Empty</div><div class="tr-sub">Tap to fill</div></div>
+        <div class="tr-act"></div>
+      </div>
+      ${_blankCells(cols)}
+    </div>`;
+}
+
+/** §65 / §122.4 an open roster spot: Add opens League → Players with everyone who fits. */
+function _needRow(n, needs, { first = false } = {}) {
+  const what = n.side === 'pitcher' ? (n.pos === 'SP' ? 'Find a starter' : 'Find a reliever') : (n.pos ? `Find a ${n.pos}` : 'Find a bat');
+  const due = '';   // (the deadline is in the banner above)
+  return `
+    <div class="tr-row tr-need${first ? ' tr-first' : ''}" data-need="${n.index}">
+      <div class="tr-fz">
+        <div class="tr-slot">${n.pos || (n.side === 'pitcher' ? 'P' : 'H')}</div>
+        <div class="tr-name"><div class="tr-name-line">Open spot</div><div class="tr-sub">${what}${due}</div></div>
+        <div class="tr-act"><button class="tr-move tr-add" data-need-add="${n.index}">ADD</button></div>
+      </div>
+      ${_blankCells(n.side === 'pitcher' ? PIT_COLS : HIT_COLS)}
+    </div>`;
+}
+
+/** On the IL: when they can come back (what it is is on the player card). */
+function _ilText(p) {
+  const inj = p.injury;
+  return p._pendingILReturn ? 'Cleared'
+    : inj?.severity === 'season' ? 'Out for the season'
+    : Number.isFinite(inj?.eligibleAt) ? (inj.eligibleAt <= Date.now() ? 'Eligible now' : `Elig. ${_dayText(inj.eligibleAt)}`)
+    : 'Timeline TBD';
 }
 
 /**
- * _renderOpenSpots(needs, arrivals, allNeeds, state)
- * Dashed cards (§65): one per open active-roster spot (tap → §122.4 League → Players, filtered to fit)
- * and one per player already on his way (shows who is coming and when).
+ * The table's season, beside its title: "This season" once anyone on that side
+ * has played this season (a row still on last season's line is marked '25),
+ * else last season's year ("'25 season") with no mark on every row.
  */
-function _renderOpenSpots(needs, arrivals, allNeeds, state) {
-  if (!needs.length && !arrivals.length) return '';
-  const players = state.players;
-  const label = (n) => n.side === 'pitcher'
-    ? (n.pos === 'SP' ? 'Starting pitcher' : 'Relief pitcher')
-    : (n.pos ? `Position player — ${n.pos}` : 'Position player');
-  const due = allNeeds.deadlineAt ? ` · due ${_clockText(allNeeds.deadlineAt)}` : '';
-  return `
-    ${arrivals.map(t => {
-      const p = players[t.playerId];
-      if (!p) return '';
-      return `
-        <div class="player-row-item vacancy-row arriving" id="pr-${p.id}">
-          <div class="player-info">
-            <div class="player-name vacancy-name">${_escape(p.name)}</div>
-            <div class="player-sub vacancy-sub">${t.reason === 'trade' ? 'Acquired by trade' : t.reason === 'signing' ? 'Signed' : 'Claimed off waivers'} — reports ${_whenText(t.effectiveAt)}</div>
-          </div>
-          <div class="player-pos-badge vacancy-pos">${p.nativePos || p.pos}</div>
-          <div class="rating-cell"><div class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</div></div>
-          <div class="row-actions"></div>
-        </div>`;
-    }).join('')}
-    ${needs.map(n => `
-      <div class="player-row-item vacancy-row" data-need="${n.index}">
-        <div class="player-info">
-          <div class="player-name vacancy-name">Open spot</div>
-          <div class="player-sub vacancy-sub">${label(n)} — tap to find a free agent${due}</div>
-        </div>
-        <div class="player-pos-badge vacancy-pos">${n.pos || (n.side === 'pitcher' ? 'P' : 'H')}</div>
-        <div class="rating-cell"></div>
-        <div class="row-actions"><span class="vacancy-plus">+</span></div>
-      </div>`).join('')}
-  `;
+function _seasonLabel(state, list) {
+  const any = list.some(p => _statsShown(p).year == null && _hasLine(p));
+  if (any) return 'This season';
+  const yr = list.map(p => _statsShown(p).year).find(Boolean);
+  return yr ? `'${String(yr).slice(-2)} season` : '';
+}
+const _hasLine = (p) => { const s = p.stats || {}; return (s.ab || 0) > 0 || (s.ip || 0) > 0 || (s.outs || 0) > 0; };
+/** A row marks its year only when its table is on this season. */
+function _rowMarksYear(state, p) {
+  const ids = state.userTeam.rosterIds || [];
+  const side = ['SP', 'RP'].includes(p.pos);
+  return ids.map(id => state.players[id]).some(q => q && ['SP', 'RP'].includes(q.pos) === side && _hasLine(q));
+}
+
+/** Not available today, in a word (day-to-day, being evaluated, rest, suspended…). */
+function _statusWord(p) {
+  const st = p.injury?.status;
+  if (st === 'evaluating') return 'being evaluated';
+  if (st === 'dtd')        return 'day-to-day';
+  if (p.isInjured)         return 'injured';
+  if (p.isSuspended)       return 'suspended';
+  const away = p.unavailable;
+  if (away) {
+    const what = { rest: 'resting', illness: 'sick', training: 'training', benched: 'sat down', suspended: 'suspended', leave: 'on leave' }[away.reason] || 'away';
+    return `${what}, ${away.gamesLeft} game${away.gamesLeft === 1 ? '' : 's'}`;
+  }
+  return '';
 }
 
 function _clockText(ms) {
@@ -894,51 +768,41 @@ function _attachListeners(state) {
     }
   });
 
-  // Collapsible group headers
-  document.querySelectorAll('[data-group]').forEach(el => {
-    el.addEventListener('click', () => {
-      const key = el.dataset.group;
-      if (key in _groupOpen) {
-        _groupOpen[key] = !_groupOpen[key];
-        refresh();
-      }
-    });
-  });
-
-  // Swap buttons — now opens swap modal instead of auto-swapping
-  document.querySelectorAll('.swap-btn[data-swap]:not([disabled])').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
+  // r153 MOVE: where this player can go (RosterEngine.moveOptions).
+  document.querySelectorAll('.tr-move[data-move]:not([disabled])').forEach(btn => {
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      await _handleSwap(btn.dataset.swap, btn.dataset.role, StateManager.get());
+      App.playClick();
+      _openMoveSheet(btn.dataset.move);
     });
   });
 
-  // Vacant slot rows — tap to open bench picker for that slot
-  document.querySelectorAll('.vacancy-row[data-vacant-slot]').forEach(el => {
+  // An empty lineup slot, rotation turn or bullpen spot: who on the bench can fill it.
+  document.querySelectorAll('.tr-empty').forEach(el => {
     el.addEventListener('click', () => {
-      const slotLabel  = el.dataset.vacantSlot;
-      const s          = StateManager.get();
-      const lineupSlots = s.userTeam.lineupSlots || [];
-      const slotIdx    = lineupSlots.findIndex(ls => ls.slot === slotLabel && !ls.playerId);
-      const bench      = (s.userTeam.rosterIds || []).map(id => s.players[id])
-        .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS
-          && isAvailable(p)
-          && _eligibleSlots(p).includes(slotLabel))
-        .sort((a, b) => a.ovr - b.ovr);
-      if (bench.length === 0) {
-        App.showToast(`No bench player can fill the ${slotLabel} slot.`, 'negative');
-        return;
-      }
-      _openReplacementPicker(
-        `Fill the ${slotLabel} slot:`,
-        bench,
-        (player) => { _execHitterSwap(player, slotIdx, null); }
-      );
+      App.playClick();
+      const st = StateManager.get();
+      const idx = el.dataset.fillSlot != null ? Number(el.dataset.fillSlot) : null;
+      const key = idx != null ? `slot:${idx}` : el.dataset.fillTurn ? 'turn:new' : 'pen:new';
+      const label = idx != null ? `the ${st.userTeam.lineupSlots[idx]?.slot} slot` : el.dataset.fillTurn ? 'the open rotation turn' : 'the open bullpen spot';
+      const who = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(p => p && moveOptions(st, p.id).some(o => o.key === key))
+        .sort((a, b) => b.ovr - a.ovr);
+      if (!who.length) { App.showToast(`Nobody on the bench can fill ${label}.`, 'negative'); return; }
+      _showSwapSheet(`Fill ${_escape(label)}`, null, who.map(p => `
+        <div class="sm-row" data-pick="${p.id}">
+          <div class="sm-pick-info"><span class="sm-pick-name">${_escape(p.name)}</span>
+            <span class="sm-pick-sub">${['SP', 'RP'].includes(p.pos) ? p.pos : (p.nativePos || p.pos)}</span></div>
+          <span class="rating-num ${_ovrColor(p.ovr)} sm-pick-ovr">${p.ovr}</span>
+        </div>`).join(''), (overlay) => {
+        overlay.querySelectorAll('.sm-row[data-pick]').forEach(row => row.addEventListener('click', () => {
+          App.playClick(); overlay.remove(); _doMove(row.dataset.pick, key);
+        }));
+      });
     });
   });
 
-  // Open roster spot (dashed card) → §122.4 League → Players: everyone we could add who fits it
-  document.querySelectorAll('.vacancy-row[data-need]').forEach(el => {
+  // Open roster spot → §122.4 League → Players: everyone we could add who fits it
+  document.querySelectorAll('.tr-need').forEach(el => {
     el.addEventListener('click', async () => {
       const need = getRosterNeeds(StateManager.get(), 'user').needs[Number(el.dataset.need)];
       if (!need) { refresh(); return; }
@@ -948,260 +812,47 @@ function _attachListeners(state) {
     });
   });
 
-  // Player row tap → PlayerCard — guard against the swap button
-  document.querySelectorAll('.player-row-item[id^="pr-"]').forEach(el => {
+  // A row → the player's card (age, contract and the rest live there).
+  document.querySelectorAll('.tr-row[data-player]').forEach(el => {
     el.addEventListener('click', (e) => {
-      if (e.target.closest('.swap-btn')) return;
-      const playerId = el.id.replace('pr-', '');
-      openPlayerCard(playerId, StateManager.get());
+      if (e.target.closest('.tr-move')) return;
+      openPlayerCard(el.dataset.player, StateManager.get());
     });
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-// SWAP — modal-driven 1-for-1 exchange
+// MOVE (r153) — one sheet of where a player can go
 // ─────────────────────────────────────────────────────────────
 
-async function _handleSwap(playerId, role, state) {
-  const player = state.players[playerId];
-  if (!player) return;
-  if (!isAvailable(player)) {
-    App.showToast(`${player.name} can't be moved right now.`, 'negative');
-    return;
-  }
-
-  const players   = state.players;
-  const rosterIds = state.userTeam.rosterIds;
-
-  // ── HITTER: bench → starter ──────────────────────────────────
-  if (role === 'bench') {
-    const eligibleSlots = _eligibleSlots(player);
-    const lineupSlots   = StateManager.get().userTeam.lineupSlots || [];
-
-    // Find empty eligible slots — promote directly with no modal
-    const emptyEligible = eligibleSlots.filter(sl =>
-      lineupSlots.some(s => s.slot === sl && !s.playerId)
-    );
-    if (emptyEligible.length > 0) {
-      // Find the slot index for the first empty eligible slot
-      const slotIdx = lineupSlots.findIndex(s => s.slot === emptyEligible[0] && !s.playerId);
-      _execHitterSwap(player, slotIdx, null);
-      return;
-    }
-
-    // All eligible slots occupied — show slot picker.
-    // For each eligible slot LABEL, find ALL matching lineupSlot entries.
-    // This correctly shows all 3 OF slots when an OF bench player is promoted.
-    const slotOccupants = [];
-    const seenIndices   = new Set();
-
-    for (const sl of eligibleSlots) {
-      // Find all lineupSlot entries matching this label (OF has 3 entries)
-      lineupSlots.forEach((s, idx) => {
-        if (s.slot !== sl || seenIndices.has(idx)) return;
-        seenIndices.add(idx);
-        const occupant = s.playerId ? StateManager.get().players[s.playerId] : null;
-        slotOccupants.push({ slot: sl, slotIdx: idx, occupant });
-      });
-    }
-
-    _openSlotPicker(player, slotOccupants, (chosenSlotIdx, outgoing) => {
-      _execHitterSwap(player, chosenSlotIdx, outgoing);
-    });
-    return;
-  }
-
-  // ── HITTER: starter → bench ──────────────────────────────────
-  if (role === 'starter') {
-    const lineupSlots = StateManager.get().userTeam.lineupSlots || [];
-    const slotIdx     = lineupSlots.findIndex(s => s.playerId === playerId);
-    const slotLabel   = slotIdx >= 0 ? lineupSlots[slotIdx].slot : (player.nativePos || player.pos);
-
-    const bench = rosterIds.map(id => players[id])
-      .filter(p => p && p.group === PLAYER_GROUP.BENCH_HITTERS
-        && isAvailable(p)
-        && _eligibleSlots(p).includes(slotLabel));
-
-    if (bench.length === 0) {
-      App.showToast('No eligible bench player for this slot.', 'negative');
-      return;
-    }
-
-    const sorted = [...bench].sort((a, b) => a.ovr - b.ovr);
-    _openReplacementPicker(
-      `Who replaces ${player.name} (${slotLabel})?`,
-      sorted,
-      (replacement) => {
-        _execHitterSwap(replacement, slotIdx, player);
-      }
-    );
-    return;
-  }
-
-  // ── PITCHER: pbench → rotation/bullpen ───────────────────────
-  if (role === 'pbench') {
-    const isSP      = player.pos === 'SP';
-    const activeGrp = isSP ? PLAYER_GROUP.STARTING_PITCHERS : PLAYER_GROUP.BULLPEN;
-    const active    = rosterIds.map(id => players[id]).filter(p => p && p.group === activeGrp);
-    const cap       = isSP ? ROSTER_LIMITS.STARTING_PITCHERS : ROSTER_LIMITS.BULLPEN;
-
-    if (active.length < cap) {
-      _execPitcherSwap(player, null, isSP);
-      return;
-    }
-
-    // Sort ascending OVR (weakest first)
-    const sorted = [...active].sort((a, b) => a.ovr - b.ovr);
-    _openReplacementPicker(
-      `Move ${player.name} into ${isSP ? 'rotation' : 'bullpen'} — who comes out?`,
-      sorted,
-      (target) => { _execPitcherSwap(player, target, isSP); }
-    );
-    return;
-  }
-
-  // ── PITCHER: rotation/bullpen → bench ────────────────────────
-  if (role === 'rotation' || role === 'bullpen') {
-    const isSP   = player.pos === 'SP';
-    const benchP = rosterIds.map(id => players[id])
-      .filter(p => p && p.group === PLAYER_GROUP.PITCHER_BENCH
-        && p.pos === player.pos && isAvailable(p));
-
-    if (benchP.length === 0) {
-      App.showToast('No bench pitcher available.', 'negative');
-      return;
-    }
-
-    // Sort ascending OVR (weakest first)
-    const sorted = [...benchP].sort((a, b) => a.ovr - b.ovr);
-    _openReplacementPicker(
-      `Who replaces ${player.name} in the ${isSP ? 'rotation' : 'bullpen'}?`,
-      sorted,
-      (replacement) => { _execPitcherSwap(replacement, player, isSP); }
-    );
-    return;
-  }
+function _openMoveSheet(playerId) {
+  const st = StateManager.get();
+  const p = st.players[playerId];
+  const opts = moveOptions(st, playerId);
+  if (!p || !opts.length) { refresh(); return; }
+  const deadline = managerFillAt(st);
+  const leaves = opts.some(o => o.key === 'bench');
+  const rows = opts.map(o => `
+    <div class="sm-row" data-key="${o.key}">
+      <div class="sm-slot-label">${_escape(o.label)}</div>
+      <div class="sm-slot-sub"><span class="${o.detail === 'Open' ? 'sm-empty' : 'sm-current'}">${_escape(o.detail)}</span></div>
+    </div>`).join('')
+    + (leaves && deadline ? `<div class="sm-note">An open spot waits for you until ${_clockText(deadline)}, an hour before first pitch. Then ${_escape(st.userTeam.coachingStaff?.manager?.name || 'the manager')} fills it from the bench.</div>` : '');
+  const pos = ['SP', 'RP'].includes(p.pos) ? p.pos : (p.nativePos || p.pos);
+  _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}`, rows, (overlay) => {
+    overlay.querySelectorAll('.sm-row[data-key]').forEach(row => row.addEventListener('click', () => {
+      App.playClick(); overlay.remove(); _doMove(playerId, row.dataset.key);
+    }));
+  });
 }
 
-// ─────────────────────────────────────────────────────────────
-// SWAP EXECUTION
-// ─────────────────────────────────────────────────────────────
-
-function _execHitterSwap(incoming, slotIdx, outgoing) {
-  // slotIdx is the index into userTeam.lineupSlots
-  StateManager.mutate(s => {
-    const slots = s.userTeam.lineupSlots;
-    if (slotIdx >= 0 && slotIdx < slots.length) {
-      slots[slotIdx].playerId = incoming.id;
-    }
-    // outgoing goes to bench — nothing to write to lineupSlots
-    // (they're already removed from the slot by setting incoming)
-  });
-  // Reconcile lineup integrity (dedupe, valid occupants) after the edit.
-  const rec = reconcileRoster(StateManager.get(), 'user');
-  StateManager.mutate(s => applyRosterMutation(s, rec));
-  EventBus.emit('roster:changed', { type: 'swap' });
-  const slotLabel = StateManager.get().userTeam.lineupSlots[slotIdx]?.slot || '';
-  const ropt      = _calcRopt(StateManager.get());
-  if (ropt.hitterScore >= 100) App.playSoundPositive();
-  App.showToast(
-    outgoing
-      ? `${incoming.name} in at ${slotLabel}, ${outgoing.name} to bench.`
-      : `${incoming.name} added to lineup at ${slotLabel}.`,
-    'positive'
-  );
-  refresh();
-}
-
-function _execPitcherSwap(incoming, outgoing, isSP) {
-  const activeGrp = isSP ? PLAYER_GROUP.STARTING_PITCHERS : PLAYER_GROUP.BULLPEN;
-  StateManager.mutate(s => {
-    s.players[incoming.id].group = activeGrp;
-    if (outgoing) s.players[outgoing.id].group = PLAYER_GROUP.PITCHER_BENCH;
-  });
-  // Reconcile so rotation.order reflects the swap. The sim reads rotation.order,
-  // NOT group — before this, a rotation swap changed only the group and had zero
-  // effect on which pitcher actually started.
-  const rec = reconcileRoster(StateManager.get(), 'user');
-  StateManager.mutate(s => applyRosterMutation(s, rec));
-  EventBus.emit('roster:changed', { type: 'swap' });
-  // Play success sound only when pitcher optimization reaches 100%
+function _doMove(playerId, key) {
+  const res = GameEngine.gmMove(playerId, key);
+  if (!res.ok) { App.showToast(res.reason, 'negative'); refresh(); return; }
+  EventBus.emit('roster:changed', { type: 'move' });
   const ropt = _calcRopt(StateManager.get());
-  if (ropt.pitcherScore >= 100) App.playSoundPositive();
-  App.showToast(
-    outgoing
-      ? `${incoming.name} active, ${outgoing.name} to bench.`
-      : `${incoming.name} added to ${isSP ? 'rotation' : 'bullpen'}.`,
-    'positive'
-  );
+  if (ropt.hitterScore >= 100 && ropt.pitcherScore >= 100) App.playSoundPositive();
   refresh();
-}
-
-// ─────────────────────────────────────────────────────────────
-// SWAP MODALS
-// ─────────────────────────────────────────────────────────────
-
-function _openSlotPicker(player, slotOccupants, onSlotChosen) {
-  document.getElementById('ts-swap-modal')?.remove();
-
-  const slotRows = slotOccupants.map(({ slot, slotIdx, occupant }) => {
-    const sub = occupant
-      ? `<span class="sm-current">${_escape(occupant.name)} <span style="color:var(--muted)">(${occupant.ovr})</span></span>`
-      : `<span class="sm-empty">Empty — promote directly</span>`;
-    return `
-      <div class="sm-row" data-slot-idx="${slotIdx}" data-occupant="${occupant?.id || ''}">
-        <div class="sm-slot-label">${slot}</div>
-        <div class="sm-slot-sub">${sub}</div>
-        <span class="sm-arrow">›</span>
-      </div>`;
-  }).join('');
-
-  _showSwapSheet(
-    `Where does ${_escape(player.name)} play?`,
-    `${player.nativePos || player.pos} · OVR ${player.ovr}`,
-    slotRows,
-    (overlay) => {
-      overlay.querySelectorAll('.sm-row[data-slot-idx]').forEach(row => {
-        row.addEventListener('click', () => {
-          App.playClick();
-          overlay.remove();
-          const chosenSlotIdx = parseInt(row.dataset.slotIdx, 10);
-          const occupantId    = row.dataset.occupant;
-          const occupant      = occupantId ? StateManager.get().players[occupantId] : null;
-          onSlotChosen(chosenSlotIdx, occupant || null);
-        });
-      });
-    }
-  );
-}
-
-function _openReplacementPicker(title, candidates, onChosen) {
-  document.getElementById('ts-swap-modal')?.remove();
-
-  const rows = candidates.map(p => {
-    const posTag = ['SP','RP'].includes(p.pos)
-      ? `${p.pos} · ${p.hand === 'L' ? 'LHP' : 'RHP'}`
-      : (p.nativePos || p.pos);
-    return `
-      <div class="sm-row" data-pick="${p.id}">
-        <div class="sm-pick-info">
-          <span class="sm-pick-name">${_escape(p.name)}</span>
-          <span class="sm-pick-sub">${posTag}</span>
-        </div>
-        <span class="rating-num ${_ovrColor(p.ovr)} sm-pick-ovr">${p.ovr}</span>
-        <span class="sm-arrow">›</span>
-      </div>`;
-  }).join('');
-
-  _showSwapSheet(title, null, rows, (overlay) => {
-    overlay.querySelectorAll('.sm-row[data-pick]').forEach(row => {
-      row.addEventListener('click', () => {
-        App.playClick();
-        const candidate = StateManager.get().players[row.dataset.pick];
-        if (candidate) { overlay.remove(); onChosen(candidate); }
-      });
-    });
-  });
 }
 
 const STAFF_LABELS = { manager: 'Manager', pitchingCoach: 'Pitching Coach', hittingCoach: 'Hitting Coach', benchCoach: 'Bench Coach',
@@ -1258,30 +909,6 @@ function _showSwapSheet(title, subtitle, rowsHtml, wireRows) {
   wireRows(overlay);
 }
 
-
-function _playerStatusEl(player) {
-  const st = player.injury?.status;
-  if (st === 'evaluating') return '<div class="player-status status-il" title="Being evaluated">Eval</div>';
-  if (st === 'dtd')        return '<div class="player-status status-il" title="Day-to-day">DTD</div>';
-  if (player.isInjured)   return '<div class="player-status status-il">IL</div>';
-  if (player.isSuspended) return '<div class="player-status status-inactive">Susp</div>';
-  // §71: away for a few games — rest, illness, training, benched, leave.
-  const away = player.unavailable;
-  if (away) {
-    const label = { rest: 'Rest', illness: 'Sick', training: 'Train', benched: 'Sat', suspended: 'Susp', leave: 'Leave' }[away.reason] || 'Away';
-    return `<div class="player-status status-inactive" title="${label} — ${away.gamesLeft} game${away.gamesLeft === 1 ? '' : 's'}">${label} ${away.gamesLeft}</div>`;
-  }
-  // Active: a hitter in his club's lineup (lineupSlots — the source of truth;
-  // every active hitter shares the bench group), a pitcher in the rotation or
-  // the bullpen. The pitcher bench and the bench bats read "Bench".
-  const state = StateManager.get();
-  const club  = player.teamId === 'user' ? state?.userTeam : (state?.leagueTeams || []).find(t => t.id === player.teamId);
-  const inLineup = (club?.lineupSlots || []).some(sl => sl?.playerId === player.id);
-  if (inLineup || player.group === PLAYER_GROUP.STARTING_PITCHERS || player.group === PLAYER_GROUP.BULLPEN) {
-    return '<div class="player-status status-active">Active</div>';
-  }
-  return '<div class="player-status status-bench">Bench</div>';
-}
 
 function _dotIndicator(player) {
   return _allStarMark(player) + _statusDot(player);
@@ -1419,6 +1046,54 @@ function _injectCSS() {
     .vacancy-name{color:var(--muted);font-style:italic;font-size:12px;}
     .vacancy-sub{color:var(--muted);font-size:10px;}
     .vacancy-pos{color:var(--muted);}
+
+    /* r153 the roster tables (ESPN-fantasy style): slot, name and MOVE frozen; the line scrolls */
+    .tr-players{padding:0 0 16px;}
+    .tr-block{margin-top:10px;}
+    .tr-title{display:flex;justify-content:space-between;align-items:baseline;font-size:11px;font-weight:800;letter-spacing:1.2px;
+      text-transform:uppercase;color:var(--text);padding:6px 16px 6px;}
+    .tr-season{font-size:10px;font-weight:600;letter-spacing:.3px;text-transform:none;color:var(--muted);}
+    .tr-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;border-top:1px solid var(--border);}
+    .tr-scroll::-webkit-scrollbar{height:3px;}
+    .tr-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+    .tr-head,.tr-row{display:flex;align-items:stretch;min-width:max-content;border-bottom:1px solid var(--border);}
+    .tr-head{background:var(--surface2);}
+    .tr-row{cursor:pointer;}
+    .tr-row:active .tr-fz,.tr-row:active .tr-td{background:var(--surface2);}
+    .tr-row.tr-first{border-top:2px solid var(--border);}
+    .tr-fz{position:sticky;left:0;z-index:2;display:flex;align-items:center;flex-shrink:0;width:206px;
+      background:var(--bg);border-right:1px solid var(--border);}
+    .tr-head .tr-fz{background:var(--surface2);z-index:3;}
+    .tr-head .tr-fz > div,.tr-head .tr-td{font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+      color:var(--muted);white-space:nowrap;padding-top:6px;padding-bottom:6px;}
+    .tr-slot{width:46px;flex-shrink:0;padding-left:10px;box-sizing:border-box;font-size:11px;font-weight:600;color:var(--soft);white-space:nowrap;}
+    .tr-slot.tr-oop{color:var(--danger);}
+    .tr-name{width:98px;flex-shrink:0;min-width:0;padding:7px 4px 7px 2px;}
+    .tr-name-line{font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .tr-sub{font-size:10px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .tr-act{width:62px;flex-shrink:0;display:flex;justify-content:center;padding-right:6px;}
+    .tr-move{font-family:'DM Sans',sans-serif;font-size:10px;font-weight:800;letter-spacing:.6px;color:var(--link);
+      background:transparent;border:1.5px solid var(--link);border-radius:12px;padding:4px 0;width:54px;cursor:pointer;}
+    .tr-move:active{opacity:.6;}
+    .tr-move:disabled{color:var(--muted);border-color:var(--border);opacity:.6;cursor:default;}
+    .tr-td{width:38px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--soft);
+      font-variant-numeric:tabular-nums;background:var(--bg);}
+    .tr-head .tr-td{background:var(--surface2);}
+    .tr-c-hab{width:50px;} .tr-c-whip{width:42px;} .tr-c-avg,.tr-c-ops,.tr-c-era{width:42px;}
+    .tr-c-imp{width:46px;} .tr-c-ovr{width:40px;padding-right:6px;}
+    .tr-c-imp,.tr-head .tr-c-imp{border-left:1px solid var(--border);}
+    .tr-c-ovr .rating-num{font-size:13px;font-weight:800;}
+    .tr-imp{font-size:10px;font-weight:800;color:var(--muted);}
+    .tr-imp-pos{color:#22C55E;} .tr-imp-neg{color:var(--danger);}
+    .tr-pend{color:var(--warning,#f5a524);font-weight:700;}
+    .tr-next{color:#22C55E;font-weight:700;}
+    .tr-coming .tr-name-line{color:var(--soft);}
+    .tr-hurt{color:var(--danger);} .tr-warn{color:#fbbf24;} .tr-ly{color:var(--muted);font-style:italic;}
+    .tr-muted{color:var(--muted);font-style:italic;font-weight:500;}
+    .tr-empty .tr-fz{background:var(--surface);}
+    .tr-need .tr-fz{background:var(--surface);}
+    .tr-need .tr-slot,.tr-empty .tr-slot{color:var(--muted);}
+    .sm-note{font-size:12px;color:var(--muted);padding:12px 20px;line-height:1.45;}
 
     /* Swap modal rows */
     .sm-row{display:flex;align-items:center;gap:10px;padding:12px 20px;

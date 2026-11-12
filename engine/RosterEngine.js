@@ -24,6 +24,7 @@ import {
   ROSTER_LIMITS,
   LINEUP_SLOTS,
   PHASE,
+  ROSTER_DECISION_LEAD_MS,
 } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
 import { reliefValue } from './PitchingEngine.js';
@@ -333,7 +334,10 @@ export function makeArrival({ player, teamId, fromTeamId = null, reason, atMs, b
       teamId,
       playerId:    player.id,
       fromTeamId,
-      toGroup:     defaultActiveGroup(player),
+      // r153 everyone who reports to us lands on the bench (the pitcher bench
+      // for any pitcher): the GM moves them in, or the manager fills an open
+      // spot at the roster deadline (managerFillsNow). CPU clubs as before.
+      toGroup:     teamId === 'user' ? reserveGroup(player) : defaultActiveGroup(player),
       reason,                       // 'trade' | 'signing' | 'waiver'
       by,                           // 'gm' | 'manager' | 'cpu'
       createdAt:   atMs,
@@ -517,6 +521,11 @@ export function checkDepth(state, teamId) {
 export function reconcileRoster(state, teamId = 'user', options = {}) {
   const autoManage = !!options.autoManage;
   const isUserTeam = !teamId || teamId === 'user';
+  // r153 our open spots wait for the GM: a vacant lineup slot, rotation turn
+  // or bullpen spot is filled by the manager only from the roster deadline
+  // (an hour before first pitch) of the next game, or when `fill` is asked.
+  const hold = isUserTeam && !options.fill
+    && !managerFillsNow(state, Number.isFinite(options.atMs) ? options.atMs : clockNow());
   const team = isUserTeam
     ? state.userTeam
     : (state.leagueTeams || []).find(t => t.id === teamId);
@@ -551,6 +560,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   let slots = LINEUP_SLOTS.map((label, i) => ({
     slot: label,
     playerId: canonical ? (existing[i].playerId || null) : null,
+    ...(canonical && existing[i].emergency ? { emergency: true } : {}),   // r153 kept while held
   }));
 
   if (!canonical) {
@@ -576,10 +586,11 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
       && isHealthy(id)
       && groupOf(id) === PLAYER_GROUP.BENCH_HITTERS
       && !seen.has(id)
-      && eligibleSlotsFor(players[id]).includes(s.slot);
+      && (eligibleSlotsFor(players[id]).includes(s.slot) || (hold && s.emergency));   // r153 held: the manager's out-of-position fill stays until the deadline
     if (ok) { seen.add(id); } else {
       if (isUserTeam && hurt(id) && !players[id]?._lostSlot) setPatch(id, { _lostSlot: { kind: 'lineup', slot: s.slot, atMs: options.atMs ?? null } });
       s.playerId = null;
+      delete s.emergency;
     }
   }
 
@@ -594,9 +605,9 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     .sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
 
   for (const slot of slots) {
-    if (slot.playerId) continue;
+    if (slot.playerId || hold) continue;
     const benchPick = benchPool().find(p => eligibleSlotsFor(p).includes(slot.slot));
-    if (benchPick) slot.playerId = benchPick.id;
+    if (benchPick) { slot.playerId = benchPick.id; delete slot.emergency; }
   }
   // A CPU manager plays his best nine (§76): a clearly better healthy bat on
   // the bench — a waiver claim, a call-up, a player back from the IL — takes
@@ -615,10 +626,13 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   const openPositions = [];
   for (const slot of slots) {
     if (slot.playerId) continue;
+    if (hold) { if (!benchPool().some(p => eligibleSlotsFor(p).includes(slot.slot))) openPositions.push(slot.slot); continue; }
     openPositions.push(slot.slot);
     const anyPick = benchPool()[0];
     if (anyPick) { slot.playerId = anyPick.id; slot.emergency = true; }
   }
+  // The flag marks an out-of-position occupant only: cleared once the slot is empty or played in position.
+  for (const slot of slots) if (slot.emergency && (!slot.playerId || eligibleSlotsFor(players[slot.playerId]).includes(slot.slot))) delete slot.emergency;
 
   // ── Rebuild rotation.order from healthy, rostered STARTING_PITCHERS ────
   const oldRotation = team.rotation || { order: [], currentIndex: 0 };
@@ -641,7 +655,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     if (order.length < REQUIRED_SP_COUNT) { order.push(id); inOrder.add(id); }
     else setPatch(id, { group: PLAYER_GROUP.PITCHER_BENCH });
   }
-  while (order.length < REQUIRED_SP_COUNT) {
+  while (!hold && order.length < REQUIRED_SP_COUNT) {
     const pbSP = rosterIds
       .map(id => players[id])
       .filter(p => p && isHealthy(p.id) && p.pos === 'SP'
@@ -700,7 +714,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   const benchRP = () => rosterIds.map(id => players[id])
     .filter(p => p && p.pos === 'RP' && isHealthy(p.id) && groupOf(p.id) === PLAYER_GROUP.PITCHER_BENCH)
     .sort((a, b) => reliefValue(b) - reliefValue(a));
-  for (let pen = penIds().filter(isHealthy); pen.length < PEN; pen = penIds().filter(isHealthy)) {
+  for (let pen = penIds().filter(isHealthy); !hold && pen.length < PEN; pen = penIds().filter(isHealthy)) {
     const up = benchRP()[0];
     if (!up) break;
     setPatch(up.id, { group: PLAYER_GROUP.BULLPEN });
@@ -827,6 +841,208 @@ function _sideCounts(rosterIds, groupOf, players, inbound) {
  * @param {Object} state
  * @param {Object} mutation
  */
+// ─────────────────────────────────────────────────────────────
+// r153 OUR OPEN SPOTS WAIT FOR THE GM; THE TEAM SCREEN'S MOVES
+// ─────────────────────────────────────────────────────────────
+
+/** Our next game not yet committed (the one the roster deadline belongs to). */
+function _nextOpenGame(state) {
+  const sched = state?.schedule || [];
+  for (let i = state?.currentGameIndex || 0; i < sched.length; i++) {
+    const g = sched[i];
+    if (g && !g._committed && Number.isFinite(g.gameTime)) return g;
+  }
+  return null;
+}
+
+/**
+ * managerFillsNow(state, atMs) — r153 the manager fills our open spots (a
+ * lineup slot, a rotation turn, a bullpen spot) only from the next game's
+ * roster deadline (ROSTER_DECISION_LEAD_MS before first pitch) until it is
+ * played. Before that an open spot waits for the GM. No game ahead: it waits.
+ */
+export function managerFillsNow(state, atMs) {
+  const g = _nextOpenGame(state);
+  return !!g && atMs >= g.gameTime - ROSTER_DECISION_LEAD_MS;
+}
+
+/** When the manager will fill our open spots: the next game's roster deadline (null with no game ahead). */
+export function managerFillAt(state) {
+  const g = _nextOpenGame(state);
+  return g ? g.gameTime - ROSTER_DECISION_LEAD_MS : null;
+}
+
+/**
+ * openSpots(state) — r153 our open spots that someone on our roster could
+ * fill now: lineup slots (with an eligible healthy bat on the bench, or any
+ * bat when nobody fits — the manager would play one out of position), an
+ * out-of-position fill an eligible bench bat could take, rotation turns (a
+ * healthy starter on the pitcher bench) and bullpen spots (a healthy
+ * reliever on the pitcher bench).
+ * @returns {{ lineup: Object[], rotation: Number, bullpen: Number, any: Boolean }}
+ */
+export function openSpots(state) {
+  const u = state.userTeam, players = state.players || {};
+  const ids = (u?.rosterIds || []);
+  const slots = u?.lineupSlots || [];
+  const seated = new Set(slots.map(sl => sl.playerId).filter(Boolean));
+  const bench = ids.map(id => players[id]).filter(p => p && isAvailable(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id));
+  const lineup = [];
+  slots.forEach((sl, i) => {
+    const fits = bench.filter(p => eligibleSlotsFor(p).includes(sl.slot));
+    if (!sl.playerId && bench.length) lineup.push({ index: i, slot: sl.slot, fits: fits.length > 0 });
+    else if (sl.playerId && sl.emergency && fits.length) lineup.push({ index: i, slot: sl.slot, fits: true, emergency: true });
+  });
+  const inGroup = (g, pos) => ids.map(id => players[id]).filter(p => p && isAvailable(p) && p.group === g && (!pos || p.pos === pos));
+  const order = (u?.rotation?.order || []).filter(id => players[id] && isAvailable(players[id]));
+  const rotation = Math.min(Math.max(0, REQUIRED_SP_COUNT - order.length), inGroup(PLAYER_GROUP.PITCHER_BENCH, 'SP').length);
+  const bullpen = Math.min(Math.max(0, ROSTER_LIMITS.BULLPEN - inGroup(PLAYER_GROUP.BULLPEN).length), inGroup(PLAYER_GROUP.PITCHER_BENCH, 'RP').length);
+  return { lineup, rotation, bullpen, any: lineup.length > 0 || rotation > 0 || bullpen > 0 };
+}
+
+/** Lineup slots nobody on our bench can play (empty or held out of position): a signing's position hint. */
+export function uncoveredSlots(state, team) {
+  const players = state.players || {};
+  const slots = team?.lineupSlots || [];
+  const seated = new Set(slots.map(sl => sl.playerId).filter(Boolean));
+  const bench = (team?.rosterIds || []).map(id => players[id])
+    .filter(p => p && isAvailable(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id));
+  return slots.filter(sl => (!sl.playerId || sl.emergency) && !bench.some(p => eligibleSlotsFor(p).includes(sl.slot))).map(sl => sl.slot);
+}
+
+/** The roster clock's probe: it is the manager's time and an open spot can be filled. */
+export function managerFillDue(state, atMs) {
+  return managerFillsNow(state, atMs) && openSpots(state).any;
+}
+
+/** A player in our trade that goes through after tonight's final out (§90): still ours, already traded. */
+export function tradedAway(state, playerId) {
+  return (state.transactions || []).some(t => t.status === 'pending' && t.kind === 'trade' && (t.teamId || 'user') === 'user'
+    && (t.offer?.outgoingIds || []).includes(playerId));
+}
+
+/**
+ * moveOptions(state, playerId) — r153 where one of our players can go from the
+ * Team screen's MOVE. Each option: { key, label, detail }. Empty when the
+ * player can't move (hurt, suspended, not on our active roster, traded).
+ *   A bat: each lineup slot they can play (whoever is there swaps into their
+ *     old slot when they can play it, else goes to the bench); from the
+ *     lineup, the bench — with a bench bat who can take the slot, or open.
+ *   A starter: each rotation turn (that starter to the pitcher bench), or an
+ *     open turn; from the rotation, the pitcher bench — with a starter there
+ *     taking the turn, or open. A reliever likewise with the bullpen.
+ * An open spot waits for the GM until the roster deadline (managerFillsNow).
+ */
+export function moveOptions(state, playerId) {
+  const u = state.userTeam, players = state.players || {};
+  const me = players[playerId];
+  if (!me || !(u.rosterIds || []).includes(playerId) || !isAvailable(me) || me.group === PLAYER_GROUP.IL || tradedAway(state, playerId)) return [];
+  const ids = u.rosterIds || [];
+  const ok = (p) => p && isAvailable(p) && !tradedAway(state, p.id);
+  const ovr = (p) => `OVR ${p.ovr}`;
+  const out = [];
+  if (!['SP', 'RP'].includes(me.pos)) {
+    if (me.group !== PLAYER_GROUP.BENCH_HITTERS) return [];
+    const slots = u.lineupSlots || [];
+    const at = slots.findIndex(sl => sl.playerId === playerId);
+    const mine = eligibleSlotsFor(me);
+    slots.forEach((sl, j) => {
+      if (j === at || !mine.includes(sl.slot)) return;
+      const occ = sl.playerId ? players[sl.playerId] : null;
+      if (occ && !ok(occ)) return;
+      const detail = !occ ? 'Open'
+        : at >= 0 && eligibleSlotsFor(occ).includes(slots[at].slot) ? `${occ.name} (${ovr(occ)}) moves to ${slots[at].slot}`
+        : `${occ.name} (${ovr(occ)}) to the bench`;
+      out.push({ key: `slot:${j}`, label: sl.slot, detail });
+    });
+    if (at >= 0) {
+      const seated = new Set(slots.map(sl => sl.playerId).filter(Boolean));
+      ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id)
+        && eligibleSlotsFor(p).includes(slots[at].slot)).sort((a, b) => b.ovr - a.ovr)
+        .forEach(p => out.push({ key: `in:${p.id}`, label: 'Bench', detail: `${p.name} (${ovr(p)}) takes ${slots[at].slot}` }));
+      out.push({ key: 'bench', label: 'Bench', detail: `Leave ${slots[at].slot} open` });
+    }
+    return out;
+  }
+  const isSP = me.pos === 'SP';
+  const active = isSP ? PLAYER_GROUP.STARTING_PITCHERS : PLAYER_GROUP.BULLPEN;
+  const where = isSP ? 'the rotation' : 'the bullpen';
+  if (me.group === PLAYER_GROUP.PITCHER_BENCH) {
+    if (isSP) {
+      const order = u.rotation?.order || [];
+      order.forEach((id, k) => {
+        const occ = players[id];
+        if (ok(occ)) out.push({ key: `turn:${k}`, label: `SP${k + 1}`, detail: `${occ.name} (${ovr(occ)}) to the pitcher bench` });
+      });
+      if (order.length < REQUIRED_SP_COUNT) out.push({ key: 'turn:new', label: `SP${order.length + 1}`, detail: 'Open' });
+    } else {
+      const pen = ids.map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.BULLPEN);
+      pen.filter(ok).sort((a, b) => reliefValue(b) - reliefValue(a))
+        .forEach(p => out.push({ key: `pen:${p.id}`, label: 'Bullpen', detail: `${p.name} (${ovr(p)}) to the pitcher bench` }));
+      if (pen.length < ROSTER_LIMITS.BULLPEN) out.push({ key: 'pen:new', label: 'Bullpen', detail: 'Open' });
+    }
+    return out;
+  }
+  if (me.group !== active) return [];
+  const label = isSP ? `SP${(u.rotation?.order || []).indexOf(playerId) + 1}` : 'their bullpen spot';
+  ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.PITCHER_BENCH && p.pos === me.pos)
+    .sort((a, b) => b.ovr - a.ovr)
+    .forEach(p => out.push({ key: `in:${p.id}`, label: 'Pitcher bench', detail: `${p.name} (${ovr(p)}) takes ${isSP ? `the ${label} turn` : label}` }));
+  out.push({ key: 'bench', label: 'Pitcher bench', detail: isSP ? `Leave the ${label} turn open` : `Leave a spot in ${where} open` });
+  return out;
+}
+
+/**
+ * applyMove(draft, playerId, key) — r153 carries out one of moveOptions on a
+ * draft (the caller reconciles after, at the move's moment). Returns false
+ * when the option no longer exists.
+ */
+export function applyMove(draft, playerId, key) {
+  if (!moveOptions(draft, playerId).some(o => o.key === key)) return false;
+  const u = draft.userTeam, players = draft.players;
+  const me = players[playerId];
+  const [kind, arg] = key.split(':');
+  if (!['SP', 'RP'].includes(me.pos)) {
+    const slots = u.lineupSlots;
+    const at = slots.findIndex(sl => sl.playerId === playerId);
+    const seat = (i, id) => { slots[i].playerId = id; delete slots[i].emergency; };
+    if (kind === 'slot') {
+      const j = Number(arg), occId = slots[j].playerId;
+      seat(j, playerId);
+      if (at >= 0) seat(at, occId && eligibleSlotsFor(players[occId]).includes(slots[at].slot) ? occId : null);
+    } else if (kind === 'in') seat(at, arg);
+    else if (kind === 'bench') seat(at, null);
+    return true;
+  }
+  const rot = u.rotation || (u.rotation = { order: [], currentIndex: 0 });
+  const order = rot.order || (rot.order = []);
+  const toBench = (id) => { if (players[id]) players[id].group = PLAYER_GROUP.PITCHER_BENCH; };
+  if (me.pos === 'SP') {
+    // The rotation keeps its place: the next starter up stays the next starter.
+    const nextId = order.length ? order[(rot.currentIndex || 0) % order.length] : null;
+    const reindex = () => { const n = order.indexOf(nextId); if (n >= 0) rot.currentIndex = n; else rot.currentIndex = order.length ? (rot.currentIndex || 0) % order.length : 0; };
+    if (kind === 'turn') {
+      me.group = PLAYER_GROUP.STARTING_PITCHERS;
+      if (arg === 'new') order.push(playerId);
+      else { const k = Number(arg); toBench(order[k]); if (order[k] === nextId) { order[k] = playerId; rot.currentIndex = k; return true; } order[k] = playerId; }
+    } else if (kind === 'in') {
+      const k = order.indexOf(playerId);
+      players[arg].group = PLAYER_GROUP.STARTING_PITCHERS; toBench(playerId);
+      order[k] = arg;
+      if (playerId === nextId) { rot.currentIndex = k; return true; }
+    } else if (kind === 'bench') {
+      toBench(playerId);
+      order.splice(order.indexOf(playerId), 1);
+    }
+    reindex();
+    return true;
+  }
+  if (kind === 'pen') { if (arg !== 'new') toBench(arg); me.group = PLAYER_GROUP.BULLPEN; }
+  else if (kind === 'in') { players[arg].group = PLAYER_GROUP.BULLPEN; toBench(playerId); }
+  else if (kind === 'bench') toBench(playerId);
+  return true;
+}
+
 /**
  * settleRoster(draft, teamId, options) — §112.6 reconcile until the roster
  * stops changing (at most three passes), applying each pass to the draft.

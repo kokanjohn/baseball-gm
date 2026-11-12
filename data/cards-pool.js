@@ -253,7 +253,7 @@ export const DECISIONS_POOL = [
    body:"{manager_name} pulled you aside — {streak_context}, and the clubhouse is tight. {sr2_read}. The move on the table: {acq_hitter_name} ({acq_hitter_pos}, {acq_hitter_age}, OVR {acq_hitter_ovr}), a free agent who would start over {replaced_starter_name}, for {sign_cost} a year.{drop_hitter_note} Signing is a real upgrade, though the room will feel the shake-up at first. Riding it out costs nothing, but a tight clubhouse gets tighter.",
    yesLabel:'Sign {acq_hitter_name}',noLabel:'Stay the course',
    yesEffect:{morale:-2},noEffect:{morale:-5},
-   yesMsg:'{acq_hitter_name} signed — a new face in the lineup. The players know the message was sent.',noMsg:'Staying the course. {manager_name} visibly frustrated.',
+   yesMsg:'{acq_hitter_name} signed and reports to the bench tomorrow — move them into the lineup from Team. The players know the message was sent.',noMsg:'Staying the course. {manager_name} visibly frustrated.',
    onYes:'sr2_shakeup',_usesSignToken:true,_rosterContract:'roster:acquire:hitter',
   },
 
@@ -301,20 +301,20 @@ export const DECISIONS_POOL = [
   {id:'s1',autoResolve:'no',autoResolveTax:{morale:-1},_maxTier:2,type:'normal',tag:'SIGNING',sender:'Free Agent Market',avatar:'✍️',
    subject:'Veteran {acq_hitter_pos} open to joining — wants a starting role',
    preview:'{acq_hitter_name} is looking for a place to play every day — we can offer that…',
-   body:"A veteran {acq_hitter_pos}, {acq_hitter_name} ({acq_hitter_age}, OVR {acq_hitter_ovr}), is shopping for a team offering a full-time starting role. Not chasing a contender — wants reps and a chance to prove there\'s something left. Accepting a discounted deal — {sign_cost} for the season. Would slot into the starting {acq_hitter_pos} spot.{drop_hitter_note}",
+   body:"A veteran {acq_hitter_pos}, {acq_hitter_name} ({acq_hitter_age}, OVR {acq_hitter_ovr}), is shopping for a team offering a full-time starting role. Not chasing a contender — wants reps and a chance to prove there\'s something left. Accepting a discounted deal — {sign_cost} for the season. They'd report to the bench tomorrow, and the starting {acq_hitter_pos} job is ours to give them.{drop_hitter_note}",
    yesLabel:'Sign',noLabel:'Decline',
    yesEffect:{morale:3},noEffect:{morale:-1},
-   yesMsg:'Deal done. Veteran bat in the starting lineup.',noMsg:'Passed. Roster stays as-is.',
+   yesMsg:'Deal done. The veteran bat reports to the bench tomorrow — move them into the lineup from Team.',noMsg:'Passed. Roster stays as-is.',
    onYes:'sign_acquire_hitter',_usesSignToken:true,_rosterContract:'roster:acquire:hitter'},
 
   // Tier 3+: contender framing — veteran taking a discount to compete
  {id:'s1',autoResolve:'no',autoResolveTax:{morale:-1},_minTier:3,type:'good',tag:'SIGNING',sender:'Free Agent Market',avatar:'✍️',
    subject:'Veteran {acq_hitter_pos} interested in joining',
    preview:'Proven bat willing to take a discount to compete…',
-   body:"A veteran {acq_hitter_pos}, {acq_hitter_name} ({acq_hitter_age}, OVR {acq_hitter_ovr}), wants to win and is accepting a discounted deal — {sign_cost} for the season. Would slot into the starting {acq_hitter_pos} spot.{drop_hitter_note}",
+   body:"A veteran {acq_hitter_pos}, {acq_hitter_name} ({acq_hitter_age}, OVR {acq_hitter_ovr}), wants to win and is accepting a discounted deal — {sign_cost} for the season. They'd report to the bench tomorrow, and the starting {acq_hitter_pos} job is ours to give them.{drop_hitter_note}",
    yesLabel:'Sign',noLabel:'Decline',
    yesEffect:{morale:6},noEffect:{morale:-3},
-   yesMsg:'Deal done! Veteran bat joins the lineup.',noMsg:'Passed. Budget preserved.',
+   yesMsg:'Deal done! The veteran bat reports to the bench tomorrow — move them into the lineup from Team.',noMsg:'Passed. Budget preserved.',
    onYes:'sign_acquire_hitter',_usesSignToken:true,_rosterContract:'roster:acquire:hitter'},
   // ── Tier-aware variants of base cards ────────────────────────────────────
   // s1_hi: Tier 4+ — veteran pursues us as a destination, not a discounted deal

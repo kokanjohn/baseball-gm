@@ -219,15 +219,17 @@ function checkTurn(prev, os, label) {
     const s2 = SM.get(), u2 = s2.userTeam;
     return { held: u2.rosterIds.filter(id => s2.players[id]?.group !== PLAYER_GROUP.IL).length
          + (s2.transactions || []).filter(t => t.kind === 'arrival' && t.status === 'pending' && t.teamId === 'user').length,
-             nine: (u2.lineupSlots || []).filter(sl => s2.players[sl.playerId]).length };
+             nine: (u2.lineupSlots || []).filter(sl => s2.players[sl.playerId]).length,
+             rot: (u2.rotation?.order || []).filter(id => s2.players[id]).length,
+             sp: (u2.rosterIds || []).map(id => s2.players[id]).filter(p => p && p.pos === 'SP' && !p.isInjured && p.group !== PLAYER_GROUP.IL).length };
   }));
   check(`${label}: our roster is legal (${active.length} active at the turn; ${heldAt.held} held by the first spring game)`,
         (u.rosterIds || []).length <= ROSTER_LIMITS.ACTIVE_TOTAL + 8 && heldAt.held === ROSTER_LIMITS.ACTIVE_TOTAL);
   check(`${label}: nine in the lineup by the first spring game (${(u.lineupSlots || []).filter(sl => st.players[sl.playerId]).length} at the turn)`, heldAt.nine === 9);
   // Five turns — or every healthy starter we have, when the GM let it get thinner than five.
-  const healthySP = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && p.pos === 'SP' && !p.isInjured && p.group !== PLAYER_GROUP.IL).length;
-  const rot = (u.rotation?.order || []).filter(id => st.players[id]).length;
-  check(`${label}: five in the rotation (or every healthy starter: ${rot} of ${healthySP})`, rot === Math.min(5, healthySP));
+  // r153 an open turn waits for the GM until the roster deadline: counted at the first spring game.
+  const rotTurn = (u.rotation?.order || []).filter(id => st.players[id]).length;
+  check(`${label}: five in the rotation by the first spring game (or every healthy starter: ${heldAt.rot} of ${heldAt.sp}; ${rotTurn} at the turn)`, heldAt.rot === Math.min(5, heldAt.sp));
   const expired = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && (p.contractExpiry ?? 99) <= N);
   check(`${label}: nobody on our roster is playing on an expired deal`, expired.length === 0, expired.map(p => `${p.name} ${p.contractExpiry}`).join(','));
   const staff = u.coachingStaff || {};

@@ -60,6 +60,9 @@ import {
   placeOnWaivers,
   HITTER_TARGET,
   PITCHER_TARGET,
+  uncoveredSlots,
+  managerFillDue,
+  managerFillAt,
 } from './RosterEngine.js';
 
 import { cpuWaiverClaimant, weakestPeer } from './LeagueEngine.js';
@@ -184,7 +187,8 @@ export function getRosterNeeds(state, teamId = 'user') {
 
   // Position hints: lineup positions nobody on the roster can play (held by
   // an out-of-position emergency fill), and a short rotation.
-  const posHints = (team.lineupSlots || []).filter(s => !s.playerId || s.emergency).map(s => s.slot);
+  // r153 an open slot someone on the bench can play waits for the GM — not a signing's hint.
+  const posHints = uncoveredSlots(state, team);
   const rotation = (team.rotation?.order || []).length;
   const benchSP  = active.filter(p => p.pos === 'SP' && p.group === PLAYER_GROUP.PITCHER_BENCH && !p.isInjured).length;
   const spShort  = Math.max(0, ROSTER_LIMITS.STARTING_PITCHERS - rotation - benchSP);
@@ -456,7 +460,7 @@ export function fillShortRosters(draft, atMs) {
  *
  * @returns {{ changed: Boolean, events: Object[] }}
  *   events: { type: 'TRADE_EXECUTED'|'TRADE_VOIDED'|'ARRIVED'|'DTD_RETURN'
- *             |'IL_ELIGIBLE'|'NEED_OPENED'|'NEED_CLEARED'|'MANAGER_FILL', … }
+ *             |'IL_ELIGIBLE'|'NEED_OPENED'|'NEED_CLEARED'|'MANAGER_FILL'|'MANAGER_LINEUP', … }
  */
 export function applyDue(draft, clockMs, { reconcileAll = false } = {}) {
   if (!Array.isArray(draft.transactions)) draft.transactions = [];
@@ -523,6 +527,22 @@ export function applyDue(draft, clockMs, { reconcileAll = false } = {}) {
       }
     }
 
+    // 2b. r153 the roster deadline: the manager fills our open spots (lineup,
+    // rotation, bullpen) the GM left open.
+    if (managerFillDue(draft, clockMs)) {
+      const u = draft.userTeam;
+      const before = { slots: (u.lineupSlots || []).map(sl => sl.playerId), rot: new Set(u.rotation?.order || []),
+                       pen: new Set((u.rosterIds || []).filter(id => draft.players[id]?.group === PLAYER_GROUP.BULLPEN)) };
+      _reconcile(draft, 'user', clockMs);
+      const moves = [];
+      (u.lineupSlots || []).forEach((sl, i) => { if (sl.playerId && sl.playerId !== before.slots[i]) moves.push({ playerId: sl.playerId, slot: sl.slot, emergency: !!sl.emergency }); });
+      for (const id of u.rotation?.order || []) if (!before.rot.has(id)) moves.push({ playerId: id, slot: 'rotation' });
+      for (const id of u.rosterIds || []) if (draft.players[id]?.group === PLAYER_GROUP.BULLPEN && !before.pen.has(id)) moves.push({ playerId: id, slot: 'bullpen' });
+      const fillAt = managerFillAt(draft);
+      if (moves.length) events.push({ type: 'MANAGER_LINEUP', teamId: 'user', moves, atMs: Number.isFinite(fillAt) ? Math.min(clockMs, fillAt) : clockMs });
+      progressed = true;
+    }
+
     // 3. Restore invariants on every team something happened to.
     for (const teamId of touched) _reconcile(draft, teamId, clockMs);
     touched.clear();
@@ -554,6 +574,7 @@ export function hasDue(state, clockMs) {
     if (inj.status === 'dtd' && inj.returnAt <= clockMs) return true;
     if (inj.status === 'il'  && inj.eligibleAt <= clockMs) return true;
   }
+  if (managerFillDue(state, clockMs)) return true;   // r153 the manager's turn at our open spots
   // §122 the winter roster call is due (its flag is set by the vacancy clock).
   const os = state.offseason;
   if (state.phase === PHASE.OFFSEASON && os?.springAt && !os.campCall && clockMs >= campCallAt(os)) return true;
@@ -573,7 +594,7 @@ function _reconcile(draft, teamId, atMs) {
   if (!teamId) return;
   const isUser = teamId === 'user';
   if (!isUser && !(draft.leagueTeams || []).some(t => t.id === teamId)) return;
-  const mut = reconcileRoster(draft, teamId, isUser ? {} : { autoManage: true, atMs });
+  const mut = reconcileRoster(draft, teamId, isUser ? { atMs } : { autoManage: true, atMs });
   applyRosterMutation(draft, mut);
   // §122 a CPU club short of 28 signs free agents for it at once.
   if (!isUser && mut.cpuShort && CAP_PHASES.has(draft.phase)) _cpuFill(draft, teamId, atMs, mut.cpuShort, []);
@@ -809,12 +830,6 @@ function _arrive(draft, tx, events, touched) {
   if (_sideOver(draft, tx.teamId, sideOf(player))) {
     const out = _weakestReserve(draft, player, tx.teamId, player.id);
     if (out) events.push(dropPlayer(draft, out.id, tx.teamId, tx.effectiveAt, { reason: 'corresponding move' }));
-  }
-  // §89 a veteran signed to start takes the spot he was signed for, if the
-  // player he replaces still holds it.
-  if (tx.startAt) {
-    const sl = (team.lineupSlots || []).find(x => x.slot === tx.startAt.slot && x.playerId === tx.startAt.replacing);
-    if (sl && eligibleSlotsFor(player).includes(sl.slot)) sl.playerId = player.id;
   }
   tx.status = 'done';
   touched.add(tx.teamId);

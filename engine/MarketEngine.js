@@ -115,14 +115,14 @@ export function signingTerms(state, player) {
 }
 
 /**
- * signToClub(draft, playerId, teamId, atMs, { displaceId, terms, startAt, by })
+ * signToClub(draft, playerId, teamId, atMs, { displaceId, terms, by })
  * A club signs a free agent (§122 the one way any club adds one — the GM, the
  * manager at a deadline, a CPU club). With no room on his side, `displaceId`
  * (or the club's weakest reserve on that side) is dropped first: waivers in
  * season, free agency between seasons. With games on the calendar he reports
  * the next day.
  */
-export function signToClub(draft, playerId, teamId, atMs, { displaceId = null, terms = null, startAt = null, by = null } = {}) {
+export function signToClub(draft, playerId, teamId, atMs, { displaceId = null, terms = null, by = null } = {}) {
   const p = draft.players[playerId];
   let t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
   if (!p || !t || p.group !== PLAYER_GROUP.FREE_AGENT) return [];
@@ -151,7 +151,6 @@ export function signToClub(draft, playerId, teamId, atMs, { displaceId = null, t
     // §89 with games being played he reports like anyone joining a club — the
     // next day — and (signed to start) takes the spot he was signed for then.
     const { tx, patch } = makeArrival({ player: p, teamId, fromTeamId: null, reason: 'signing', atMs, by: by || (teamId === 'user' ? 'gm' : 'cpu') });
-    if (startAt) tx.startAt = startAt;
     draft.transactions = [...(draft.transactions || []), tx];
     Object.assign(p, patch, { _faFrom: null, _faSince: null });
   } else {

@@ -486,7 +486,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
       .sort((a, b) => (a.p.ovr || 0) - (b.p.ovr || 0))[0];
     if (weakest) {
       const vet = take('acq_hitter', marketCandidate(state, { kind: spec.kind, side: 'hitter', pos: weakest.slot, minOvr: (weakest.p.ovr || 0) + 2, rand: eventRand }));
-      if (vet) { vet._startAt = weakest.slot; money('sign_cost', signingTerms(state, vet).salary); }
+      if (vet) money('sign_cost', signingTerms(state, vet).salary);
       out.players.replaced_starter = weakest.p.id;
       _playerTokens(values, 'replaced_starter', weakest.p, state);   // (sr2 names who'd sit)
     }

@@ -54,6 +54,7 @@ import {
   COMPOSE_REPLY,
   OFFSEASON_CARD_HOUR,
   GAME_STATUS,
+  ROSTER_DECISION_LEAD_MS,
 } from '../data/constants.js';
 
 import {
@@ -65,6 +66,7 @@ import * as When from './When.js';
 import { exposeRatings } from './Diamonds.js';
 import {
   activateFromIL, placeOnWaivers, reconcileRoster, applyRosterMutation, reserveGroup,
+  openSpots, managerFillAt, managerFillsNow, pendingArrivals,
   HITTER_TARGET, PITCHER_TARGET,
   defaultActiveGroup, nextCalendarDay, computePayroll,
 } from './RosterEngine.js';
@@ -1047,6 +1049,75 @@ function _lineupNudges(atMs) {
   return delivered;
 }
 
+/** r153 the manager's fill in words: "Pai at SS", "Pai at SS (out of position)", "Ruiz into the rotation". */
+function _spotMoves(st, moves) {
+  return (moves || []).filter(m => st.players[m.playerId]).map(m => {
+    const n = st.players[m.playerId].name;
+    return m.slot === 'rotation' ? `${n} into the rotation` : m.slot === 'bullpen' ? `${n} into the bullpen`
+      : `${n} at ${m.slot}${m.emergency ? ' (out of position)' : ''}`;
+  });
+}
+
+/** r153 what the manager would do with our open spots now: the fill, as moves. */
+function _managerWouldFill(st) {
+  const u = st.userTeam;
+  const mut = reconcileRoster(st, 'user', { fill: true });
+  const after = mut.userTeam || {};
+  const moves = [];
+  (after.lineupSlots || []).forEach((sl, i) => { if (sl.playerId && sl.playerId !== u.lineupSlots?.[i]?.playerId) moves.push({ playerId: sl.playerId, slot: sl.slot, emergency: !!sl.emergency }); });
+  const rot = new Set(u.rotation?.order || []);
+  for (const id of after.rotation?.order || []) if (!rot.has(id)) moves.push({ playerId: id, slot: 'rotation' });
+  for (const [id, upd] of Object.entries(mut.players || {})) {
+    if (upd.group === PLAYER_GROUP.BULLPEN && st.players[id]?.group !== PLAYER_GROUP.BULLPEN) moves.push({ playerId: id, slot: 'bullpen' });
+  }
+  return moves;
+}
+
+/**
+ * r153 our open spots wait for the GM until the roster deadline (an hour
+ * before first pitch), when the manager fills them. One message per game's
+ * deadline, a little after a spot opens: what's open, what the manager will
+ * do, and the choice to have it done now or set it in Team. Withdrawn once
+ * the spots are filled (by anyone) or the deadline moves.
+ */
+function _deliverOpenSpotsCard(atMs) {
+  const st = StateManager.get();
+  const fillAt = managerFillAt(st);
+  if (!Number.isFinite(fillAt) || managerFillsNow(st, atMs)) return null;
+  const spots = openSpots(st);
+  if (!spots.any) return null;
+  const key = `openspots:${fillAt}`;
+  if (_cardsWithKey(st, key).length) return null;
+  const moves = _managerWouldFill(st);
+  if (!moves.length) return null;
+  const at = Math.max(atMs, Math.min(atMs + 20 * 60_000, fillAt - 10 * 60_000));
+  const open = [
+    ...spots.lineup.map(x => x.emergency ? `${x.slot} (played out of position)` : x.slot),
+    ...(spots.rotation ? [spots.rotation > 1 ? `${spots.rotation} rotation turns` : 'a rotation turn'] : []),
+    ...(spots.bullpen ? [spots.bullpen > 1 ? `${spots.bullpen} bullpen spots` : 'a bullpen spot'] : []),
+  ];
+  const coming = pendingArrivals(st, 'user').map(t => st.players[t.playerId]).filter(Boolean).map(p => p.name);
+  const game = (st.schedule || []).find(g => !g._committed && Number.isFinite(g.gameTime) && g.gameTime - ROSTER_DECISION_LEAD_MS === fillAt);
+  const when = game ? When.untilFull(game.gameTime, at) : 'the next game';
+  const plan = _list(_spotMoves(st, moves));
+  const card = _rosterCard(st, {
+    cardId: 'open_spots', tag: 'LINEUP', sender: _managerName(st), avatar: '📋', type: 'normal',
+    _rosterKey: key, _rosterKind: 'openspots',
+    subject: open.length > 1 ? 'Open spots before the next game' : `${open[0][0].toUpperCase()}${open[0].slice(1)} is open`,
+    preview: `Open: ${_list(open)}. I'll fill ${open.length > 1 ? 'them' : 'it'} at ${_clock(fillAt)} if you don't.`,
+    body: `For our game ${when}, ${_list(open)} ${open.length > 1 ? 'are' : 'is'} open. `
+        + `If ${open.length > 1 ? 'they\'re' : 'it\'s'} still open at ${_clock(fillAt)}, an hour before first pitch, I'll go with ${plan}.`
+        + (coming.length ? ` ${_list(coming)} ${coming.length > 1 ? 'report' : 'reports'} at midnight and ${coming.length > 1 ? 'land' : 'lands'} on the bench, so you could wait for that and move them in yourself.` : '')
+        + ` Or set it however you like in Team.`,
+    yesLabel: 'Do it that way now',
+    noLabel: "I'll set it in Team",
+    expiresAtMs: fillAt,
+    _raw: { onYes: 'openspots_fill', onNo: 'openspots_defer', onAuto: 'openspots_auto' },
+    _autoLabel: `No answer — ${_managerName(st)} filled them at the deadline`,
+  });
+  return _deliverAt(card, at);
+}
+
 /**
  * Open roster spot — one card per open spot, tied to the current deadline.
  * §122 it offers the free agents who fit, best first, with their price (a
@@ -1208,6 +1279,10 @@ function _rosterEventCards(ev, atMs) {
       if (deliverInjuryAct1(ev.playerId, (ev.atMs ?? atMs) + _randBetween(5, 20) * 60_000)) delivered++;
     } else if (ev.type === 'MANAGER_FILL') {
       if (_deliverManagerFillCard(ev)) delivered++;
+    } else if (ev.type === 'MANAGER_LINEUP') {
+      // r153 news, not a message (§117): the manager filled the spots the GM left open.
+      const st = StateManager.get();
+      _ourNews(`${_managerName(st)} filled our open spots at the roster deadline: ${_list(_spotMoves(st, ev.moves))}`, ev.atMs ?? atMs);
     } else if (ev.type === 'WAIVER_CLAIMED' && ev.userClaimed) {
       // §73: how our waiver claim came out.
       const st = StateManager.get();
@@ -1255,6 +1330,9 @@ function _rosterConditionCards(delivered, atMs) {
 
   // §113 back from an injury but not back in the lineup → the staff asks.
   delivered += _lineupNudges(atMs);
+
+  // r153 open spots waiting for the GM → the manager says what happens at the deadline.
+  if (_deliverOpenSpotsCard(atMs)) delivered++;
 
   // Open roster spots → one card per spot, keyed to the current deadline.
   state = StateManager.get();
@@ -1312,6 +1390,7 @@ function _rosterConditionCards(delivered, atMs) {
       return !p || p.teamId !== 'user' || !p._lostSlot || seatedNow || !isAvailable(p) || !_whoHasSpot(state, p);
     }
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
+    if (key.startsWith('openspots:')) return key !== `openspots:${managerFillAt(state)}` || !openSpots(state).any;
     // §70: a free agent who signed elsewhere (or left); a re-sign card for a
     // player no longer ours (retired, traded).
     if (key.startsWith('os:fa:'))     return players[c._targetPlayerId]?.group !== PLAYER_GROUP.FREE_AGENT;
@@ -4637,6 +4716,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'need_defer',
   'need_auto',
   'mfill_keep', 'mfill_sendback',
+  'openspots_fill', 'openspots_defer', 'openspots_auto',   // r153
   // §71–72 card actions (CardActions registry)
   ...Object.keys(CARD_ACTIONS),
   // §70 offseason
@@ -4758,6 +4838,16 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     case 'need_defer':
     case 'need_auto':
       break;   // the roster clock owns the deadline
+
+    // ── r153 our open spots: the manager's fill now, or the GM sets it ──
+    case 'openspots_fill': {
+      const rec = reconcileRoster(StateManager.get(), 'user', { fill: true, atMs });
+      StateManager.mutate(s => applyRosterMutation(s, rec));
+      break;
+    }
+    case 'openspots_defer':
+    case 'openspots_auto':
+      break;   // the roster clock fills at the deadline
 
     // ── r135 the manager's deadline call-ups ─────────────────────
     case 'mfill_keep':

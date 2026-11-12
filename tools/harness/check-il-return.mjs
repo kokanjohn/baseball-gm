@@ -62,7 +62,9 @@ function hurt(id, hours) {
     const p = s.players[id];
     Object.assign(p, placeOnILUpdate({ ...p, injury: { status: 'evaluating', injuredAt: now, days: 1 } }));   // (the real placement)
     p.injury.eligibleAt = now + hours * 3600_000;
-    applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: now }));
+    // r153 the spot waits for the GM until the roster deadline, then the manager fills it from
+    // the bench — this check is about the fill-in who has the spot, so it plays the fill out now.
+    applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: now, fill: true }));
   });
 }
 /** A call-up for the IL'd player — from that player's side (the club is at 28 active again). */

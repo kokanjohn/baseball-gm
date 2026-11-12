@@ -55,6 +55,7 @@ import {
   defaultActiveGroup,
   pendingArrivals,
   teamRating, recordRating,
+  openSpots, managerFillAt, managerFillDue, moveOptions, applyMove,
 } from './RosterEngine.js';
 
 import { rosterClock, applyDue, hasDue, cpuSalaryMove, cpuFreeAgentLook, campCallAt } from './TransactionEngine.js';
@@ -642,6 +643,10 @@ function _activateGame(game) {
   return withDice(_gameDice(StateManager.get(), game, true, 'start'), () => _activateGameNow(game));
 }
 function _activateGameNow(game) {
+  // r153 first pitch is past the roster deadline: the manager fills any spot the GM left open
+  // (through the roster step, so Recent says so), and the game never starts short of a bench
+  // that could fill it.
+  if (managerFillDue(StateManager.get(), game.gameTime)) _rosterStep(game.gameTime);
   const state       = StateManager.get();
   const now         = clockNow();
   const MAX_LIVE_WINDOW_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -3212,6 +3217,9 @@ function _nextRosterDue(state, uptoMs, { overdue = true } = {}) {
   }
   for (const x of state.developmentPlans || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);
   take(state.userTeam?.vacancyDeadlineAt);
+  // r153 the manager fills what the GM left open, at the roster deadline — or at once when that has
+  // already passed (the second game of a doubleheader: its deadline fell during the first).
+  if (openSpots(state).any) { take(managerFillAt(state)); overdueAt(managerFillAt(state)); }
   if (state.phase === PHASE.OFFSEASON && state.offseason?.springAt && !state.offseason.campCall) take(campCallAt(state.offseason));   // §122 the winter roster call
   return best;
 }
@@ -3238,6 +3246,24 @@ function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
     changed: expired > 0 || applied.changed || cards.delivered > 0 || cards.withdrawn > 0,
     events:  applied.events,
   };
+}
+
+/**
+ * gmMove(playerId, key, nowMs) — r153 the Team screen's MOVE: one of
+ * RosterEngine.moveOptions, carried out and reconciled at `nowMs` (an open
+ * spot waits for the GM until the roster deadline), then the roster cards
+ * catch up (the open-spots message comes or goes). Returns { ok, reason }.
+ */
+export function gmMove(playerId, key, nowMs = clockNow()) {
+  const st = StateManager.get();
+  if (!st?.userTeam) return { ok: false, reason: 'no team loaded' };
+  if (!moveOptions(st, playerId).some(o => o.key === key)) return { ok: false, reason: 'That move is no longer possible.' };
+  StateManager.mutate(s => {
+    applyMove(s, playerId, key);
+    applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: nowMs }));
+  });
+  CardEngine.syncRosterCards([], nowMs);
+  return { ok: true };
 }
 
 /**

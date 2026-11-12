@@ -10094,3 +10094,73 @@ Fresh team: not needed.
 - **"fault(user SP): rotation restored to 5" (got 4):** the check counted every healthy SP on the roster. The refill only draws on the rotation and the pitcher bench (by design, a user rotation spot otherwise goes to the GM), so an SP working out of the bullpen or in transit after a trade made the count wrong. The check now counts what the refill draws on and names any healthy starter elsewhere.
 - **"the free-agent pool carries into season 2":** failed once in UTC, without saying which part. It now reports free agents missing from the pool, pool entries that aren't free agents, and the pre-spring count, so the next failure can be diagnosed.
 - **Why CI failures looked silent:** the harness ended with `process.exit()`. In CI stdout is a pipe, and exiting dropped whatever was still buffered, which was often the FAIL lines and the summary. One run's log simply stopped at game 36. The harness now exits only after stdout has been flushed (`_exit`).
+
+### 122.25 The Team screen, ESPN-fantasy style; arrivals report to the bench; open spots wait for the GM (GM, Nov 12 — r153)
+
+**The ask (GM).** Team → Players like an ESPN fantasy team page, not collapsible groups: hitters by position with the bench below and any injured players below that; pitchers as rotation, bullpen, bench, injured. Pending players on the bench with a tag.
+
+**Decided with the GM:**
+1. **Columns:** this season's stats with a frozen player column (as in League → Players), IMP and OVR on the far right, not sortable. A **MOVE** button replaces Bench / ▲. Age and salary leave the rows; they're on the player card.
+2. **Every new arrival reports to the bench:** signings, claims and trades alike, relievers included, and the "would start" signing cards (s1 tiers, sr2) too. Nobody walks into the lineup, rotation or bullpen; the GM moves them in.
+3. **An open spot waits for the GM until the roster deadline.** The manager fills it then, if it's still open. That's an hour before first pitch. The lineup, the rotation and the bullpen all work the same way. Nobody eligible on the bench: the manager plays someone out of position, as before (§65).
+4. The injured rows show only when someone is hurt. Open roster spots stay as rows at the end of the bench, before the injured.
+
+**The engine (RosterEngine, pure):**
+- `managerFillsNow(state, atMs)`: from the next game's roster deadline (`ROSTER_DECISION_LEAD_MS` before first pitch) until it's played. `managerFillAt(state)` returns that moment.
+- `reconcileRoster` holds our open spots outside that window: no bench fill of a lineup slot, no rotation top-up from the pitcher bench, no bullpen fill. An out-of-position fill keeps its slot until the deadline (the `emergency` flag now survives a reconcile). The option `fill: true` forces the manager's fill. CPU clubs are unchanged.
+- `makeArrival` sends our arrivals to `reserveGroup` (the bench, or the pitcher bench for any pitcher). The "would start" handoff (`tx.startAt`, `_startAt`) is removed from `_arrive`, `signToClub`, `signStarter` and CardTokens.
+- `openSpots(state)` lists our open spots someone could fill now. `uncoveredSlots` gives the slots nobody on the bench can play; a signing's position hint now uses it, so a held slot isn't a need. `managerFillDue` is the clock's probe.
+- `moveOptions(state, playerId)` / `applyMove(draft, playerId, key)` decide what MOVE offers and carry it out:
+  - **a bat:** any slot they can play (the occupant swaps into their old slot if eligible, else goes to the bench); from the lineup, the bench, either with a bench bat taking the slot or leaving it open;
+  - **a starter:** any rotation turn, or an open one; from the rotation, the pitcher bench, with a bench starter taking the turn or leaving it open. The next starter up stays next.
+  - **a reliever:** likewise with the bullpen.
+  - **no MOVE:** hurt, suspended, reporting, or in a trade waiting on tonight's final out (`tradedAway`).
+- `GameEngine.gmMove(playerId, key, nowMs)` carries out a MOVE, reconciles and syncs the roster cards.
+
+**The clock and the messages:**
+- `TransactionEngine.applyDue` fills our open spots once `managerFillDue` says it's time. It emits `MANAGER_LINEUP` with who went where; `hasDue` and `_nextRosterDue` count the moment.
+- Recent gets the line, not Messages (§117): "Hartmann filled our open spots at the roster deadline: Ogata at SS, Simmons into the rotation and Acevedo into the bullpen".
+- **The manager's message** (`open_spots`, LINEUP) comes about 20 minutes after a spot opens, one per game deadline. It names what's open and what the manager will do at the deadline. If a player is reporting at midnight, it says so; they could take the spot. The choices are **Do it that way now** (`openspots_fill`) / **I'll set it in Team**. Unanswered, the manager fills it at the deadline. The message is withdrawn once the spots are filled by anyone, or the deadline moves.
+- The veteran-starter and shake-up cards now say the player reports to the bench, and that the job is ours to give.
+
+**The screen (TeamScreen):**
+- **Two tables, Hitters and Pitchers.** Each title shows which season the stats are from: "This season", or "'25 season" before anyone has played. In a this-season table, a row still showing last year is marked '25.
+- **Frozen columns:** slot, player and Action (MOVE). The name's sub-line is the position (and hand), plus Next, a status, out of position, resting or tired, or a contract note. For a reporting, traded or injured player it shows that status alone ("Pending · tomorrow", "Traded · leaves tonight", "Elig. in 4 weeks").
+- **Columns:**
+  - hitters: H/AB, R, HR, RBI, BB, SB, AVG, OPS | IMP, OVR;
+  - pitchers: IP, W, L, SV, ERA, WHIP, K, BB | IMP, OVR.
+- **Rows:**
+  - hitters: the nine by `lineupSlots` slot; Bench; reporting players tagged Pending, with MOVE greyed out; open roster spots (Add → League → Players); IL.
+  - pitchers: SP1–SP5 in start order; the bullpen by role (CL, SU, MR, LR); Bench; reporting; open roster spots; IL.
+  - An open lineup slot, rotation turn or bullpen spot shows as **Empty · Tap to fill**: a sheet of the bench players who can fill it.
+- **MOVE** opens "Move X": where they can go, and who's affected. When leaving a spot open is one of the options, the sheet notes when the manager will fill it.
+- The Pending Transactions section is gone. Players coming back in a trade that goes through after tonight's game show as Pending ("joins after the game"). Our players in that trade keep their rows, tagged Traded, with MOVE greyed out.
+
+**Checks:**
+- `check-open-spots` (new, 30): MOVE's choices; a slot opens and waits, isn't counted as a roster need, gets the manager's message (gender-neutral, no dates), and is filled by the GM, which withdraws the message; SS, a rotation turn and a bullpen spot wait to the deadline, keep the next starter up, and are filled together at the deadline with the Recent line; inside the last hour a benched starter is replaced at once; "Do it that way now"; a signed reliever reports to the pitcher bench, can't move before reporting, and moves into the pen; a traded player has no MOVE.
+- `test-team-roster-ui` (new, 22, dark and light): the two tables and their columns; slot order; Empty SS; Pending on the bench; no hitter IL rows with nobody hurt; the pitchers' order with the IL; an Empty bullpen spot; no age or salary; headings over their columns; the frozen part stays put scrolled; MOVE's sheet and a move; filling an empty spot; a row opens the card.
+- `test-fa-screens-ui` reads the new layout.
+
+**Found by the sims, fixed:** the clock could miss the fill moment when it had already passed by the time the clock looked. The case was the second game of a doubleheader, whose deadline falls during the first game, and game 69 was played without a full nine. Two fixes:
+- `_nextRosterDue` also takes an overdue fill moment (as it does an overdue move);
+- `_activateGameNow` runs the roster step first whenever `managerFillDue` at first pitch, so a game never starts short of a bench that could fill it, and Recent still gets its line.
+
+**Harness updates for the rule:**
+- **sim-season:**
+  - the SP fault check expects the open turn to wait before the deadline and to be filled with `fill: true`;
+  - "every lineup fields nine" allows our slot to be open before the roster deadline;
+  - a new per-game check, "we fielded nine", reads the box score.
+- **multi-season:** counts the rotation at the first spring game, as it already did the lineup and the 28.
+- **check-il-return:** plays the manager's fill out at once, since it's about the fill-in who holds the spot.
+
+**Suite (r153):**
+- full season 3813/3813;
+- three seasons 52/52;
+- every engine check, including check-open-spots 30/30 and check-il-return 27/27;
+- every UI test in dark and light, including test-team-roster-ui 22/22 and test-fa-screens-ui 30/30.
+
+Two intermittent misses in light, each passing on rerun:
+- **test-game-pushes-ui:** "registers our next game's pushes", 2 failures between 10:06 and 10:08; 15 runs since, including one with the start pinned to 10:07, all pass. It's time-dependent like §122.21's open item.
+- **test-trade-advice-ui:** "the director has a counter for us"; the random offer sometimes leaves no counter worth making. 3/3 on rerun.
+
+Fresh team: not needed. Saves pick up the new rule as they are; a player already on the way when r153 loads still reports to the group set when they were signed.

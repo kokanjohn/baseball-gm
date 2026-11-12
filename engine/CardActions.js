@@ -221,7 +221,7 @@ const payBonus = (d, k, label, atMs) => { if (k) Finance.post(d.userTeam.finance
 const fullFor = (st, side = null) => rosterIsFull(st, 'user', side);
 const between = (lo, hi) => lo + eventRand() * (hi - lo);
 
-/** A veteran who wants to start: signs, takes the weak starter's spot; the weakest bench bat goes down. */
+/** A veteran who wants to start: signs and reports to the bench (r153), for the GM to move in; the weakest bench bat goes down. */
 const signStarter = {
   feasible: (st, c) => isFA(st, role(c, 'acq_hitter')) && REGULAR_OR_SPRING.has(st.phase)
     && (!fullFor(st, 'hitter') || (ours(st, role(c, 'drop_hitter')) && !rosterIsFull(st, 'user', 'hitter', { excluding: role(c, 'drop_hitter') })))
@@ -229,10 +229,9 @@ const signStarter = {
   apply(d, c, atMs) {
     const id = role(c, 'acq_hitter');
     const p = d.players[id];
-    const startAt = p?._startAt ? { slot: p._startAt, replacing: role(c, 'replaced_starter') } : null;
-    if (p) p._startAt = undefined;
-    // He takes the spot when he reports (TransactionEngine._arrive).
-    return signToClub(d, id, 'user', atMs, { displaceId: role(c, 'drop_hitter'), startAt });
+    if (p?._startAt) p._startAt = undefined;   // r153 no longer set; cleared on older saves
+    // r153 they report to the bench; the GM moves them into the lineup.
+    return signToClub(d, id, 'user', atMs, { displaceId: role(c, 'drop_hitter') });
   },
 };
 
