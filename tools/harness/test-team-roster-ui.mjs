@@ -59,7 +59,7 @@ const read = () => page.evaluate(() => {
     head: [...b.querySelectorAll('.tr-head .tr-td')].map(x => x.textContent),
     rows: [...b.querySelectorAll('.tr-row')].map(r => ({ slot: r.querySelector('.tr-slot')?.textContent, name: r.querySelector('.tr-name-line')?.textContent,
       sub: r.querySelector('.tr-sub')?.textContent, move: r.querySelector('.tr-move')?.textContent, disabled: !!r.querySelector('.tr-move')?.disabled,
-      player: r.dataset.player || null, empty: r.classList.contains('tr-empty') })),
+      player: r.dataset.player || null, empty: r.classList.contains('tr-empty'), ovr: +(r.querySelector('.tr-c-ovr')?.textContent) || 0 })),
   }));
   return { blocks, groups: document.querySelectorAll('[data-group]').length, text: document.getElementById('team-content')?.innerText || '' };
 });
@@ -78,9 +78,16 @@ check('the benched shortstop is on the bench with MOVE', benched?.slot === 'Benc
 const pend = H.rows.find(r => r.player === made.fa);
 check('the signing sits on the bench tagged Pending, reporting, MOVE greyed out', pend?.slot === 'Bench' && /^Pending/.test(pend.sub || "") && /tomorrow|today|in \d/.test(pend.sub || "") && pend.disabled, JSON.stringify(pend));
 check('no injured hitters: no IL rows in the hitters table', !made.hasHitIL && !H.rows.some(r => r.slot === 'IL'));
-check('pitchers: SP1–SP5, then the pen by role, the bench, the IL',
-      Pt.rows.slice(0, 5).map(r => r.slot).join(' ') === 'SP1 SP2 SP3 SP4 SP5' && Pt.rows.slice(5, 10).every(r => ['CL', 'SU', 'MR', 'LR', 'RP'].includes(r.slot)) && Pt.rows.at(-1).slot === 'IL',
+// r154 the slot says SP or RP; the rotation and the pen each run best-rated first.
+const spRows = Pt.rows.filter(r => r.slot === 'SP' && !r.empty), rpRows = Pt.rows.filter(r => r.slot === 'RP' && !r.empty);
+const desc = (rs) => rs.every((r, i) => i === 0 || rs[i - 1].ovr >= r.ovr);
+check('pitchers: SP ×5, then RP, the bench, the IL — no numbered turns or role codes',
+      Pt.rows.slice(0, 5).every(r => r.slot === 'SP') && Pt.rows.slice(5, 10).every(r => r.slot === 'RP') && Pt.rows.at(-1).slot === 'IL'
+      && !Pt.rows.some(r => /^(SP\d|CL|SU|MR|LR)$/.test(r.slot)),
       Pt.rows.map(r => r.slot).join(' '));
+check('the rotation and the bullpen are each sorted by OVR, highest first', spRows.length === 5 && desc(spRows) && rpRows.length >= 4 && desc(rpRows),
+      JSON.stringify({ sp: spRows.map(r => r.ovr), rp: rpRows.map(r => r.ovr) }));
+check('who starts next is still marked', Pt.rows.slice(0, 5).filter(r => /Next/.test(r.sub || '')).length === 1, Pt.rows.slice(0, 5).map(r => r.sub).join(' | '));
 const ilRow = Pt.rows.find(r => r.player === made.rp);
 check('the injured reliever is on the IL with the injury and when, MOVE greyed out', ilRow?.slot === 'IL' && ilRow.disabled && /elig|TBD|season|cleared/i.test(ilRow.sub), JSON.stringify(ilRow));
 check('the bullpen spot the injury opened waits as "Empty"', Pt.rows.some(r => r.empty && r.slot === 'RP'), Pt.rows.map(r => r.slot + (r.empty ? '*' : '')).join(' '));
@@ -143,6 +150,27 @@ check('tapping the empty bullpen spot lists the bench arms; one fills it', !fill
 await page.evaluate((id) => document.querySelector(`.tr-row[data-player="${id}"] .tr-name`).click(), made.ss);
 await page.waitForTimeout(500);
 check('a row opens the player card', await page.evaluate(() => !!document.querySelector('.modal-overlay.open, .player-card, #player-card-modal')));
+
+// r154 a reliever's role is on the player card — the pen's and the pitcher bench's (a reserve).
+const roleOf = async (id) => page.evaluate(async (id) => {
+  const PC = await import('/baseball-gm/ui/components/PlayerCard.js'); const SM = await import('/baseball-gm/store/StateManager.js');
+  PC.closePlayerCard(); PC.openPlayerCard(id, SM.get());
+  await new Promise(r => setTimeout(r, 300));
+  return document.querySelector('#player-card-overlay .pc-role')?.textContent.replace(/\s+/g, ' ').trim() || null;
+}, id);
+const ids = await page.evaluate(async () => {
+  const SM = await import('/baseball-gm/store/StateManager.js'); const st = SM.get();
+  const ps = st.userTeam.rosterIds.map(id => st.players[id]);
+  return { pen: ps.filter(p => p.group === 'bp' && !p.isInjured).map(p => p.id), bench: ps.find(p => p.group === 'pb' && p.pos === 'RP' && !p.isInjured)?.id || null,
+           sp: ps.find(p => p.group === 'sp')?.id };
+});
+const penRoles = [];
+for (const id of ids.pen) penRoles.push(await roleOf(id));
+check('every reliever in the pen shows a bullpen role on the card (one closer)',
+      penRoles.every(r => /^Bullpen role (Closer|Setup|Middle relief|Long relief)$/.test(r || '')) && penRoles.filter(r => /Closer/.test(r)).length === 1, penRoles.join(' | '));
+await page.screenshot({ path: `${out}/team-roster-role-${theme}.png` });
+if (ids.bench) { const r = await roleOf(ids.bench); check('a bench reliever: a reserve, with the role', /^Bullpen role Reserve · (middle|long) relief$/.test(r || ''), r); }
+check('a starter has no bullpen role', (await roleOf(ids.sp)) === null);
 
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();

@@ -68,6 +68,8 @@ export function openHistory() {
 
   _render(overlay);
   requestAnimationFrame(() => overlay.classList.add('open'));
+  // r154 a tap outside the sheet (and a swipe down — SwipeClose) closes it.
+  if (!overlay._backdrop) { overlay._backdrop = true; overlay.addEventListener('click', e => { if (e.target === overlay) closeHistory(); }); }
 }
 
 /**

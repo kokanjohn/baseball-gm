@@ -74,7 +74,7 @@ import { computeOVR, isAvailable } from './PlayerFactory.js';
 import { playingRating, trueRatings } from './Diamonds.js';
 import { injuryChancePerExposure } from './InjuryEngine.js';
 import {
-  ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, tireAfterBF, reliefInnings,
+  ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, tireAfterBF, reliefInnings, springStarterInnings,
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS } from '../data/constants.js';
 
@@ -477,8 +477,8 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     userRole:  ROLE.STARTER, oppRole: ROLE.STARTER,
     userTireAt: exhibition ? Infinity : tireAfterBF(userSP && players[userSP.id], true),
     oppTireAt:  exhibition ? Infinity : tireAfterBF(oppSP && players[oppSP.id], true),
-    userTarget: _pitcherTargetInnings(userSP && players[userSP.id], { exhibition }),
-    oppTarget:  _pitcherTargetInnings(oppSP && players[oppSP.id], { exhibition }),
+    userTarget: _pitcherTargetInnings(userSP && players[userSP.id], { exhibition, isSpring, springNum: game?.index }),
+    oppTarget:  _pitcherTargetInnings(oppSP && players[oppSP.id], { exhibition, isSpring, springNum: game?.index }),
     userRuns: 0, oppRuns: 0,
     // §118 injuries on the field: the season year (for age), and who has already left hurt.
     injuryYear: ctx.injuryYear ?? null,
@@ -1903,6 +1903,8 @@ function _pitcherTargetInnings(pitcher, gs = null) {
   const isRP = pitcher?.group === PLAYER_GROUP.BULLPEN
             || pitcher?.group === PLAYER_GROUP.PITCHER_BENCH;
   if (isRP) return Math.max(1, Math.round(1 + (stam - 40) / 25)); // ~1–2 IP
+  // r154 spring: a starter is building up (2 innings early in camp, 4 by the end).
+  if (gs?.isSpring) return springStarterInnings(gs.springNum);
   return Math.max(4, Math.round(5 + (stam - 50) / 12));           // ~5–8 IP
 }
 
@@ -1959,7 +1961,9 @@ function _checkPitcherChange(gs, players, team, userBullpen, oppBullpen, plays, 
     const pick = chooseReliever({ roles, players, used: gs[`${side}Used`], atMs: gs.atMs, inning, lead });
     // A taxed pen: the man out there isn't tired and nobody rested is left —
     // the manager asks him for another inning.
-    if (pick && !pick.wanted && !gs[`${side}MustGo`] && !closerCall) {
+    // r154 Never a spring starter: his innings are his build-up.
+    const springStarter = gs.isSpring && gs[`${side}Role`] === ROLE.STARTER;
+    if (pick && !pick.wanted && !gs[`${side}MustGo`] && !closerCall && !springStarter) {
       gs[`${side}Target`] += 1;
       gs[`${side}Fatigued`] = false;
       return;

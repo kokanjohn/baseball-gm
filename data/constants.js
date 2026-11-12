@@ -298,6 +298,10 @@ export const PITCH_HOOK_EXTRA_BF            = 6;     // past tiring by this many
 export const PITCH_SHELLED_RUNS             = 5;     // a starter who has allowed this many by the 6th is pulled
 export const PITCH_SHELLED_EARLY_RUNS       = 4;     // ... or this many by the 3rd
 export const PITCH_LONG_INNINGS             = Object.freeze({ min: 2, max: 3 });  // a long man's stint
+// r154 Spring training: a starter builds up — two innings in the first spring
+// games, four by the last — and is never stretched past that; the bullpen
+// covers the rest as usual.
+export const SPRING_SP_INNINGS              = Object.freeze({ first: 2, last: 4 });
 // Between games (calendar days since an outing; same-day = 0).
 export const PITCH_SP_REST_DAYS             = 4;     // a starter needs 4 days' rest
 export const PITCH_RP_LONG_OUTING_BF        = 10;    // ≈ 2+ innings: not available the next day

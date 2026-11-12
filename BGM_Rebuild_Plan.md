@@ -10164,3 +10164,74 @@ Two intermittent misses in light, each passing on rerun:
 - **test-trade-advice-ui:** "the director has a counter for us"; the random offer sometimes leaves no counter worth making. 3/3 on rerun.
 
 Fresh team: not needed. Saves pick up the new rule as they are; a player already on the way when r153 loads still reports to the group set when they were signed.
+
+---
+
+## §122.26 r154 — Pitchers as SP/RP, roles on the player card, spring outings, swipe to close
+
+**What the GM asked:**
+- On the Team screen's Pitchers table the slot says SP or RP, and both the rotation and the bullpen are sorted by OVR, best first.
+- A reliever's bullpen role (closer, setup and so on) moves to the player card, for the pitcher bench's relievers too.
+- A starter went 8 innings in the first spring game. That's far too long.
+- The game's stats sheet on Schedule couldn't be swiped down to close. Every modal should close with a swipe down.
+
+**Team → Pitchers (TeamScreen):**
+- The rotation is the `sp` group sorted by OVR, each row's slot **SP**. "Next" on the sub-line still marks who starts next (rotation.order is unchanged; only the display is sorted).
+- The bullpen is the `bp` group sorted by OVR, slot **RP**.
+- Pitcher-bench rows keep **Bench**, like the hitters' bench. Empty turns and spots read SP and RP.
+- **MOVE's labels** (RosterEngine.moveOptions) no longer number the turns: a pitcher-bench starter's choices read "Rotation · X (OVR) to the pitcher bench". A rotation starter's read "Y takes their rotation turn" or "Leave their rotation turn open".
+- LeagueScreen's view of another club still lists SP1–SP5 in start order (unchanged).
+
+**Player card:** a "Bullpen role" line under the club name, using PitchingEngine.bullpenRoles for the player's club (ours or a CPU club's):
+- the roles: Closer, Setup, Middle relief, Long relief;
+- a pitcher-bench arm shows "Reserve · middle relief" (or long relief);
+- starters, hitters and the injured show no line.
+
+**Spring outings:**
+- **The bug:** spring starters used the regular-season innings target, 5–8 by stamina. When the pen was taxed, the manager could add innings on top, so a spring starter could go 8.
+- **New constant:** `SPRING_SP_INNINGS = { first: 2, last: 4 }`.
+- **The build-up:** `PitchingEngine.springStarterInnings(n)` ramps from 2 innings in the first spring game to 4 in the 10th. Spring games lead the schedule, so n is the game's index; a CPU-vs-CPU game, which has no index, uses 2.
+- **SimEngine:**
+  - `_pitcherTargetInnings` uses the ramp for a starter in a spring game, for both sides;
+  - `_checkPitcherChange` never adds an inning for a spring starter, because those innings are the build-up.
+- **Unchanged:** tired and shelled pulls (earlier exits) and how relievers are used.
+- **Seed 1:** starters went 2, 2, 2, 3/1, 2/3, 3, 3, 4, 4, 4 innings over the ten spring games.
+
+**Swipe to close — `ui/components/SwipeClose.js`** (new, precached):
+- **One delegated touch handler**, installed once by App.js. It covers `.modal-overlay > .modal-sheet` (every sheet built with the shared modal classes, Settings included), the Franchise Story (`.history-sheet`) and the delete-team confirm (`.ts-confirm-sheet`).
+- **Starting a pull:** a downward drag that starts on an open sheet becomes a pull when it is more down than sideways and nothing between the finger and the sheet is scrolled down.
+- **Ignored:** sideways drags (stat tables), sliders, selects, text areas and canvases.
+- **Letting go:**
+  - past 25% of the sheet's height (at least 90px), or a flick (more than 0.6 px/ms at the end or over the finger's whole travel), the sheet slides away;
+  - closing dispatches the sheet's own backdrop click, so each sheet's own close and clean-up runs (timers, intervals, state);
+  - otherwise it springs back.
+  - A hidden-not-removed sheet (the player card) has its inline transform cleared, so it opens fresh.
+- **Not included:** the full-screen radar, a map with its own Done.
+- **Franchise Story:** gained a backdrop-tap close; it had none, so a swipe had nothing to call.
+
+**Found by the season sim, fixed:**
+- **The bug:** "rating history: kept across seasons" failed when the GM acted on a card that changed the club's rating. In the run, a release came at the very moment spring opened. The history's last point stayed one behind the dashboard until the next clock pass.
+- **The fix:** `CardEngine.resolve` now records the point (`recordRating`) at the moment of the decision when the rating changed, as GM moves through `advanceClock` already did.
+
+**Checks:**
+- **sim-season:** new "spring: no starter goes past his build-up innings", which reads every spring box score's two starters against `springStarterInnings`.
+- **test-team-roster-ui** (now 26):
+  - SP ×5 then RP, with no numbered turns or role codes;
+  - both groups sorted by OVR;
+  - Next still marked;
+  - every pen arm shows a role on the card, with exactly one closer;
+  - a bench reliever reads "Reserve · …";
+  - a starter shows no role.
+- **test-swipe-close-ui** (new, 13, dark and light; touch emulation through CDP):
+  - the first spring game played, with each starter at 2 innings or fewer;
+  - Schedule's stats sheet: a short pull springs back; a sideways drag on the box score and a pull with the stats scrolled both leave it open; a swipe closes it, and so does a flick;
+  - the player card closes and reopens in place;
+  - Settings and the Franchise Story close.
+
+**Suite (r154):**
+- full season 3798/3798 (spring starters 2, 2, 2, 3, 3, 3, 4, 4/3, 4; one spring game rained out);
+- three seasons 52/52;
+- every engine check;
+- every UI test in dark and light, including test-team-roster-ui 27/27 and test-swipe-close-ui 13/13.
+
+Fresh team: not needed. The display, the card and the swipe apply to any save. Spring outings apply to the next spring game played.

@@ -2216,6 +2216,15 @@ async function main() {
     check(`stats: two starts per game, quality starts counted (${gsSum} GS / ${startGames} games, ${qsSum} QS)`,
           gsSum === 2 * startGames && qsSum > 0 && qsSum < gsSum && rotNoStart.length === 0,
           `starters with no start recorded: ${rotNoStart.length}`);
+    // r154 spring: starters build up — never past their spring innings (2 early, 4 late).
+    {
+      const sp = st.schedule.filter(g => g.isSpring && g._committed && g.boxScore);
+      const over = sp.flatMap(g => [g.boxScore.away.pitchers[0], g.boxScore.home.pitchers[0]]
+        .filter(Boolean).map(p => ({ g: g.index, outs: p.ipOuts || 0, cap: 3 * Pitching.springStarterInnings(g.index) })))
+        .filter(x => x.outs > x.cap);
+      const ips = sp.map(g => `${g.index}:${(g.boxScore.away.pitchers[0]?.ipOuts || 0) / 3 | 0}/${(g.boxScore.home.pitchers[0]?.ipOuts || 0) / 3 | 0}`).join(' ');
+      check(`spring: no starter goes past his build-up innings (${sp.length} games; ${ips})`, sp.length > 0 && over.length === 0, JSON.stringify(over));
+    }
     // §76: the manager's pitching. Relievers rest (never a third day in a row),
     // starters get four days, relief work is spread over the pen (the best arms
     // pitch the most), closers collect the saves, starters go about 5–6.

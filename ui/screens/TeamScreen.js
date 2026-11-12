@@ -26,7 +26,7 @@ import { baseballYear, isAvailable } from '../../engine/PlayerFactory.js';
 import { contractIsUp } from '../../engine/OffseasonEngine.js';
 import { developmentStatus } from '../../engine/DevelopmentEngine.js';
 import { getHotColdIndicator, lastSeasonIMP } from '../../engine/IMPEngine.js';
-import { bullpenRoles, armStatus, ROLE_ABBR } from '../../engine/PitchingEngine.js';
+import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
@@ -277,8 +277,10 @@ export function refresh() {
  * season's, marked, before there is one), Impact and the rating on the right.
  *   Hitters:  C 1B 2B 3B SS OF OF OF DH (lineupSlots — the source of truth),
  *             the bench, players reporting (Pending), open roster spots, the IL.
- *   Pitchers: SP1–SP5 in start order, the bullpen by role, the pitcher bench,
- *             players reporting, open roster spots, the IL.
+ *   Pitchers: the rotation (SP) and the bullpen (RP), each best-rated first —
+ *             who starts next is marked, a reliever's role is on the player
+ *             card (r154) — the pitcher bench, players reporting, open roster
+ *             spots, the IL.
  * Everyone who reports lands on the bench; an open lineup slot, rotation turn
  * or bullpen spot waits for the GM until the roster deadline (RosterEngine).
  */
@@ -317,20 +319,17 @@ function _renderPlayers(state) {
   // Pitchers
   const rot       = team.rotation || {};
   const order     = (rot.order || []).map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.STARTING_PITCHERS);
-  const inOrder   = new Set(order.map(p => p.id));
-  const rotation  = [...order, ...ours.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS && !inOrder.has(p.id)).sort((a, b) => b.ovr - a.ovr)];
+  const byOvr     = (a, b) => b.ovr - a.ovr;
+  const rotation  = ours.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS).sort(byOvr);
   const nextSPId  = order.length ? order[(rot.currentIndex || 0) % order.length].id : null;
-  const roles     = bullpenRoles({ rosterIds }, players);
-  const depth     = [roles.closer, ...roles.setup, ...roles.middle, ...roles.long].filter(Boolean);
-  const byDepth   = (a, b) => (depth.indexOf(a.id) + 1 || 99) - (depth.indexOf(b.id) + 1 || 99) || b.ovr - a.ovr;
-  const pen       = ours.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort(byDepth);
+  const pen       = ours.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort(byOvr);
   const pBench    = ours.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort((a, b) => (a.pos === 'SP' ? 0 : 1) - (b.pos === 'SP' ? 0 : 1) || b.ovr - a.ovr);
   const pitIL     = ours.filter(p => isP(p) && p.group === PLAYER_GROUP.IL);
   const comingP   = coming.filter(c => isP(c.p));
   const pitRows = [
-    ...rotation.map((p, k) => _row(state, p, `SP${k + 1}`, impScores[p.id], { next: p.id === nextSPId })),
-    ...Array.from({ length: Math.max(0, ROSTER_LIMITS.STARTING_PITCHERS - rotation.length) }, (_, k) => _emptyRow(`SP${rotation.length + k + 1}`, { turn: true })),
-    ...pen.map((p, i) => _row(state, p, ROLE_ABBR[roles.roleOf[p.id]] || 'RP', impScores[p.id], { first: i === 0 })),
+    ...rotation.map(p => _row(state, p, 'SP', impScores[p.id], { next: p.id === nextSPId })),
+    ...Array.from({ length: Math.max(0, ROSTER_LIMITS.STARTING_PITCHERS - rotation.length) }, () => _emptyRow('SP', { turn: true })),
+    ...pen.map((p, i) => _row(state, p, 'RP', impScores[p.id], { first: i === 0 })),
     ...Array.from({ length: Math.max(0, ROSTER_LIMITS.BULLPEN - pen.length) }, (_, i) => _emptyRow('RP', { pen: true, first: !pen.length && i === 0 })),
     ...pBench.map((p, i) => _row(state, p, 'Bench', impScores[p.id], { first: i === 0 })),
     ...comingP.map((c, i) => _row(state, c.p, 'Bench', impScores[c.p.id], { first: !pBench.length && i === 0, coming: c })),

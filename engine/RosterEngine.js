@@ -972,9 +972,9 @@ export function moveOptions(state, playerId) {
       const order = u.rotation?.order || [];
       order.forEach((id, k) => {
         const occ = players[id];
-        if (ok(occ)) out.push({ key: `turn:${k}`, label: `SP${k + 1}`, detail: `${occ.name} (${ovr(occ)}) to the pitcher bench` });
+        if (ok(occ)) out.push({ key: `turn:${k}`, label: 'Rotation', detail: `${occ.name} (${ovr(occ)}) to the pitcher bench` });
       });
-      if (order.length < REQUIRED_SP_COUNT) out.push({ key: 'turn:new', label: `SP${order.length + 1}`, detail: 'Open' });
+      if (order.length < REQUIRED_SP_COUNT) out.push({ key: 'turn:new', label: 'Rotation', detail: 'Open' });
     } else {
       const pen = ids.map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.BULLPEN);
       pen.filter(ok).sort((a, b) => reliefValue(b) - reliefValue(a))
@@ -984,11 +984,11 @@ export function moveOptions(state, playerId) {
     return out;
   }
   if (me.group !== active) return [];
-  const label = isSP ? `SP${(u.rotation?.order || []).indexOf(playerId) + 1}` : 'their bullpen spot';
+  const label = isSP ? 'their rotation turn' : 'their bullpen spot';
   ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.PITCHER_BENCH && p.pos === me.pos)
     .sort((a, b) => b.ovr - a.ovr)
-    .forEach(p => out.push({ key: `in:${p.id}`, label: 'Pitcher bench', detail: `${p.name} (${ovr(p)}) takes ${isSP ? `the ${label} turn` : label}` }));
-  out.push({ key: 'bench', label: 'Pitcher bench', detail: isSP ? `Leave the ${label} turn open` : `Leave a spot in ${where} open` });
+    .forEach(p => out.push({ key: `in:${p.id}`, label: 'Pitcher bench', detail: `${p.name} (${ovr(p)}) takes ${label}` }));
+  out.push({ key: 'bench', label: 'Pitcher bench', detail: isSP ? `Leave ${label} open` : `Leave a spot in ${where} open` });
   return out;
 }
 

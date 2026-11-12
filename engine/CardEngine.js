@@ -68,7 +68,7 @@ import {
   activateFromIL, placeOnWaivers, reconcileRoster, applyRosterMutation, reserveGroup,
   openSpots, managerFillAt, managerFillsNow, pendingArrivals,
   HITTER_TARGET, PITCHER_TARGET,
-  defaultActiveGroup, nextCalendarDay, computePayroll,
+  defaultActiveGroup, nextCalendarDay, computePayroll, teamRating, recordRating,
 } from './RosterEngine.js';
 import { evaluateTrade, queueTrade, generateCPUCashSale, tradeWindow, tradeBlockers, startCooldown, busyWithUs, evaluateForUser, evaluateForClub, clubBar } from './TradeEngine.js';
 import {
@@ -335,6 +335,10 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
   _applyRosterAction(instance, choice, StateManager.get(), { atMs: clockNow(), feasible: actionOk });
   _maybeChainFollowup(instance, choice, clockNow());
   _makePromise(instance, choice, clockNow());
+  // r154 §95 a decision that changed the club's rating (a release, a call-up)
+  // is a point on its history at the moment it was made — not at the next tick.
+  const after = StateManager.get(), last = (after.ratingHistory || []).slice(-1)[0];
+  if (last && (teamRating(after, 'user') !== last.r || last.s !== (after.seasonNum || 1))) StateManager.mutate(s => { recordRating(s, clockNow()); });
 }
 
 /**

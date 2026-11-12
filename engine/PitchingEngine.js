@@ -25,6 +25,7 @@ import {
   PITCH_SP_TIRE_BASE_BF, PITCH_SP_TIRE_PER_STAMINA, PITCH_RP_TIRE_BASE_BF, PITCH_RP_TIRE_PER_STAMINA,
   PITCH_SP_REST_DAYS, PITCH_RP_LONG_OUTING_BF, PITCH_RP_HEAVY_OUTING_BF, PITCH_RP_START_BF,
   PITCH_RP_MAX_STRAIGHT_DAYS, PITCH_RP_TIRED_ONSET_SHARE, PITCH_ARM_HISTORY_DAYS, PITCH_LONG_INNINGS,
+  SPRING_SP_INNINGS, SPRING_TRAINING_GAME_COUNT,
 } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
 import { playingRating } from './Diamonds.js';
@@ -165,6 +166,17 @@ export function tireAfterBF(player, isStarter, carriedTired = false) {
   const bf = isStarter ? PITCH_SP_TIRE_BASE_BF + s * PITCH_SP_TIRE_PER_STAMINA
                        : PITCH_RP_TIRE_BASE_BF + s * PITCH_RP_TIRE_PER_STAMINA;
   return Math.max(2, Math.round(bf * (carriedTired ? PITCH_RP_TIRED_ONSET_SHARE : 1)));
+}
+
+/**
+ * r154 A starter's innings in a spring game: two in the first ones, building
+ * to four by the last (`springNum` = the club's spring game, 0-based; spring
+ * games lead the schedule, so it is the game's index).
+ */
+export function springStarterInnings(springNum) {
+  const n = Math.max(1, SPRING_TRAINING_GAME_COUNT - 1);
+  const k = Math.min(n, Math.max(0, Number.isFinite(springNum) ? springNum : 0));
+  return Math.round(SPRING_SP_INNINGS.first + (SPRING_SP_INNINGS.last - SPRING_SP_INNINGS.first) * k / n);
 }
 
 /** Innings the manager wants from a reliever in this role. */

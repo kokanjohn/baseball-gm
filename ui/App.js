@@ -27,13 +27,14 @@ import * as EventBus  from './EventBus.js';
 import * as StateManager from '../store/StateManager.js';
 import { applyTheme, applyTeamColors, metricBarColor } from './formatters.js';
 import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
+import { installSwipeClose } from './components/SwipeClose.js';
 
 // ─────────────────────────────────────────────────────────────
 // TAB STATE
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r153';
+export const APP_VERSION = 'tfo-v2-r154';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -1084,6 +1085,8 @@ export function playSoundOpen() {
 
 // Wire warmUpAudio to first user tap anywhere in the app
 document.addEventListener('pointerdown', warmUpAudio, { once: true });
+// r154 every bottom sheet closes with a swipe down.
+installSwipeClose();
 
 // ─────────────────────────────────────────────────────────────
 // SETTINGS — DEVICE PREFERENCES (localStorage, not save-slot)

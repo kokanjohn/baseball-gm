@@ -27,7 +27,8 @@
 import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
 import { getHotColdIndicator, getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
-import { PHASE } from '../../data/constants.js';
+import { PHASE, PLAYER_GROUP } from '../../data/constants.js';
+import { bullpenRoles } from '../../engine/PitchingEngine.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear } from '../../engine/PlayerFactory.js';
 
@@ -149,6 +150,7 @@ function _renderCard(player, playerId, state) {
           <span class="pc-age">${formatAge(player.dob, baseballYear(StateManager.get()))} yrs</span>
         </div>
         <div class="pc-team">${_escape(teamName)}</div>
+        ${_roleLine(player, state)}
         ${player.trait ? `<div class="pc-trait">${_escape(TRAIT_WORDS[player.trait] || player.trait)}</div>` : ''}
         ${(player.allStarSeasons || []).length ? `<div class="pc-trait" style="color:#c9971c;">★ ${player.allStarSeasons.length > 1 ? `${player.allStarSeasons.length}× ` : ''}All-Star${(player.allStarMvps || []).length ? ` · ${player.allStarMvps.length > 1 ? `${player.allStarMvps.length}× ` : ''}ASG MVP` : ''}</div>` : ''}
       </div>
@@ -194,6 +196,22 @@ function _renderAsk(player, state) {
       </div>
       ${Number.isFinite(player._faSince) ? `<div class="pc-ask-note">Unsigned for ${_daysText(Math.max(0, Math.floor((Date.now() - player._faSince) / 86_400_000)))}${years === 1 && state.phase !== PHASE.OFFSEASON ? ' · paid only for the days on a roster' : ''}</div>` : ''}
     </div>`;
+}
+
+/**
+ * r154 A reliever's bullpen role (the Team screen lists the pen by rating, so
+ * the role lives here): the manager's roles from PitchingEngine.bullpenRoles —
+ * closer, setup, middle, long. An arm on the pitcher bench is a reserve.
+ */
+const ROLE_WORDS = { closer: 'Closer', setup: 'Setup', middle: 'Middle relief', long: 'Long relief' };
+function _roleLine(player, state) {
+  if (![PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(player.group)) return '';
+  const team = player.teamId === 'user' ? state.userTeam : (state.leagueTeams || []).find(t => t.id === player.teamId);
+  if (!team) return '';
+  const role = ROLE_WORDS[bullpenRoles(team, state.players || {}).roleOf[player.id]];
+  if (!role) return '';
+  const reserve = player.group === PLAYER_GROUP.PITCHER_BENCH;
+  return `<div class="pc-role"><span class="pc-role-label">Bullpen role</span> ${reserve ? `Reserve · ${role.toLowerCase()}` : role}</div>`;
 }
 
 const TRAIT_WORDS = { youngGun: 'Young gun', clubhouseLeader: 'Clubhouse leader', veteran: 'Veteran', volatile: 'Volatile', consistent: 'Consistent' };
@@ -474,6 +492,8 @@ function _injectCSS() {
     .pc-pos{font-weight:700;color:var(--text);}
     .pc-dot{color:var(--border);}
     .pc-team{font-size:13px;color:var(--soft);margin-bottom:3px;}
+    .pc-role{font-size:13px;font-weight:700;color:var(--text);margin-bottom:3px;}
+    .pc-role-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-right:4px;}
     .pc-career-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;max-height:220px;overflow-y:auto;}
     .pc-career{width:100%;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums;}
     .pc-career th{font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);text-align:right;padding:3px 5px;position:sticky;top:0;background:var(--surface);}
