@@ -2460,10 +2460,19 @@ async function main() {
   }
   const ok = summarize();
   console.log(`\nseed=${SEED} games=${target}`);
-  process.exit(ok ? 0 : 1);
+  _exit(ok ? 0 : 1);
+}
+
+/**
+ * Exit once stdout has been written out. Piped (as in CI), process.exit() drops
+ * whatever is still buffered — the report's last thousands of lines, the FAIL
+ * lines and the summary with them — so a failed run read as a silent stop.
+ */
+function _exit(code) {
+  process.stdout.write('', () => process.stderr.write('', () => process.exit(code)));
 }
 
 main().catch(err => {
   console.error('\n\x1b[31mHARNESS CRASHED\x1b[0m:', err);
-  process.exit(2);
+  _exit(2);
 });
