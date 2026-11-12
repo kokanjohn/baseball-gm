@@ -23,7 +23,7 @@ import { TRADE } from '../data/constants.js';
 import * as Finance from './FinanceEngine.js';
 import {
   cpuRespond, buildCounter, evaluateForClub, tradeBlockers, queueTrade,
-  adjustRapport, startCooldown, clubBar, talkWith, talkIsOpen,
+  adjustRapport, startCooldown, clubBar, talkWith, talkIsOpen, ourSideBlocker,
 } from './TradeEngine.js';
 import { deliverTalkReply, withdrawTalkCards } from './CardEngine.js';
 import { formatK } from './CardTokens.js';
@@ -42,21 +42,9 @@ function _replyDelayMs() {
 // desk reads them too); re-exported here for the screens and cards.
 export { talkWith, talkIsOpen };
 
-/**
- * ourSideOk(state, offer) — can our owner carry the deal (salary we'd add,
- * cash we'd send)? Returns null or the reason.
- */
-export function ourSideBlocker(state, offer) {
-  const P = (id) => state.players[id];
-  const ret = offer.retain || {};
-  const inK  = (offer.incomingIds || []).filter(id => Finance.isPaid(P(id)))
-    .reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
-  const outK = (offer.outgoingIds || []).filter(id => Finance.isPaid(P(id)))
-    .reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
-  if (!Finance.canAddSalary(state, inK, outK)) return 'ownership won\'t approve the added payroll';
-  if ((offer.cashK || 0) < 0 && !Finance.canSpend(state, -offer.cashK)) return 'club funds can\'t cover the cash';
-  return null;
-}
+// §85 can our owner carry the deal — a pure rule, with the rest in TradeEngine (r150: the staff's
+// trade advice reads it too); re-exported here for the screens and cards.
+export { ourSideBlocker };
 
 /**
  * proposeTrade(teamId, offer, atMs, { round }) — send an offer. Returns

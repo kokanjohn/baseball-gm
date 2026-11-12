@@ -633,6 +633,22 @@ export function evaluateForUser(offer, state) {
   }, state, 'user');
 }
 
+/**
+ * ourSideBlocker(state, offer) — can our owner carry the deal (salary we'd add,
+ * cash we'd send)? Returns null or the reason.
+ */
+export function ourSideBlocker(state, offer) {
+  const P = (id) => state.players[id];
+  const ret = offer.retain || {};
+  const inK  = (offer.incomingIds || []).filter(id => Finance.isPaid(P(id)))
+    .reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
+  const outK = (offer.outgoingIds || []).filter(id => Finance.isPaid(P(id)))
+    .reduce((a, id) => a + (P(id)?.contractSalary || 0) * (1 - (ret[id] || 0)), 0);
+  if (!Finance.canAddSalary(state, inK, outK)) return 'ownership won\'t approve the added payroll';
+  if ((offer.cashK || 0) < 0 && !Finance.canSpend(state, -offer.cashK)) return 'club funds can\'t cover the cash';
+  return null;
+}
+
 /** The bar this club sets (net value it needs), by its GM's rapport with ours. */
 export function clubBar(state, teamId) {
   const g = rapportGrade(rapportOf(state, teamId)).toLowerCase();

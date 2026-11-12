@@ -86,6 +86,7 @@ import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
 import { planDeliveryTimes, pushTimeFor, replyTime } from './CardScheduler.js';
 import { writeComposeReply } from './ComposeReplies.js';
+import { dealByKey } from './TradeAdvice.js';
 import { reviewWords } from './SeasonReview.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
@@ -1319,6 +1320,8 @@ function _rosterConditionCards(delivered, atMs) {
     // got hurt, or is already away) is withdrawn rather than left as a ghost.
     if ((!key || key.startsWith('followup:') || key.startsWith('indie:') || key.startsWith('tip:')) && CARD_ACTIONS[c._raw?.onYes]) return !cardFeasible(state, c);
     if (c._tradeOffer)               return !_tradeStillValid(state, c, atMs);
+    // r150 the director's counter to a deal that's no longer waiting on us (taken, passed, ran out, called off).
+    if (c._adviceDeal && !dealByKey(state, c._adviceDeal, atMs)) return true;
     // §90 a package Pro Scouting put together that can no longer be offered
     // (a player in it moved or got hurt, the window closed, the club cooled off).
     if (c._ideaOffer && c._ideaTeamId) return !!(tradeBlockers(c._ideaOffer, state, Math.max(atMs, c.deliverAtMs || 0), c._ideaTeamId)
@@ -1826,7 +1829,7 @@ function _releaseDue(nowMs) {
   due = due.map(c => {
     if (!c._composeWrite) return c;
     const reply = writeComposeReply(state, { topicId: c._composeTopic, channelId: c._composeChannel, atMs: c.deliverAtMs,
-                                             subject: c._composeLabel ? `Re: ${c._composeLabel}` : null });
+                                             subject: c._composeLabel ? `Re: ${c._composeLabel}` : null, arg: c._composeArg || null });
     if (!reply) return { ...c, _composeWrite: false };
     log.push({ topicId: c._composeTopic, channelId: c._composeChannel, atMs: c.deliverAtMs, memo: reply.memo });
     // r146 the players the reply names (its report), so each name opens the player's card.
@@ -1840,6 +1843,19 @@ function _releaseDue(nowMs) {
         yesLabel: d.yesLabel, noLabel: d.noLabel, _targetPlayerId: d.playerId, autoResolve: 'no',
         expiresAtMs: c.deliverAtMs + (d.expiresInMs || 2 * 86_400_000),
         _raw: { ...(c._raw || {}), onYes: d.onYes, onNo: null, _trainGain: d.trainGain, _trainGames: d.trainGames },
+      });
+    }
+    // r150 the director's counter is a decision: send it as the next round of the talks, adjust it
+    // first in the composer, or not now. It stands only while the deal it's about is on the table.
+    const t = reply.trade;
+    if (t) {
+      Object.assign(out, {
+        tag: 'TRADE', yesLabel: 'Counter with This', noLabel: 'Not Now', autoResolve: 'no',
+        expiresAtMs: t.expiresAtMs ?? c.deliverAtMs + 2 * 86_400_000,
+        _ideaTeamId: t.teamId, _ideaOffer: t.offer, _ideaRound: t.round, _adviceDeal: t.dealKey,
+        _reviseOffer: { teamId: t.teamId, offer: t.offer, round: t.round }, _reviseLabel: 'Adjust It First',
+        yesMsg: 'Counter sent. Their answer comes on their clock.', noMsg: 'Holding off on a counter.',
+        _raw: { ...(c._raw || {}), onYes: 'lt_offer_send', onNo: 'lt_pass', onAuto: 'lt_pass' },
       });
     }
     return out;
@@ -2156,21 +2172,24 @@ export function deliverCardById(cardId) {
  * @param {String} topicId    — e.g. 'gk_field', 'mgr_morale'
  * @param {String} channelId  — e.g. 'groundskeeper', 'manager'
  */
-export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs = clockNow() } = {}) {
+export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs = clockNow(), arg = null } = {}) {
   const state   = StateManager.get();
   const cardDef = COMPOSE_RESPONSE_POOL[topicId];
 
   // §105 the reply comes back later, not at once: when this person would write back.
   const [minMin, maxMin] = COMPOSE_REPLY.windows[channelId] || COMPOSE_REPLY.defaultWindow;
-  const deliverAtMs = replyTime({
+  let deliverAtMs = replyTime({
     nowMs, minMin, maxMin,
     quietStart: state.push?.quietStart, quietEnd: state.push?.quietEnd,
     busy: COMPOSE_REPLY.gameWorkers.includes(channelId) ? _userGameWindows(state, nowMs) : [],
   });
+  // r150 a question about something with a deadline (a trade on the table) is answered before it.
+  if (Number.isFinite(arg?.expiresAtMs)) deliverAtMs = Math.min(deliverAtMs, _answerBy(nowMs, arg.expiresAtMs));
   // §106 written when it comes back (releaseDueCards), from the club as it stands then; until then the
   // card carries only what the GM's phone needs (who, "Re: …") and the pool's text as a fallback.
   const pending = { isCompose: true, _composeTopic: topicId, _composeChannel: channelId, _composeWrite: true,
-                    _composeLabel: topicLabel, _sentAtMs: nowMs, deliverAtMs, deliveredAt: deliverAtMs };
+                    _composeLabel: topicLabel, _sentAtMs: nowMs, deliverAtMs, deliveredAt: deliverAtMs,
+                    ...(arg ? { _composeArg: arg } : {}) };
 
   let instance;
   if (!cardDef) {
@@ -2224,6 +2243,17 @@ export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs 
     s.scheduledCards = [...(s.scheduledCards || []), instance].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
   });
   return instance;
+}
+
+/**
+ * r150 when a reply about something with a deadline must land: COMPOSE_REPLY.beforeDeadlineMs
+ * ahead of it, and never sooner than COMPOSE_REPLY.soonestMs after sending — inside a short
+ * deadline, halfway there.
+ */
+function _answerBy(nowMs, deadlineMs) {
+  const by = deadlineMs - COMPOSE_REPLY.beforeDeadlineMs;
+  if (by >= nowMs + COMPOSE_REPLY.soonestMs) return by;
+  return nowMs + Math.max(60_000, Math.min(COMPOSE_REPLY.soonestMs, Math.floor((deadlineMs - nowMs) / 2)));
 }
 
 /** Messages the GM sent that haven't been answered yet (§105), oldest first. */
@@ -3767,7 +3797,7 @@ function _applyLeagueTradeAction(action, instance, atMs) {
     return;
   }
   if (action === 'lt_offer_send') {
-    const res = Negotiation.proposeTrade(instance._ideaTeamId, instance._ideaOffer, atMs);
+    const res = Negotiation.proposeTrade(instance._ideaTeamId, instance._ideaOffer, atMs, { round: instance._ideaRound ?? null });
     if (!res.ok) {
       _deliverNotice(`lt:unsent:${instance.instanceId}`, {
         cardId: 'lt_unsent', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞',

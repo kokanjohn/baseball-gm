@@ -2716,6 +2716,23 @@ export const COMPOSE_RESPONSE_POOL = {
     yesLabel:'Noted', yesEffect:{}, yesMsg:'Opponent scouting reviewed.',
   },
 
+  // r150 a trade on the table (written as it comes back: ComposeReplies mgr_trade / sc_trade)
+  mgr_trade: {
+    id:'compose_mgr_trade', autoResolve:'yes', type:'normal', tag:'TRADE',
+    sender:'Manager', avatar:'📋',
+    subject:'The trade on the table',
+    body:'The manager looked over the deal and will talk it through with you.',
+    yesLabel:'Noted', yesEffect:{}, yesMsg:'Noted.',
+  },
+
+  sc_trade: {
+    id:'compose_sc_trade', autoResolve:'yes', type:'normal', tag:'TRADE',
+    sender:'Scouting Dept.', avatar:'🔭',
+    subject:'The trade on the table',
+    body:'The scouts looked over the deal and will report back.',
+    yesLabel:'Noted', yesEffect:{}, yesMsg:'Noted.',
+  },
+
   mr_narrative: {
     id:'compose_mr_narrative', autoResolve:'yes', type:'normal', tag:'OPERATIONS',
     sender:'Media Relations', avatar:'📰',

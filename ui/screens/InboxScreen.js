@@ -28,6 +28,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../formatters.js';
 import * as When from '../../engine/When.js';
+import { dealsFor } from '../../engine/TradeAdvice.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -39,6 +40,7 @@ let _openCard       = null;     // §115 instanceId of the message open in the r
 let _listScroll     = 0;        // the list's scroll position, restored on the way back
 let _composeChannel = null;     // currently selected compose channel id
 let _composeTopic   = null;     // currently selected compose topic id
+let _composeDeal    = null;     // r150 the deal a trade topic asks about (its key)
 let _mounted      = false;
 let _listeners    = [];
 
@@ -68,6 +70,7 @@ const COMPOSE_CHANNELS = [
       { id: 'mgr_morale',    label: 'Team morale check-in',     desc: 'Get a read on clubhouse atmosphere' },
       { id: 'mgr_rotation',  label: 'Rotation status',          desc: 'Check on SP workload and next starts' },
       { id: 'mgr_matchup',   label: 'Upcoming series prep',     desc: 'Discuss the next opponent\'s tendencies' },
+      { id: 'mgr_trade',     label: 'A trade on the table',     desc: 'How a deal would change us on the field, with the coaches\' read on who\'s coming in', deal: true },
     ],
   },
   {
@@ -157,6 +160,7 @@ const COMPOSE_CHANNELS = [
       { id: 'sc_free_agents', label: 'Free agents worth a look', desc: 'The scouts look over the free agents (a few a week, by the director)' },
       { id: 'sc_prospect',   label: 'Young player report',      desc: 'A scouting report on one of our young players' },
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
+      { id: 'sc_trade',      label: 'Is there a better deal?',  desc: 'The director\'s counter to a trade on the table, and what the deal does to payroll', deal: true },
     ],
   },
   // Low priority — event-driven
@@ -424,8 +428,12 @@ function _linkPlayers(html, players) {
   if (!players.length) return html;
   const byName = new Map(players.map(p => [_escape(p.name), p.id]));
   const names = [...byName.keys()].sort((a, b) => b.length - a.length).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const re = new RegExp(`(?<![\\w'&#;-])(${names.join('|')})(?![\\w-])`, 'g');
-  return html.replace(re, (m) => `<button class="msg-player" data-msg-player="${byName.get(m)}">${m}</button>`);
+  // (with the punctuation right after it, so a line never starts with "." or ",")
+  const re = new RegExp(`(?<![\\w'&#;-])(${names.join('|')})(?![\\w-])((?:&#39;s?|'s?)?[.,;:!?)]*)`, 'g');
+  return html.replace(re, (m, name, tail) => {
+    const btn = `<button class="msg-player" data-msg-player="${byName.get(name)}">${name}</button>`;
+    return tail ? `<span class="msg-player-wrap">${btn}${tail}</span>` : btn;
+  });
 }
 
 function _renderReading(card, inbox, state) {
@@ -604,6 +612,19 @@ function _renderCompose(state) {
 
 /** Topic state for one topic: awaiting a reply, cooling down (games left), or open. */
 function _topicState(t, state) {
+  // r150 a trade topic is about one deal on the table: open while a deal hasn't been asked about.
+  if (t.deal) {
+    const deals = dealsFor(t.id, state, Date.now());
+    const asked = (d) => [...(state.scheduledCards || []), ...(state.inbox || [])]
+      .some(c => c.isCompose && c._composeTopic === t.id && c._composeArg?.key === d.key);
+    const open = deals.filter(d => !asked(d));
+    if (!deals.length) return { none: 'No trade is waiting on our answer' };
+    if (!open.length) {
+      const waiting = (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id);
+      return waiting ? { waiting } : { none: 'Already asked about every trade on the table' };
+    }
+    return { deals: open };
+  }
   const gameIdx = state.currentGameIndex || 0, cd = state.composeCooldowns || {};
   const waiting = (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id);
   if (waiting) return { waiting };
@@ -633,11 +654,13 @@ function _composeRecipients(state) {
     if (ch.id === 'other_gms') sub = 'Trade talks with the other clubs';
     else {
       const st = ch.topics.map(t => _topicState(t, state));
-      const open = st.filter(x => !x.waiting && !x.left).length;
+      const open = st.filter(x => !x.waiting && !x.left && !x.none).length;
       const wait = st.filter(x => x.waiting).length;
+      const left = Math.min(...st.filter(x => x.left).map(x => x.left));
       sub = open ? `${open} topic${open !== 1 ? 's' : ''}${wait ? ` · awaiting ${wait} repl${wait !== 1 ? 'ies' : 'y'}` : ''}`
           : wait ? `Awaiting a reply`
-          : `Recently contacted · again in ${Math.min(...st.map(x => x.left))} game${Math.min(...st.map(x => x.left)) !== 1 ? 's' : ''}`;
+          : Number.isFinite(left) ? `Recently contacted · again in ${left} game${left !== 1 ? 's' : ''}`
+          : 'Nothing to ask right now';
     }
     return `<button type="button" class="compose-person" data-channel="${ch.id}">
       <span class="cp-main"><span class="cp-name">${_escape(ch.label)}</span><span class="cp-sub">${_escape(ch.role)} · ${_escape(sub)}</span></span>
@@ -654,21 +677,35 @@ function _composeTopics(state, ch) {
     const st = _topicState(t, state);
     const isSel = _composeTopic === t.id;
     const note = st.waiting ? `Sent ${_shortWhen(st.waiting._sentAtMs)} · awaiting reply`
-      : st.left ? `Available again in ${st.left} game${st.left !== 1 ? 's' : ''}` : '';
-    const off = !!(st.waiting || st.left);
+      : st.left ? `Available again in ${st.left} game${st.left !== 1 ? 's' : ''}` : st.none || '';
+    const off = !!(st.waiting || st.left || st.none);
+    // r150 a trade topic, picked: which deal (each with its deadline).
+    const deals = isSel && !off && st.deals ? `<div class="compose-h compose-deal-h">Which deal?</div>
+      <div class="compose-deals">${st.deals.map(d => `<button type="button" class="compose-deal${_composeDeal === d.key ? ' selected' : ''}" data-deal="${_escape(d.key)}">
+        <span class="cd-label">${_escape(d.label)}</span>
+        ${d.expiresAtMs ? `<span class="cd-due">Answer due ${_escape(When.untilFull(d.expiresAtMs, Date.now()))}</span>` : ''}</button>`).join('')}</div>` : '';
     return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
       <span>${_escape(t.label)}</span>
       <span class="topic-desc">${_escape(note || t.desc)}</span>
-    </div>`;
+    </div>${deals}`;
   }).join('');
-  const canSend = !!_composeTopic;
+  const sel = ch.topics.find(t => t.id === _composeTopic);
+  const canSend = !!_composeTopic && (!sel?.deal || !!_composeDeal);
   return `
     <button type="button" class="compose-back" id="compose-back">‹ All recipients</button>
     <div class="compose-to"><span class="compose-to-label">To</span> ${_escape(ch.label)}<span class="compose-to-role">${_escape(ch.role)}</span></div>
     <div class="compose-h">What about?</div>
     <div class="compose-topic-list">${rows}</div>
-    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : 'Pick a topic'}</button>
+    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : _composeTopic ? 'Pick a deal' : 'Pick a topic'}</button>
     <div class="compose-cooldown-note">Replies come back later, the way they would from a real staff — field staff answer after the game.</div>`;
+}
+
+/** A trade topic with one deal on the table: that deal, picked already. */
+function _onlyDeal(ch, topicId) {
+  const t = ch?.topics.find(x => x.id === topicId);
+  if (!t?.deal) return null;
+  const st = _topicState(t, StateManager.get());
+  return st.deals?.length === 1 ? st.deals[0].key : null;
 }
 
 function _isOnCooldown(channel, cooldowns, gameIdx) {
@@ -708,6 +745,7 @@ function _attachTabListeners(state) {
       if (_activeTab === 'compose' && tab !== 'compose') {
         _composeChannel = null;
         _composeTopic   = null;
+        _composeDeal    = null;
       }
       _activeTab = tab;
       _openCard  = null;
@@ -788,14 +826,15 @@ function _attachTabListeners(state) {
       }
       _composeChannel = ch.id;
       // One open topic: picked already.
-      const open = ch.topics.filter(t => { const st = _topicState(t, StateManager.get()); return !st.waiting && !st.left; });
+      const open = ch.topics.filter(t => { const st = _topicState(t, StateManager.get()); return !st.waiting && !st.left && !st.none; });
       _composeTopic = open.length === 1 ? open[0].id : null;
+      _composeDeal = _onlyDeal(ch, _composeTopic);
       refresh();
       _composeToTop();
     });
   });
   document.getElementById('compose-back')?.addEventListener('click', () => {
-    _composeChannel = null; _composeTopic = null;
+    _composeChannel = null; _composeTopic = null; _composeDeal = null;
     refresh();
     _composeToTop();
   });
@@ -804,9 +843,15 @@ function _attachTabListeners(state) {
   document.querySelectorAll('[data-topic]').forEach(el => {
     el.addEventListener('click', () => {
       if (el.classList.contains('disabled')) return;
+      if (_composeTopic !== el.dataset.topic) _composeDeal = null;
       _composeTopic = el.dataset.topic;
+      const ch = COMPOSE_CHANNELS.find(c => c.id === _composeChannel);
+      _composeDeal = _composeDeal || _onlyDeal(ch, _composeTopic);
       refresh();
     });
+  });
+  document.querySelectorAll('[data-deal]').forEach(el => {
+    el.addEventListener('click', () => { _composeDeal = el.dataset.deal; refresh(); });
   });
 
   // Compose send button
@@ -879,16 +924,21 @@ async function _sendCompose(topicId, channelId, state) {
   const gameIdx = state.currentGameIndex || 0;
   const ch = COMPOSE_CHANNELS.find(c => c.id === channelId);
   const topic = ch?.topics.find(t => t.id === topicId);
+  // r150 a trade topic asks about one deal (no cooldown: one question per deal).
+  const deal = topic?.deal ? (_topicState(topic, state).deals || []).find(d => d.key === _composeDeal) : null;
+  if (topic?.deal && !deal) { App.showToast('That deal is no longer waiting on us.', 'neutral', 2500); refresh(); return; }
 
   // Record cooldown immediately
-  StateManager.mutate(s => {
+  if (!topic?.deal) StateManager.mutate(s => {
     s.composeCooldowns = { ...(s.composeCooldowns || {}), [topicId]: gameIdx };
   });
 
   // §105 the reply is written now and arrives later (CardEngine schedules it; a push when it lands).
   try {
     const { deliverComposeCard } = await import('../../engine/CardEngine.js');
-    deliverComposeCard(topicId, channelId, { topicLabel: topic?.label || '' });
+    deliverComposeCard(topicId, channelId, deal
+      ? { topicLabel: deal.label, arg: { key: deal.key, label: deal.label, instanceId: deal.instanceId, expiresAtMs: deal.expiresAtMs } }
+      : { topicLabel: topic?.label || '' });
     import('../PushClient.js').then(P => P.syncPushSchedule()).catch(() => {});
   } catch (err) {
     console.error('InboxScreen._sendCompose:', err);
@@ -897,6 +947,7 @@ async function _sendCompose(topicId, channelId, state) {
   // Back to the list, where the message waits under "Waiting to hear back".
   _composeChannel = null;
   _composeTopic   = null;
+  _composeDeal    = null;
   App.showToast(`Message sent to ${ch?.label || 'staff'}. You'll hear back.`, 'positive', 2500);
   refresh();
   _composeToTop();

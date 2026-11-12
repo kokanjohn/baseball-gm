@@ -1533,6 +1533,10 @@ export const COMPOSE_REPLY = Object.freeze({
   defaultWindow: Object.freeze([30, 240]),
   gameWorkers: Object.freeze(['manager', 'pitching_coach', 'hitting_coach', 'bench_coach', 'bullpen_coach', 'groundskeeper']),
   gameLengthMs: 3 * 60 * 60_000,   // a game not yet over is busy until about this long after first pitch
+  // r150 a question about something with a deadline (a trade on the table) is answered this far ahead of it…
+  beforeDeadlineMs: 2 * 60 * 60_000,
+  // …and, inside a short deadline, no sooner than this (or halfway there).
+  soonestMs: 15 * 60_000,
 });
 export const FA_UPGRADE_MIN          = 3;    // OVR over the man he'd replace
 

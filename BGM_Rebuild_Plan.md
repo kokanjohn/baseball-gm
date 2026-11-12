@@ -9990,3 +9990,50 @@ test-fa-screens-ui: Finances' payday and ledger read relatively, with no month n
 **Suite note (r149):** r148's new Messages-time check switched tabs, which closed the open report before the next step tapped a name in it. The test crashed (a timeout, not a FAIL line), and a FAIL-line grep missed it. The check now runs at the end, after reopening the report. Test only; the app was unaffected. check-game-pushes now expects the relative makeup time.
 
 **Suite (r149):** everything passes: check-relative-times 4/4, the full season 3657/3657, three seasons 52/52, check-game-pushes 8/8 and test-fa-screens-ui 30/30 in dark and light, each re-run after its fix.
+
+### 122.22 Ask the staff about a trade on the table (GM, Nov 11 — r150)
+
+The GM asked for compose messages that get opinions on trade offers and counter options. Of the four proposed (A: the manager on the field, B: the scouting director's counter, C: the payroll, D: shopping a player), the GM picked **A and B, with C's payroll paragraph inside B**. D comes separately. The offer card's one-line Pro Scouting read stays as it is.
+
+**A deal on the table** (`TradeAdvice.dealsOnTable`) is one waiting on our answer:
+- a club's offer to us (the offer card; a counter from us would be round 2);
+- a club's counter to our offer (`talk_counter`; our counter would be its round + 1);
+- a club's yes to our offer (`talk_accepted`; the manager only — the director doesn't reopen a yes).
+
+**Compose:**
+- Manager → **A trade on the table**; Scouting / Dev → **Is there a better deal?** (`topic.deal`).
+- Picking the topic lists the deals on the table, each with "Answer due Saturday at 7:46 PM" (one deal: picked already). Send carries the deal (`_composeArg: { key, label, instanceId, expiresAtMs }`); the reply's subject is "Re: <the deal's subject>".
+- No game cooldown: one question per deal per topic. A topic with no deal reads "No trade is waiting on our answer"; after asking, "awaiting reply" or "Already asked about every trade on the table".
+- **The reply comes before the deal is due:** `COMPOSE_REPLY.beforeDeadlineMs` (2 hours) ahead of it, never sooner than `soonestMs` (15 minutes) after sending — inside a short deadline, halfway there. A deadline beats quiet hours and game time.
+- Written when it comes back, from the deal as it stands then. A deal already settled gets "By the time I got to it, that deal was settled — you made the call and took it / passed / it ran out / it's off the table."
+
+**A — the manager** (`fieldRead`, the words in ComposeReplies `mgr_trade`). The club on the field today, before and after:
+- each regular we'd send (lineup spot, rotation turn, closer or setup arm) and who would take the spot — one of ours, or one coming back in the deal;
+- the depth we'd send, together ("We won't miss much on the field");
+- where each player coming in would play: over whom in the lineup, whose turn in the rotation, closing or setup, or depth;
+- the pitching coach on an arm coming in (stamina for a starter, stuff against control for a reliever, the season's ERA), the hitting coach on a bat (power or contact, the season's line), 32 or older is more injury risk (true: InjuryEngine), and an untested player's ratings are an estimate;
+- the bottom line: better / a little better / a wash / a little worse / worse **today** (OVR across the regulars). The future is "the director's department."
+- No decision. **Trades don't move morale in the engine**, so the manager says nothing about how the room would take it.
+
+**B — the director** (`suggestCounter`, the words in `sc_trade`), signed by the director:
+1. **As it stands:** good / fair / a little short / we'd give more than we get (our rules, `evaluateForUser`). Then the read of the club: room to do more / a little room / close to the most they'll do / at their limit, and a cool or strained relationship makes them harder to move.
+2. **The counter**, the one worth the most to us that the director thinks the club will still take. Options considered:
+   - more cash from them (or less from us);
+   - one of ours kept out (when we send more than one);
+   - one more of theirs — a player who would play for us, or a prospect (24 or younger);
+   - a better player of theirs in place of one they offer, in the same job.
+   It is judged by the clubs' own rule (`evaluateForClub` − `clubBar`, both owners' books, the blockers). **The director's read of the club's room is off by `readError` (1 sd, trade value: about 13 for a 40, 4 for a 90 pro scout)**, one error per read, and the counter leaves `COUNTER_MARGIN` (5) of room by that read. A great director's counters are taken about 91–94% of the time; a weak director's, 59–70% (asking for more each time). It must add at least `COUNTER_MIN_GAIN` (3) for us. Confidence words by quality ("I'm confident" 75+, "I think" 55+, "though I could be wrong" below).
+   **The risk, said plainly:** a counter replaces their offer (as the composer always did), so if it's misread they counter back or decline, and we can't take the offer as it stood. On the last round: "if they say no, the talks are over." No counter: "I wouldn't counter" — take it or pass — or "out of rounds."
+3. **Untested players in the deal:** the director's read (as in the free-agent report) — better or worse than the reports, and "careful with <ours>: better than the rating, and they'd be getting that."
+4. **On payroll (C)**, for the counter if there is one: the change a year and the share for the rest of this season; over or under ownership's target; who coming in is signed past this season and at what; whose money comes off our books.
+
+**The decision:** **Counter with This** sends it as the next round of the talks (`lt_offer_send`, now with `_ideaRound`); **Adjust It First** opens the trade composer with the counter in it; **Not Now** does nothing. It expires with the deal. If the deal stops waiting on us (taken, passed, ran out, called off), the counter is withdrawn (`_adviceDeal`, checked in the roster sweep).
+
+**Structural:** `ourSideBlocker` moved from Negotiation (not pure) into TradeEngine (pure); Negotiation re-exports it. `writeComposeReply` takes `arg` and returns `trade`; a writer may set the opening's `topic` ("Here's my read on Gulfport's offer").
+
+**Player links (r146 fix):** a linked name keeps the punctuation right after it ("Pai." / "Garza's") on the same line.
+
+**check-trade-advice (new, 32):** the deals on the table; the manager names everyone in the deal, every name real, the bottom line, a coach, no decision. The director: signed, the read, a counter or why not, the payroll. Its counters against the club's real answer (`cpuRespond`) across 400 reads at 90 and at 40. The last round. A reply due in 40 minutes comes inside it, and the replies land before the deal is due. Counter with This is round 2 and replaces their offer; their answer becomes the next deal on the table. Taking their offer instead withdraws the counter. A deal settled before the reply.
+**test-trade-advice-ui (new, 14), dark and light:** Compose → topic → which deal (with its due time) → Send; both waiting; "awaiting reply"; the replies before the deadline; links; the decision's three buttons; Adjust It First opens the composer with the counter; Counter with This makes round 2.
+
+Fresh team: not needed.
