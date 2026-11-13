@@ -66,9 +66,10 @@ check('a starter can go to the bench (open, or a bench bat who can play there ta
       ssOpts.some(o => o.key === 'bench') && ssOpts.filter(o => o.key.startsWith('in:')).every(o => eligibleSlotsFor(P(o.key.slice(3))).includes(SS)),
       JSON.stringify(ssOpts));
 check('…and to any other slot they can play, never one they can\'t',
-      ssOpts.filter(o => o.key.startsWith('slot:')).every(o => eligibleSlotsFor(P(ss)).includes(slots()[+o.key.slice(5)].slot)));
+      ssOpts.filter(o => o.key.startsWith('slot:')).every(o => eligibleSlotsFor(P(ss)).includes(slots()[+o.key.slice(5)].slot))
+      && ssOpts.filter(o => o.oop).every(o => !eligibleSlotsFor(P(ss)).includes(o.label)));
 const benchBat = U().rosterIds.find(id => !['SP', 'RP'].includes(P(id).pos) && !slots().some(sl => sl.playerId === id));
-const bbOpts = moveOptions(SM.get(), benchBat);
+const bbOpts = moveOptions(SM.get(), benchBat).filter(o => !o.oop);   // (r165 out-of-position spots are their own, behind a button)
 check('a bench bat: only the slots they can play, each saying who goes to the bench',
       bbOpts.length > 0 && bbOpts.every(o => o.key.startsWith('slot:') && eligibleSlotsFor(P(benchBat)).includes(o.label)), JSON.stringify(bbOpts));
 

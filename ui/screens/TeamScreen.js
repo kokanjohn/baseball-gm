@@ -309,7 +309,7 @@ function _renderPlayers(state) {
   const hitRows = [
     ...slots.map((sl, i) => {
       const p = sl.playerId ? players[sl.playerId] : null;
-      return p ? _row(state, p, sl.slot, impScores[p.id], { oop: !!sl.emergency })
+      return p ? _row(state, p, sl.slot, impScores[p.id], { oop: !!(sl.emergency || sl.oop) })
                : _emptyRow(sl.slot, { slotIdx: i });
     }),
     ...hitBench.map((p, i) => _row(state, p, 'Bench', impScores[p.id], { first: i === 0 })),
@@ -853,17 +853,28 @@ function _openMoveSheet(playerId) {
   if (!p || !opts.length) { refresh(); return; }
   const deadline = managerFillAt(st);
   const leaves = opts.some(o => o.key === 'bench');
-  const rows = opts.map(o => `
-    <div class="sm-row" data-key="${o.key}">
+  const row = (o) => `
+    <div class="sm-row${o.oop ? ' sm-oop' : ''}" data-key="${o.key}">
       <div class="sm-slot-label">${_escape(o.label)}</div>
-      <div class="sm-slot-sub"><span class="${o.detail === 'Open' ? 'sm-empty' : 'sm-current'}">${_escape(o.detail)}</span></div>
-    </div>`).join('')
+      <div class="sm-slot-sub">${o.oop ? '<span class="sm-oop-tag">Out of position</span> ' : ''}<span class="${o.detail === 'Open' ? 'sm-empty' : 'sm-current'}">${_escape(o.detail)}</span></div>
+    </div>`;
+  // r165 §122.35 the spots he's eligible at first; out-of-position spots behind a button, clearly lesser choices
+  const elig = opts.filter(o => !o.oop), oop = opts.filter(o => o.oop);
+  const rows = elig.map(row).join('')
+    + (oop.length ? `<button class="sm-oop-toggle" type="button">Show out-of-position spots (${oop.length})</button>
+       <div class="sm-oop-list" hidden>${oop.map(row).join('')}</div>` : '')
     + (leaves && deadline ? `<div class="sm-note">An open spot waits for you until ${_clockText(deadline)}, an hour before first pitch. Then ${_escape(st.userTeam.coachingStaff?.manager?.name || 'the manager')} fills it from the bench.</div>` : '');
   const pos = ['SP', 'RP'].includes(p.pos) ? p.pos : posLabel(p);
   _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}`, rows, (overlay) => {
     overlay.querySelectorAll('.sm-row[data-key]').forEach(row => row.addEventListener('click', () => {
       App.playClick(); overlay.remove(); _doMove(playerId, row.dataset.key);
     }));
+    overlay.querySelector('.sm-oop-toggle')?.addEventListener('click', (e) => {
+      App.playClick();
+      const list = overlay.querySelector('.sm-oop-list');
+      list.hidden = !list.hidden;
+      e.currentTarget.textContent = list.hidden ? `Show out-of-position spots (${oop.length})` : 'Hide out-of-position spots';
+    });
   });
 }
 
@@ -1133,6 +1144,9 @@ function _injectCSS() {
     .sm-slot-sub{flex:1;font-size:12px;}
     .sm-current{color:var(--text);font-weight:600;}
     .sm-empty{color:var(--text);font-weight:600;}
+    .sm-oop-toggle{display:block;width:calc(100% - 40px);margin:12px 20px 6px;padding:11px;border-radius:10px;border:1px dashed var(--border);background:transparent;color:var(--soft);font-size:13px;font-weight:600;}
+    .sm-oop .sm-slot-label{color:var(--muted);}
+    .sm-oop-tag{font-size:10px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;color:#d49b00;}
     .sm-pick-info{flex:1;min-width:0;}
     .sm-pick-name{font-size:13px;font-weight:600;color:var(--text);display:block;}
     .sm-pick-sub{font-size:11px;color:var(--muted);}

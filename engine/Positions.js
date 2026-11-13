@@ -245,3 +245,34 @@ export function seasonTurn(p) {
   _sync(p);
   return lost.length || from !== s.primary ? { lost, from, to: s.primary } : null;
 }
+
+// ─────────────────────────────────────────────────────────────
+// r165 §122.35 PHASE 3 — PLAYING OUT OF POSITION
+// ─────────────────────────────────────────────────────────────
+
+/** How exposed a player is at a slot: 0 eligible (or DH), else 1 − familiarity (1 = never played it). */
+export function exposure(p, slot) {
+  if (!p || isPitcher(p) || norm(slot) === 'DH' || canPlay(p, slot)) return 0;
+  return Math.max(0, 1 - familiarity(p, slot));
+}
+
+/**
+ * defenseOf(lineupSlots, players) — a club's defense for a game: the ground-ball error multiplier
+ * (each fielder out of position adds, by exposure) and the catcher's exposure (a non-catcher behind
+ * the plate: steals and passed balls). `out` lists who's out of position, for the record.
+ */
+export function defenseOf(lineupSlots, players) {
+  const O = R.oop;
+  let errorMult = 1, catcher = 0;
+  const out = [];
+  for (const sl of lineupSlots || []) {
+    const p = sl.playerId ? players[sl.playerId] : null;
+    if (!p || sl.slot === 'DH') continue;
+    const x = exposure(p, sl.slot);
+    if (!x) continue;
+    out.push({ id: p.id, slot: sl.slot, exposure: Math.round(x * 100) / 100 });
+    errorMult += O.errorPer * x;
+    if (sl.slot === 'C') catcher = x;
+  }
+  return { errorMult: Math.round(errorMult * 1000) / 1000, catcher, out };
+}

@@ -25,12 +25,13 @@ import {
   LINEUP_SLOTS,
   PHASE,
   ROSTER_DECISION_LEAD_MS,
+  POSITION_RULES,
 } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
 import { reliefValue } from './PitchingEngine.js';
 import { payrollOf } from './FinanceEngine.js';
 import { clockNow } from './Clock.js';
-import { eligibleSlots, canPlay } from './Positions.js';   // r163 §122.35
+import { eligibleSlots, canPlay, startsAt, familiarity } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // POSITIONS: who can play where is engine/Positions.js (r163 §122.35)
@@ -525,6 +526,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     slot: label,
     playerId: canonical ? (existing[i].playerId || null) : null,
     ...(canonical && existing[i].emergency ? { emergency: true } : {}),   // r153 kept while held
+    ...(canonical && existing[i].oop ? { oop: true } : {}),               // r165 the GM's own out-of-position choice
   }));
 
   if (!canonical) {
@@ -550,11 +552,13 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
       && isHealthy(id)
       && groupOf(id) === PLAYER_GROUP.BENCH_HITTERS
       && !seen.has(id)
-      && (eligibleSlotsFor(players[id]).includes(s.slot) || (hold && s.emergency));   // r153 held: the manager's out-of-position fill stays until the deadline
+      && (eligibleSlotsFor(players[id]).includes(s.slot) || (hold && s.emergency)   // r153 held: the manager's out-of-position fill stays until the deadline
+          || (isUserTeam && s.oop));   // r165 §122.35 the GM put him there out of position, on purpose: it stays
     if (ok) { seen.add(id); } else {
       if (isUserTeam && hurt(id) && !players[id]?._lostSlot) setPatch(id, { _lostSlot: { kind: 'lineup', slot: s.slot, atMs: options.atMs ?? null } });
       s.playerId = null;
       delete s.emergency;
+      delete s.oop;
     }
   }
 
@@ -597,6 +601,8 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   }
   // The flag marks an out-of-position occupant only: cleared once the slot is empty or played in position.
   for (const slot of slots) if (slot.emergency && (!slot.playerId || eligibleSlotsFor(players[slot.playerId]).includes(slot.slot))) delete slot.emergency;
+  // (r165 and the GM's mark, once the player is eligible there — ten starts — or the slot is empty)
+  for (const slot of slots) if (slot.oop && (!slot.playerId || eligibleSlotsFor(players[slot.playerId]).includes(slot.slot))) delete slot.oop;
 
   // ── Rebuild rotation.order from healthy, rostered STARTING_PITCHERS ────
   const oldRotation = team.rotation || { order: [], currentIndex: 0 };
@@ -919,6 +925,19 @@ export function moveOptions(state, playerId) {
         : `${occ.name} (${ovr(occ)}) to the bench`;
       out.push({ key: `slot:${j}`, label: sl.slot, detail });
     });
+    // r165 §122.35 out of position: every fielding slot he isn't eligible at (the GM's choice — it stays),
+    // with how familiar he is there; listed after the eligible ones.
+    slots.forEach((sl, j) => {
+      if (j === at || sl.slot === 'DH' || mine.includes(sl.slot)) return;
+      const occ = sl.playerId ? players[sl.playerId] : null;
+      if (occ && !ok(occ)) return;
+      const n = startsAt(me, sl.slot), fam = familiarity(me, sl.slot) > 0;
+      const how = `${fam ? 'practiced' : 'unfamiliar'}${n ? `, ${n} of ${POSITION_RULES.gainStarts}` : ''}`;
+      const detail = !occ ? `Open — ${how}`
+        : at >= 0 && eligibleSlotsFor(occ).includes(slots[at].slot) ? `${how}; ${occ.name} (${ovr(occ)}) moves to ${slots[at].slot}`
+        : `${how}; ${occ.name} (${ovr(occ)}) to the bench`;
+      out.push({ key: `oop:${j}`, label: sl.slot, detail, oop: true });
+    });
     if (at >= 0) {
       const seated = new Set(slots.map(sl => sl.playerId).filter(Boolean));
       ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id)
@@ -969,10 +988,11 @@ export function applyMove(draft, playerId, key) {
   if (!['SP', 'RP'].includes(me.pos)) {
     const slots = u.lineupSlots;
     const at = slots.findIndex(sl => sl.playerId === playerId);
-    const seat = (i, id) => { slots[i].playerId = id; delete slots[i].emergency; };
-    if (kind === 'slot') {
+    const seat = (i, id) => { slots[i].playerId = id; delete slots[i].emergency; delete slots[i].oop; };
+    if (kind === 'slot' || kind === 'oop') {
       const j = Number(arg), occId = slots[j].playerId;
       seat(j, playerId);
+      if (kind === 'oop') slots[j].oop = true;   // r165 the GM's out-of-position choice: it stays
       if (at >= 0) seat(at, occId && eligibleSlotsFor(players[occId]).includes(slots[at].slot) ? occId : null);
     } else if (kind === 'in') seat(at, arg);
     else if (kind === 'bench') seat(at, null);

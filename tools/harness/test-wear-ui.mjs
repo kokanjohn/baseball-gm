@@ -111,7 +111,9 @@ const rest = await page.evaluate(async (t) => {
   const SM = await import('/baseball-gm/store/StateManager.js');
   const CE = await import('/baseball-gm/engine/CardEngine.js');
   // (the staff writes in the season, not in spring: the regular season, for the test)
-  SM.mutate(s => { s.phase = 'REGULAR_SEASON'; });
+  SM.mutate(s => { s.phase = 'REGULAR_SEASON';
+    // (r162 a new club's first roster suggestion holds rest messages back half a day: not this test's subject)
+    s.inbox = (s.inbox || []).filter(c => c.cardId !== 'roster_advice'); s.scheduledCards = (s.scheduledCards || []).filter(c => c.cardId !== 'roster_advice'); });
   CE.syncRosterCards([], t);
   const c = (SM.get().scheduledCards || []).find(x => x.cardId === 'rest_ask');
   return c ? { id: c.instanceId, at: c.deliverAtMs } : null;

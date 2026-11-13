@@ -10905,3 +10905,38 @@ Fresh team: required from here on (§122.35's phases build on the record). Old s
 Fresh team: required (from r163).
 
 **Suite (r164):** season sim 3828/3828, multi-season 59/59. check-game-pushes failed once and passed twice on rerun. test-sheet-close-ui (dark) failed 1 of 3 runs, its known intermittent failure.
+
+### §122.38 r165 Positions, phase 3: playing out of position
+
+**Built:**
+- **MOVE** (`RosterEngine.moveOptions`): a hitter's eligible moves come first, then every fielding slot he isn't eligible at, as `oop:<slot>` options marked `oop: true`. Each says how familiar he is there ("unfamiliar", or "practiced", plus "N of 10" once he has starts) and what happens to whoever is there.
+- **`applyMove` 'oop':** seats him there and marks the slot `oop: true`. Any ordinary move into a slot clears the mark.
+- **The sheet** (Team): the eligible spots, then a dashed "Show out-of-position spots (N)" button. It opens a list of the rest, each tagged OUT OF POSITION in amber with a muted slot label, so they read as lesser choices. Tapping the button again hides them.
+- **The tidy-up keeps the GM's choice** (`reconcileRoster`): an `oop` slot on our club survives (only the manager's emergency fills are re-evaluated), and the mark stays through the canonical rebuild. It's cleared once he's eligible there (ten starts) or the slot empties. Team rows show "out of position" for these as for emergencies.
+- **On the field** (`Positions.exposure` / `defenseOf`; `SimEngine`):
+  - **Exposure:** 0 if eligible, else 1 − familiarity.
+  - **Each lineup carries `defense`** = { errorMult: 1 + 0.5 × each fielder's exposure, catcher: the C slot's exposure, out: [...] }, from its lineup slots at first pitch. The fielding side's defense is set each half (`_fieldDef`).
+  - **The ground-ball error chance** is multiplied by `errorMult`.
+  - **A non-catcher behind the plate** brings:
+    - steal attempts × (1 + 0.6 × exposure);
+    - steal success + 0.08 × exposure;
+    - a new play, **`passed_ball`**, checked between at-bats with a runner on (1.5% × exposure): every runner moves up a base, and a runner on third scores (an unearned run, credited to the runner; a walk-off counts). The dashboard's marker is "PB".
+- **Numbers (`POSITION_RULES.oop`):** errorPer 0.5, sbAttempt 0.6, sbSuccess 0.08, passedBall 0.015. These were tuned down from 0.15 / 0.03: at those values steals succeeded 97% of the time and passed balls came every other game. Over 1,200 games with an outfielder catching and another at shortstop (four fielders out of position both ways):
+  - errors 0.55 → 1.76 a game;
+  - steal tries 0.40 → 0.73 and success 0.82 → 0.89;
+  - 0.25 passed balls a game.
+
+**Checks:**
+- **check-out-of-position** (15):
+  - MOVE: eligible first, then every other fielding spot marked "unfamiliar";
+  - the GM's 3B placement is made (the 3B goes to 1B or the bench), survives the tidy-up, and after ten starts he's eligible with the mark gone;
+  - `defenseOf`: in position, unfamiliar, practiced;
+  - the 1,200-game comparison: more errors, more steal tries, a better steal rate, passed balls only with a non-catcher.
+- **test-oop-move-ui** (dark and light): eligible rows shown, the button showing its count with the list hidden, opened rows marked with familiarity, the 3B choice, and the row's "out of position".
+- **check-open-spots:** a bench bat's eligible moves are checked apart from the out-of-position ones.
+
+Fresh team: required (from r163).
+
+**Suite (r165):** multi-season 59/59.
+- **Failed once, then passed on rerun:** the season sim (one re-sign card count, then 3826/3826), check-game-sim-weather (3 passing reruns), check-player-work (2 passing reruns).
+- **Fixed:** test-wear-ui now clears a new club's first roster suggestion before asking for a rest message. A suggestion holds rest messages back for half a day (r162), so the test passed or failed depending on timing.

@@ -1859,4 +1859,9 @@ export const POSITION_RULES = Object.freeze({
   famStep: Object.freeze({ easy: 0.15, hard: 0.08, C: 0.06 }),
   famCarry: 0.5,
   notes: Object.freeze({ first: Object.freeze({ min: 20, base: 25, max: 30 }), second: Object.freeze({ min: 8, base: 10, max: 12 }) }),
+  // r165 phase 3 — the cost of a fielder out of position, scaled by what familiarity hasn't taken away
+  // (1 − familiarity): each one adds `errorPer` to the ground-ball error chance; a non-catcher behind
+  // the plate draws `sbAttempt` more steal attempts, `sbSuccess` more successful ones, and allows a
+  // passed ball on `passedBall` of the moments with a runner on.
+  oop: Object.freeze({ errorPer: 0.5, sbAttempt: 0.6, sbSuccess: 0.08, passedBall: 0.015 }),
 });

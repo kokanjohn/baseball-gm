@@ -48,6 +48,7 @@ import {
   SIM_FC_PROB,
   SIM_DP_PROB,
   SIM_ERROR_PROB,
+  POSITION_RULES,
   SIM_SAC_BUNT_POWER_MAX,
   SIM_SAC_BUNT_INNING_MIN,
   SIM_SAC_BUNT_PROB,
@@ -77,7 +78,7 @@ import {
   ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, armLoad, tireAfterBF, reliefInnings, springStarterInnings,
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
-import { canPlay, primaryPos, posLabel } from './Positions.js';
+import { canPlay, primaryPos, posLabel, defenseOf } from './Positions.js';
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -503,6 +504,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
   const runHalf = (isTop, walkoffRuns = Infinity, resume = null) => {
     const userBats = isTop ? !userBatsBottom : userBatsBottom;
     _userFielding = userBats ? oppIsGM : userIsGM;
+    _fieldDef = (userBats ? oppLineup : userLineup)?.defense || null;   // r165 the fielding side's defense
     gs.halfIdx = (gs.inning - 1) * 2 + (isTop ? 0 : 1);
     gs.env = _envFor(gs.wx, gs.halfIdx);
     const hp = _simulateHalfInning(
@@ -656,6 +658,30 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
  * Returns a stolen_base or caught_stealing play object, or null if no attempt.
  * Only the lead runner attempts (second takes priority over first if both on).
  */
+/** r165 §122.35 a non-catcher behind the plate: runners go more often. */
+const _runMore = () => 1 + POSITION_RULES.oop.sbAttempt * (_fieldDef?.catcher || 0);
+
+/**
+ * r165 §122.35 a passed ball: a non-catcher behind the plate lets one by — every runner moves up a
+ * base (a runner on third scores, unearned). Returns the play, or null.
+ */
+function _passedBall(bases, players, outs, pitcher) {
+  const x = _fieldDef?.catcher || 0;
+  if (!x || !(bases.first || bases.second || bases.third) || _roll() >= POSITION_RULES.oop.passedBall * x) return null;
+  const scored = bases.third ? [bases.third] : [];
+  const deltas = {};
+  for (const id of scored) (deltas[id] ||= []).push({ stat: 'r', delta: 1 });
+  const lead = players[bases.third || bases.second || bases.first];
+  return {
+    playIndex: 0, batterId: null, pitcherId: pitcher?.id || null,
+    type: 'passed_ball',
+    description: scored.length ? `Passed ball — ${lead?.name || 'the runner'} scores` : 'Passed ball — the runners move up',
+    runs: scored.length, rbi: 0, isScoring: scored.length > 0, isBigPlay: false, outsAfter: outs,
+    _basesAfter: { first: null, second: bases.first || null, third: bases.second || null },
+    cumOurScore: 0, cumTheirScore: 0, _timestamp: 0, _statDeltas: deltas,
+  };
+}
+
 function _attemptStolenBase(bases, players, outs, inning, gs) {
   // Pick the lead runner eligible for stealing
   // Runner on second stealing third is slightly less common than 1st→2nd
@@ -666,13 +692,13 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
   if (bases.second && !bases.third) {
     const runner = players[bases.second];
     const spd    = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
-    if (spd >= SIM_H_SPEED_SB_THRESHOLD && _roll() < SIM_SB_ATTEMPT_PROB * 0.7) {
+    if (spd >= SIM_H_SPEED_SB_THRESHOLD && _roll() < SIM_SB_ATTEMPT_PROB * 0.7 * _runMore()) {
       runnerId = bases.second; fromBase = 'second'; toBase = 'third';
     }
   } else if (bases.first && !bases.second) {
     const runner = players[bases.first];
     const spd    = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
-    if (spd >= SIM_H_SPEED_SB_THRESHOLD && _roll() < SIM_SB_ATTEMPT_PROB) {
+    if (spd >= SIM_H_SPEED_SB_THRESHOLD && _roll() < SIM_SB_ATTEMPT_PROB * _runMore()) {
       runnerId = bases.first; fromBase = 'first'; toBase = 'second';
     }
   }
@@ -681,7 +707,7 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
 
   const runner   = players[runnerId];
   const spd      = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
-  const success  = _roll() < (SIM_SB_BASE_SUCCESS + (spd / SIM_SB_SPEED_BONUS_DIVISOR));
+  const success  = _roll() < (SIM_SB_BASE_SUCCESS + (spd / SIM_SB_SPEED_BONUS_DIVISOR) + POSITION_RULES.oop.sbSuccess * (_fieldDef?.catcher || 0));   // r165
 
   const newBases = { ...bases };
 
@@ -764,6 +790,23 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       const w = _weatherCheck(gs, players, plays, inning, half, outs, bases, fieldSide);
       if (w === 'stop') { gs.wxStop = { inning, half, outs, bases: { ...bases }, halfRuns, at: plays.length }; return plays; }
       if (w === 'arm')  pitcher = players[gs[`${fieldSide}Pitcher`].id] || pitcher;
+    }
+
+    // ── r165 a passed ball (a non-catcher behind the plate), between at-bats ──
+    {
+      const pb = _passedBall(bases, players, outs, pitcher);
+      if (pb) {
+        pb._halfInning = halfKey;
+        pb.inning = parseInt(halfKey.split('_')[1]) || 1;
+        pb.half = half;
+        let runs = pb.runs;
+        if (halfRuns + runs >= walkoffRuns) { walkedOff = true; runs = Math.max(0, walkoffRuns - halfRuns); pb.runs = runs; pb.isScoring = runs > 0; }
+        halfRuns += runs;
+        plays.push(pb);
+        bases = pb._basesAfter;
+        if (walkedOff) break;
+        continue;
+      }
     }
 
     // ── Stolen base attempt (between at-bats) ─────────────────
@@ -1324,7 +1367,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       const hasFirst  = !!bases.first;
 
       // Error check — before anything else
-      if (_roll() < SIM_ERROR_PROB * (_userFielding && _staff ? _staff.errorMult : 1)) {
+      if (_roll() < SIM_ERROR_PROB * (_userFielding && _staff ? _staff.errorMult : 1) * (_fieldDef?.errorMult || 1)) {   // r165 fielders out of position
         playMod = 'error';
         // Batter reaches first (no out charged)
         // Runners advance one base
@@ -2574,6 +2617,7 @@ function _buildLineup(team, players, isCPU) {
     bench:   bench.map(p => ({ id: p.id, used: false })),
     bullpen: bullpen.map(id => ({ id })),
     roles,
+    defense: lineupSlots.length === 9 ? defenseOf(lineupSlots, players) : null,   // r165 §122.35 who's out of position
   };
 }
 
@@ -2893,6 +2937,7 @@ function _gmRelVariance(gmRel) {
 // when a game is simulated: rating points our players get from their coaches.
 let _staff = null;
 let _simAt = null;   // r161 the game's first pitch (a pitcher's workload is read as of then)
+let _fieldDef = null;          // r165 §122.35 the fielding side's defense this half (defenseOf)
 let _userFielding = false;   // our club is in the field this half (the bench coach's defense)
 function _coachPoints(player, key) {
   if (!_staff || player?.teamId !== 'user') return 0;
