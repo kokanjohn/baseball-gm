@@ -105,6 +105,7 @@ import { starterRested, reliefValue } from './PitchingEngine.js';
 import { clockNow } from './Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
+import { primaryPos, canPlay, coversRole, posLabel } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -642,7 +643,7 @@ function _managerName(state) {
 function _needFor(player) {
   if (!player) return { side: 'hitter', pos: null };
   if (['SP', 'RP'].includes(player.pos)) return { side: 'pitcher', pos: player.pos };
-  return { side: 'hitter', pos: player.nativePos || player.pos };
+  return { side: 'hitter', pos: primaryPos(player) };
 }
 
 /**
@@ -728,7 +729,7 @@ export function deliverInjuryAct2(playerId, atMs = clockNow()) {
     ? ` Or we manage it day-to-day: the roster spot stays put and ${player.name} should be available in about ${inj.days} days, but we play a player short until then.`
     : '';
   const fitLine = picks.length
-    ? ` Best fits among the free agents: ${_list(picks.map(p => `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr}, ${formatK(signingTerms(state, p).salary || 0)} a year)`))}. A signing reports tomorrow.`
+    ? ` Best fits among the free agents: ${_list(picks.map(p => `${p.name}${_hand(p)} (${posLabel(p)}, OVR ${p.ovr}, ${formatK(signingTerms(state, p).salary || 0)} a year)`))}. A signing reports tomorrow.`
     : ' No healthy free agent fits right now.';
   const dlLine = deadline
     ? ` We need a decision by ${_clock(deadline)} (${_day(deadline, atMs)}) or ${_managerName(state)} will put ${player.name} on the IL and sign someone.`
@@ -736,7 +737,7 @@ export function deliverInjuryAct2(playerId, atMs = clockNow()) {
 
   const ilChoices = [
     ...picks.map(p => ({ key: `il:${p.id}`, label: `IL ${player.name} — sign ${p.name}`,
-      sub: `${p.nativePos || p.pos}, OVR ${p.ovr}, ${formatK(signingTerms(state, p).salary || 0)} a year; ${player.name} stays paid` })),
+      sub: `${posLabel(p)}, OVR ${p.ovr}, ${formatK(signingTerms(state, p).salary || 0)} a year; ${player.name} stays paid` })),
     { key: 'il', label: `IL ${player.name} — I'll pick the replacement`, sub: `${player.name} stays on the payroll; the open spot waits for your pick` },
   ];
   const cutChoice = { key: 'cut', label: `Cut ${player.name}`,
@@ -871,7 +872,7 @@ function _deliverILReturnCard(playerId, atMs) {
   const ref      = `${player.name}${_hand(player)} (${player.pos})`;
   const spot     = _whoHasSpot(state, player);
   const choices  = full ? _sendDownChoices(state, player) : [];
-  const where    = (c) => `${c.name} (${c.nativePos || c.pos}, OVR ${c.ovr})`;
+  const where    = (c) => `${c.name} (${posLabel(c)}, OVR ${c.ovr})`;
   const what     = !spot ? null : spot.kind === 'lineup' ? _slotWhere(spot.slot) : spot.kind === 'bullpen' ? 'in the bullpen' : 'a spot in the rotation';
   const reserve  = sideOf(player) === 'pitcher' ? 'the pitcher bench' : 'the bench';
   const stuck    = full && !choices.length;   // (nobody who could go down: rare — the card waits)
@@ -934,7 +935,7 @@ function _sendDownChoices(state, player) {
     .map(p => ({
       key: p.id, name: p.name,
       label: `Activate ${player.name} — waive ${p.name}`,
-      sub: `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})${_lineNow(p) ? `, ${_lineNow(p)}` : ''}`,
+      sub: `${p.name} (${posLabel(p)}, OVR ${p.ovr})${_lineNow(p) ? `, ${_lineNow(p)}` : ''}`,
     }));
 }
 
@@ -1250,7 +1251,7 @@ function _restCard(st, cand, game, at) {
   const mgr = person('manager'), pc = person('pitchingCoach'), hc = person('hittingCoach');
   const X = p.name, B = sub.name, n = Math.max(w.straight, 1);
   const when = When.untilFull(game.gameTime, at), day = When.untilDay(game.gameTime, at);
-  const subC = sub.pos === 'C' || sub.nativePos === 'C';
+  const subC = canPlay(sub, 'C');   // r163 Positions
   const where = slot === 'C' ? 'catch' : slot === 'DH' ? 'DH' : `play ${slot === 'OF' ? 'the outfield' : slot}`;
   const cover = catcher && !subC ? `We don't carry another catcher, so ${B} would catch, out of position.` : `${B} can ${where}.`;
   const v = eventRand() < 0.5 ? 0 : 1;
@@ -1453,7 +1454,7 @@ function _deliverNeedCard(state, need, index, needs, atMs) {
     const t = signingTerms(state, p);
     const line = _lineNow(p) || _lastLine(p);
     return { key: p.id, label: `Sign ${p.name}`,
-             sub: `${p.nativePos || p.pos}, OVR ${p.ovr}, ${formatK(t.salary || 0)} a year${line ? `; ${line}` : ''}` };
+             sub: `${posLabel(p)}, OVR ${p.ovr}, ${formatK(t.salary || 0)} a year${line ? `; ${line}` : ''}` };
   });
   const card = _rosterCard(state, {
     cardId:   'roster_need',
@@ -3895,13 +3896,13 @@ function _applyTalkAction(action, instance, atMs) {
 const _IDEA_GAP_MS = 3 * 86_400_000;     // at most one "opportunity" card (sold / surplus) every few days
 
 /** One player's short reference: name (POS, OVR n). */
-const _ref = (p) => `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
+const _ref = (p) => `${p.name} (${posLabel(p)}, OVR ${p.ovr})`;
 
 /** Same role: a pitcher of the same kind, or a hitter who can play the spot. */
 function _sameRole(p, target) {
   if (!p || !target) return false;
   if (['SP', 'RP'].includes(target.pos)) return p.pos === target.pos;
-  return !['SP', 'RP'].includes(p.pos) && playsSlot(p, target.nativePos || target.pos);
+  return !['SP', 'RP'].includes(p.pos) && coversRole(p, target);   // r163 Positions
 }
 
 /**
@@ -3975,7 +3976,7 @@ function _leagueTradeCards(tx, atMs) {
       subject: `${to.name} beat us to ${gone.name}`,
       preview: 'Nobody else fits the spot right now.',
       body: `${lead} We looked for the next-best option and nobody else fits the spot right now.`,
-      spec: { type: 'role', pos: gone.pos, nativePos: gone.nativePos || gone.pos, excludeId: gone.id },
+      spec: { type: 'role', pos: gone.pos, nativePos: posLabel(gone), primary: primaryPos(gone), excludeId: gone.id },
       what: `someone to fill ${gone.name}'s role`,
       atMs: atMs + 2 * 3600_000, extra: { _beatenTalkId: talk.id },
     }) ? 1 : 0;
@@ -4175,7 +4176,8 @@ function _fitsFor(spec, st) {
   if (!spec) return () => false;
   if (spec.type === 'need') return (p) => LeagueTrades.fillsNeed(p, spec.need) && (p.ovr || 0) >= (spec.minOvr || 0);
   if (spec.type === 'rp')   return (p) => p.pos === 'RP' && wouldStart(p, st, 'user');
-  if (spec.type === 'role') return (p) => p.id !== spec.excludeId && _sameRole(p, { pos: spec.pos, nativePos: spec.nativePos });
+  // (r163 the role as it stood: its primary position — an older search reads its label)
+  if (spec.type === 'role') return (p) => p.id !== spec.excludeId && _sameRole(p, { pos: spec.pos, nativePos: spec.nativePos, ...(spec.primary ? { positions: { primary: spec.primary, elig: [spec.primary], roles: [spec.primary] } } : {}) });
   return () => false;
 }
 
@@ -4316,7 +4318,7 @@ function _applyLeagueTradeAction(action, instance, atMs) {
 // Hard gates (§23.2 — ownership, expiring contracts, manager) carry `_osGate`
 // and are due when spring training opens; free-agent cards are soft (3 days).
 
-const _who = (p) => `${p.name}${_hand(p)} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
+const _who = (p) => `${p.name}${_hand(p)} (${posLabel(p)}, OVR ${p.ovr})`;
 const _years = (n) => `${n} year${n === 1 ? '' : 's'}`;
 
 /**
@@ -4412,7 +4414,7 @@ const _listWords = (xs) => (xs.length <= 1 ? xs.join('') : xs.length === 2 ? `${
 
 /** §112.3 What a contract decision rests on, in sentences (his season, role, standing, who replaces him, the market). */
 function _contractSentences(state, p, X) {
-  const pos = p.nativePos || p.pos;
+  const pos = primaryPos(p);
   const out = [];
   if (X.line) out.push(`Last season: ${X.line}, as ${X.role}.`);
   else out.push(`${p.name} was ${X.role}.`);
@@ -4659,7 +4661,7 @@ export function deliverFreeAgentCards(atMs, springAt) {
       cardId: 'os_free_agent', tag: 'FREE_AGENT', sender: 'Pro Scouting', avatar: '🔎', type: 'good',
       _rosterKey: `os:fa:${p.id}:${state.seasonNum}`, _targetPlayerId: p.id,
       subject: `Free agent: ${p.name}`,
-      preview: `${p.nativePos || p.pos}, OVR ${p.ovr}, ${age} — ${t.reason}.`,
+      preview: `${posLabel(p)}, OVR ${p.ovr}, ${age} — ${t.reason}.`,
       body: `${_who(p)}, ${age} next season${from ? `, formerly with ${from}` : ''}, is on the market — ${t.reason}. `
           + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)}. `
           + (room ? `Our 28 is full, so ${room.name} (OVR ${room.ovr}) would be let go to make room (nothing owed after that). ` : '')
@@ -4959,7 +4961,7 @@ function _addDropChoices(state, instance) {
   if (!res.length) return;
   const sign = instance.yesLabel || `Sign ${p.name}`;
   instance._choices = res.map(r => ({ key: r.id, label: `${sign} — waive ${r.name}`,
-    sub: `${r.name} (${r.nativePos || r.pos}, OVR ${r.ovr}) goes on waivers: off the payroll at once` }));
+    sub: `${r.name} (${posLabel(r)}, OVR ${r.ovr}) goes on waivers: off the payroll at once` }));
 }
 
 /** The scout's independent-league report: sign him to our roster, or pass (he's gone). */

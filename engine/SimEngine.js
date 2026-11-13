@@ -77,6 +77,7 @@ import {
   ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, armLoad, tireAfterBF, reliefInnings, springStarterInnings,
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
+import { canPlay, primaryPos, posLabel } from './Positions.js';
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -395,7 +396,7 @@ function _generateResumption(game, userTeam, opponentTeam, players, context) {
     for (const sl of slots) {
       if (can(sl.id)) continue;
       const gone = players[sl.id];
-      const fits = (b) => { const q = players[b.id]; return q && gone && (q.pos === gone.pos || q.nativePos === gone.pos || (/^(LF|CF|RF|OF)$/.test(q.pos) && /^(LF|CF|RF|OF)$/.test(gone.pos))); };
+      const fits = (b) => { const q = players[b.id]; return q && gone && canPlay(q, sl.pos || primaryPos(gone)); };   // r163 Positions
       const sub = bench.filter(b => !b.used).sort((a, b) => (fits(b) - fits(a)) || ((players[b.id]?.ovr || 0) - (players[a.id]?.ovr || 0)))[0];
       if (!sub) continue;   // (no one left on the bench: the spot stays as it was)
       sub.used = true;
@@ -1634,7 +1635,7 @@ export function accumulateBox(plays, players, opts = {}) {
     const hitters = order.map(id => {
       const s = side.hit[id] || HIT0();
       const p = players[id] || {};
-      return { id, name: p.name || '—', pos: p.pos || p.nativePos || '', ...s, ...(hurt.has(id) ? { hurt: true } : {}) };
+      return { id, name: p.name || '—', pos: posLabel(p) || '', ...s, ...(hurt.has(id) ? { hurt: true } : {}) };
     });
     const pitchers = side.pitSeen.map(id => {
       const s = side.pit[id];
@@ -1837,10 +1838,11 @@ function _injuryPlay(halfKey, fields) {
 function _batterHurt(gs, players, plays, slots, bench, slotIdx, batter, pitcher, outs, bases, halfKey) {
   if (gs.hurt.has(batter.id)) return bases;
   if (_roll() >= injuryChancePerExposure(batter, 'hitter', gs.injuryYear, (batter?.wear || 0) >= WEAR.tired)) return bases;   // r159 worn down: likelier hurt
-  const pos = (p) => p?.nativePos || p?.pos;
   const inGame = new Set(slots.map(s => s.id));
   const avail = (bench || []).filter(b => !b.used && !inGame.has(b.id) && !gs.hurt.has(b.id) && players[b.id] && isAvailable(players[b.id]));
-  const sub = avail.find(b => pos(players[b.id]) === pos(batter)) || avail[0];
+  // (r163 §122.35 one who can play the hurt player's spot first — Positions)
+  const spot = slots[slotIdx]?.pos || primaryPos(batter);
+  const sub = avail.find(b => canPlay(players[b.id], spot)) || avail[0];
   if (!sub) return bases;
   const phrase = _HURT_HITTER[Math.floor(_roll() * _HURT_HITTER.length)];
   gs.hurt.add(batter.id);
@@ -2471,11 +2473,7 @@ function _buildSyntheticCPUTeam(players) {
   // Seat 9 hitters into the canonical lineupSlots by position eligibility so the
   // synthetic team has the length-9 lineupSlots that _buildLineup requires.
   const SLOTS = ['C','1B','2B','3B','SS','OF','OF','OF','DH'];
-  const eligible = (p, label) => {
-    if (label === 'DH') return true;               // anyone can DH
-    const nat = p.nativePos || p.pos;
-    return nat === label || (nat.includes('/') && nat.split('/').includes(label));
-  };
+  const eligible = (p, label) => canPlay(p, label);   // r163 §122.35 Positions (DH: anyone)
   const used = new Set();
   const lineupSlots = SLOTS.map(label => {
     const pick = hitters.find(p => !used.has(p.id) && eligible(p, label));

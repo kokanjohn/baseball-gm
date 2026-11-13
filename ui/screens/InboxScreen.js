@@ -31,6 +31,7 @@ import * as When from '../../engine/When.js';
 import { dealsFor, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
 import { namedPlayers } from '../../engine/ComposeReplies.js';
 import { workPlayers, skillsOf } from '../../engine/PlayerWork.js';
+import { posLabel } from '../../engine/Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -731,7 +732,7 @@ function _composeTopics(state, ch) {
         ${d.expiresAtMs ? `<span class="cd-due">Answer due ${_escape(When.untilFull(d.expiresAtMs, Date.now()))}</span>` : ''}</button>`).join('')}</div>` : '';
     // r151 shopping: which player (hitters, then pitchers, best first).
     const byOvr = (a, b) => (b.ovr || 0) - (a.ovr || 0);
-    const opt = (p) => `<option value="${p.id}"${_composeDeal === p.id ? ' selected' : ''}>${_escape(p.name)} — ${_escape(p.nativePos || p.pos)}, OVR ${p.ovr}</option>`;
+    const opt = (p) => `<option value="${p.id}"${_composeDeal === p.id ? ' selected' : ''}>${_escape(p.name)} — ${_escape(posLabel(p))}, OVR ${p.ovr}</option>`;
     const isP = (p) => p.pos === 'SP' || p.pos === 'RP';
     const hit = st.players ? st.players.filter(p => !isP(p)).sort(byOvr) : [], arm = st.players ? st.players.filter(isP).sort(byOvr) : [];
     const players = isSel && !off && st.players ? `<div class="compose-h compose-deal-h">Which player?</div>

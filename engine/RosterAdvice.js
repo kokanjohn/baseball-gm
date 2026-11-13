@@ -116,9 +116,11 @@ export function leaveIssues(draft, rand, n) {
   const ok = (p) => p && isAvailable(p) && !p.isInjured;
   const ops = [];
   // A starter and a bench bat at his spot, the starter clearly better: they trade places.
+  // (Fielding spots only — r163: a DH swap could bat the backup catcher at DH, leaving nobody on the
+  //  bench to catch; the staff can still raise a DH change that comes up on its own.)
   (u.lineupSlots || []).forEach((sl, j) => {
     const o = players[sl.playerId];
-    if (!ok(o)) return;
+    if (!ok(o) || sl.slot === 'DH') return;
     const seated = new Set(u.lineupSlots.map(x => x.playerId));
     const b = (u.rosterIds || []).map(id => players[id]).find(p => ok(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !['SP', 'RP'].includes(p.pos)
       && !seated.has(p.id) && eligibleSlotsFor(p).includes(sl.slot) && o.ovr - p.ovr >= A.hitterGap && o.ovr - p.ovr <= START_MAX_GAP);

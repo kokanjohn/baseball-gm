@@ -20,6 +20,7 @@ import {
 import { proposeTrade, talkIsOpen, ourSideBlocker } from '../../engine/Negotiation.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatK } from '../../engine/CardTokens.js';
+import { posLabel } from '../../engine/Positions.js';   // r163 §122.35
 
 let _d = null;          // the deal being built
 let _view = 'deal';     // 'teams' | 'deal' | 'theirs' | 'ours'
@@ -97,7 +98,7 @@ function _dealHtml(state) {
         </div>` : '';
     return `<div class="tc-chip">
       <div class="tc-chip-main"><span class="tc-chip-name">${_esc(p.name)}</span>
-        <span class="tc-chip-meta">${p.nativePos || p.pos} · OVR ${p.ovr} · ${formatK(p.contractSalary || 0)}</span>
+        <span class="tc-chip-meta">${posLabel(p)} · OVR ${p.ovr} · ${formatK(p.contractSalary || 0)}</span>
         <button class="tc-x" data-drop="${id}" data-side="${who}" aria-label="Remove">Remove</button></div>
       ${keepCtl}
     </div>`;
@@ -147,7 +148,7 @@ function _pickHtml(state, who) {
     const unavailable = p.isInjured || p.group === 'il' || p.group === 'transit';
     return `<button class="tc-row${sel ? ' on' : ''}" data-toggle="${p.id}" ${unavailable ? 'disabled' : ''}>
       <span class="tc-row-name">${_esc(p.name)}</span>
-      <span class="tc-row-meta">${p.nativePos || p.pos} · OVR ${p.ovr} · ${formatK(p.contractSalary || 0)}${unavailable ? ' · hurt' : ''}</span>
+      <span class="tc-row-meta">${posLabel(p)} · OVR ${p.ovr} · ${formatK(p.contractSalary || 0)}${unavailable ? ' · hurt' : ''}</span>
       <span class="tc-row-mark">${sel ? 'Added' : ''}</span>
     </button>`;
   };

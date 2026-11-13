@@ -153,6 +153,8 @@ import {
 } from '../data/constants.js';
 import { clockNow, runAt } from './Clock.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
+import { naturalFor } from './Positions.js';
+import { posLabel } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // DEV LIVE-SPEED (Developer Menu only)
@@ -233,10 +235,7 @@ export function migrateLineupSlots(state) {
     for (let i = 0; i < slots.length; i++) {
       const label = slots[i].slot;
       const match = starters.find(p =>
-        !used.has(p.id) && (
-          p.pos === label ||
-          (p.pos?.includes('/') && p.pos.split('/').includes(label))
-        )
+        !used.has(p.id) && naturalFor(p, label)   // r163 §122.35
       );
       if (match) { slots[i].playerId = match.id; used.add(match.id); }
     }
@@ -3054,7 +3053,7 @@ function _feedLeagueMoves(events) {
     const p = st.players[e.playerId];
     if (!p) continue;
     const notable = (p.ovr || 0) - level >= 58 || e.teamId === 'user' || e.fromTeamId === 'user';
-    const who = `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
+    const who = `${p.name} (${posLabel(p)}, OVR ${p.ovr})`;
     const at = e.atMs;
     if (e.type === 'FA_SIGNED') lines.push([abbrOf(e.teamId), `${abbrOf(e.teamId)} sign free agent ${who}`, at]);
     else if (e.type === 'RETIRED' && notable) lines.push([abbrOf(e.teamId), `${who} retires`, at]);
@@ -3066,7 +3065,7 @@ function _feedLeagueMoves(events) {
   for (const e of events || []) {
     const p = st.players[e.playerId];
     if (!p) continue;
-    const who = `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})`;
+    const who = `${p.name} (${posLabel(p)}, OVR ${p.ovr})`;
     const nm = (id) => _clubName(st, id);
     if (e.type === 'FA_SIGNED') wire.push({ atMs: e.atMs, kind: 'signing', teamIds: [e.teamId], text: `${nm(e.teamId)} sign free agent ${who}` });
     else if (e.type === 'FREE_AGENT' && e.fromTeamId) wire.push({ atMs: e.atMs, kind: 'release', teamIds: [e.fromTeamId], text: `${who} leaves ${nm(e.fromTeamId)} as a free agent` });
@@ -3121,7 +3120,7 @@ function _runTradeDesk(atMs, { extra = false } = {}) {
 /** A trade in a line: who got whom, for whom, and the money. */
 function _tradeLine(st, tx, { short = false } = {}) {
   const P = (id) => st.players[id];
-  const ref = (id) => { const p = P(id); return p ? (short ? p.name : `${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})`) : 'a player'; };
+  const ref = (id) => { const p = P(id); return p ? (short ? p.name : `${p.name} (${posLabel(p)}, OVR ${p.ovr})`) : 'a player'; };
   const list = (ids) => {
     const xs = (ids || []).map(ref);
     return xs.length <= 1 ? (xs[0] || 'nothing') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
@@ -3168,7 +3167,7 @@ function _recordMoves(events) {
     const p = st.players[e.playerId];
     if (!p) continue;
     wire.push({ atMs: e.atMs, kind: 'claim', teamIds: [e.teamId],
-      text: `${_clubName(st, e.teamId)} claim ${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr}) off waivers` });
+      text: `${_clubName(st, e.teamId)} claim ${p.name} (${posLabel(p)}, OVR ${p.ovr}) off waivers` });
   }
   StateManager.mutate(s => {
     _wireAdd(s, wire);
@@ -3302,7 +3301,7 @@ export function gmSignFreeAgent(playerId, dropId = null, nowMs = clockNow()) {
     s.userTeam.finances.payroll = computePayroll(s);
     const p = s.players[playerId];
     _wireAdd(s, [{ atMs: nowMs, kind: 'signing', teamIds: ['user'],
-      text: `${_clubName(s, 'user')} sign free agent ${p.name} (${p.nativePos || p.pos}, OVR ${p.ovr})` }]);
+      text: `${_clubName(s, 'user')} sign free agent ${p.name} (${posLabel(p)}, OVR ${p.ovr})` }]);
   });
   advanceClock(nowMs);
   return { ok: true };

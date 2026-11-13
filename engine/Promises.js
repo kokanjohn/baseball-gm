@@ -27,6 +27,7 @@ import { computeAge, baseballYear } from './PlayerFactory.js';
 import { trueOVR } from './Diamonds.js';
 import { formatK } from './CardTokens.js';
 import { PLAYER_ORIGIN } from '../data/constants.js';
+import { posLabel } from './Positions.js';   // r163 §122.35
 
 export const PROMISE_WHEN = Object.freeze(['season_end', 'winter', 'fa_opens', 'spring']);
 
@@ -163,7 +164,7 @@ const RESOLVERS = {
       card: {
         sender: scoutSig(s), avatar: '🔎', tag: 'SCOUTING', type: 'good',
         subject: `${p.name} — we saw this one at our ballpark`,
-        body: `Remember the college game we hosted? Our scouts were in the stands. ${p.name} (${p.nativePos || p.pos}, ${age}) played in it, and is in this winter's free-agent class. We've seen ${p.name} up close, so our read is better than anyone's: ${better ? 'better than the rating — the kind of player who gets signed late and makes everyone wonder why' : 'about what the rating says, with the tools to grow'}. ${p.name} is in League → Players under Free Agents.`,
+        body: `Remember the college game we hosted? Our scouts were in the stands. ${p.name} (${posLabel(p)}, ${age}) played in it, and is in this winter's free-agent class. We've seen ${p.name} up close, so our read is better than anyone's: ${better ? 'better than the rating — the kind of player who gets signed late and makes everyone wonder why' : 'about what the rating says, with the tools to grow'}. ${p.name} is in League → Players under Free Agents.`,
       },
       land: { scouted: p.id, sharpen: p.id },
     };

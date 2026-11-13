@@ -47,6 +47,7 @@ import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
 import { exposeRatings } from './Diamonds.js';
 import { devFactor } from './CoachEngine.js';
 import { trainingDevFactor } from './FrontOffice.js';
+import { canPlay, primaryPos } from './Positions.js';
 
 const DAY = 86_400_000;
 const WEIGHT = {
@@ -411,8 +412,9 @@ export function givePitcherRest(draft, playerId, atMs) {
 /** r160 who would fill in for `p` (read-only: the staff names the backup). */
 export function fillInFor(draft, t, p) { return _fillIn(draft, t, p); }
 function _fillIn(draft, t, p) {
-  const OF = /^(LF|CF|RF|OF)$/;
-  const fits = (x) => x.pos === p.pos || x.nativePos === p.pos || (OF.test(x.pos) && OF.test(p.pos)) || (p.pos === 'DH');
+  // (r163 §122.35 who can play the spot p holds today — or p's own position, off the lineup)
+  const spot = (t.lineupSlots || []).find(s => s.playerId === p.id)?.slot || primaryPos(p);
+  const fits = (x) => canPlay(x, spot);
   const bench = (t.rosterIds || []).map(id => draft.players[id])
     .filter(x => x && !isPitcher(x) && x.id !== p.id && !x.unavailable && !x.isInjured && !x.isSuspended
       && [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS].includes(x.group) && !(t.lineupSlots || []).some(s => s.playerId === x.id));

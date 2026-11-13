@@ -10794,3 +10794,63 @@ Fresh team: needed to see the new starting roster (the change is in `startNewGam
 6. **The league:** simulated position changes and free agents adding positions.
 
 Fresh team: after phase 1.
+
+### §122.36 r163 Positions, phase 1: one answer to "where can this player play?"
+
+**Built:** `engine/Positions.js` (pure, imports nothing). Every player now carries a positions record:
+- **Hitters:** `{ primary, elig, fam }`.
+- **Pitchers:** `{ primary, roles, stretch }`.
+
+A player without one (a save from before r163) is read from his old label, giving the same answers as before. New players get the record in `PlayerFactory.createPlayer` (`seedPositions`).
+
+**The questions everyone asks now:**
+
+| Function | Answers |
+|---|---|
+| `eligibleAt` | the fielding positions he's eligible at |
+| `eligibleSlots` | those plus DH (`RosterEngine.eligibleSlotsFor` delegates here) |
+| `canPlay(p, slot)` | can he fill this slot (DH: any hitter) |
+| `primaryPos` | his primary position, or a pitcher's primary role |
+| `coversRole(p, q)` | can p play q's position (or q's pitching role) |
+| `naturalFor` | a new lineup's first pass |
+| `pitchRoles` | a pitcher's designations |
+| `stretchOf` | a pitcher's stretched-out level |
+| `familiarity` | how familiar he is with a position (phase 2) |
+| `posLabel` | the label everyone reads: primary first, e.g. "SS/2B", "DH/OF", "SP/RP" |
+| `setPitchRole` | a staff card's reliever/starter swap moves the label and the designation together |
+
+**What now goes through it:**
+- **Display:** every place that printed the old label, about 36 (messages, tokens, Team, League, the trade composer, the signing sheet, the inbox, the wire, the sim's box score).
+- **Decisions:**
+  - the day-off fill-in (the spot the player holds, not his label);
+  - the sim's substitutes (for a hurt batter, and when a game resumes);
+  - the spring lineup builder;
+  - the new-league and new-club lineup builders;
+  - trade compatibility and `playsSlot`;
+  - the staff's "same role" searches (which now remember the primary);
+  - the replaceability check;
+  - IMP's position average;
+  - the season review's role;
+  - the League screen's position filter;
+  - the "a player at that position" token;
+  - roster coverage.
+
+**Small corrections that came with it (the old rules disagreed with the lineup):**
+- **Roster coverage:** a pure DH no longer counts as cover at 1B, and every hitter counts as DH cover (`POSITION_COVERAGE` is removed).
+- **Trade compatibility:** a DH is no longer limited to 1B and OF players.
+- **A two-position player's position average:** IMP uses his primary position instead of the league average.
+
+**Check:** check-positions (37):
+- every old label (and both pitcher roles) gives the same slots and label as the old rule;
+- a record matches the label it was seeded from, and a record that differs wins;
+- a pure DH covers DH only, and any hitter can DH;
+- CF, LF and RF read as OF;
+- a role swap moves the label and the designation together;
+- a new league: every player has a record, with the same label as before;
+- our lineup is all legal.
+
+Fresh team: required from here on (§122.35's phases build on the record). Old saves still read correctly.
+
+**Also in r163 (an r162 fix the suite turned up):** a new club's planted problems no longer use the DH spot. A DH swap could bat the backup catcher at DH, leaving nobody on the bench to catch, so a rest message about the catcher named a first baseman to catch (check-rest-watch failed on some new clubs, since the plant is random). The staff can still raise a DH change that comes up on its own.
+
+**Suite (r163):** season sim 3827/3827, multi-season 59/59. check-coaches, check-game-sim-weather, check-weather-cards and test-swipe-close-ui (light) each failed once and passed on rerun.

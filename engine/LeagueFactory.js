@@ -36,6 +36,7 @@ import {
   SUB_RATING_MIN,
   SUB_RATING_MAX,
 } from '../data/constants.js';
+import { naturalFor } from './Positions.js';
 
 // ─────────────────────────────────────────────────────────────
 // LEAGUE TEAM DEFINITIONS
@@ -349,10 +350,7 @@ function _buildLineupSlots(activeHitterIds, players) {
   for (let i = 0; i < slots.length; i++) {
     const label = slots[i].slot;
     const match = pool.find(p =>
-      !used.has(p.id) && (
-        p.pos === label ||
-        (p.pos?.includes('/') && p.pos.split('/').includes(label))
-      )
+      !used.has(p.id) && naturalFor(p, label)   // r163 §122.35
     );
     if (match) { slots[i].playerId = match.id; used.add(match.id); }
   }

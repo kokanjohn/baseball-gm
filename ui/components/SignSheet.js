@@ -17,6 +17,7 @@ import * as Finance from '../../engine/FinanceEngine.js';
 import { formatK } from '../../engine/CardTokens.js';
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { PHASE } from '../../data/constants.js';
+import { posLabel } from '../../engine/Positions.js';   // r163 §122.35
 
 let _drop = null;
 
@@ -51,7 +52,7 @@ function _render(playerId, kind) {
   const body = document.getElementById('ss-body');
   if (!p || !body) return;
   const close = () => document.getElementById('sign-sheet-overlay')?.remove();
-  const who = `${_esc(p.name)} (${p.nativePos || p.pos}, OVR ${p.ovr}, age ${computeAge(p.dob, baseballYear(st))})`;
+  const who = `${_esc(p.name)} (${posLabel(p)}, OVR ${p.ovr}, age ${computeAge(p.dob, baseballYear(st))})`;
 
   if (kind === 'withdraw') {
     body.innerHTML = `
@@ -94,7 +95,7 @@ function _render(playerId, kind) {
     <div class="ss-list">${room.candidates.map(c => `
       <button class="ss-row${_drop === c.player.id ? ' on' : ''}" data-drop="${c.player.id}">
         <span class="ss-radio">${_drop === c.player.id ? '●' : '○'}</span>
-        <span class="ss-name">${_esc(c.player.name)} <span class="ss-meta">${c.player.nativePos || c.player.pos} · OVR ${c.player.ovr}${c.starter ? ' · starter' : ''}${c.player.isInjured ? ' · hurt' : ''}</span></span>
+        <span class="ss-name">${_esc(c.player.name)} <span class="ss-meta">${posLabel(c.player)} · OVR ${c.player.ovr}${c.starter ? ' · starter' : ''}${c.player.isInjured ? ' · hurt' : ''}</span></span>
         <span class="ss-out">${outcomeText(c)}</span>
       </button>`).join('')}</div>` : '';
 

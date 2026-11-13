@@ -26,6 +26,7 @@ import {
   PLAYER_GROUP,
   SALARY_BY_OVR,
 } from '../data/constants.js';
+import { seedPositions } from './Positions.js';
 
 // ─────────────────────────────────────────────────────────────
 // OVR COMPUTATION — single source of truth
@@ -153,6 +154,7 @@ function _createPlayer(config) {
     name,
     pos,
     nativePos:  pos,
+    positions:  seedPositions({ pos, nativePos: pos }),   // r163 §122.35 where he can play (Positions)
     group,
     hand:       isPitcher ? (hand || 'R') : null,
     dob,

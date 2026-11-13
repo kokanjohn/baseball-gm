@@ -67,6 +67,7 @@ import {
   IMP_SHRINK_PA,
   IMP_SHRINK_IP,
 } from '../data/constants.js';
+import { primaryPos } from './Positions.js';   // r163 §122.35
 
 const DAY_MS = 86_400_000;
 
@@ -332,7 +333,7 @@ function _hitterIMP(stats, player) {
   const babip = (h - hr) / Math.max(1, ab - k - hr);
 
   // Position normalization
-  const pos         = player?.nativePos || player?.pos || 'OF';
+  const pos         = (player && primaryPos(player)) || 'OF';   // r163 Positions
   const posAvgOPS   = IMP_POS_AVG_OPS[pos]     || IMP_LEAGUE_AVG_OPS;
   const posAvgHR    = IMP_POS_AVG_HR_RATE[pos]  || 0.030;
 

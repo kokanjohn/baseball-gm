@@ -38,6 +38,7 @@ import { bullpenRoles, ROLE } from './PitchingEngine.js';
 import { scoutEye, scoutLooks } from './CoachEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
+import { coversRole } from './Positions.js';   // r163 §122.35
 
 /** A player this young the director would ask for as a prospect (not a regular for us yet). */
 export const PROSPECT_AGE = 24;
@@ -252,7 +253,7 @@ export function suggestCounter(state, deal, rand, atMs) {
     if (!q) continue;
     for (const p of theirs) {
       if ((p.ovr || 0) <= (q.ovr || 0)) continue;
-      const same = isP(q) ? p.pos === q.pos : !isP(p) && playsSlot(p, q.nativePos || q.pos);
+      const same = isP(q) ? p.pos === q.pos : !isP(p) && coversRole(p, q);   // r163 Positions
       if (!same) continue;
       const o = clone(offer); o.incomingIds = o.incomingIds.map(x => (x === id ? p.id : x)); delete o.retain[id];
       cands.push({ o, change: { kind: 'swap', id: p.id, for: id } });

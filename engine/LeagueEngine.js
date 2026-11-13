@@ -36,6 +36,7 @@ import { computeOVR, isAvailable } from './PlayerFactory.js';
 import { canAddSalary } from './FinanceEngine.js';
 import { cpuView } from './Diamonds.js';
 import { eventRand } from './Dice.js';
+import { primaryPos } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // CPU GAME SIMULATION
@@ -147,7 +148,7 @@ export function weakestPeer(team, player, players) {
   const peers = (team.rosterIds || []).map(id => players[id]).filter(p =>
     p && p.id !== player.id && p.group !== PLAYER_GROUP.IL && !p.isInjured
     && (isP ? p.pos === player.pos
-            : !['SP', 'RP'].includes(p.pos) && (p.nativePos || p.pos) === (player.nativePos || player.pos)));
+            : !['SP', 'RP'].includes(p.pos) && primaryPos(p) === primaryPos(player)));   // r163 Positions
   return peers.sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0] || null;
 }
 

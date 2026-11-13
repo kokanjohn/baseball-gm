@@ -34,6 +34,7 @@ import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import * as Finance from './FinanceEngine.js';
 import { clockNow } from './Clock.js';
 import { eventRand } from './Dice.js';
+import { canPlay, coversRole, primaryPos } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // TRADE VALUE CALCULATION
@@ -237,15 +238,12 @@ function _assessDepthImpact(outgoing, incoming, state) {
     .filter(p => p && isAvailable(p));
 
   for (const player of outgoing) {
-    const pos      = player.nativePos || player.pos;
     const isPitcher = ['SP', 'RP'].includes(player.pos);
 
     const compatible = userRoster.filter(p => {
       if (p.id === player.id) return false;
       if (isPitcher) return ['SP','RP'].includes(p.pos);
-      // Simplified position compatibility
-      return (p.nativePos || p.pos) === pos
-          || (pos === 'DH' && ['1B','OF'].includes(p.nativePos || p.pos));
+      return coversRole(p, player);   // r163 §122.35 Positions: who can play his position
     });
 
     if (compatible.length === 0) return 'CRITICAL';
@@ -398,8 +396,7 @@ export function contractRunOut(player, state) {
 const POSTSEASON = new Set([PHASE.PLAYOFF_BRACKET_BUILD, PHASE.WILD_CARD, PHASE.FIRST_ROUND, PHASE.DIVISION_SERIES, PHASE.WORLD_SERIES]);
 const _club = (state, id) => (id === 'user' ? state.userTeam : (state.leagueTeams || []).find(t => t.id === id) || null);
 const _isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
-const _plays = (p, slot) => slot === 'DH' ? !_isPitcher(p)
-  : [p.nativePos, ...(String(p.pos || '').split('/'))].includes(slot);
+const _plays = (p, slot) => canPlay(p, slot);   // r163 §122.35 Positions (DH: any hitter)
 
 /** Our committed regular-season games (the season's position against the deadline). */
 export function regularIndex(state) {
@@ -564,7 +561,7 @@ function _holeCost(p, state, teamId) {
   } else if (p.pos === 'RP') {
     fits = org.filter(x => x.pos === 'RP' && !_isKey(x, state, teamId));
   } else {
-    const slot = (t.lineupSlots || []).find(sl => sl.playerId === p.id)?.slot || p.nativePos || p.pos;
+    const slot = (t.lineupSlots || []).find(sl => sl.playerId === p.id)?.slot || primaryPos(p);
     const starters = new Set((t.lineupSlots || []).map(sl => sl.playerId));
     fits = org.filter(x => !_isPitcher(x) && !starters.has(x.id) && _plays(x, slot));
   }

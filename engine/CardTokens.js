@@ -40,6 +40,7 @@ import {
   LEGEND_ROLES,
 } from '../data/card-tokens.js';
 import { eventRand, dice, diceSeed } from './Dice.js';
+import { posLabel, primaryPos } from './Positions.js';   // r163 §122.35
 
 // Matches any {token}. Digits are allowed (e.g. {sp2_items}, {bg11_team}).
 export const TOKEN_PATTERN = /\{([a-z0-9_]+)\}/gi;
@@ -199,7 +200,7 @@ export function buildTokenMap(cardDef, context, state) {
   _setHitter(values,  'drop_hitter',      dropHitter,      'our last bench bat');
   _setHitter(values,  'audition_hitter',  auditionHitter,  'a bench player');
   for (const [k, pl] of [['prospect_hitter', prospectHitter], ['drop_hitter', dropHitter], ['audition_hitter', auditionHitter]]) {
-    values[`${k}_desc`] = pl ? `${pl.name} (${pl.nativePos || pl.pos}, OVR ${pl.ovr})` : values[`${k}_name`];
+    values[`${k}_desc`] = pl ? `${pl.name} (${posLabel(pl)}, OVR ${pl.ovr})` : values[`${k}_name`];
   }
   // A signing with the hitters' side of the 28 full puts the last bench bat on waivers (signStarter).
   values.drop_hitter_note = dropHitter && rosterIsFull(state, 'user', 'hitter')
@@ -438,14 +439,14 @@ export function playerTokenValues(state, prefix, p) {
 /** "shortstop", "left-hander"… for an international prospect. */
 export function intlTypeOf(pl) {
   return ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-hander' : 'right-hander')
-    : ({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder');
+    : ({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[primaryPos(pl)] || 'infielder');
 }
 
 function _playerTokens(values, prefix, p, state) {
   if (!p) return;
   const isP = ['SP', 'RP'].includes(p.pos);
   values[`${prefix}_name`] = p.name;
-  values[`${prefix}_pos`]  = isP ? p.pos : (p.nativePos || p.pos);
+  values[`${prefix}_pos`]  = isP ? p.pos : posLabel(p);
   values[`${prefix}_hand`] = isP ? (PITCHER_HAND_DISPLAY[p.hand] || '(R)') : '';
   values[`${prefix}_age`]  = String(computeAge(p.dob, baseballYear(state)));
   values[`${prefix}_ovr`]  = String(p.ovr);
@@ -543,7 +544,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
     const pl = take('intl_player', marketCandidate(state, { kind: 'intl', side, rand: eventRand }, new Set(state.freeAgentPool || [])));
     if (pl) {
       values.intl_player_type = ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-hander' : 'right-hander')
-        : ({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder');
+        : ({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[primaryPos(pl)] || 'infielder');
       values.intl_player_age = values.intl_player_age;
       pl._marketKind = 'intl';
       pl._intlCountry = values.intl_country;
@@ -553,7 +554,7 @@ function _marketRoles(cardDef, state, values, amountsK, activeHitter) {
     const pl = take('indie_player', marketCandidate(state, { kind: 'indie', side, rand: eventRand }, new Set(state.freeAgentPool || [])));
     if (pl) {
       values.college_pos = ['SP', 'RP'].includes(pl.pos) ? (pl.hand === 'L' ? 'left-handed pitcher' : 'right-handed pitcher')
-        : `${({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[pl.nativePos || pl.pos] || 'infielder')}`;
+        : `${({ C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder' }[primaryPos(pl)] || 'infielder')}`;
       pl._marketKind = 'indie';
       pl._indieLeague = values.indie_league_name;
     }
@@ -633,7 +634,7 @@ function _pickLeader(state, used) {
       || all.sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0] || null;
 }
 function _pickActivePlayerByPos(state, pos) {
-  return _roster(state).find(p => (p.nativePos || p.pos) === pos) || null;
+  return _roster(state).find(p => primaryPos(p) === pos) || null;   // r163 Positions
 }
 function _pickFarm(state, pitchers) {
   return _pick(_youngReserves(state, pitchers));
@@ -649,7 +650,7 @@ function _setPitcher(values, prefix, p, fallback) {
 }
 function _setHitter(values, prefix, p, fallback) {
   values[`${prefix}_name`]       = p?.name || fallback;
-  values[`${prefix}_pos`]        = p ? (p.nativePos || p.pos) : 'position player';
+  values[`${prefix}_pos`]        = p ? posLabel(p) : 'position player';
   values[`${prefix}_trait_note`] = p ? _traitNote(p.trait) : '';
   values[`${prefix}_name_tr`]    = values[`${prefix}_name`];
   values[`${prefix}_pos_tr`]     = values[`${prefix}_pos`];

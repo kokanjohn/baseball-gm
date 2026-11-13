@@ -29,6 +29,7 @@ import { queueTrade } from './TradeEngine.js';
 import { eventRand } from './Dice.js';
 import { startWork, workable, isPitcher as pitcherPos } from './PlayerWork.js';
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
+import { setPitchRole } from './Positions.js';   // r163
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -219,9 +220,9 @@ const bpToRotation = {
     const out = order.map(id => d.players[id]).filter(Boolean).sort((a, b) => (a.ovr || 0) - (b.ovr || 0))[0];
     if (out) {
       order[order.indexOf(out.id)] = p.id;
-      Object.assign(out, { group: PLAYER_GROUP.BULLPEN, pos: 'RP' });
+      out.group = PLAYER_GROUP.BULLPEN; setPitchRole(out, 'RP');
     } else order.push(p.id);
-    Object.assign(p, { group: PLAYER_GROUP.STARTING_PITCHERS, pos: 'SP' });
+    p.group = PLAYER_GROUP.STARTING_PITCHERS; setPitchRole(p, 'SP');
     return [{ type: 'ROLE_CHANGE', playerId: p.id, to: 'SP', replaced: out?.id || null }];
   },
 };

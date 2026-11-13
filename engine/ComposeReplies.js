@@ -22,6 +22,7 @@ import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from
 import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart } from './TradeEngine.js';
 import { coachRead, programRead, restRead, healthRead, isPitcher as isArm } from './PlayerWork.js';
 import { PLAYER_WORK } from '../data/constants.js';
+import { posLabel } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -760,7 +761,7 @@ W.sc_free_agents = (f, r, who) => {
     const ask = signingTerms(st, p);
     const sr = p.subRatings || {};
     const last = (p.seasonLog || []).filter(e => e?.stats).at(-1);
-    const lines = [`${p.name} (${p.nativePos || p.pos}, ${f.age(p)}, OVR ${p.ovr}, asking ${ask.salary ? formatK(ask.salary) : 'the minimum'}${ask.bonus ? ` with a ${formatK(ask.bonus)} bonus` : ''}):`];
+    const lines = [`${p.name} (${posLabel(p)}, ${f.age(p)}, OVR ${p.ovr}, asking ${ask.salary ? formatK(ask.salary) : 'the minimum'}${ask.bonus ? ` with a ${formatK(ask.bonus)} bonus` : ''}):`];
     if (p._ratingGap) {
       const read = readOfUntested(p, r, sigmaOf(p));
       lines.push(`${Cap(ORIGIN_WORDS[p.origin] || 'new to the league')}. ${read > 0 ? 'Our read: better than the reports — this could be a real find.' : read < 0 ? 'Our read: not as good as the reports.' : 'Our read: about what the reports say.'}`);
@@ -979,7 +980,7 @@ W.mgr_trade = (f, r, who, arg) => {
   const spare = leaving.filter(l => ['pen', 'bench', 'hurt'].includes(l.role)).map(l => l.p);
   if (spare.length) out.unshift(`${list(spare.map(p => p.name))} ${spare.length === 1 ? 'is depth' : 'are depth'} for us${spare.length === 1 ? ` (${spare[0].pos === 'RP' || spare[0].pos === 'SP' ? 'a reliever we don\'t lean on' : 'off the bench'})` : ''}. We won't miss much on the field.`);
   for (const a of arriving) {
-    const q = a.p, pos = q.nativePos || q.pos;
+    const q = a.p, pos = posLabel(q);
     if (a.fills) continue;
     if (a.role === 'lineup')        out.push(`${q.name} (${pos}, ${ovrOf(q)}) would play ${SPOT_WORDS[a.slot] || a.slot} over ${a.over.name} (${ovrOf(a.over)}).`);
     else if (a.role === 'rotation') out.push(`${q.name} (${ovrOf(q)}) would take ${a.over.name}'s spot in the rotation.`);
@@ -1022,7 +1023,7 @@ W.sc_trade = (f, r, who, arg) => {
     const was = deal.offer.cashK || 0, now = was + (c.k || 0);
     const ask = c.kind === 'cash' ? (was >= 0 ? `ask them to add ${formatK(c.k)}` : now <= 0 ? `pay ${formatK(c.k)} less` : `ask them to send ${formatK(now)} instead of us paying ${formatK(-was)}`)
       : c.kind === 'drop' ? `keep ${P(c.id).name} out of it`
-      : c.kind === 'add'  ? `ask them to include ${P(c.id).name} (${P(c.id).nativePos || P(c.id).pos}, ${f.age(P(c.id))}, ${ovrOf(P(c.id))}${wouldStart(P(c.id), st, 'user') ? ', who would play for us' : ', a prospect'})`
+      : c.kind === 'add'  ? `ask them to include ${P(c.id).name} (${posLabel(P(c.id))}, ${f.age(P(c.id))}, ${ovrOf(P(c.id))}${wouldStart(P(c.id), st, 'user') ? ', who would play for us' : ', a prospect'})`
       : `ask for ${P(c.id).name} (${ovrOf(P(c.id))}) instead of ${P(c.for).name} (${ovrOf(P(c.for))})`;
     const sure = q >= 75 ? 'I\'m confident they\'ll take it.' : q >= 55 ? 'I think they\'ll take it.' : 'I think they\'ll take it, though I could be wrong about how far they\'ll go.';
     out.push(`My counter: ${ask}. That makes the deal: ${dealWords(st, a.counter, team)}. ${sure} `
@@ -1068,7 +1069,7 @@ function needWords(st, need, p) {
 }
 /** What a club would give: "Ruiz (SS, 26, OVR 61) and $50K". */
 function bidWords(f, o, team) {
-  const pieces = (o.incomingIds || []).map(f.P).filter(Boolean).map(q => `${q.name} (${q.nativePos || q.pos}, ${f.age(q)}, ${ovrOf(q)})`);
+  const pieces = (o.incomingIds || []).map(f.P).filter(Boolean).map(q => `${q.name} (${posLabel(q)}, ${f.age(q)}, ${ovrOf(q)})`);
   const c = o.cashK || 0;
   if (c > 0) pieces.push(`${formatK(c)}`);
   let t = pieces.length ? list(pieces) : 'nothing';

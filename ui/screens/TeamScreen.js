@@ -37,6 +37,7 @@ import { getRosterNeeds } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as Coach from '../../engine/CoachEngine.js';
 import * as When from '../../engine/When.js';
+import { posLabel } from '../../engine/Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -57,7 +58,7 @@ let _listeners   = [];
 // player.group is NOT used to identify starters — BENCH_HITTERS
 // means "available but not currently in a lineup slot".
 
-// Which slots a bench player is eligible to fill (based on nativePos).
+// Which slots a bench player is eligible to fill (Positions — r163 §122.35).
 // Slot labels match lineupSlots entries: 'C','1B','2B','3B','SS','OF','DH'.
 // 'OF' covers all three OF positions — no LF/CF/RF distinction.
 // Every hitter is eligible for 'DH'.
@@ -455,7 +456,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
   const canMove = !coming && !il && moveOptions(state, p.id).length > 0;
   const shown = _statsShown(p);
   const pitcher = ['SP', 'RP'].includes(p.pos);
-  const pos = pitcher ? `${p.pos} · ${p.hand === 'L' ? 'L' : 'R'}` : (p.nativePos || p.pos);
+  const pos = pitcher ? `${p.pos} · ${p.hand === 'L' ? 'L' : 'R'}` : posLabel(p);
   // The sub-line: position (and hand), then what matters about the row today.
   // A row with a status (reporting, traded, on the IL) shows that alone, so it fits.
   const subBits = [];
@@ -807,7 +808,7 @@ function _attachListeners(state) {
       _showSwapSheet(`Fill ${_escape(label)}`, null, who.map(p => `
         <div class="sm-row" data-pick="${p.id}">
           <div class="sm-pick-info"><span class="sm-pick-name">${_escape(p.name)}</span>
-            <span class="sm-pick-sub">${['SP', 'RP'].includes(p.pos) ? p.pos : (p.nativePos || p.pos)}</span></div>
+            <span class="sm-pick-sub">${['SP', 'RP'].includes(p.pos) ? p.pos : posLabel(p)}</span></div>
           <span class="rating-num ${_ovrColor(p.ovr)} sm-pick-ovr">${p.ovr}</span>
         </div>`).join(''), (overlay) => {
         overlay.querySelectorAll('.sm-row[data-pick]').forEach(row => row.addEventListener('click', () => {
@@ -854,7 +855,7 @@ function _openMoveSheet(playerId) {
       <div class="sm-slot-sub"><span class="${o.detail === 'Open' ? 'sm-empty' : 'sm-current'}">${_escape(o.detail)}</span></div>
     </div>`).join('')
     + (leaves && deadline ? `<div class="sm-note">An open spot waits for you until ${_clockText(deadline)}, an hour before first pitch. Then ${_escape(st.userTeam.coachingStaff?.manager?.name || 'the manager')} fills it from the bench.</div>` : '');
-  const pos = ['SP', 'RP'].includes(p.pos) ? p.pos : (p.nativePos || p.pos);
+  const pos = ['SP', 'RP'].includes(p.pos) ? p.pos : posLabel(p);
   _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}`, rows, (overlay) => {
     overlay.querySelectorAll('.sm-row[data-key]').forEach(row => row.addEventListener('click', () => {
       App.playClick(); overlay.remove(); _doMove(playerId, row.dataset.key);

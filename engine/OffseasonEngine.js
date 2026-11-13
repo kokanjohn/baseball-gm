@@ -92,6 +92,7 @@ import { trainingWinterBonus } from './FrontOffice.js';
 import { fillsNeed } from './LeagueTrades.js';
 import { clockNow } from './Clock.js';
 import { fillShortRosters } from './TransactionEngine.js';
+import { primaryPos, posLabel } from './Positions.js';   // r163 §122.35
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
 
@@ -574,7 +575,7 @@ function _retirements(draft, atMs, nextYear) {
       draft.history = [...(draft.history || []), {
         id: _uuid(), type: 'retirement', season: draft.seasonNum || 1, gameIdx: draft.currentGameIndex || 0,
         headline: `${p.name} retires`,
-        detail: `${p.name} (${p.nativePos || p.pos}) retired at ${age} after ${p.careerStats?.seasons || 1} season${(p.careerStats?.seasons || 1) === 1 ? '' : 's'} (peak OVR ${p.careerStats?.peakOvr || p.ovr}).`,
+        detail: `${p.name} (${posLabel(p)}) retired at ${age} after ${p.careerStats?.seasons || 1} season${(p.careerStats?.seasons || 1) === 1 ? '' : 's'} (peak OVR ${p.careerStats?.peakOvr || p.ovr}).`,
         playerId: p.id, icon: '🎩', userNote: '',
       }];
     }
@@ -721,8 +722,9 @@ export function roleWords(draft, p) {
     if ((s.gs || 0) >= 10) return 'a starter in our rotation';
     if ((s.g || 0) >= 15) return (s.sv || 0) >= 10 ? 'our closer' : 'a reliever';
   } else {
-    if ((s.ab || 0) >= 300) return `an everyday ${p.pos === 'DH' ? 'designated hitter' : p.pos}`;
-    if ((s.ab || 0) >= 120) return `a part-time ${p.pos === 'DH' ? 'designated hitter' : p.pos}`;
+    const pp = primaryPos(p);   // r163 Positions
+    if ((s.ab || 0) >= 300) return `an everyday ${pp === 'DH' ? 'designated hitter' : pp}`;
+    if ((s.ab || 0) >= 120) return `a part-time ${pp === 'DH' ? 'designated hitter' : pp}`;
   }
   if ((s.g || 0) > 0) return isPitcher(p) ? 'a spare arm' : 'a bench player';
   return isPitcher(p) ? 'an arm we barely used' : 'a bench player who barely played';

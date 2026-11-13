@@ -35,6 +35,7 @@ import * as Roster from '../../engine/RosterEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { PHASE } from '../../data/constants.js';
 import * as When from '../../engine/When.js';
+import { primaryPos, pitchRoles, eligibleAt, posLabel } from '../../engine/Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -450,17 +451,14 @@ function _renderPlayers(state) {
   // Position filter — bypassed when searching so cross-position search works
   const HITTER_POS  = ['C','1B','2B','3B','SS','OF','DH'];
   const PITCHER_POS = ['SP','RP'];
-  const POS_FAMILY  = {
-    '2B': ['2B','2B/SS'], '1B': ['1B','1B/3B'], 'DH': ['DH','DH/OF'],
-    'SS': ['SS','2B/SS'], '3B': ['3B','1B/3B'], 'OF': ['OF','DH/OF'],
-  };
   const pos = f.pos;
   if (!isSearching) {
     if (pos === 'batters') allPlayers = allPlayers.filter(p => !['SP','RP'].includes(p.pos));
     else if (pos === 'pitchers') allPlayers = allPlayers.filter(p => ['SP','RP'].includes(p.pos));
     else if (pos !== 'all') {
-      const family = POS_FAMILY[pos] || [pos];
-      allPlayers = allPlayers.filter(p => family.includes(p.nativePos || p.pos));
+      // (r163 §122.35 everyone who plays it — Positions; DH: the designated hitters; SP/RP: the designation)
+      allPlayers = allPlayers.filter(p => pos === 'DH' ? primaryPos(p) === 'DH'
+        : ['SP', 'RP'].includes(pos) ? pitchRoles(p).includes(pos) : eligibleAt(p).includes(pos));
     }
   }
 
@@ -578,7 +576,7 @@ function _renderPlayers(state) {
       <div class="lp-row ${isUser ? 'user-player-row' : ''}" data-player="${p.id}">
         <div class="lp-td-name">
           <div class="lp-name-line">${_escape(p.name)}${p.onWaivers ? ` <span class="lp-wv-left" title="Time left on waivers">${_waiverLeft(p)}</span>` : ''}</div>
-          <div class="lp-name-sub">${_escape(teamAbbr)} · ${p.nativePos || p.pos}${shown.year ? ` · <span class="lp-lyline">'${String(shown.year).slice(-2)} stats</span>` : ''}${dtd}</div>
+          <div class="lp-name-sub">${_escape(teamAbbr)} · ${posLabel(p)}${shown.year ? ` · <span class="lp-lyline">'${String(shown.year).slice(-2)} stats</span>` : ''}${dtd}</div>
         </div>
         ${statVals}
       </div>`;
@@ -979,8 +977,8 @@ function _openLeagueTeamModal(team, state) {
         ${section('Lineup', lineup.map(x => row(x.p, x.slot)))}
         ${section('Rotation', rotation.map((p, i) => row(p, `SP${i + 1}`)))}
         ${section('Bullpen', bullpen.map(p => row(p, p.pos)))}
-        ${section('Bench', bench.map(p => row(p, p.nativePos || p.pos)))}
-        ${section('Injured', injured.map(p => row(p, p.nativePos || p.pos)))}
+        ${section('Bench', bench.map(p => row(p, posLabel(p))))}
+        ${section('Injured', injured.map(p => row(p, posLabel(p))))}
       </div>
     </div>`;
 

@@ -30,27 +30,11 @@ import { isAvailable } from './PlayerFactory.js';
 import { reliefValue } from './PitchingEngine.js';
 import { payrollOf } from './FinanceEngine.js';
 import { clockNow } from './Clock.js';
+import { eligibleSlots, canPlay } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
-// POSITION COMPATIBILITY MAP
-// Which positions can cover for each native position.
-// Used for depth checks.
+// POSITIONS: who can play where is engine/Positions.js (r163 §122.35)
 // ─────────────────────────────────────────────────────────────
-
-const POSITION_COVERAGE = Object.freeze({
-  'C':      ['C'],
-  '1B':     ['1B', '1B/3B', 'DH'],
-  '2B':     ['2B', '2B/SS'],
-  '3B':     ['3B', '1B/3B'],
-  'SS':     ['SS', '2B/SS'],
-  'OF':     ['OF', 'DH/OF'],
-  'DH':     ['DH', 'OF', 'DH/OF', '1B'],
-  '2B/SS':  ['2B', 'SS', '2B/SS'],
-  '1B/3B':  ['1B', '3B', '1B/3B'],
-  'DH/OF':  ['DH', 'OF', 'DH/OF'],
-  'SP':     ['SP'],
-  'RP':     ['RP'],
-});
 
 // Positions that are "starters" for depth check purposes
 const REQUIRED_STARTER_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH'];
@@ -72,26 +56,7 @@ const REQUIRED_RP_COUNT = 2; // minimum relievers to function
  * @returns {String[]} slot labels (subset of LINEUP_SLOTS)
  */
 export function eligibleSlotsFor(player) {
-  const nat = (player && (player.nativePos || player.pos)) || '';
-  switch (nat) {
-    case 'C':     return ['C', 'DH'];
-    case '1B':    return ['1B', 'DH'];
-    case '2B':    return ['2B', 'DH'];
-    case '3B':    return ['3B', 'DH'];
-    case 'SS':    return ['SS', 'DH'];
-    case 'OF':    return ['OF', 'DH'];
-    case 'DH':    return ['DH'];            // pure DH — only DH slot
-    case 'DH/OF': return ['OF', 'DH'];
-    case '2B/SS': return ['2B', 'SS', 'DH'];
-    case '1B/3B': return ['1B', '3B', 'DH'];
-    case 'SS/OF': return ['SS', 'OF', 'DH'];
-    case '1B/OF': return ['1B', 'OF', 'DH'];
-    default:
-      if (nat.includes('/')) {
-        return [...new Set([...nat.split('/'), 'DH'])];
-      }
-      return nat ? [nat, 'DH'] : ['DH'];
-  }
+  return eligibleSlots(player);   // r163 §122.35 Positions: the one answer (an old label reads the same as before)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -441,10 +406,9 @@ export function checkDepth(state, teamId) {
   const healthyHitters = activePlayers.filter(p => p.group === PLAYER_GROUP.BENCH_HITTERS);
 
   for (const pos of REQUIRED_STARTER_POSITIONS) {
-    const compatible = POSITION_COVERAGE[pos] || [pos];
-    const available  = healthyHitters.filter(p =>
-      compatible.includes(p.nativePos || p.pos)
-    ).length;
+    // (r163 §122.35 who can play there: Positions, the same answer as the lineup's — a pure DH no
+    //  longer counts as 1B cover, and every hitter covers DH, as the DH slot takes anyone)
+    const available  = healthyHitters.filter(p => canPlay(p, pos)).length;
 
     if (available === 0) issues.push({ type: 'CRITICAL', position: pos, available });
     else if (available === 1) issues.push({ type: 'WARNING', position: pos, available });
