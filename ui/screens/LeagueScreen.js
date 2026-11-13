@@ -18,13 +18,12 @@
  * Activity feed (Section 28.5 — LOCKED):
  *   72-hour rolling feed shown at bottom of Standings tab.
  *
- * Hot/cold indicators shown on Players tab (own roster only on free tier).
  */
 
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
-import { getHotColdIndicator, getImpLeaderboard, lastSeasonIMP } from '../../engine/IMPEngine.js';
+import { getImpLeaderboard, lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { openSignSheet } from '../components/SignSheet.js';
 import {
   formatRecord, formatGB, formatOVR,
@@ -340,7 +339,7 @@ function _renderMoves(state) {
   const chip = (id, label) => `<button class="lw-chip ${_wireFilter === id ? 'active' : ''}" data-wire="${id}">${label}</button>`;
   const head = `<div class="lw-bar">${chip('all', 'All')}${chip('trades', 'Trades')}${chip('ours', 'Our Club')}</div>`;
   if (!shown.length) {
-    return `${head}<div class="lw-empty">${all.length ? 'Nothing here yet.' : 'No moves yet. Trades, signings, waiver claims and releases around the league appear here as they happen.'}</div>`;
+    return `${head}<div class="lw-empty">${all.length ? 'Nothing here yet.' : 'No moves yet.'}</div>`;
   }
   const dayKey = (ms) => new Date(ms).toDateString();
   const dayLabel = (ms) => When.agoDay(ms, Date.now());   // r149 relative: "Today", "Yesterday", "3 days ago"

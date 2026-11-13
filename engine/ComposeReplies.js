@@ -978,7 +978,7 @@ W.mgr_trade = (f, r, who, arg) => {
     const q = a.p, pos = q.nativePos || q.pos;
     if (a.fills) continue;
     if (a.role === 'lineup')        out.push(`${q.name} (${pos}, ${ovrOf(q)}) would play ${SPOT_WORDS[a.slot] || a.slot} over ${a.over.name} (${ovrOf(a.over)}).`);
-    else if (a.role === 'rotation') out.push(`${q.name} (${ovrOf(q)}) would take ${a.over.name}'s turn in the rotation.`);
+    else if (a.role === 'rotation') out.push(`${q.name} (${ovrOf(q)}) would take ${a.over.name}'s spot in the rotation.`);
     else if (a.role === 'closer')   out.push(`${q.name} (${ovrOf(q)}) would close, and ${a.over.name} would move to setup.`);
     else if (a.role === 'setup')    out.push(`${q.name} (${ovrOf(q)}) would pitch the late innings, ahead of ${a.over.name}.`);
     else if (a.role === 'hurt')     out.push(`${q.name} is hurt right now, so nothing changes on the field until ${q.name} is back.`);

@@ -12,7 +12,6 @@
  *   - Contract: salary, years remaining, expiry
  *   - Season stats (batting or pitching depending on position)
  *   - IMP trend: 7-day, 15-day, 30-day, season
- *   - Hot/cold indicator
  *   - Trait label
  *   - GM relationship bar
  *   - Career: the seasons before this one (§122.9), or why there are none
@@ -26,7 +25,7 @@
 
 import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
-import { getHotColdIndicator, getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
+import { getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { PHASE, PLAYER_GROUP } from '../../data/constants.js';
 import { bullpenRoles } from '../../engine/PitchingEngine.js';
 import * as StateManager from '../../store/StateManager.js';
@@ -119,7 +118,6 @@ export function closePlayerCard() {
 function _renderCard(player, playerId, state) {
   const isPitcher    = ['SP','RP'].includes(player.pos);
   const impScores    = state.impScores?.[playerId];
-  const indicator    = getHotColdIndicator(impScores);
   const impLast      = lastSeasonIMP(player);
   const impLabel     = impScores?.impS != null ? getImpLabel(impScores.impS) : '';
   const userRosterIds = new Set(state.userTeam?.rosterIds || []);
@@ -154,7 +152,6 @@ function _renderCard(player, playerId, state) {
         ${player.trait ? `<div class="pc-trait">${_escape(TRAIT_WORDS[player.trait] || player.trait)}</div>` : ''}
         ${(player.allStarSeasons || []).length ? `<div class="pc-trait" style="color:#c9971c;">★ ${player.allStarSeasons.length > 1 ? `${player.allStarSeasons.length}× ` : ''}All-Star${(player.allStarMvps || []).length ? ` · ${player.allStarMvps.length > 1 ? `${player.allStarMvps.length}× ` : ''}ASG MVP` : ''}</div>` : ''}
       </div>
-      ${indicator ? `<div class="pc-hot-cold">${indicator}</div>` : ''}
     </div>
 
     <!-- Sub-ratings -->
@@ -505,7 +502,6 @@ function _injectCSS() {
     .pc-farm-badge{font-size:10px;font-weight:700;color:var(--text);
       background:var(--chip-accent-bg);padding:1px 6px;border-radius:4px;display:inline-block;}
     .pc-trait{font-size:11px;color:var(--muted);font-style:italic;margin-top:2px;}
-    .pc-hot-cold{font-size:24px;flex-shrink:0;}
     .pc-section{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);}
     .pc-section:last-child{border-bottom:none;}
     .pc-section-label{font-size:10px;font-weight:700;letter-spacing:2px;

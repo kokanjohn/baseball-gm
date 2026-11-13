@@ -10315,3 +10315,72 @@ Fresh team: not needed (UI only).
 - No page errors.
 
 Fresh team: not needed (UI only).
+
+---
+
+## §122.29 — r157: quieter copy, no hot/cold, who a trade offer comes from, tighter messages
+
+**Asked:**
+- remove the Compose note "Replies come back later, the way they would from a real staff…" and any similar text elsewhere;
+- remove the hot/cold marks on players;
+- reword "take a turn in their rotation";
+- a trade offer from another club's "front office" shouldn't carry our analysis. Analysis comes from someone internal, with some offers really from the other club, in its own voice;
+- tighten the line spacing of message bodies.
+
+**Explainer text removed:**
+- **Removed:** notes that explain how the game works, rather than saying something about this club right now.
+  - Compose: the note on how replies arrive.
+  - The empty Inbox: "New messages arrive as the season moves…" ("You're all caught up" stays).
+  - The empty Completed folder: "Messages you've decided on are kept here…".
+  - The empty Franchise Story: "Trades, injuries, milestones… will be recorded here…".
+  - League Moves when empty: now just "No moves yet."
+- **Kept**, because they are information, not explanation:
+  - the open-spot deadline in the Move sheet ("An open spot waits for you until 6:05 PM…");
+  - the trade composer's cash sign hint;
+  - the forecast's "From the forecast made at…";
+  - the new-team setup step subtitles, which describe what each choice decides.
+
+**Hot/cold removed everywhere:**
+- the 🔥/❄️ after a name on the Team roster;
+- on the player card;
+- the dashboard's "Form" strip, whose only job was the hot/cold list (its CSS went with it);
+- `IMPEngine.getHotColdIndicator`, the leaderboard's `hot` field, and `IMP_HOT_THRESHOLD`/`IMP_COLD_THRESHOLD`. Nothing else used them; no save holds them.
+- A coach's natural speech ("the hottest bat we have") is a sentence, not a designation, and stays.
+
+**Rotation "turns" → spots:** the move-sheet labels already said SP since r154.
+- A club's need: "want X to **start in their rotation**" (or "our rotation").
+- The IL return: "took a spot in the rotation".
+- Back-from-IL nudges: "is the weakest starter in the rotation", "keeps starting".
+- Open spots: "a rotation spot".
+- A trade's field read: "would take Y's spot in the rotation".
+- The move sheet: "takes their spot in the rotation".
+- Team: "the open rotation spot".
+
+**Who a trade offer is from** (`deliverTradeOffer`):
+- **Two voices**, chosen from the offer itself (a hash of club, time and kind; no random draw, so the sim and the lookahead stay deterministic). About 40% are direct.
+  - **Pro Scouting** (sender `Pro Scouting`, `_voice: 'scouting'`) tells us about the call and what it makes of it: the varied intro, the deal, cash and kept salary, Impact, the read and the payroll. The read is in Pro Scouting's own voice ("Our read: …"), since it signs the message.
+  - **The club itself** (sender `<Club> front office`, `_voice: 'club'`) writes in the first person: what it wants, the deal ("You send X; we send Y."), its cash and kept salary, and a short close ("Let us know."). There is none of our analysis: no read, no Impact, no payroll.
+    - Its subjects are "Interested in X" and "X is available".
+    - It has a welcome variant for the seeded first offer.
+    - Its need words are its own ("start in our rotation", "pitch the late innings for us").
+- **Always Pro Scouting:**
+  - an offer written for the moment (a club calling back about a conversation we started, a salary dump returning our call);
+  - the replies to our offers (accepted / counter / passed / run their course);
+  - "the deal is off". All of these tell of the club's call in the third person.
+- The decision, its buttons and counters are the same in both voices.
+
+**Message bodies:** line height 1.65 → 1.4; paragraph gap 12px → 9px.
+
+**Checks:**
+- **sim-season (offers to us):**
+  - both voices appear (9 Pro Scouting / 8 club in the run);
+  - a club message is signed by its front office, speaks in the first person, and carries no analysis (no read, Pro Scouting, Impact, payroll or "We can take it");
+  - Pro Scouting signs the offers with its read;
+  - no rotation "turns" in offer wording.
+- **test-copy-cleanup-ui** (new, 10, dark and light):
+  - no 🔥/❄️ on the dashboard, Team or the player card, even for players forced to a hot or cold IMP-7;
+  - no Form strip;
+  - no explainer on Compose, empty Completed, the empty Franchise Story or League Moves;
+  - a message body at line height ≤1.45 with ≤10px between paragraphs.
+
+Fresh team: not needed. The wording and voices apply to messages from now on. The removed constants were display-only.

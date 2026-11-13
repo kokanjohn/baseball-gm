@@ -984,7 +984,7 @@ export function moveOptions(state, playerId) {
     return out;
   }
   if (me.group !== active) return [];
-  const label = isSP ? 'their rotation turn' : 'their bullpen spot';
+  const label = isSP ? 'their spot in the rotation' : 'their bullpen spot';
   ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.PITCHER_BENCH && p.pos === me.pos)
     .sort((a, b) => b.ovr - a.ovr)
     .forEach(p => out.push({ key: `in:${p.id}`, label: 'Pitcher bench', detail: `${p.name} (${ovr(p)}) takes ${label}` }));

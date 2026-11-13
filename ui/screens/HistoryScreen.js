@@ -274,9 +274,6 @@ function _renderEmpty() {
     <div class="history-empty">
       <div class="history-empty-icon">📖</div>
       <div class="history-empty-title">Your story starts here</div>
-      <div class="history-empty-sub">
-        Trades, injuries, milestones, and championships will be recorded here as your franchise grows.
-      </div>
     </div>
   `;
 }

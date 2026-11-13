@@ -42,8 +42,6 @@ import {
   IMP_P_SAVE_BONUS,
   IMP_P_HOLD_BONUS,
   IMP_P_IP_LOG_SCALE,
-  IMP_HOT_THRESHOLD,
-  IMP_COLD_THRESHOLD,
   IMP_ELITE_THRESHOLD,
   IMP_BELOW_REPLACEMENT,
   IMP_POS_AVG_OPS,
@@ -182,26 +180,6 @@ export function lastSeasonIMP(player) {
   return _computeSeasonIMP(player, _isPitcher(player), last.stats);
 }
 
-// ─────────────────────────────────────────────────────────────
-// HOT/COLD INDICATOR
-// ─────────────────────────────────────────────────────────────
-
-/**
- * getHotColdIndicator(impScore)
- * Returns a display indicator based on IMP-7 value.
- * Used on roster screen player rows.
- *
- * @param {Object|null} impScore
- * @returns {String} '🔥'|'❄️'|''
- */
-export function getHotColdIndicator(impScore) {
-  const imp7 = impScore?.imp7;
-  if (imp7 === null || imp7 === undefined) return '';
-  if (imp7 >= IMP_HOT_THRESHOLD)   return '🔥';
-  if (imp7 <= IMP_COLD_THRESHOLD)  return '❄️';
-  return '';
-}
-
 /**
  * getImpLabel(impS)
  * Returns a qualitative label for a season IMP value.
@@ -270,7 +248,6 @@ function _leaderEntry({ playerId, player, impScore }) {
     ovr:    player.ovr,
     impS:   impScore.impS,
     imp7:   impScore.imp7,
-    hot:    getHotColdIndicator(impScore),
   };
 }
 

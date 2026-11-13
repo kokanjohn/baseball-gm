@@ -869,7 +869,7 @@ function _deliverILReturnCard(playerId, atMs) {
   const spot     = _whoHasSpot(state, player);
   const choices  = full ? _sendDownChoices(state, player) : [];
   const where    = (c) => `${c.name} (${c.nativePos || c.pos}, OVR ${c.ovr})`;
-  const what     = !spot ? null : spot.kind === 'lineup' ? _slotWhere(spot.slot) : spot.kind === 'bullpen' ? 'in the bullpen' : 'a turn in the rotation';
+  const what     = !spot ? null : spot.kind === 'lineup' ? _slotWhere(spot.slot) : spot.kind === 'bullpen' ? 'in the bullpen' : 'a spot in the rotation';
   const reserve  = sideOf(player) === 'pitcher' ? 'the pitcher bench' : 'the bench';
   const stuck    = full && !choices.length;   // (nobody who could go down: rare — the card waits)
 
@@ -993,8 +993,8 @@ function _deliverLineupNudge(state, player, n, atMs) {
                 still: `sat again while ${Y.name} (OVR ${Y.ovr}) played ${_slotWhere(spot.slot).replace(/^(at|in|behind) /, '')}` },
     rotation: { where: 'in the rotation', bench: 'the pitcher bench',
                 ready: `${X.name} threw a full bullpen session today and is ready to take the ball every fifth day again.`,
-                has: 'has the weakest turn in the rotation',
-                still: `is still out of the rotation while ${Y.name} (OVR ${Y.ovr}) keeps taking a turn` },
+                has: 'is the weakest starter in the rotation',
+                still: `is still out of the rotation while ${Y.name} (OVR ${Y.ovr}) keeps starting` },
     bullpen:  { where: 'in the bullpen', bench: 'the pitcher bench',
                 ready: `${X.name} threw a clean side session today, no restrictions, and is ready to pitch out of the pen again.`,
                 has: 'is the weakest arm in the bullpen right now',
@@ -1097,7 +1097,7 @@ function _deliverOpenSpotsCard(atMs) {
   const at = Math.max(atMs, Math.min(atMs + 20 * 60_000, fillAt - 10 * 60_000));
   const open = [
     ...spots.lineup.map(x => x.emergency ? `${x.slot} (played out of position)` : x.slot),
-    ...(spots.rotation ? [spots.rotation > 1 ? `${spots.rotation} rotation turns` : 'a rotation turn'] : []),
+    ...(spots.rotation ? [spots.rotation > 1 ? `${spots.rotation} rotation spots` : 'a rotation spot'] : []),
     ...(spots.bullpen ? [spots.bullpen > 1 ? `${spots.bullpen} bullpen spots` : 'a bullpen spot'] : []),
   ];
   const coming = pendingArrivals(st, 'user').map(t => st.players[t.playerId]).filter(Boolean).map(p => p.name);
@@ -1368,7 +1368,7 @@ function _rosterConditionCards(delivered, atMs) {
     _withdraw(x => x.instanceId === c.instanceId);
     Negotiation.callOff(c._talkTeamId, atMs);
     if (_deliverNotice(`talk:off:${talk.id}:${talk.round}`, {
-      cardId: 'trade_off', tag: 'TRADE', sender: `${name} front office`, avatar: '📞',
+      cardId: 'trade_off', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞',
       subject: `The deal with ${name} is off`,
       preview: `Things changed before it could be done: ${reason}.`,
       body: `${name} called: ${c.cardId === 'talk_counter' ? 'they had a counter ready' : 'they were ready to do the deal'}, but things changed before it could be done — ${reason}. The talks are closed for now; we can start over with a new offer.`,
@@ -1470,7 +1470,7 @@ const _and   = (xs) => xs.length <= 1 ? (xs[0] || '') : `${xs.slice(0, -1).join(
 /** A club's need in words: { a: 'a shortstop', role: 'play shortstop for them every day', hole: 'shortstop has been a weak spot' }. */
 function _needWords(need, whose = 'them') {
   if (!need) return { a: 'help', role: `help ${whose} right away`, hole: 'the lineup has a hole' };
-  if (need.kind === 'sp') return { a: 'a starting pitcher', role: `take a turn in ${whose === 'us' ? 'our' : 'their'} rotation`, hole: 'the back of the rotation has been a weak spot' };
+  if (need.kind === 'sp') return { a: 'a starting pitcher', role: `start in ${whose === 'us' ? 'our' : 'their'} rotation`, hole: 'the back of the rotation has been a weak spot' };
   if (need.kind === 'rp') return { a: 'a late-inning reliever', role: `pitch the late innings for ${whose}`, hole: 'the bullpen has been leaking late in games' };
   const n = _NOUN[need.slot] || 'regular';
   return need.slot === 'DH'
@@ -1503,21 +1503,70 @@ function _offerIntro(kind, { team, ours, theirs, need, seed }) {
   return '';
 }
 
+/**
+ * r157 Who an offer comes from. Most reach us through Pro Scouting, who tells
+ * us about the call and what they make of it (the read, Impact, the payroll).
+ * Some come straight from the other club's front office, in their own voice:
+ * what they want and what they'll give, and nothing of our analysis. A line
+ * written for the moment (a club calling back about a conversation we started)
+ * is always Pro Scouting's. Chosen from the offer itself, so it never shifts.
+ */
+const _DIRECT_SHARE = 0.4;
+function _offerVoiceDirect(key) {
+  let h = 2166136261;
+  for (const ch of String(key)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
+  return (h % 1000) / 1000 < _DIRECT_SHARE;
+}
+const _pickBy = (xs, key) => { let h = 7; for (const ch of String(key)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return xs[h % xs.length]; };
+
+/** The other club's front office, writing to us: the ask, the deal, no analysis. */
+function _directOffer({ kind, need, seed, key, ins, outs, inRef, outRef, cashK, retain }) {
+  const ours = outs[0]?.name, theirs = ins[0]?.name;
+  const w = _needWords(need, 'us');                     // their need, in their words ("our rotation")
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const lead = kind === 'call' ? _pickBy(seed ? [
+      `Welcome to the league. We'll get right to it: we need ${w.a}, and we want ${ours}.`,
+      `Congratulations on the new job. We've had our eye on ${ours} for a while, and we'd like ${ours} to ${w.role}.`,
+    ] : [
+      `We're looking for ${w.a}, and ${ours} is the one we want.`,
+      `We'd like ${ours} to ${w.role}.`,
+      need ? `${cap(w.hole)} for us, and we think ${ours} fixes it.` : `We've been talking about ${ours} for a while now.`,
+    ], key)
+    : kind === 'sale' ? `We need to move salary, so ${theirs} is available.`
+    : _pickBy(seed ? [
+      `Welcome to the league. ${theirs} is available, and we think you're a fit.`,
+    ] : [
+      `${theirs} is available, and we think ${theirs} would start for you.`,
+      need ? `We hear you could use ${w.a}. ${theirs} is available.` : `We're moving ${theirs}, and you were the first club we thought of.`,
+    ], key);
+  const deal = kind === 'sale' ? `${inRef} is yours for ${formatK(-cashK)}.` : `You send ${outRef}; we send ${inRef}.`;
+  const cash = kind === 'sale' ? '' : cashK > 0 ? ` We'll add ${formatK(cashK)} to make it work.` : cashK < 0 ? ` We'd need ${formatK(-cashK)} from you.` : '';
+  const keep = Object.entries(retain || {}).map(([id, pct]) => {
+    const p = [...ins, ...outs].find(x => x.id === id);
+    if (!p) return '';
+    return ins.includes(p) ? ` We'll keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`
+                           : ` We'd ask you to keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`;
+  }).join('');
+  const close = _pickBy(['Let us know.', 'Let us know what you think.', 'We\'d like to get this done soon.', 'Call us if you want to talk it over.'], key + ':close');
+  const subject = kind === 'call' ? `Interested in ${ours}` : `${theirs} is available`;
+  return { body: `${lead} ${deal}${cash}${keep} ${close}`, subject };
+}
+
 /** Pro Scouting's read, in words (never a meter). */
 function _offerRead(st, kind, offer, room) {
   const net = evaluateForUser(offer, st).net;
   const good = net >= 15;
   if (kind === 'call') return room
-    ? 'Pro Scouting reads it as an opening bid — they should go higher if we push back.'
-    : good     ? 'Pro Scouting thinks this is close to the most they will pay, and it is a good deal for us.'
-    : net >= 0 ? 'Pro Scouting thinks this is close to the most they will pay, and it is fair value for us.'
-               : 'Pro Scouting thinks this is about the most they will pay — a little short of what we would want.';
+    ? 'Our read: it\'s an opening bid, and they should go higher if we push back.'
+    : good     ? 'Our read: this is close to the most they will pay, and it\'s a good deal for us.'
+    : net >= 0 ? 'Our read: this is close to the most they will pay, and it\'s fair value for us.'
+               : 'Our read: this is about the most they will pay, a little short of what we would want.';
   if (kind === 'sell') return room
-    ? 'They are asking a bit more than they would take — Pro Scouting thinks there is room to bring the price down.'
-    : good     ? 'Pro Scouting thinks that is a good price for us.'
-    : net >= 0 ? 'Pro Scouting thinks that is a fair price.'
-               : 'Pro Scouting thinks that is about the least they will take, and it is a little steep for us.';
-  return good ? 'Pro Scouting thinks that is a good price for us.' : net >= 0 ? 'Pro Scouting thinks the price is fair.' : 'Pro Scouting thinks the price is a little high.';
+    ? 'Our read: they\'re asking a bit more than they would take, so there\'s room to bring the price down.'
+    : good     ? 'Our read: that\'s a good price for us.'
+    : net >= 0 ? 'Our read: that\'s a fair price.'
+               : 'Our read: that\'s about the least they will take, and it\'s a little steep for us.';
+  return good ? 'Our read: that\'s a good price for us.' : net >= 0 ? 'Our read: the price is fair.' : 'Our read: the price is a little high.';
 }
 
 /** Can the offer be made right now, with both owners able to carry it? */
@@ -1585,6 +1634,9 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
 
   // The player the offer is about: ours they want, or theirs they offer.
   const target = kind === 'call' ? outs[0] : incoming;
+  const when0 = atMs ?? clockNow();
+  const direct = !intro && _offerVoiceDirect(`${proposingTeamId}:${when0}:${kind}`);
+  const own = direct ? _directOffer({ kind, need, seed, key: `${proposingTeamId}:${when0}`, ins, outs, inRef, outRef, cashK, retain: offer.retain }) : null;
   const lead = intro || _offerIntro(kind, { team: teamName, ours: target?.name, theirs: target?.name, need, seed });
   const read = _offerRead(state, kind, offer, room);
   const deal = kind === 'sale'
@@ -1596,14 +1648,16 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
     cardId:          `trade_${proposingTeamId}`,
     type:            'normal',
     tag:             'TRADE',
-    sender:          `${teamName} front office`,
+    sender:          direct ? `${teamName} front office` : 'Pro Scouting',
     avatar:          '📞',
-    subject:         subject || (kind === 'call' ? `${teamName} want ${target?.name}`
+    _voice:          direct ? 'club' : 'scouting',
+    subject:         subject || own?.subject || (kind === 'call' ? `${teamName} want ${target?.name}`
                               : kind === 'sale' ? `${teamName} will sell ${incoming.name}`
                               : `${teamName} are offering ${target?.name}`),
     preview:         kind === 'sale' ? `${incoming.name} for ${formatK(-cashK)}.`
                                      : `${_and(ins.map(p => p.name))} for ${_and(outs.map(p => p.name))}.`,
-    body:            `${lead ? lead + ' ' : ''}${deal}${cashNote}${keepNote}${Negotiation.impactNote(state, offer)} ${read}${payrollNote} We can take it, turn it down, or counter.`,
+    body:            own ? own.body
+                         : `${lead ? lead + ' ' : ''}${deal}${cashNote}${keepNote}${Negotiation.impactNote(state, offer)} ${read}${payrollNote} We can take it, turn it down, or counter.`,
     yesLabel:        'Accept the Trade',
     noLabel:         'Decline',
     autoResolve:     'roster',
@@ -3414,7 +3468,7 @@ export function deliverTalkReply(teamId, r, atMs) {
   const name = team.name;
   const grade = rapportGrade(rapportOf(state, teamId));
   const key = `talk:${teamId}:${talk.id}:${r.decision}:${talk.round}`;
-  const base = { tag: 'TRADE', sender: `${name} front office`, avatar: '📞', _talkTeamId: teamId, _talkId: talk.id, _talkRound: talk.round, _rosterKey: key };
+  const base = { tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', _talkTeamId: teamId, _talkId: talk.id, _talkRound: talk.round, _rosterKey: key };
   if (r.decision === 'accept') {
     return _deliverAt(_rosterCard(state, { ...base, cardId: 'talk_accepted', type: 'good',
       subject: `${name} accepted our offer`,

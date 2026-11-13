@@ -321,7 +321,6 @@ function _renderToDo(inbox, state) {
   if (inbox.length === 0) {
     return `<div class="ml-empty">
       <div class="ml-empty-h">You're all caught up</div>
-      <div class="ml-empty-s">New messages arrive as the season moves. Check back after the next game.</div>
     </div>`;
   }
   const ordered = _inboxOrder(inbox);
@@ -537,7 +536,6 @@ function _renderCompleted(state) {
     return `<div style="padding:8px 16px 0;">${toolbar}</div>
     <div class="ml-empty">
       <div class="ml-empty-h">Nothing here yet</div>
-      <div class="ml-empty-s">Messages you've decided on are kept here, with what you chose and how it turned out.</div>
     </div>`;
   }
 
@@ -728,8 +726,7 @@ function _composeTopics(state, ch) {
     <div class="compose-to"><span class="compose-to-label">To</span> ${_escape(ch.label)}<span class="compose-to-role">${_escape(ch.role)}</span></div>
     <div class="compose-h">What about?</div>
     <div class="compose-topic-list">${rows}</div>
-    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : !_composeTopic ? 'Pick a topic' : sel?.player ? 'Pick a player' : 'Pick a deal'}</button>
-    <div class="compose-cooldown-note">Replies come back later, the way they would from a real staff — field staff answer after the game.</div>`;
+    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : !_composeTopic ? 'Pick a topic' : sel?.player ? 'Pick a player' : 'Pick a deal'}</button>`;
 }
 
 /** A trade topic with one deal on the table: that deal, picked already. */

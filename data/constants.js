@@ -1422,8 +1422,6 @@ export const IMP_SHRINK_PA             = 40;
 export const IMP_SHRINK_IP             = 10;
 
 // Display thresholds
-export const IMP_HOT_THRESHOLD         =  2.5;  // IMP-7 above this = 🔥
-export const IMP_COLD_THRESHOLD        = -2.0;  // IMP-7 below this = ❄️
 export const IMP_ELITE_THRESHOLD       =  6.0;  // MVP-caliber
 export const IMP_BELOW_REPLACEMENT     = -1.5;  // roster decision needed
 

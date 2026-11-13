@@ -259,7 +259,7 @@ function gmActs() {
     gm.seen.add(c.instanceId);
     if (c.autoResolve === 'skip') { resolveCard(c.instanceId, 'yes'); continue; }   // notices
     if (isTrade) {
-      gm.offers.push({ kind: c._tradeKind, opening: c._opening, subject: c.subject, body: c.body, offer: JSON.parse(JSON.stringify(c._tradeOffer)), team: c._proposingTeamId, at: clock.get(), season: SM.get().seasonNum || 1 });
+      gm.offers.push({ kind: c._tradeKind, opening: c._opening, subject: c.subject, body: c.body, sender: c.sender, voice: c._voice, offer: JSON.parse(JSON.stringify(c._tradeOffer)), team: c._proposingTeamId, at: clock.get(), season: SM.get().seasonNum || 1 });
       const r = Math.random();
       if (r < 0.35) {
         const before = JSON.parse(JSON.stringify(c._tradeOffer));
@@ -1533,6 +1533,19 @@ function checkOffersToUs(st) {
   check(`offers to us: the wording varies (${intros.size} openings over ${calls.length} calls)`, calls.length < 4 || intros.size >= 2);
   check('offers to us: offer text reads gender-neutral', gm.offers.every(o => !/\b(he|him|his|she|her)\b/i.test(o.body)),
         gm.offers.filter(o => /\b(he|him|his|she|her)\b/i.test(o.body)).slice(0, 1).map(o => o.body).join(''));
+  // r157 who an offer is from: Pro Scouting's carries the analysis; a club calling in its own voice carries none.
+  const club = gm.offers.filter(o => o.voice === 'club'), scout = gm.offers.filter(o => o.voice === 'scouting');
+  check(`offers to us: some come through Pro Scouting, some from the club itself (${scout.length} / ${club.length})`,
+        gm.offers.length < 6 || (scout.length >= 1 && club.length >= 1));
+  const ANALYSIS = /Our read|Pro Scouting|By Impact|payroll|ownership's target|We can take it|\bthey\b.*\bwant\b/i;
+  const badClub = club.filter(o => !/front office$/.test(o.sender) || ANALYSIS.test(o.body) || !/\b(we|We|We'll|We'd|We're|us)\b/.test(o.body));
+  check('offers to us: a club writing itself speaks for itself, with none of our analysis', badClub.length === 0,
+        badClub.slice(0, 2).map(o => `${o.sender}: ${o.body}`).join(' | '));
+  const badScout = scout.filter(o => o.sender !== 'Pro Scouting' || (!/Our read/.test(o.body) && o.kind !== 'sale' && !/called back/.test(o.body)));
+  check('offers to us: Pro Scouting signs the offers that carry its read', badScout.length === 0,
+        badScout.slice(0, 2).map(o => `${o.sender}: ${o.body}`).join(' | '));
+  check('offers to us: no rotation "turns" in the wording', gm.offers.every(o => !/\bturn in\b|rotation turn/.test(o.body)),
+        gm.offers.filter(o => /\bturn in\b|rotation turn/.test(o.body)).slice(0, 1).map(o => o.body).join(''));
   const badCounter = gm.counters.filter(c => c.ok && (!c.withdrawn || c.round !== 2));
   check(`offers to us: a counter opens talks at round 2 and replaces their offer (${gm.counters.filter(c => c.ok).length} sent)`,
         badCounter.length === 0, JSON.stringify(badCounter.slice(0, 2)));

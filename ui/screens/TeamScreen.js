@@ -25,7 +25,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { baseballYear, isAvailable } from '../../engine/PlayerFactory.js';
 import { contractIsUp } from '../../engine/OffseasonEngine.js';
 import { developmentStatus } from '../../engine/DevelopmentEngine.js';
-import { getHotColdIndicator, lastSeasonIMP } from '../../engine/IMPEngine.js';
+import { lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
@@ -438,7 +438,6 @@ const _blankCells = (cols) => cols.map(([k]) => `<div class="tr-td tr-c-${k}"></
 function _row(state, p, slot, imp, { first = false, il = false, coming = null, oop = false, next = false } = {}) {
   const traded = !coming && tradedAway(state, p.id);
   const canMove = !coming && !il && moveOptions(state, p.id).length > 0;
-  const indicator = getHotColdIndicator(imp);
   const shown = _statsShown(p);
   const pitcher = ['SP', 'RP'].includes(p.pos);
   const pos = pitcher ? `${p.pos} · ${p.hand === 'L' ? 'L' : 'R'}` : (p.nativePos || p.pos);
@@ -468,7 +467,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
       <div class="tr-fz">
         <div class="tr-slot${oop ? ' tr-oop' : ''}">${slot}</div>
         <div class="tr-name">
-          <div class="tr-name-line">${_escape(p.name)}${indicator ? `<span class="imp-indicator">${indicator}</span>` : ''}${_dotIndicator(p)}</div>
+          <div class="tr-name-line">${_escape(p.name)}${_dotIndicator(p)}</div>
           <div class="tr-sub">${subBits.join(' · ')}</div>
         </div>
         <div class="tr-act"><button class="tr-move" data-move="${p.id}"${canMove ? '' : ' disabled'}>MOVE</button></div>
@@ -784,7 +783,7 @@ function _attachListeners(state) {
       const st = StateManager.get();
       const idx = el.dataset.fillSlot != null ? Number(el.dataset.fillSlot) : null;
       const key = idx != null ? `slot:${idx}` : el.dataset.fillTurn ? 'turn:new' : 'pen:new';
-      const label = idx != null ? `the ${st.userTeam.lineupSlots[idx]?.slot} slot` : el.dataset.fillTurn ? 'the open rotation turn' : 'the open bullpen spot';
+      const label = idx != null ? `the ${st.userTeam.lineupSlots[idx]?.slot} slot` : el.dataset.fillTurn ? 'the open rotation spot' : 'the open bullpen spot';
       const who = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(p => p && moveOptions(st, p.id).some(o => o.key === key))
         .sort((a, b) => b.ovr - a.ovr);
       if (!who.length) { App.showToast(`Nobody on the bench can fill ${label}.`, 'negative'); return; }
@@ -958,7 +957,6 @@ function _injectCSS() {
   _cssInjected = true;
   const style = document.createElement('style');
   style.textContent = `
-    .imp-indicator{font-size:11px;margin-left:3px;}
     .imp-note{font-weight:700;} .imp-note.imp-pos{color:#22C55E;} .imp-note.imp-neg{color:var(--danger);}
 
     /* Ropt bar */

@@ -26,7 +26,6 @@
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
-import { getHotColdIndicator } from '../../engine/IMPEngine.js';
 import { accumulateBox, liveSituation, playRuns } from '../../engine/SimEngine.js';
 import { renderBoxScore } from '../components/BoxScore.js';
 import { renderLeagueLiveRow, wireLeagueGameTaps } from '../components/LiveGame.js';
@@ -634,7 +633,6 @@ function _renderDashboard(state) {
       <div id="dash-league-live">${renderLeagueLiveRow(state)}</div>
     </div>
 
-    ${gamesPlayed >= 3 ? _renderHotColdStrip(state) : ''}
     ${_renderActivityFeed(state)}
   `;
 }
@@ -1282,40 +1280,6 @@ function _renderSeasonDoneCard(state) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// HOT/COLD STRIP
-// ─────────────────────────────────────────────────────────────
-
-function _renderHotColdStrip(state) {
-  const rosterIds = state.userTeam?.rosterIds || [];
-  const impScores = state.impScores || {};
-
-  const hot = rosterIds
-    .map(id => ({ id, player: state.players[id], imp: impScores[id] }))
-    .filter(({ player, imp }) => player && !player.isInjured && imp?.imp7 != null)
-    .sort((a,b) => Math.abs(b.imp?.imp7||0) - Math.abs(a.imp?.imp7||0))
-    .slice(0, 5);
-
-  if (!hot.length) return '';
-
-  const chips = hot.map(({ player, imp }) => {
-    const ind  = getHotColdIndicator(imp);
-    const imp7 = imp?.imp7;
-    const sign = imp7 > 0 ? '+' : '';
-    return `<div class="hot-cold-chip">
-      <span class="hot-cold-name">${_escape(player.name)}</span>
-      <span class="hot-cold-pos">${player.pos}</span>
-      ${ind ? `<span class="imp-indicator">${ind}</span>` : ''}
-      ${imp7 != null ? `<span class="imp-score ${imp7>0?'imp-pos':'imp-neg'}">${sign}${imp7.toFixed(1)}</span>` : ''}
-    </div>`;
-  }).join('');
-
-  return `<div class="hot-cold-strip">
-    <div class="hot-cold-label">FORM</div>
-    <div class="hot-cold-chips">${chips}</div>
-  </div>`;
-}
-
-// ─────────────────────────────────────────────────────────────
 // ACTIVITY FEED
 // ─────────────────────────────────────────────────────────────
 
@@ -1685,14 +1649,6 @@ function _injectCSS() {
     .game-result{font-size:13px;font-weight:700;font-family:'Bebas Neue',sans-serif;letter-spacing:.5px;}
     .game-result.win{color:var(--accent2);}
     .game-result.loss{color:var(--danger);}
-    .hot-cold-strip{padding:8px 16px 4px;display:flex;align-items:center;gap:8px;flex-wrap:nowrap;overflow-x:auto;}
-    .hot-cold-strip::-webkit-scrollbar{display:none;}
-    .hot-cold-label{font-size:9px;font-weight:800;letter-spacing:2px;color:var(--muted);text-transform:uppercase;flex-shrink:0;}
-    .hot-cold-chips{display:flex;gap:6px;overflow-x:auto;}
-    .hot-cold-chip{display:flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:4px 10px;white-space:nowrap;flex-shrink:0;}
-    .hot-cold-name{font-size:11px;font-weight:600;color:var(--text);}
-    .hot-cold-pos{font-size:9px;color:var(--muted);font-weight:600;}
-    .imp-indicator{font-size:11px;}
     .imp-score{font-size:10px;font-weight:700;}
     .imp-pos{color:var(--accent2);}
     .imp-neg{color:var(--danger);}
