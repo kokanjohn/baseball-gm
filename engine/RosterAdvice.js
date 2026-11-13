@@ -16,7 +16,9 @@
  * Pure: never imports StateManager. Moves are RosterEngine's (the Team screen's MOVE).
  */
 
-import { PLAYER_GROUP, ROSTER_ADVICE } from '../data/constants.js';
+import { PLAYER_GROUP, ROSTER_ADVICE, POSITION_RULES } from '../data/constants.js';
+import { canPlay, difficulty, familiarity } from './Positions.js';
+import { activeTeaching, teachablePositions, teachRead, startTeaching } from './PlayerWork.js';
 import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
 import { eligibleSlotsFor, moveOptions, applyMove, tradedAway } from './RosterEngine.js';
 
@@ -35,10 +37,11 @@ function _ours(state) {
 const _can = (state, playerId, key) => moveOptions(state, playerId).some(o => o.key === key);
 
 /**
- * adviceFor(state) → [{ kind, key, inId, outId, slot, gap, move: { playerId, key } }]
+ * adviceFor(state, skip) → [{ kind, key, inId, outId, slot, gap, move: { playerId, key } }]
+ * (`skip(s)`: suggestions to leave out before the one-per-player rule — those the GM has answered)
  * `inId` is who the staff wants playing, `outId` who'd give way.
  */
-export function adviceFor(state) {
+export function adviceFor(state, skip = null) {
   const { u, players, ok, all, seated, year } = _ours(state);
   if (!u) return [];
   const out = [];
@@ -86,10 +89,29 @@ export function adviceFor(state) {
     out.push({ kind: 'pen', key: `pen:${benchRP[0].id}:${pen[0].id}`, inId: benchRP[0].id, outId: pen[0].id, slot: 'bullpen',
                gap: benchRP[0].ovr - pen[0].ovr, move: { playerId: benchRP[0].id, key: `pen:${pen[0].id}` } });
   }
-  // One suggestion per player: the clearest first (a better player before a prospect, the widest gap first).
-  out.sort((a, b) => ((a.kind === 'prospect') - (b.kind === 'prospect')) || (b.gap - a.gap));
+  // r166 §122.35 a thin spot: nobody on the bench can play a fielding position, and the Bench Coach is
+  // free — the bench player who'd pick it up most easily (then the most familiar, then the best) could
+  // be taught it.
+  if (!activeTeaching(state)) {
+    const healthyBench = bench.filter(b => !b.isInjured);
+    const seenPos = new Set();
+    for (const sl of u.lineupSlots || []) {
+      if (sl.slot === 'DH' || seenPos.has(sl.slot)) continue;
+      seenPos.add(sl.slot);
+      if (healthyBench.some(b => canPlay(b, sl.slot))) continue;
+      const D = { easy: 0, hard: 1, C: 2 };
+      const pick = healthyBench.filter(b => teachablePositions(b).includes(sl.slot) && familiarity(b, sl.slot) < POSITION_RULES.famCap[difficulty(b, sl.slot)] - 1e-9)
+        .sort((a, b) => (D[difficulty(a, sl.slot)] - D[difficulty(b, sl.slot)]) || (familiarity(b, sl.slot) - familiarity(a, sl.slot)) || (b.ovr - a.ovr))[0];
+      if (pick) out.push({ kind: 'cover', key: `cover:${sl.slot}:${pick.id}`, inId: pick.id, outId: null, slot: sl.slot, gap: 0,
+                           difficulty: difficulty(pick, sl.slot), move: null });
+    }
+  }
+  // One suggestion per player: the clearest first (a better player, then a prospect, then a spot to cover; the widest gap first).
+  const rank = { prospect: 1, cover: 2 };
+  out.sort((a, b) => ((rank[a.kind] || 0) - (rank[b.kind] || 0)) || (b.gap - a.gap));
+  // (r166 a suggestion the GM has answered, or was just asked, doesn't hold another back: `skip` first)
   const seen = new Set();
-  return out.filter(x => !seen.has(x.inId) && !seen.has(x.outId) && (seen.add(x.inId), seen.add(x.outId), true));
+  return out.filter(x => !(skip && skip(x))).filter(x => !seen.has(x.inId) && !(x.outId && seen.has(x.outId)) && (seen.add(x.inId), x.outId && seen.add(x.outId), true));
 }
 
 /** The situation of a suggestion's two players: where they are, healthy or not, still ours. */
@@ -101,7 +123,11 @@ export function adviceStamp(state, s) {
 }
 
 /** Carry out a suggestion's move (on a draft; the caller reconciles). False when it no longer exists. */
-export function applyAdvice(draft, s) {
+export function applyAdvice(draft, s, atMs = 0) {
+  if (s.kind === 'cover') {   // r166 the Bench Coach starts teaching the spot
+    const read = teachRead(draft, s.inId, s.slot);
+    return !!read && !read.busy && startTeaching(draft, { playerId: s.inId, pos: s.slot, odds: read.odds }, atMs).length > 0;
+  }
   return applyMove(draft, s.move.playerId, s.move.key);
 }
 

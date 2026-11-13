@@ -154,6 +154,7 @@ import {
 import { clockNow, runAt } from './Clock.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 import { naturalFor } from './Positions.js';
+import * as Teaching from './PlayerWork.js';   // r166 the Bench Coach's position work
 import { posLabel } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
@@ -3240,6 +3241,7 @@ function _nextRosterDue(state, uptoMs, { overdue = true } = {}) {
     if (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER') take(c.expiresAtMs);
   }
   for (const x of state.developmentPlans || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);
+  for (const x of state.teaching || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);   // r166
   take(state.userTeam?.vacancyDeadlineAt);
   // r153 the manager fills what the GM left open, at the roster deadline — or at once when that has
   // already passed (the second game of a doubleheader: its deadline fell during the first).
@@ -3263,6 +3265,12 @@ function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
     let back = [];
     StateManager.mutate(s => { back = Development.releaseDue(s, atMs); });
     applied = { changed: true, events: [...applied.events, ...back] };
+  }
+  // r166 §122.35 a day of the Bench Coach's position work.
+  if (Teaching.teachingDue(StateManager.get(), atMs)) {
+    let ev = [];
+    StateManager.mutate(s => { ev = Teaching.teachSteps(s, atMs); });
+    applied = { changed: true, events: [...applied.events, ...ev] };
   }
   // §71: development increments due on the clock.
   if (Development.developmentDue(StateManager.get(), atMs)) {

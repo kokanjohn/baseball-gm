@@ -1864,4 +1864,8 @@ export const POSITION_RULES = Object.freeze({
   // the plate draws `sbAttempt` more steal attempts, `sbSuccess` more successful ones, and allows a
   // passed ball on `passedBall` of the moments with a runner on.
   oop: Object.freeze({ errorPer: 0.5, sbAttempt: 0.6, sbSuccess: 0.08, passedBall: 0.015 }),
+  // r166 phase 4 — the Bench Coach teaching a position (free, in practice already on the schedule, one
+  // player at a time): `days` of extra reps by difficulty; each day takes (adds one famStep) with
+  // `odds`, better with a good coach (quality − 60) / 200, a young player +0.05, one 32+ −0.1.
+  teach: Object.freeze({ days: Object.freeze({ easy: 4, hard: 7, C: 9 }), odds: Object.freeze({ easy: 0.85, hard: 0.6, C: 0.45 }) }),
 });

@@ -30,8 +30,8 @@ import { snapshotMetrics } from '../formatters.js';
 import * as When from '../../engine/When.js';
 import { dealsFor, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
 import { namedPlayers } from '../../engine/ComposeReplies.js';
-import { workPlayers, skillsOf } from '../../engine/PlayerWork.js';
-import { posLabel } from '../../engine/Positions.js';   // r163 §122.35
+import { workPlayers, skillsOf, teachablePositions } from '../../engine/PlayerWork.js';
+import { posLabel, startsAt, familiarity } from '../../engine/Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -124,6 +124,7 @@ const COMPOSE_CHANNELS = [
     priority: 'medium',
     topics: [
       { id: 'bc_morale',     label: 'In-game decisions',        desc: 'Get bench coach\'s read on game tactics' },
+      { id: 'bc_teach',      label: 'Teach a player a position', desc: 'Pick a hitter and a position: extra reps there in practice', player: 'hitters', skill: true, choices: 'positions' },
     ],
   },
   {
@@ -743,9 +744,9 @@ function _composeTopics(state, ch) {
       </select>` : '';
     // r159 a work topic, a player picked: which skill (with where it stands now).
     const pick = isSel && !off && t.skill && _composeDeal ? state.players[_composeDeal] : null;
-    const skills = pick ? `<div class="compose-h compose-deal-h">Work on what?</div>
-      <div class="compose-skills">${skillsOf(pick).map(k => `<button type="button" class="compose-skill${_composeSkill === k ? ' selected' : ''}" data-skill="${k}">
-        <span class="cs-name">${k[0].toUpperCase() + k.slice(1)}</span><span class="cs-val">${pick.subRatings?.[k] ?? '—'}</span></button>`).join('')}</div>` : '';
+    const skills = pick ? `<div class="compose-h compose-deal-h">${t.choices === 'positions' ? 'Which position?' : 'Work on what?'}</div>
+      <div class="compose-skills">${_choicesFor(t, pick).map(c => `<button type="button" class="compose-skill${_composeSkill === c.key ? ' selected' : ''}" data-skill="${c.key}">
+        <span class="cs-name">${c.name}</span><span class="cs-val">${c.val}</span></button>`).join('')}</div>` : '';
     return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
       <span>${_escape(t.label)}</span>
       <span class="topic-desc">${_escape(note || t.desc)}</span>
@@ -987,6 +988,16 @@ async function _resolveCard(instanceId, choice, pick = null) {
   refresh();
 }
 
+/** r159 a work topic's choices: a skill (its rating) — r166 §122.35 or a position to teach (where it stands). */
+function _choicesFor(t, p) {
+  if (!p) return [];
+  if (t.choices === 'positions') return teachablePositions(p).map(x => {
+    const n = startsAt(p, x);
+    return { key: x, name: x, val: n ? `${n}/10` : familiarity(p, x) > 0 ? 'practiced' : 'new' };
+  });
+  return skillsOf(p).map(k => ({ key: k, name: k[0].toUpperCase() + k.slice(1), val: p.subRatings?.[k] ?? '—' }));
+}
+
 async function _sendCompose(topicId, channelId, state) {
   const gameIdx = state.currentGameIndex || 0;
   const ch = COMPOSE_CHANNELS.find(c => c.id === channelId);
@@ -997,10 +1008,10 @@ async function _sendCompose(topicId, channelId, state) {
   const player = topic?.player ? (_topicState(topic, state).players || []).find(p => p.id === _composeDeal) : null;
   if (topic?.player && !player) { App.showToast(topic.player === true ? 'That player can\'t be traded right now.' : 'That player isn\'t available to ask about.', 'neutral', 2500); refresh(); return; }
   const skill = topic?.skill ? _composeSkill : null;
-  if (topic?.skill && !skillsOf(player).includes(skill)) { App.showToast('Pick a skill to work on.', 'neutral', 2500); refresh(); return; }
+  if (topic?.skill && !_choicesFor(topic, player).some(c => c.key === skill)) { App.showToast(topic.choices === 'positions' ? 'Pick a position.' : 'Pick a skill to work on.', 'neutral', 2500); refresh(); return; }
   const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`,
                        sc_program: (p) => `A development program for ${p.name}`, mgr_rest: (p) => `A day off for ${p.name}`,
-                       doc_health: (p) => `${p.name}'s health` };
+                       doc_health: (p) => `${p.name}'s health`, bc_teach: (p) => `Teach ${p.name} ${skill}` };
 
   // Record cooldown immediately
   if (!topic?.deal && !topic?.player) StateManager.mutate(s => {

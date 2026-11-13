@@ -20,7 +20,7 @@ import { formatK } from './CardTokens.js';
 import { scoutEye as directorEye, scoutLooks } from './CoachEngine.js';
 import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from './TradeAdvice.js';
 import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart } from './TradeEngine.js';
-import { coachRead, programRead, restRead, healthRead, isPitcher as isArm } from './PlayerWork.js';
+import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teachRead } from './PlayerWork.js';
 import { PLAYER_WORK } from '../data/constants.js';
 import { posLabel } from './Positions.js';   // r163 §122.35
 
@@ -863,7 +863,7 @@ const TOPIC_LABELS = {
   tix_renewals: 'season-ticket renewals', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
   mr_narrative: 'the coverage', ca_event: 'community commitments',
-  hc_work: 'the work', pc_work: 'the work', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
+  hc_work: 'the work', pc_work: 'the work', bc_teach: 'the position work', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
 };
 
 
@@ -1191,6 +1191,39 @@ function coachWork(f, r, who, arg) {
 }
 W.hc_work = coachWork;
 W.pc_work = coachWork;
+
+/** r166 §122.35 the Bench Coach on teaching one hitter a position. */
+const POS_NAME = { C: 'catcher', '1B': 'first', '2B': 'second', '3B': 'third', SS: 'short', OF: 'the outfield' };
+const POS_AT = (x) => POS_NAME[x] || x;
+W.bc_teach = function benchTeach(f, r, who, arg) {
+  const st = f.state, p = arg?.playerId ? st.players[arg.playerId] : null;
+  const pos = arg?.skill;
+  const read = p && pos ? teachRead(st, p.id, pos) : null;
+  if (!read) return { body: [`${p?.name || 'That player'} isn't one I can work with at ${pos || 'that spot'} right now.`], memo: {}, topic: 'that player' };
+  const name = p.name, at = POS_AT(pos), topic = `${name} at ${pos}`;
+  if (read.busy) {
+    const b = st.players[read.busy.playerId];
+    return { body: [read.busy.playerId === p.id ? `I'm already working with ${name} at ${read.busy.pos}. One position at a time.`
+                                                 : `I'm working with ${b?.name || 'someone'} at ${read.busy.pos} right now, and I take one player at a time. I can start with ${name} once that's done.`],
+             memo: { playerId: p.id }, topic };
+  }
+  if (read.maxed) return { body: [`${name} has had all the reps at ${at} practice can give. From here it's games: ${read.starts ? `${read.starts} of ten starts so far` : 'ten starts there makes it official'}.`], memo: { playerId: p.id }, topic };
+  const hard = { easy: `${at === 'first' || at === 'the outfield' ? `Moving to ${at}` : `Sliding over to ${at}`} is the easy direction for ${name}: the hands and the arm are already there.`,
+                 hard: `${at[0].toUpperCase() + at.slice(1)} is a step up for ${name}: more range, a quicker first step, a stronger arm. It takes longer and it may not all take.`,
+                 C: `Catching is its own job: the crouch, the blocks, the throws to second. Most players never get comfortable back there.` }[read.difficulty];
+  const odds = { good: 'I like the odds.', fair: 'The odds are fair.', modest: 'The odds are modest.', slim: 'Honestly, the odds are slim.' }[read.oddsWord];
+  const out = [hard, `I'd want ${plural(read.days, 'day')} of extra reps at ${at}, folded into the work we already do before games: ${name} stays available and it costs us nothing. ${odds}`];
+  out.push(read.fam > 0 ? `${name} has some reps there already, so we're not starting from nothing.` : `${name} has never played ${at}, so we're starting from scratch.`);
+  out.push(`Practice makes ${name} steadier there. Games make it official: ten starts at ${pos} this season.`);
+  return {
+    body: out, memo: { playerId: p.id }, topic,
+    decision: {
+      playerId: p.id, onYes: 'teach_position', yesLabel: 'Start Teaching', noLabel: 'Not Now',
+      teach: { pos, odds: read.odds }, expiresInMs: 3 * 86_400_000,
+      yesMsg: `I'll start with ${name} at ${at} tomorrow.`, noMsg: 'Understood. Another time.',
+    },
+  };
+};
 
 /** Scouting/Dev: an off-site development program for one player. */
 W.sc_program = (f, r, who, arg) => {

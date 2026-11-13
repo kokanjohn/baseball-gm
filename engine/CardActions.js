@@ -27,7 +27,7 @@ import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { queueTrade } from './TradeEngine.js';
 import { eventRand } from './Dice.js';
-import { startWork, workable, isPitcher as pitcherPos } from './PlayerWork.js';
+import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeaching, teachablePositions } from './PlayerWork.js';
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
 import { setPitchRole } from './Positions.js';   // r163
 
@@ -102,6 +102,15 @@ const train = {
  * Feasible while the player is ours and here, whoever does the work is free, the skill isn't already
  * being worked on, and — when it takes days away — the club can spare him.
  */
+/** r166 §122.35 the Bench Coach teaches a position (free, in practice; one player at a time). */
+const teach = {
+  feasible(st, c) {
+    const raw = c._raw || {}, p = st.players[c._targetPlayerId];
+    return workable(st, p) && !activeTeaching(st) && teachablePositions(p).includes(raw._teachPos);
+  },
+  apply: (d, c, atMs) => startTeaching(d, { playerId: c._targetPlayerId, pos: c._raw?._teachPos, odds: c._raw?._teachOdds ?? 0.6 }, atMs),
+};
+
 const work = {
   feasible(st, c) {
     const raw = c._raw || {}, p = st.players[c._targetPlayerId];
@@ -509,6 +518,7 @@ export const CARD_ACTIONS = Object.freeze({
   bench_active_hitter:  away((raw) => raw.tag === 'DISCIPLINE' ? 'suspended' : raw.tag === 'HEALTH' ? 'illness' : 'benched', 2),
   train_hitter:         train,
   coach_work:           work,      // r159 §122.31
+  teach_position:       teach,     // r166 §122.35
   dev_program:          work,
   day_off:              dayOff,
   arm_rest:             armRest,   // r161

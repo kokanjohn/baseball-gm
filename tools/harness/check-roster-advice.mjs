@@ -41,7 +41,7 @@ console.log(`    left: ${issues.map(i => `${i.kind} (${i.gap})`).join(', ')} · 
 check(`${issues.length} problems left (between ${ROSTER_ADVICE.startIssues.join(' and ')})`, issues.length >= ROSTER_ADVICE.startIssues[0] && issues.length <= ROSTER_ADVICE.startIssues[1]);
 check('…each one a suggestion the staff would make', issues.every(i => adv0.some(a => a.kind === i.kind)));
 check(`…real but not glaring (each 4–12 apart: ${issues.map(i => i.gap).join(', ')})`, issues.every(i => i.gap >= 4 && i.gap <= 12));
-check('…one suggestion per player', new Set(adv0.flatMap(a => [a.inId, a.outId])).size === adv0.length * 2);
+check('…one suggestion per player', new Set(adv0.flatMap(a => [a.inId, a.outId].filter(Boolean))).size === adv0.reduce((n, a) => n + (a.outId ? 2 : 1), 0));
 
 // ── Spring, nobody answering: what arrives, and how often ─────
 console.log('Spring, nobody answering');
@@ -57,7 +57,7 @@ const gaps = got.slice(1).map((c, i) => c.deliverAtMs - got[i].deliverAtMs);
 check(`…never two close together (shortest ${(Math.min(...gaps, Infinity) / DAY).toFixed(1)} days)`, gaps.every(g => g >= ROSTER_ADVICE.gapMs));
 const rest = [...seen.values()].filter(c => c.cardId === 'rest_ask');
 check('…nor within half a day of a rest message', got.every(c => rest.every(r => Math.abs(r.deliverAtMs - c.deliverAtMs) >= 12 * 3600_000)));
-const who = { bat: staff().hittingCoach?.name, rotation: staff().pitchingCoach?.name, pen: staff().pitchingCoach?.name, prospect: staff().scoutingDirector?.name };
+const who = { bat: staff().hittingCoach?.name, rotation: staff().pitchingCoach?.name, pen: staff().pitchingCoach?.name, prospect: staff().scoutingDirector?.name, cover: staff().benchCoach?.name };
 check('…each from the right person (bats: the hitting coach; arms: the pitching coach; a prospect: the scouting director)', got.every(c => c.sender === who[c._advice.kind]), got.map(c => `${c._advice.kind}:${c.sender}`).join(' '));
 check('…each a decision: make the change, or "I Have a Plan"', got.every(c => c._raw.onYes === 'advice_move' && c.noLabel === 'I Have a Plan'));
 const bad = got.map(c => [c, voiceProblems(c, personOf)]).filter(([c, v]) => v.length || GEN.test(c.body) || GEN.test(c.yesLabel));
@@ -109,6 +109,8 @@ check(`"I Have a Plan": the reply — "${card.noMsg}"`, /leave it unless somethi
 const again = (days) => {
   // (only the suggestions in view: no rest message holding them back)
   SM.mutate(s => { s.inbox = (s.inbox || []).filter(c => c.cardId !== 'rest_ask'); s.scheduledCards = (s.scheduledCards || []).filter(c => c.cardId !== 'rest_ask'); s.restWatch = { lastAt: clock.get() }; });
+  // (another suggestion that came meanwhile — the same bench bat at another spot — answered, out of the way)
+  for (const c of advCards().filter(c => !c.resolved && c._advice?.key !== want.key)) { CE.releaseDueCards(Math.max(clock.get(), c.deliverAtMs + 1000)); if (CE.getInbox().some(x => x.instanceId === c.instanceId)) CE.resolve(c.instanceId, 'no'); }
   SM.mutate(s => { s.adviceWatch = {}; if (s.adviceQuiet?.[want.key]) s.adviceQuiet[want.key].atMs -= days * DAY; });
   CE.syncRosterCards([], clock.get());
   const c = advCards().find(c => !c.resolved && c._advice?.key === want.key);
@@ -143,7 +145,7 @@ for (const c of advCards().filter(c => !c.resolved)) CE.resolve(c.instanceId, 'n
     s.adviceWatch = {}; s.adviceQuiet = {};
     s.players[kid.id].ovr = s.players[reg.id].ovr - 3;
     s.players[kid.id].dob = `${(s.baseYear || year) + (s.seasonNum || 1) - 1 - 22}-04-01`;
-    for (const a of adviceFor(s)) if (a.inId !== kid.id) s.adviceQuiet[a.key] = { atMs: clock.get(), gap: a.gap, stamp: adviceStamp(s, a) };
+    for (const a of adviceFor(s, (x) => x.kind === 'prospect' && x.inId === kid.id)) s.adviceQuiet[a.key] = { atMs: clock.get(), gap: a.gap, stamp: adviceStamp(s, a) };   // (all but the prospect one)
   });
   fresh();
   console.log(`    “${card?.subject}” (${card?.sender}) — ${card?.body}  [${card?.yesLabel} / ${card?.noLabel}]`);

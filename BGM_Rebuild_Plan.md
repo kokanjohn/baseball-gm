@@ -10940,3 +10940,53 @@ Fresh team: required (from r163).
 **Suite (r165):** multi-season 59/59.
 - **Failed once, then passed on rerun:** the season sim (one re-sign card count, then 3826/3826), check-game-sim-weather (3 passing reruns), check-player-work (2 passing reruns).
 - **Fixed:** test-wear-ui now clears a new club's first roster suggestion before asking for a rest message. A suggestion holds rest messages back for half a day (r162), so the test passed or failed depending on timing.
+
+### §122.39 r166 Positions, phase 4: the Bench Coach teaches a position; cover for a thin spot
+
+**Built:**
+- **Teaching** (`PlayerWork.js`; `POSITION_RULES.teach`):
+  - **`teachablePositions(p)`:** the fielding positions he isn't eligible at.
+  - **`teachRead(state, id, pos)`:** the Bench Coach's read:
+    - difficulty (easy / hard / C);
+    - days of reps (4 / 7 / 9);
+    - the odds a day takes: 0.85 / 0.6 / 0.45, plus (coach quality − 60) / 200, +0.05 for 25 and under, −0.1 for 32 and up, clamped to 0.15–0.95; shown as good / fair / modest / slim;
+    - familiarity now, against its cap (`maxed` at the cap);
+    - `busy` (one player at a time).
+  - **`startTeaching`:** `state.teaching` [{ id, playerId, pos, status, steps: one a day }], free, no time away.
+  - **`teachingDue` / `teachSteps`** on the roster clock (`GameEngine._rosterStep`, and the rating-point times):
+    - each day takes with its own dice (a hurt player's day doesn't);
+    - a day that takes adds one familiarity step, capped;
+    - the work ends early if he leaves or becomes eligible there in games;
+    - `TEACH_DONE` goes to the Bench Coach's report (`teach_report`, a notice): "took to third: every day of reps stuck", "N of M days stuck", or "it didn't take", then where his starts stand.
+  - Teaching never makes a player eligible; that still takes ten regular-season starts.
+- **Compose → Bench Coach → "Teach a player a position"** (`bc_teach`, `player: 'hitters', skill: true, choices: 'positions'`):
+  - The skill picker now takes its choices from `_choicesFor`: skills with their rating, or positions with where they stand ("new", "practiced", "3/10").
+  - **The reply** (`W.bc_teach`):
+    - how hard the move is;
+    - the days of reps, folded into pregame work ("stays available and it costs us nothing");
+    - the odds;
+    - whether he has reps there already;
+    - that games make it official.
+  - **The decision:** **Start Teaching** (`teach_position` → `startTeaching`) or Not Now. It stands 3 days.
+  - **Other replies:** busy ("I take one player at a time"); and at the cap ("it's games from here").
+- **The thin-spot suggestion** (`RosterAdvice.adviceFor`, kind `cover`):
+  - **When:** a fielding position with no healthy bench player eligible there, while the Bench Coach is free.
+  - **Who:** the bench player who would pick it up most easily (then the most familiar, then the best) and isn't at the cap.
+  - **The message** from the Bench Coach: "Nobody behind X at SS" / "Cover for SS" → **Teach Y SS** (starts teaching) or **I Have a Plan**.
+  - Same pacing as the other suggestions.
+- **The one-per-player rule now runs after skipping held suggestions** (`adviceFor(state, skip)`; `CardEngine._adviceHeld`): those answered "I Have a Plan" and those asked recently. A held suggestion no longer hides another one, and a suggestion that's waiting doesn't count against itself (the withdrawal check passes its own key). So while one pairing is on hold, the same bench bat can be suggested at another spot.
+
+**Checks:**
+- **check-teaching** (16):
+  - the read for easy, hard and catcher moves, and a position he already plays isn't offered;
+  - the Compose reply as a decision, in the coach's voice;
+  - yes: the work starts and he stays in the lineup;
+  - a second request gets "one player at a time";
+  - the days of reps: familiarity equals the days that took × the step (capped), he isn't eligible, the report, and the coach is free again;
+  - a thin SS: the cover suggestion from the Bench Coach, and yes starts teaching.
+- **test-teaching-ui** (dark and light): the topic, the position picker (five positions, "2B practiced", "3B new"), Send waits for a position, the sent label, and the reply's decision.
+- **check-roster-advice:** cover counts in the one-per-player and sender checks; the "I Have a Plan" sequence answers any other suggestion that came meanwhile; the prospect scenario quiets all but the prospect suggestion.
+
+Fresh team: required (from r163).
+
+**Suite (r166):** season sim 3826/3826, multi-season 59/59. check-game-injuries and test-wear-ui (dark) each failed once and passed twice on rerun. test-sheet-close-ui (dark) is its known intermittent failure.

@@ -21,7 +21,9 @@
  * draft the caller passes (inside StateManager.mutate) and return events.
  */
 
-import { PLAYER_WORK, PLAYER_GROUP } from '../data/constants.js';
+import { PLAYER_WORK, PLAYER_GROUP, POSITION_RULES } from '../data/constants.js';
+import { difficulty, familiarity, eligibleAt, startsAt, addFamiliarity, FIELD_POSITIONS, isPitcher as isP } from './Positions.js';
+import { dice, diceSeed, withDice, eventRand } from './Dice.js';
 import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { gainMultiplier, roomLeft, activeWork, setUnavailable, startPlan, wearOf, developmentStatus } from './DevelopmentEngine.js';
 
@@ -198,4 +200,91 @@ export function startWork(draft, { playerId, skill, owner, days = 0, gain, sourc
   const plan = startPlan(draft, playerId, { gain, focus: [skill], source, owner }, atMs);
   if (plan) out.push({ type: 'DEV_STARTED', playerId, owner, skill, days });
   return out.filter(Boolean);
+}
+
+// ─────────────────────────────────────────────────────────────
+// r166 §122.35 PHASE 4 — THE BENCH COACH TEACHES A POSITION
+// ─────────────────────────────────────────────────────────────
+//   state.teaching = [{ id, playerId, pos, status: 'active'|'done', startAt, days, steps: [{ atMs, done, took }], gained }]
+// Free, in practice already on the schedule (no time away), one player at a time. Each day of
+// reps takes (one famStep of familiarity) or doesn't; familiarity never passes its cap, and only
+// games (ten regular-season starts) make the position official.
+
+const DAYMS = 86_400_000;
+
+/** The positions a hitter could be taught: the fielding ones he isn't eligible at. */
+export function teachablePositions(p) {
+  if (!p || isP(p)) return [];
+  const elig = eligibleAt(p);
+  return FIELD_POSITIONS.filter(x => !elig.includes(x));
+}
+
+/** The Bench Coach's teaching now (or null). */
+export const activeTeaching = (state) => (state.teaching || []).find(t => t.status === 'active') || null;
+
+/**
+ * teachRead(state, playerId, pos) — the Bench Coach's read on teaching a player a position:
+ * how hard, how many days, the odds a day takes, where familiarity stands, whether it can go further.
+ */
+export function teachRead(state, playerId, pos) {
+  const p = state.players?.[playerId];
+  if (!workable(state, p) || isP(p) || !teachablePositions(p).includes(pos)) return null;
+  const T = POSITION_RULES.teach, d = difficulty(p, pos);
+  const coach = state.userTeam?.coachingStaff?.benchCoach;
+  const q = coach && !coach.vacant ? (coach.quality || 60) : 50;
+  const age = computeAge(p.dob, baseballYear(state));
+  const odds = Math.max(0.15, Math.min(0.95, T.odds[d] + (q - 60) / 200 + (age <= 25 ? 0.05 : age >= 32 ? -0.1 : 0)));
+  const fam = familiarity(p, pos), cap = POSITION_RULES.famCap[d];
+  return {
+    p, pos, difficulty: d, days: T.days[d], odds, oddsWord: odds >= 0.8 ? 'good' : odds >= 0.6 ? 'fair' : odds >= 0.45 ? 'modest' : 'slim',
+    fam, cap, maxed: fam >= cap - 1e-9, starts: startsAt(p, pos), age,
+    busy: activeTeaching(state), coachVacant: !coach || coach.vacant,
+  };
+}
+
+/** startTeaching(draft, { playerId, pos, odds }, atMs) — the days of reps on the clock. Returns events. */
+export function startTeaching(draft, { playerId, pos, odds }, atMs) {
+  if (activeTeaching(draft)) return [];
+  const p = draft.players?.[playerId];
+  if (!p || !teachablePositions(p).includes(pos)) return [];
+  const d = difficulty(p, pos), days = POSITION_RULES.teach.days[d];
+  const id = `teach:${playerId}:${pos}:${atMs}`;
+  (draft.teaching ||= []).push({
+    id, playerId, pos, status: 'active', startAt: atMs, days, odds, gained: 0,
+    steps: Array.from({ length: days }, (_, i) => ({ atMs: atMs + (i + 1) * DAYMS, done: false, took: null })),
+  });
+  return [{ type: 'TEACH_STARTED', playerId, pos, days }];
+}
+
+/** Is a day of teaching due by `atMs`? (cheap — every clock step) */
+export function teachingDue(state, atMs) {
+  const t = activeTeaching(state);
+  return !!t && t.steps.some(s => !s.done && s.atMs <= atMs);
+}
+
+/**
+ * teachSteps(draft, atMs) — each day of reps due: takes or doesn't (its own dice); the last one closes
+ * the work. A player who leaves the club, gets hurt, or becomes eligible there (games) ends it early.
+ * @returns {Object[]} events — TEACH_DONE { playerId, pos, gained, days, took, reason }
+ */
+export function teachSteps(draft, atMs) {
+  const t = activeTeaching(draft);
+  if (!t) return [];
+  const p = draft.players?.[t.playerId];
+  const out = [];
+  const end = (reason) => {
+    t.status = 'done'; t.endAt = atMs;
+    out.push({ type: 'TEACH_DONE', playerId: t.playerId, pos: t.pos, gained: Math.round(t.gained * 1000) / 1000,
+               took: t.steps.filter(s => s.took).length, days: t.steps.filter(s => s.done).length, reason, atMs });
+  };
+  if (!p || p.teamId !== 'user' || eligibleAt(p).includes(t.pos)) { end(!p || p.teamId !== 'user' ? 'gone' : 'eligible'); return out; }
+  for (const [i, s] of t.steps.entries()) {
+    if (s.done || s.atMs > atMs) continue;
+    s.done = true;
+    if (p.isInjured) { s.took = false; continue; }   // (hurt: no reps that day)
+    s.took = withDice(dice(diceSeed(draft), 'teach', t.id, i), () => eventRand() < t.odds);
+    if (s.took) t.gained += addFamiliarity(p, t.pos, 1);
+  }
+  if (t.steps.every(s => s.done)) end('done');
+  return out;
 }

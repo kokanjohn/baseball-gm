@@ -1076,12 +1076,7 @@ function _adviceWatch(atMs) {
   if (all.some(c => (c.cardId === 'roster_advice' || c.cardId === 'rest_ask') && !c.resolved)) return 0;
   if (all.some(c => c.cardId === 'rest_ask' && Math.abs((c.deliverAtMs ?? c.arrivedAtMs ?? 0) - atMs) < 12 * 3600_000)) return 0;
   const quiet = st.adviceQuiet || {};
-  const cands = adviceFor(st).filter(a => {
-    const q = quiet[a.key];
-    if (q && q.stamp === adviceStamp(st, a) && atMs - q.atMs < ROSTER_ADVICE.quietMs && a.gap < q.gap + ROSTER_ADVICE.quietGrow) return false;   // "I have a plan"
-    const asked = W.asked?.[a.key];
-    return !(asked && atMs - asked < ROSTER_ADVICE.samePairMs);
-  });
+  const cands = adviceFor(st, _adviceHeld(st, atMs));
   if (!cands.length) return 0;
   const a = cands[0];
   // (the moment is the situation's: after the last game or the takeover, and the spacing — not when
@@ -1097,12 +1092,27 @@ function _adviceWatch(atMs) {
   });
 }
 
+/**
+ * r166 the suggestions on hold at `atMs`: answered "I have a plan" (and nothing's changed), or asked
+ * recently (`except`: one that's on its way or waiting — it doesn't hold itself back).
+ */
+function _adviceHeld(st, atMs, except = null) {
+  const W = st.adviceWatch || {}, quiet = st.adviceQuiet || {};
+  return (a) => {
+    if (a.key === except) return false;
+    const q = quiet[a.key];
+    if (q && q.stamp === adviceStamp(st, a) && atMs - q.atMs < ROSTER_ADVICE.quietMs && a.gap < q.gap + ROSTER_ADVICE.quietGrow) return true;   // "I have a plan"
+    const asked = W.asked?.[a.key];
+    return !!(asked && atMs - asked < ROSTER_ADVICE.samePairMs);
+  };
+}
+
 /** The suggestion in the sender's own words (two ways each). */
 function _adviceCard(st, a, at) {
   const staff = st.userTeam.coachingStaff || {};
   const person = (role) => (staff[role] && !staff[role].vacant ? staff[role].name : null);
-  const IN = st.players[a.inId], OUT = st.players[a.outId];
-  const X = IN.name, Y = OUT.name;
+  const IN = st.players[a.inId], OUT = a.outId ? st.players[a.outId] : null;
+  const X = IN.name, Y = OUT?.name || '';
   const v = eventRand() < 0.5 ? 0 : 1;
   const age = computeAge(IN.dob, baseballYear(st));
   const spot = a.slot === 'rotation' ? 'the rotation' : a.slot === 'bullpen' ? 'the bullpen' : a.slot === 'DH' ? 'DH' : a.slot === 'OF' ? 'the outfield' : a.slot;
@@ -1122,6 +1132,16 @@ function _adviceCard(st, a, at) {
     body = v ? `${X} has better stuff than ${Y} right now (${IN.ovr} to ${OUT.ovr}), yet isn't pitching. I'd put ${X} in ${where} and send ${Y} to the pitcher bench.`
              : `Watching the bullpen sessions, ${X} is the better arm (${IN.ovr} to ${OUT.ovr}). I'd swap ${X} in for ${Y} in ${where}.`;
     yesLabel = a.kind === 'rotation' ? `Put ${X} in the Rotation` : `Put ${X} in the Bullpen`;
+  } else if (a.kind === 'cover') {   // r166 §122.35 a thin spot the Bench Coach could cover by teaching
+    sender = _benchCoach(st); avatar = '🧢';
+    const at = { C: 'catcher', '1B': 'first', '2B': 'second', '3B': 'third', SS: 'short', OF: 'the outfield' }[a.slot] || a.slot;
+    const starter = st.players[(st.userTeam.lineupSlots || []).find(sl => sl.slot === a.slot)?.playerId];
+    subject = v ? `Nobody behind ${starter?.name || 'the starter'} at ${a.slot}` : `Cover for ${a.slot}`;
+    preview = `If ${starter?.name || 'the starter'} goes down, nobody on the bench plays ${at}.`;
+    body = (v ? `If ${starter?.name || 'our starter'} goes down, nobody on the bench plays ${at}, and whoever we put there is out of position.`
+              : `We're thin at ${a.slot}: ${starter?.name || 'the starter'} and nobody behind.`)
+         + ` ${X} is the one I'd teach: ${a.difficulty === 'easy' ? `it's an easy move for ${X}` : a.difficulty === 'C' ? `catching is a long road for anyone, but ${X} is the best bet we have` : `it's a step up for ${X}, but doable`}. Extra reps in practice, no time away, no cost.`;
+    yesLabel = `Teach ${X} ${a.slot}`;
   } else {
     const sd = person('scoutingDirector');
     sender = sd || 'Scouting Director'; avatar = '📈';
@@ -1134,10 +1154,10 @@ function _adviceCard(st, a, at) {
   }
   return _rosterCard(st, {
     cardId: 'roster_advice', tag: 'LINEUP', sender, avatar, type: 'normal',
-    _rosterKey: `advice:${a.key}`, _targetPlayerId: a.inId, _playerIds: [a.outId], _advice: a,
+    _rosterKey: `advice:${a.key}`, _targetPlayerId: a.inId, _playerIds: a.outId ? [a.outId] : [], _advice: a,
     subject, preview, body,
     yesLabel, noLabel: 'I Have a Plan',
-    yesMsg: `Done. ${X} is in, and ${Y} ${a.slot === 'rotation' || a.slot === 'bullpen' ? 'goes to the pitcher bench' : 'comes off the bench'}.`,
+    yesMsg: a.kind === 'cover' ? `I'll start with ${X} at ${a.slot} tomorrow.` : `Done. ${X} is in, and ${Y} ${a.slot === 'rotation' || a.slot === 'bullpen' ? 'goes to the pitcher bench' : 'comes off the bench'}.`,
     noMsg: `Understood. You have your reasons; I'll leave it unless something changes.`,
     expiresAtMs: at + ROSTER_ADVICE.expireMs,
     _raw: { onYes: 'advice_move', onNo: 'advice_quiet', onAuto: null },
@@ -1622,6 +1642,8 @@ function _rosterEventCards(ev, atMs) {
       // (cannot happen: a user claim always makes the user a claimant)
     } else if (ev.type === 'DEV_DONE' && ev.teamId === 'user') {
       if (_deliverDevelopmentReport(ev, ev.atMs ?? atMs)) delivered++;
+    } else if (ev.type === 'TEACH_DONE') {
+      if (_deliverTeachReport(ev, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'POS_GAINED' && ev.teamId === 'user') {
       // r164 §122.35 ten starts there: the news (Recent — no answer needed)
       const p = StateManager.get().players[ev.playerId];
@@ -1725,7 +1747,8 @@ function _rosterConditionCards(delivered, atMs) {
       return !p || p.teamId !== 'user' || !p._lostSlot || seatedNow || !isAvailable(p) || !_whoHasSpot(state, p);
     }
     if (key.startsWith('advice:')) {   // r162 the suggestion no longer stands (the GM made the move, or things changed)
-      return !adviceFor(state).some(a => `advice:${a.key}` === key);
+      const own = key.slice('advice:'.length);
+      return !adviceFor(state, _adviceHeld(state, atMs, own)).some(a => a.key === own);
     }
     if (key.startsWith('rest:')) {   // r160 out of the lineup already (the GM moved them), hurt, away, gone, or the game is past
       const p = players[c._targetPlayerId];
@@ -2325,7 +2348,9 @@ function _releaseDue(nowMs) {
         _raw: { ...(c._raw || {}), onYes: d.onYes, onNo: null, _trainGain: d.trainGain, _trainGames: d.trainGames,
                 // r159 §122.31 work the GM asked for: who does it, on what, for how long
                 ...(d.work ? { _workSkill: d.work.skill, _workOwner: d.work.owner, _workDays: d.work.days, _workGain: d.work.gain,
-                               _workSource: d.work.source } : {}) },
+                               _workSource: d.work.source } : {}),
+                // r166 §122.35 teaching a position: which, and the odds a day of reps takes
+                ...(d.teach ? { _teachPos: d.teach.pos, _teachOdds: d.teach.odds } : {}) },
         ...(d.costK ? { _budgetCost: d.costK } : {}),
         ...(d.yesMsg ? { yesMsg: d.yesMsg } : {}), ...(d.noMsg ? { noMsg: d.noMsg } : {}),
       });
@@ -4821,6 +4846,27 @@ export function deliverRetirementNotice(playerId, age, atMs) {
   }, atMs);
 }
 
+/**
+ * r166 §122.35 the Bench Coach's position work is over: how it went, in the coach's words (a
+ * consequence the GM should know — the player is steadier there, or isn't).
+ */
+function _deliverTeachReport(ev, atMs) {
+  const st = StateManager.get(), p = st.players[ev.playerId];
+  if (!p || ev.reason === 'gone') return null;
+  const at = { C: 'catcher', '1B': 'first', '2B': 'second', '3B': 'third', SS: 'short', OF: 'the outfield' }[ev.pos] || ev.pos;
+  const n = startsAt(p, ev.pos);
+  const how = ev.reason === 'eligible' ? `${p.name} made ${ev.pos} official in games before we finished, so we stopped there.`
+    : ev.gained <= 0 ? `We put in ${ev.days} days at ${at} with ${p.name} and it didn't take. Some players just don't settle in at a new spot.`
+    : ev.took >= ev.days ? `${p.name} took to ${at}: every day of reps stuck. ${p.name} is steadier there now.`
+    : `${p.name} took to some of it: ${ev.took} of ${ev.days} days stuck. Steadier at ${at} than before, not finished.`;
+  return _deliverNotice(`teach:done:${ev.playerId}:${ev.pos}:${ev.atMs}`, {
+    cardId: 'teach_report', sender: _benchCoach(st), avatar: '🧢', tag: 'DEVELOPMENT', _playerIds: [p.id], _targetPlayerId: p.id,
+    subject: ev.gained > 0 ? `${p.name} at ${ev.pos}` : `${p.name} at ${ev.pos}: it didn't take`,
+    preview: ev.gained > 0 ? `The position work is done: steadier at ${at}.` : 'The position work is done.',
+    body: `${how}${ev.reason === 'eligible' ? '' : `\n\n${n ? `${n} of ten starts at ${ev.pos} so far.` : `Ten starts at ${ev.pos} makes it official.`}`}`,
+  }, atMs);
+}
+
 /** r164 §122.35 the Bench Coach (by name when the chair is filled). */
 function _benchCoach(st) {
   const b = st.userTeam?.coachingStaff?.benchCoach;
@@ -5437,7 +5483,7 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     case 'advice_move': {
       const a = instance._advice;
       if (!a) break;
-      StateManager.mutate(s => { if (applyAdvice(s, a)) applyRosterMutation(s, reconcileRoster(s, 'user', { atMs })); });
+      StateManager.mutate(s => { if (applyAdvice(s, a, atMs) && a.kind !== 'cover') applyRosterMutation(s, reconcileRoster(s, 'user', { atMs })); });
       break;
     }
     case 'advice_quiet': {   // "I have a plan": quiet for this pairing until something changes
