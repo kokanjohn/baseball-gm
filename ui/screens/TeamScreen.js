@@ -37,7 +37,7 @@ import { getRosterNeeds } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as Coach from '../../engine/CoachEngine.js';
 import * as When from '../../engine/When.js';
-import { posLabel } from '../../engine/Positions.js';   // r163 §122.35
+import { posLabel, eligibleAt } from '../../engine/Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -465,6 +465,10 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
   else if (il) subBits.push(`<span class="tr-hurt">${_escape(_ilText(p))}</span>`);
   else {
     subBits.push(pos);
+    // r164 §122.35 working toward a new position: its regular-season starts so far
+    if (!pitcher) for (const [x, n] of Object.entries(p.positions?.starts || {})) {
+      if (x !== 'DH' && n > 0 && !eligibleAt(p).includes(x)) subBits.push(`<span class="tr-learn">${x} ${n}/10</span>`);
+    }
     if (next) subBits.push('<span class="tr-next" title="Starts the next game">Next</span>');
     const st = _statusWord(p);
     if (st) subBits.push(`<span class="tr-hurt">${st}</span>`);
@@ -1096,6 +1100,7 @@ function _injectCSS() {
       font-variant-numeric:tabular-nums;background:var(--bg);}
     .tr-head .tr-td{background:var(--surface2);}
     .tr-c-hab{width:50px;} .tr-c-whip{width:42px;} .tr-c-avg,.tr-c-ops,.tr-c-era{width:42px;}
+    .tr-learn{color:#3b82f6;font-weight:700;}
     .tr-c-wear{width:52px;}
     .tr-wear{display:flex;flex-direction:column;align-items:center;gap:3px;width:100%;padding:0 6px;}
     .tr-wear-bar{display:block;width:100%;height:4px;border-radius:2px;background:var(--surface2);overflow:hidden;}

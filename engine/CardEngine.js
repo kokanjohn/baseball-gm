@@ -33,6 +33,7 @@ import {
   PHASE,
   REST_WATCH,
   ROSTER_ADVICE,
+  POSITION_RULES,
   PLAYER_GROUP,
   PITCHER_HAND_DISPLAY,
   ARCHETYPE_CARD_WEIGHTS,
@@ -105,7 +106,7 @@ import { starterRested, reliefValue } from './PitchingEngine.js';
 import { clockNow } from './Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
-import { primaryPos, canPlay, coversRole, posLabel } from './Positions.js';   // r163 §122.35
+import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -1621,6 +1622,10 @@ function _rosterEventCards(ev, atMs) {
       // (cannot happen: a user claim always makes the user a claimant)
     } else if (ev.type === 'DEV_DONE' && ev.teamId === 'user') {
       if (_deliverDevelopmentReport(ev, ev.atMs ?? atMs)) delivered++;
+    } else if (ev.type === 'POS_GAINED' && ev.teamId === 'user') {
+      // r164 §122.35 ten starts there: the news (Recent — no answer needed)
+      const p = StateManager.get().players[ev.playerId];
+      if (p) _ourNews(`${p.name} is now eligible at ${ev.pos}: ten starts there this season`, ev.atMs ?? atMs);
     } else if (ev.type === 'TRADE_EXECUTED' && ev.tx?.league) {
       delivered += _leagueTradeCards(ev.tx, ev.atMs ?? atMs);
     } else if (ev.type === 'TRADE_VOIDED' && !ev.tx?.league) {
@@ -1657,6 +1662,9 @@ function _rosterConditionCards(delivered, atMs) {
 
   // r162 §122.34 a better player sitting, or a prospect who should play → the staff says so.
   delivered += _adviceWatch(atMs);
+
+  // r164 §122.35 the Bench Coach on positions in reach and at risk, late in the season.
+  delivered += _positionNotes(atMs);
 
   // r153 open spots waiting for the GM → the manager says what happens at the deadline.
   if (_deliverOpenSpotsCard(atMs)) delivered++;
@@ -4811,6 +4819,93 @@ export function deliverRetirementNotice(playerId, age, atMs) {
     preview: `${_who(p)} has decided to hang them up at ${age}.`,
     body: `${_who(p)} told us it's time to retire, at ${age}, after ${p.careerStats?.seasons || 1} season${(p.careerStats?.seasons || 1) === 1 ? '' : 's'}. The roster spot is open.`,
   }, atMs);
+}
+
+/** r164 §122.35 the Bench Coach (by name when the chair is filled). */
+function _benchCoach(st) {
+  const b = st.userTeam?.coachingStaff?.benchCoach;
+  return b?.name && !b.vacant ? b.name : 'Bench Coach';
+}
+
+/**
+ * r164 §122.35 the season turn for positions: who lost which position, and whose primary moved.
+ * A consequence the GM should know before planning next season (a notice).
+ */
+export function deliverPositionsTurnNotice(changes, atMs) {
+  const st = StateManager.get();
+  const lines = [], ids = [];
+  for (const c of changes || []) {
+    const p = st.players[c.playerId];
+    if (!p) continue;
+    ids.push(p.id);
+    const last = p.positions?.lastStarts || {};
+    for (const x of c.lost || []) lines.push(`${p.name} loses ${x}: ${last[x] || 0} start${(last[x] || 0) === 1 ? '' : 's'} there this season.`);
+    if (c.from !== c.to) { const w = POS_WORDS[c.to] || c.to; lines.push(`${p.name} is ${/^[aeiou]/i.test(w) ? 'an' : 'a'} ${w} first now (${last[c.to] || 0} starts there).`); }
+  }
+  if (!lines.length) return null;
+  const lost = (changes || []).reduce((n, c) => n + (c.lost || []).length, 0);
+  return _deliverNotice(`pos:turn:${st.seasonNum || 1}`, {
+    sender: _benchCoach(st), avatar: '🧢', tag: 'ROSTER', _playerIds: ids,
+    subject: lost ? 'Where everyone plays next season' : 'A new primary position',
+    preview: lost ? `${lost} position${lost === 1 ? '' : 's'} came off the list with the season's starts.` : lines[0],
+    body: `The season's starts are in, and the position list follows them.\n\n${lines.join('\n')}\n\nAnyone who lost a spot can earn it back with ten starts there next season.`,
+  }, atMs);
+}
+const POS_WORDS = { C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder', DH: 'designated hitter' };
+
+/**
+ * r164 §122.35 the Bench Coach's two late-season notes: who's within reach of a new position, and
+ * which positions are at risk at the season turn (the higher-rated first), around 25 and 10 of our
+ * regular-season games left — earlier when someone needs a lot of starts, later when all are close.
+ * Not sent when nothing is in reach or at risk.
+ */
+function _positionNotes(atMs) {
+  const st = StateManager.get(), u = st.userTeam;
+  if (![PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK].includes(st.phase)) return 0;
+  const cur = st.schedule?.[st.currentGameIndex];
+  if (cur && !cur._committed && Number.isFinite(cur.gameTime) && cur.gameTime <= atMs && !cur.cancelled) return 0;   // (between games)
+  const left = (st.schedule || []).filter(g => !g._committed && !g.cancelled && !g.isSpring && !g.isPlayoff).length;
+  const N = st.posNotes?.season === (st.seasonNum || 1) ? st.posNotes : { season: st.seasonNum || 1 };
+  if (N.second || left > POSITION_RULES.notes.first.max) return 0;
+  const reach = [], risk = [];
+  for (const id of u.rosterIds || []) {
+    const p = st.players[id];
+    if (!p || ['SP', 'RP'].includes(p.pos) || p.teamId !== 'user') continue;
+    const s = p.positions || {};
+    for (const [x, n] of Object.entries(s.starts || {})) {
+      if (x === 'DH' || eligibleAt(p).includes(x)) continue;
+      reach.push({ p, x, n, need: POSITION_RULES.gainStarts - n });
+    }
+    for (const x of eligibleAt(p)) {
+      if (x === primaryPos(p)) continue;
+      const need = keepNeed(p, x);
+      if (need > 0) risk.push({ p, x, n: startsAt(p, x), need });
+    }
+  }
+  const doable = [...reach, ...risk].filter(i => i.need <= left);
+  if (!doable.length && !(N.first && risk.length)) return 0;
+  const maxNeed = Math.max(0, ...doable.map(i => i.need));
+  const W = POSITION_RULES.notes;
+  const which = !N.first && left > W.second.max ? 'first' : 'second';
+  const at = which === 'first' ? Math.min(W.first.max, Math.max(W.first.min, maxNeed + W.first.base - 10))
+                               : Math.min(W.second.max, Math.max(W.second.min, maxNeed + W.second.base - 5));
+  if (left > at) return 0;
+  const byOvr = (a, b) => (b.p.ovr || 0) - (a.p.ovr || 0);
+  const lines = [];
+  for (const i of reach.filter(i => i.need <= left).sort(byOvr).slice(0, 4)) lines.push(`${i.p.name} has ${i.n} start${i.n === 1 ? '' : 's'} at ${i.x}; ${i.need} more makes it official.`);
+  for (const i of risk.filter(i => i.need <= left).sort(byOvr).slice(0, 4)) lines.push(`${i.p.name} has ${i.n} start${i.n === 1 ? '' : 's'} at ${i.x} and needs ${i.need} more to keep it.`);
+  if (which === 'second') for (const i of risk.filter(i => i.need > left).sort(byOvr).slice(0, 3)) lines.push(`${i.p.name} can't get to enough starts at ${i.x} now; that one comes off the list at the turn.`);
+  if (!lines.length) return 0;
+  const ids = [...new Set([...reach, ...risk].map(i => i.p.id))];
+  StateManager.mutate(s => { s.posNotes = { ...N, [which]: true }; });
+  const card = _deliverNotice(`pos:notes:${st.seasonNum || 1}:${which}`, {
+    sender: _benchCoach(st), avatar: '🧢', tag: 'ROSTER', _playerIds: ids,
+    subject: which === 'first' ? 'Positions down the stretch' : 'Last call on positions',
+    preview: `${left} games left: ${lines.length} position call${lines.length === 1 ? '' : 's'} to make.`,
+    body: `${which === 'first' ? `With ${left} games left, a few position calls to make before the season's out.` : `${left} games to go. Here's where the positions stand.`}\n\n${lines.join('\n')}\n\nYour call on who plays where.`,
+    expiresAtMs: atMs + 3 * 86_400_000,
+  }, Math.max(atMs, (u._lastGameAt ?? atMs) + 4 * 3600_000));
+  return card ? 1 : 0;
 }
 
 /** Offseason card decisions (inside _applyRosterAction). */

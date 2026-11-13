@@ -10854,3 +10854,54 @@ Fresh team: required from here on (§122.35's phases build on the record). Old s
 **Also in r163 (an r162 fix the suite turned up):** a new club's planted problems no longer use the DH spot. A DH swap could bat the backup catcher at DH, leaving nobody on the bench to catch, so a rest message about the catcher named a first baseman to catch (check-rest-watch failed on some new clubs, since the plant is random). The staff can still raise a DH change that comes up on its own.
 
 **Suite (r163):** season sim 3827/3827, multi-season 59/59. check-coaches, check-game-sim-weather, check-weather-cards and test-swipe-close-ui (light) each failed once and passed on rerun.
+
+### §122.37 r164 Positions, phase 2: earned in games, kept or lost at the turn, the Bench Coach's notes
+
+**Built:**
+- **`POSITION_RULES`** (constants): `gainStarts` 10; `keepStarts` 20 / `keepShare` 0.25 / `keepMin` 5; the spectrum (SS 5, 2B 4, 3B 3, C 3, OF 2, 1B 1); `famCap` (easy 0.75 / hard 0.5 / C 0.35); `famStep` (0.15 / 0.08 / 0.06); `famCarry` 0.5; and the note windows.
+- **Positions.js:**
+  - **`difficulty`:** 'easy' when moving down the spectrum from the player's best position, or to 1B; 'hard' when moving up; 'C' for catcher.
+  - **`recordStart(p, slot, kind)`:**
+    - regular-season starts are counted in `positions.starts` (DH too, for the primary), and the 10th at a new position makes him eligible;
+    - every start at a position he isn't eligible at, in spring, the postseason or the regular season, adds familiarity (`addFamiliarity`, capped);
+    - `touched` records the positions practiced or played.
+  - **`keepNeed`:** the fewest more starts that would keep a position.
+  - **`seasonTurn`:**
+    - **The primary** becomes where he started most, among his eligible positions and DH; a tie keeps it.
+    - **Kept:** a position with 20 starts or a quarter of his starts (at least 5).
+    - **Never started (hurt all season):** he keeps everything.
+    - **Familiarity** carries at half if touched, and is lost with a lost position.
+    - **Bookkeeping:** `lastStarts` holds the season's starts, and the label fields stay in step (`_sync`).
+- **The count:** `DevelopmentEngine.countGame(draft, teamId, atMs, { kind })` records the start for everyone who started, by the slot played, for every club (our commit, the opponent, and CPU-vs-CPU games). Ours returns `POS_GAINED` events, which `GameEngine` passes to `CardEngine.syncRosterCards` after the commit, giving a news line in Recent ("X is now eligible at 3B: ten starts there this season").
+- **The season turn:** `OffseasonEngine.beginOffseason` runs `seasonTurn` for everyone. Our changes become a `POSITIONS_TURN` event, which `GameEngine` sends as the Bench Coach's notice (`deliverPositionsTurnNotice`): "X loses SS: 3 starts there this season", "Y is a shortstop first now", and "ten starts there next season" to earn a spot back.
+- **The late-season notes** (`CardEngine._positionNotes`, on the roster clock, between games, notices from the Bench Coach):
+  - **First note:** when our regular-season games left reach between 20 and 30 (by the largest number of starts anyone needs; 25 when that need is 10).
+  - **Second note:** between 8 and 12 games left (10 when the need is 5).
+  - **Each note lists,** higher-rated players first:
+    - players within reach of a new position ("4 more makes it official");
+    - positions at risk ("needs 8 more to keep it");
+    - in the second note, positions that can no longer be kept ("comes off the list at the turn").
+  - **Each is sent once a season,** and skipped when nothing is in reach or at risk.
+- **Screens:**
+  - **Team rows:** a position in progress in blue under the name ("3B 6/10").
+  - **The player card's Positions section** (hitters):
+    - the primary, and each eligible position with this season's starts;
+    - for ours, what keeping it takes (amber);
+    - each position in progress ("practiced" or "learning", "6 of 10 starts");
+    - a pure DH is noted as having no fielding position.
+
+**Found for phase 3:** the roster tidy-up (`reconcileRoster`) moves an out-of-position occupant back as soon as a natural fit is on the bench. When the GM places someone out of position deliberately (phase 3's MOVE), that placement must be left alone; only the manager's emergency fills should be re-evaluated.
+
+**Checks:**
+- **check-position-earning** (29):
+  - the rules on single players: difficulty, spring and postseason familiarity only, the cap, the 10th start, the label, DH;
+  - keeping at 21, keeping a third of 18, losing 8 of 108, keeping everything with no starts, the primary moving, familiarity carrying half then going;
+  - through `countGame`: spring familiarity only, then ten regular-season starts make him eligible (and the 3B playing 1B earns 1B), with the news;
+  - in real play, every club's starts are counted;
+  - the notes: none at 40 left, the first around 25 (lines in reach and at risk), the second around 10, each sent once;
+  - the season-turn notice.
+- **test-positions-ui** (dark and light): the Team row ("3B 6/10"), the card's rows ("1B primary 40 starts", "3B practiced 6 of 10 starts"), and a utility player at risk ("needs N more starts to keep it").
+
+Fresh team: required (from r163).
+
+**Suite (r164):** season sim 3828/3828, multi-season 59/59. check-game-pushes failed once and passed twice on rerun. test-sheet-close-ui (dark) failed 1 of 3 runs, its known intermittent failure.

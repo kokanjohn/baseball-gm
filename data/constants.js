@@ -1839,3 +1839,24 @@ export const DEV_REPS = Object.freeze({
   sat:     Object.freeze({ hitter: 0.15, SP: 0.05, RP: 0.1 }),
   regularBonus: 0.75, satPenalty: 0.5,
 });
+
+/**
+ * r164 §122.35 phase 2 — positions earned in games.
+ *   gainStarts — regular-season starts at a position to become eligible there.
+ *   keepStarts / keepShare / keepMin — at the season turn a position is kept with
+ *     keepStarts starts there, or keepShare of the player's starts (at least keepMin).
+ *   Familiarity (a share of the extra error risk out of position taken away, phase 3):
+ *     each spring, postseason or out-of-position regular-season start (and, phase 4,
+ *     a day of teaching) adds famStep; it never passes famCap. Moving down the
+ *     defensive spectrum (and to 1B) is 'easy', up it 'hard', behind the plate 'C'.
+ *   famCarry — what's left at the season turn of familiarity built that season (else 0).
+ *   notes — the Bench Coach's two late-season notes, by our regular-season games left.
+ */
+export const POSITION_RULES = Object.freeze({
+  gainStarts: 10, keepStarts: 20, keepShare: 0.25, keepMin: 5,
+  spectrum: Object.freeze({ SS: 5, '2B': 4, '3B': 3, C: 3, OF: 2, '1B': 1, DH: 0 }),
+  famCap: Object.freeze({ easy: 0.75, hard: 0.5, C: 0.35 }),
+  famStep: Object.freeze({ easy: 0.15, hard: 0.08, C: 0.06 }),
+  famCarry: 0.5,
+  notes: Object.freeze({ first: Object.freeze({ min: 20, base: 25, max: 30 }), second: Object.freeze({ min: 8, base: 10, max: 12 }) }),
+});

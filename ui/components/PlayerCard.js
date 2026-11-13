@@ -31,6 +31,7 @@ import { bullpenRoles, armStatus } from '../../engine/PitchingEngine.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear, computeAge } from '../../engine/PlayerFactory.js';
 import { wearOf } from '../../engine/DevelopmentEngine.js';
+import { primaryPos, eligibleAt, keepNeed, familiarity } from '../../engine/Positions.js';   // r164
 
 // ─────────────────────────────────────────────────────────────
 // OPEN / CLOSE
@@ -160,6 +161,9 @@ function _renderCard(player, playerId, state) {
 
     <!-- r160 §122.32 our players' wear (r161 §122.33 pitchers too: the arm's workload, and today's arm) -->
     ${isOwnPlayer && player.group !== PLAYER_GROUP.IL ? _renderWear(player, isPitcher, state) : ''}
+
+    <!-- r164 §122.35 where a hitter plays: eligible, working toward, practiced -->
+    ${!isPitcher ? _renderPositions(player, state, isOwnPlayer) : ''}
 
     <!-- Season stats -->
     ${_renderStats(player, isPitcher, state)}
@@ -361,6 +365,39 @@ function _renderWear(player, isPitcher, state) {
     </div>`;
 }
 
+/**
+ * r164 §122.35 a hitter's positions: each eligible one with this season's starts (and, ours, what
+ * keeping it takes), and each he's working toward (starts of the ten, practiced or not).
+ */
+function _renderPositions(player, state, ours) {
+  const s = player.positions || {};
+  const starts = s.starts || {};
+  const inSeason = [PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK].includes(state.phase);
+  const rows = [];
+  const primary = primaryPos(player);
+  const elig = eligibleAt(player);
+  const order = [primary, ...elig.filter(x => x !== primary)].filter(x => x && x !== 'DH' || x === primary);
+  for (const x of order) {
+    const n = starts[x] || 0;
+    const need = ours && inSeason && x !== primary ? keepNeed(player, x) : 0;
+    const note = x === primary ? 'primary' : need > 0 ? `needs ${need} more start${need === 1 ? '' : 's'} to keep it` : 'eligible';
+    rows.push(`<div class="pc-pos-row"><span class="pc-pos-name">${x}</span><span class="pc-pos-note${need > 0 ? ' risk' : ''}">${note}</span><span class="pc-pos-n">${inSeason ? `${n} start${n === 1 ? '' : 's'}` : ''}</span></div>`);
+  }
+  if (ours) {
+    const learning = new Set([...Object.keys(starts), ...Object.keys(s.fam || {})].filter(x => x !== 'DH' && !elig.includes(x)));
+    for (const x of learning) {
+      const n = starts[x] || 0, fam = familiarity(player, x) > 0;
+      rows.push(`<div class="pc-pos-row learn"><span class="pc-pos-name">${x}</span><span class="pc-pos-note">${fam ? 'practiced' : 'learning'}</span><span class="pc-pos-n">${n} of 10 starts</span></div>`);
+    }
+  }
+  return `
+    <div class="pc-section">
+      <div class="pc-section-label">Positions</div>
+      ${rows.join('')}
+      ${primary === 'DH' && !elig.length ? '<div class="pc-ask-note">A designated hitter: no fielding position.</div>' : ''}
+    </div>`;
+}
+
 function _renderStats(player, isPitcher, state) {
   // During spring training the season line is empty — read springStats instead,
   // and label the block clearly so it's never mistaken for regular-season stats.
@@ -553,6 +590,12 @@ function _injectCSS() {
     .pc-career-tot td{font-weight:800;}
     .pc-origin-note{font-size:12px;color:var(--soft);line-height:1.45;margin-top:6px;}
     .pc-ask-note{font-size:12px;color:var(--muted);margin-top:4px;}
+    .pc-pos-row{display:flex;align-items:baseline;gap:10px;padding:3px 0;font-size:13px;}
+    .pc-pos-name{font-weight:800;min-width:30px;}
+    .pc-pos-note{flex:1;color:var(--soft);}
+    .pc-pos-note.risk{color:#d49b00;font-weight:600;}
+    .pc-pos-row.learn .pc-pos-note{color:#3b82f6;}
+    .pc-pos-n{color:var(--muted);font-size:12px;}
     .pc-wear{display:flex;align-items:center;gap:10px;}
     .pc-wear-fill{height:100%;border-radius:3px;background:#34C97A;}
     .pc-wear-word{font-size:12px;font-weight:700;min-width:70px;text-align:right;color:var(--soft);}

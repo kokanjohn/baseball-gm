@@ -17,7 +17,11 @@
  * A player without `positions` (a save from before r163) is read from his old
  * label (`nativePos` / `pos`, e.g. "2B/SS", "DH/OF") — the same answers the
  * game gave before. Pure: no imports from the stores; no state.
+ *
+ * r164 phase 2 — earned in games: `starts` (this regular season, DH too), `touched`
+ * (positions practiced or played this season), `lastStarts` (last season's).
  */
+import { POSITION_RULES as R } from '../data/constants.js';
 
 export const FIELD_POSITIONS = Object.freeze(['C', '1B', '2B', '3B', 'SS', 'OF']);
 const OUTFIELD = /^(LF|CF|RF|OF)$/;
@@ -130,4 +134,114 @@ export function naturalFor(p, slot) {
   if (!p || isPitcher(p)) return false;
   const s = norm(slot);
   return primaryPos(p) === s || eligibleAt(p).includes(s);
+}
+
+// ─────────────────────────────────────────────────────────────
+// r164 §122.35 PHASE 2 — EARNED IN GAMES (called on a draft)
+// ─────────────────────────────────────────────────────────────
+
+/** The player's own record (made from his label if he has none yet), to change. */
+function _own(p) {
+  if (!p.positions) p.positions = seedPositions(p);
+  const s = p.positions;
+  if (!isPitcher(p)) { s.fam ||= {}; s.starts ||= {}; s.touched ||= {}; }
+  return s;
+}
+
+/** Keep the old label fields in step with the record (anything still reading them reads the truth). */
+function _sync(p) { p.pos = posLabel(p); p.nativePos = p.pos; }
+
+/** How hard a position is for this player to pick up: 'easy' (down the spectrum, or 1B), 'hard' (up it), 'C'. */
+export function difficulty(p, pos) {
+  const x = norm(pos);
+  if (x === 'C') return 'C';
+  if (x === '1B') return 'easy';
+  const s = positionsOf(p);
+  const best = Math.max(R.spectrum[s.primary] ?? 0, ...(s.elig || []).map(e => R.spectrum[e] ?? 0));
+  return (R.spectrum[x] ?? 0) <= best ? 'easy' : 'hard';
+}
+
+/** Regular-season starts at a position this season. */
+export const startsAt = (p, pos) => positionsOf(p)?.starts?.[norm(pos)] || 0;
+
+/** More familiarity with a position he isn't eligible at (one practice's or one game's worth). */
+export function addFamiliarity(p, pos, steps = 1) {
+  const x = norm(pos);
+  if (isPitcher(p) || x === 'DH' || eligibleAt(p).includes(x)) return 0;
+  const s = _own(p), d = difficulty(p, x);
+  const before = s.fam[x] || 0;
+  s.fam[x] = Math.min(R.famCap[d], Math.round((before + R.famStep[d] * steps) * 1000) / 1000);
+  s.touched[x] = true;
+  return s.fam[x] - before;
+}
+
+/**
+ * recordStart(p, slot, kind) — after a game he started in this slot. 'regular' starts count
+ * (10 at a position makes him eligible); spring and postseason starts only build familiarity.
+ * @returns {String|null} the position he just became eligible at
+ */
+export function recordStart(p, slot, kind = 'regular') {
+  if (!p || isPitcher(p) || !slot) return null;
+  const x = norm(slot), s = _own(p);
+  const eligible = x === 'DH' || (s.elig || []).includes(x);
+  if (eligible) s.touched[x] = true;
+  else addFamiliarity(p, x);
+  if (kind !== 'regular') return null;
+  s.starts[x] = (s.starts[x] || 0) + 1;
+  if (!eligible && s.starts[x] >= R.gainStarts) {
+    s.elig = [...(s.elig || []), x];
+    delete s.fam[x];
+    _sync(p);
+    return x;
+  }
+  return null;
+}
+
+/** What keeping a position takes, from where he stands now: starts still needed (0 = safe). */
+export function keepNeed(p, pos, startsSoFar = null) {
+  const s = positionsOf(p), x = norm(pos);
+  if (s.primary === x) return 0;
+  const n = s.starts?.[x] || 0;
+  const total = startsSoFar ?? Object.values(s.starts || {}).reduce((a, b) => a + b, 0);
+  if (n >= R.keepStarts || (n >= R.keepMin && total > 0 && n / total >= R.keepShare)) return 0;
+  // the fewest more starts there that would do it (each also adds to his total)
+  for (let k = 1; k <= R.keepStarts; k++) {
+    const m = n + k, t = total + k;
+    if (m >= R.keepStarts || (m >= R.keepMin && m / t >= R.keepShare)) return k;
+  }
+  return R.keepStarts - n;
+}
+
+/**
+ * seasonTurn(p) — the season is over: he keeps a position with 20 starts there or a quarter of his
+ * starts (at least 5); his primary becomes where he started most (always kept); a player who never
+ * started (hurt all season) keeps everything. Familiarity built this season carries at half; the
+ * rest, and a lost position's, goes.
+ * @returns {{ lost: String[], from: String, to: String }|null} what changed (null: nothing)
+ */
+export function seasonTurn(p) {
+  if (!p || isPitcher(p)) return null;
+  const s = _own(p);
+  const starts = s.starts || {};
+  const total = Object.values(starts).reduce((a, b) => a + b, 0);
+  const from = s.primary, lost = [];
+  if (total > 0) {
+    // primary: where he started most (eligible there, or DH); a tie keeps the one he had
+    const ranked = Object.entries(starts).filter(([x]) => x === 'DH' || (s.elig || []).includes(x))
+      .sort((a, b) => (b[1] - a[1]) || ((b[0] === s.primary) - (a[0] === s.primary)));
+    if (ranked.length && ranked[0][1] > (starts[s.primary] || 0)) s.primary = ranked[0][0];
+    const keep = (x) => x === s.primary || (starts[x] || 0) >= R.keepStarts
+      || ((starts[x] || 0) >= R.keepMin && (starts[x] || 0) / total >= R.keepShare);
+    for (const x of s.elig || []) if (!keep(x)) lost.push(x);
+    s.elig = (s.elig || []).filter(x => !lost.includes(x));
+    if (s.primary !== 'DH' && !s.elig.includes(s.primary)) s.elig = [s.primary, ...s.elig];
+  }
+  const fam = {};
+  for (const [x, v] of Object.entries(s.fam || {})) if (s.touched?.[x] && !lost.includes(x) && v > 0) fam[x] = Math.round(v * R.famCarry * 1000) / 1000;
+  s.fam = fam;
+  s.lastStarts = starts;
+  s.starts = {};
+  s.touched = {};
+  _sync(p);
+  return lost.length || from !== s.primary ? { lost, from, to: s.primary } : null;
 }

@@ -47,7 +47,7 @@ import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
 import { exposeRatings } from './Diamonds.js';
 import { devFactor } from './CoachEngine.js';
 import { trainingDevFactor } from './FrontOffice.js';
-import { canPlay, primaryPos } from './Positions.js';
+import { canPlay, primaryPos, recordStart } from './Positions.js';
 
 const DAY = 86_400_000;
 const WEIGHT = {
@@ -305,7 +305,7 @@ export function setCondition(draft, playerId, { subRating, amount, games, reason
  * the GM's — the staff writes instead: CardEngine's rest watch).
  * @returns {Object[]} events — AVAILABLE when someone is back, RESTED when a CPU manager sits someone
  */
-export function countGame(draft, teamId, atMs = null) {
+export function countGame(draft, teamId, atMs = null, { kind = 'regular' } = {}) {
   const events = [];
   const t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
   if (!t) return events;
@@ -313,14 +313,20 @@ export function countGame(draft, teamId, atMs = null) {
   const offDays = atMs && t._lastGameAt ? Math.max(0, Math.floor((atMs - t._lastGameAt) / DAY) - 1) : 0;
   if (atMs) t._lastGameAt = atMs;
   const inLineup = new Set((t.lineupSlots || []).map(x => x.playerId).filter(Boolean));
-  const caught = (t.lineupSlots || []).find(x => x.slot === 'C')?.playerId || null;   // r161 who caught (the slot, not the listing)
+  const caught = (t.lineupSlots || []).find(x => x.slot === 'C')?.playerId || null;
+  const slotOf = new Map((t.lineupSlots || []).filter(x => x.playerId).map(x => [x.playerId, x.slot]));   // r161 who caught (the slot, not the listing)
   const year = baseballYear(draft);
   for (const id of t.rosterIds || []) {
     const p = draft.players[id];
     if (!p) continue;
     // (an away or hurt player keeps his lineup slot until he's back: he didn't start)
-    if (!isPitcher(p)) _wear(p, inLineup.has(id) && !p.unavailable && !p.isInjured && !p.isSuspended, offDays,
-                             { catcher: id === caught, mult: ageWearMult(computeAge(p.dob, year)) });
+    const started = inLineup.has(id) && !p.unavailable && !p.isInjured && !p.isSuspended;
+    if (!isPitcher(p)) _wear(p, started, offDays, { catcher: id === caught, mult: ageWearMult(computeAge(p.dob, year)) });
+    // r164 §122.35 a start at a position: regular-season starts earn it (10), any start builds familiarity.
+    if (!isPitcher(p) && started) {
+      const gained = recordStart(p, slotOf.get(id), kind);
+      if (gained) events.push({ type: 'POS_GAINED', playerId: id, teamId, pos: gained, atMs });
+    }
     if (p.condition) {
       p.condition.gamesLeft -= 1;
       if (p.condition.gamesLeft <= 0) p.condition = null;

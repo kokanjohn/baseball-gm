@@ -92,7 +92,7 @@ import { trainingWinterBonus } from './FrontOffice.js';
 import { fillsNeed } from './LeagueTrades.js';
 import { clockNow } from './Clock.js';
 import { fillShortRosters } from './TransactionEngine.js';
-import { primaryPos, posLabel } from './Positions.js';   // r163 §122.35
+import { primaryPos, posLabel, seasonTurn } from './Positions.js';   // r163 §122.35
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
 
@@ -416,10 +416,20 @@ export function beginOffseason(draft, atMs) {
     _develop(p, nextYear, draft.seasonNum || 1, p.teamId === 'user' ? draft.userTeam?.coachingStaff : null,
              p.teamId === 'user' ? trainingWinterBonus(draft.userTeam) : 0, reps[p.id]);
   }
+  // r164 §122.35 the season turn for positions: kept with enough starts there, lost without; the
+  // primary is where he started most. Ours become the Bench Coach's notice.
+  const posTurn = [];
+  for (const p of Object.values(draft.players || {})) {
+    if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
+    const ch = seasonTurn(p);
+    if (ch && p.teamId === 'user') posTurn.push({ playerId: p.id, ...ch });
+  }
   draft.ilReturnQueue = [];
   draft.impScores = {};
   draft.userTeam._ownerWinTarget = nextWinTarget(draft);
-  return _retirements(draft, atMs, nextYear);
+  const out = _retirements(draft, atMs, nextYear);
+  if (posTurn.length) out.push({ type: 'POSITIONS_TURN', teamId: 'user', changes: posTurn, atMs });
+  return out;
 }
 
 function _lockSeason(draft, atMs) {

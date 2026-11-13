@@ -751,6 +751,9 @@ function _activateGameNow(game) {
  * @param {Number} gameIndex  — index in state.schedule
  * @returns {Promise<Object>} { phaseChanged, newPhase, milestone }
  */
+/** r164 §122.35 our players' new positions from the commit's count, handed to CardEngine after it. */
+const _pendingPos = [];
+
 export async function commitGame(gameIndex) {
   const result = commitGameNow(gameIndex);
   await StateManager.save();
@@ -943,9 +946,11 @@ function _commitAt(gameIndex) {
     // conditions count down one game; whoever is back gets his spot back.
     // (r160 §122.32 wear too: ours never sits anyone on the manager's say — the staff's rest
     //  messages come from CardEngine's rest watch on the roster clock.)
-    if (wasPlayed) Development.countGame(s, 'user', g.gameTime);
+    // r164 §122.35 and starts by position (regular season: toward eligibility; spring and postseason: familiarity)
+    const kind = g.isPlayoff ? 'playoff' : g.isSpring ? 'spring' : 'regular';
+    if (wasPlayed) _pendingPos.push(...Development.countGame(s, 'user', g.gameTime, { kind }).filter(e => e.type === 'POS_GAINED'));
     const oppTeam = s.leagueTeams.find(t => t.name === g.opponent);
-    if (oppTeam && wasPlayed) Development.countGame(s, oppTeam.id, g.gameTime);
+    if (oppTeam && wasPlayed) Development.countGame(s, oppTeam.id, g.gameTime, { kind });
 
     // (Trades, arrivals and IL clearances are no longer tied to a commit —
     //  they run on the real-time roster clock: advanceClock(), §65.)
@@ -981,6 +986,9 @@ function _commitAt(gameIndex) {
       delete gCommitted.liveLineups;
     }
   });
+
+  // r164 §122.35 one of ours became eligible somewhere new: the news.
+  if (_pendingPos.length) CardEngine.syncRosterCards(_pendingPos.splice(0), endMs);
 
   // ── CPU processing (outside main mutate for clarity) ────
   const dateStr = game.date;
@@ -2213,8 +2221,9 @@ function _finishLeagueGame(date, i) {
       const gate = Finance.homeGate(s, home.id, { atMs: endMs, dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, false) });
       if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
     }
-    if (home) Development.countGame(s, home.id, g.gameTime);
-    if (away) Development.countGame(s, away.id, g.gameTime);
+    const posKind = g.isPlayoff ? 'playoff' : g.isSpring ? 'spring' : 'regular';   // r164
+    if (home) Development.countGame(s, home.id, g.gameTime, { kind: posKind });
+    if (away) Development.countGame(s, away.id, g.gameTime, { kind: posKind });
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
     recordOutings(s, g.plays, endMs);   // §76: the arms' record
     for (const [pid, d] of Object.entries(perGame)) _expose(s, pid, d);   // §122.9
@@ -2883,6 +2892,9 @@ function _runOffseasonStep(step, atMs) {
     for (const e of ev.filter(e => e.type === 'RETIRED' && e.teamId === 'user')) {
       CardEngine.deliverRetirementNotice(e.playerId, e.age, cardAt(1, OFFSEASON_CARD_HOUR));
     }
+    // r164 §122.35 who kept and lost which positions over the season.
+    const posTurn = ev.find(e => e.type === 'POSITIONS_TURN');
+    if (posTurn) CardEngine.deliverPositionsTurnNotice(posTurn.changes, cardAt(1, OFFSEASON_CARD_HOUR + 1));
     // The manager's look back, and the winter's priority (due before free agency opens).
     CardEngine.deliverPriorityCard(cardAt(1, OFFSEASON_REVIEW_HOUR), Offseason.dayStart(os, 5));
     // §112.4 a champion's city wants its parade now, not on day 9.
