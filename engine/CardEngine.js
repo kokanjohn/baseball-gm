@@ -1294,6 +1294,7 @@ function _rosterEventCards(ev, atMs) {
       const won = ev.teamId === 'user';
       const winner = won ? null : (st.leagueTeams || []).find(t => t.id === ev.teamId)?.name;
       if (p && _deliverNotice(`claim:${ev.playerId}:${ev.atMs}`, {
+        cardId: won ? 'claim_won' : 'claim_lost', tag: 'ROSTER',
         sender: 'Player Dev.', avatar: '📋', type: won ? 'good' : 'normal',
         subject: won ? `Claim awarded: ${p.name}` : `Claim lost: ${p.name}`,
         preview: won ? `${_who(p)} is ours — reporting tomorrow.` : `${winner || 'Another club'} was ahead of us in the claiming order.`,
@@ -2810,6 +2811,7 @@ function _createInstance(cardDef, context, state) {
     type:             cardDef.type       || 'normal',
     tag:              cardDef.tag        || 'GENERAL',
     sender:           text.sender,
+    relay:            cardDef.relay ? t(cardDef.relay) : null,   // r158 whose words the sender passes on (§122.30)
     avatar:           cardDef.avatar     || '📋',
     subject:          text.subject,
     preview:          text.preview,
@@ -2960,13 +2962,13 @@ export function deliverAllStarHostCard({ hostId, status }, atMs) {
     return _deliverNotice(key, {
       cardId: 'as_host', tag: 'OWNERSHIP', type: 'good', avatar: '🌟', _prominent: true,
       sender: "Commissioner's Office",
-      subject: n === 1 ? "We're hosting the All-Star Game" : `The All-Star Game is coming back to ${_cityOf(state, 'user')}`,
-      preview: `The league has awarded this year's All-Star Game to ${_cityOf(state, 'user')}.`,
-      body: `The Commissioner's Office has awarded this season's All-Star Game to ${_cityOf(state, 'user')}. `
-          + (n === 1 ? 'The league has watched what this organization has built in the ballpark and in the stands, and it wants the game here. '
-                     : 'It is a rare thing for a club to host twice; the league says the ballpark and the crowds made the decision easy. ')
-          + `The host's share — ${formatK(season?.hostBonusK || 0)} — is already in our revenue, the city is buzzing, and ownership has never been happier. `
-          + `Every club's GM will be in our building during the break. All-Star week is ours to run.`,
+      subject: n === 1 ? `The All-Star Game is coming to ${_cityOf(state, 'user')}` : `The All-Star Game is coming back to ${_cityOf(state, 'user')}`,
+      preview: `We're pleased to award this season's All-Star Game to ${_cityOf(state, 'user')}…`,
+      body: `We're pleased to award this season's All-Star Game to ${_cityOf(state, 'user')}. `
+          + (n === 1 ? "We've watched what your organization has built in the ballpark and in the stands, and we want the game there. "
+                     : 'It is a rare thing for a club to host twice; your ballpark and your crowds made the decision easy. ')
+          + `The host's share — ${formatK(season?.hostBonusK || 0)} — has been paid to your club. `
+          + `Every club's GM will be in your building during the break. All-Star week is yours to run.`,
       yesLabel: "Let's get to work", expiresAtMs: atMs + 3 * 24 * 3600_000,
     }, atMs);
   }
@@ -3209,7 +3211,7 @@ export function deliverRainStartCard(info, atMs) {
     subject: `${what[0].toUpperCase()}${what.slice(1)} likely tonight — start ${sp.name}?`,
     preview: `${_wxPct(info.chance)} chance of ${what} during the game${at}. Hold ${sp.name} a day and start ${alt.name}?`,
     body: `The forecast for tonight${at} gives a ${_wxPct(info.chance)} chance of ${what} during the game (first pitch ${_clock(info.gameTime)}). `
-        + `If play stops for ${GAME_WEATHER.ARM_COOL_MIN} minutes or more, the pitcher on the mound doesn't go back out — a start cut short is a turn of the rotation spent. `
+        + `If play stops for ${GAME_WEATHER.ARM_COOL_MIN} minutes or more, the pitcher on the mound doesn't go back out — a start cut short still counts as that pitcher's start. `
         + `We can hold ${_who(sp)} a day and give the ball to ${_who(alt)} tonight; ${sp.name} would start the next game, on an extra day's rest. `
         + `Or start ${sp.name} as planned and take our chances with the weather.`,
     yesLabel: `Hold ${sp.name}, start ${alt.name}`, noLabel: `Start ${sp.name}`,
@@ -3291,7 +3293,7 @@ function _strainWords(strain) {
   if (strain.over > 0.5) parts.push(`payroll is ${formatK(strain.payroll)}, ${Math.round(strain.over)}% over the ${formatK(strain.target)} target`);
   if (strain.projected < 0) parts.push(`at this rate we finish the season ${formatK(-strain.projected)} in the red`);
   if (strain.cpw) parts.push(`we're paying more per win than the league`);
-  return parts.length ? parts.join(', and ') : 'the books are tighter than ownership likes';
+  return parts.length ? parts.join(', and ') : 'the books are tighter than I like';   // (the owner's own words)
 }
 
 /** The owner's mood worsened (watching / concerned) — a note in his voice. */
@@ -3299,14 +3301,16 @@ export function deliverOwnerFinanceCard(stage, strain, atMs) {
   const state = StateManager.get();
   const owner = state.userTeam.ownerName || 'Ownership';
   const concerned = stage === 'concerned';
+  const line = _voice(state, stage);
+  const strainText = _strainWords(strain);
   return _deliverNotice(`owner:${stage}:${state.seasonNum}:${atMs}`, {
     cardId: `owner_${stage}`, tag: 'OWNERSHIP', sender: owner, avatar: '💼', type: concerned ? 'urgent' : 'normal',
-    subject: concerned ? `${owner} is concerned about the money` : `${owner} is watching the payroll`,
-    preview: _voice(state, stage),
-    body: `"${_voice(state, stage)}" — ${_strainWords(strain)}. `
+    subject: concerned ? "I'm concerned about the money" : "I'm watching the payroll",
+    preview: line,
+    body: `${line} Right now ${strainText}. `
         + (concerned
-          ? `Until the books improve, ownership won't approve adding salary. If it doesn't turn around by the next payday or two, expect an order to cut payroll.`
-          : `Nothing's being asked of us yet. Winning is the best argument we have.`),
+          ? `Until the books improve, I won't approve adding salary. If it doesn't turn around by the next payday or two, expect me to order a payroll cut.`
+          : `I'm not asking anything of you yet. Winning is the best argument you have.`),
     yesLabel: 'Understood', expiresAtMs: atMs + 3 * 86_400_000,
   }, atMs);
 }
@@ -3324,12 +3328,13 @@ export function deliverOwnerCutOrder(playerId, amountK, atMs) {
   if (!p || !order) return null;
   const owner = state.userTeam.ownerName || 'Ownership';
   const due = When.untilDay(order.dueAt, atMs);   // r149 relative
+  const line = _voice(state, 'concerned');
   return _deliverAt(_rosterCard(state, {
-    cardId: 'owner_cut_order', tag: 'OWNERSHIP', sender: owner, avatar: '💼', type: 'urgent',
+    cardId: 'owner_cut_order', tag: 'OWNERSHIP', sender: 'Front Office', relay: owner, avatar: '💼', type: 'urgent',
     _rosterKey: `owner:order:${state.seasonNum}:${order.dueAt}`, _targetPlayerId: playerId,
     subject: `${owner} wants ${formatK(amountK)} off the payroll`,
-    preview: `"${_voice(state, 'concerned')}" Due ${due.startsWith('in ') ? due : `by ${due}`}.`,
-    body: `"${_voice(state, 'concerned')}" Ownership wants ${formatK(amountK)} a year off the payroll by the payday ${due === 'today' || due === 'tomorrow' || due.startsWith('in ') ? due : `on ${due}`}. `
+    preview: `${owner} sent word: "${line}" Due ${due.startsWith('in ') ? due : `by ${due}`}.`,
+    body: `${owner} sent word this morning: "${line}" Ownership wants ${formatK(amountK)} a year off the payroll by the payday ${due === 'today' || due === 'tomorrow' || due.startsWith('in ') ? due : `on ${due}`}. `
         + `The obvious contract is ${_who(p)}, at ${formatK(p.contractSalary)} a year. We can find a club to take the contract — it's a salary dump, nothing much comes back but the savings — `
         + `or release ${p.name}: waivers, and the salary comes off the payroll at once. Or tell ownership we're keeping ${p.name} and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
     _choices: [
@@ -3349,11 +3354,11 @@ export function deliverOwnerOrderResult(result, atMs) {
   return _deliverNotice(`owner:orderResult:${state.seasonNum}:${result.dueAt}`, {
     cardId: result.met ? 'owner_order_met' : 'owner_order_missed', tag: 'OWNERSHIP', sender: owner, avatar: '💼',
     type: result.met ? 'good' : 'urgent',
-    subject: result.met ? 'Ownership noticed the payroll cut' : 'Ownership: the payroll wasn\'t cut',
-    preview: result.met ? `${formatK(result.cutK)} off the payroll. Trust restored a little.` : `Asked for ${formatK(result.amountK)}. It didn't happen.`,
+    subject: result.met ? 'Thank you for the payroll cut' : "The payroll wasn't cut",
+    preview: result.met ? `${formatK(result.cutK)} off the payroll, as I asked…` : `I asked for ${formatK(result.amountK)} off the payroll. It didn't happen…`,
     body: result.met
-      ? `Payroll came down ${formatK(result.cutK)}, as asked. Ownership appreciates it — and remembers who delivered.`
-      : `Ownership asked for ${formatK(result.amountK)} off the payroll and got ${formatK(Math.max(0, result.cutK))}. Their trust took a real hit, and next season's payroll target will be smaller for it.`,
+      ? `Payroll came down ${formatK(result.cutK)}, as I asked. I appreciate it — and I remember who delivered.`
+      : `I asked for ${formatK(result.amountK)} off the payroll and got ${formatK(Math.max(0, result.cutK))}. You've lost a good deal of my trust, and next season's payroll target will be smaller for it.`,
     yesLabel: 'Understood', expiresAtMs: atMs + 3 * 86_400_000,
   }, atMs);
 }
@@ -3381,7 +3386,7 @@ function _applyFinanceAction(action, instance, atMs) {
     // §122 no taker: releasing is still on the table.
     const key = `owner:noTaker:${instance.instanceId}`;
     if (!_cardsWithKey(st, key).length) _deliverAt(_rosterCard(st, {
-      cardId: 'owner_no_taker', tag: 'OWNERSHIP', sender: st.userTeam.ownerName || 'Ownership', avatar: '📞', type: 'urgent',
+      cardId: 'owner_no_taker', tag: 'OWNERSHIP', sender: 'Pro Scouting', avatar: '📞', type: 'urgent',
       _rosterKey: key, _targetPlayerId: pid,
       subject: `No club can take ${p.name}'s contract`,
       preview: `We called around — nobody has ${formatK(p.contractSalary || 0)} of room right now. Release ${p.name}?`,
@@ -3574,7 +3579,7 @@ function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, atMs, sen
   return _deliverAt(_rosterCard(st, {
     cardId: 'lt_offer', tag: 'TRADE', sender, avatar: '📞', type: 'normal',
     subject, preview,
-    body: `${lead} Pro Scouting's package: ${what}.${Negotiation.impactNote(st, offer)} `
+    body: `${lead} Our package: ${what}.${Negotiation.impactNote(st, offer)} `
         + `We can make the offer as it stands — ${team.name} answers on their own clock — adjust it first, or pass.`,
     yesLabel: 'Make the Offer', noLabel: 'Pass',
     autoResolve: 'roster', expiresAtMs: atMs + 2 * 86_400_000,
@@ -3847,7 +3852,7 @@ function _deliverWatchCard(key, { subject, preview, body, spec, what, atMs, card
   return _deliverAt(_rosterCard(st, {
     cardId, tag: 'TRADE', sender, avatar: '📞', type: 'normal',
     subject, preview,
-    body: `${body} Pro Scouting can keep watching — checking every day for the next two weeks and calling as soon as someone fits — or we can drop it.`,
+    body: `${body} We can keep watching — checking every day for the next two weeks and calling as soon as someone fits — or drop it.`,
     yesLabel: 'Keep Watching', noLabel: 'Drop It',
     autoResolve: 'roster', expiresAtMs: atMs + 2 * 86_400_000,
     _rosterKey: key, _watch: { spec, what },
@@ -3990,24 +3995,24 @@ export function deliverOwnershipCard(offer, atMs, expiresAtMs) {
   const net   = books ? books.net : 0;
   const booksLine = books
     ? `The books: ${net >= 0 ? `a profit of ${formatK(net)}` : `a loss of ${formatK(-net)}`} on the season`
-      + `${books.covered ? `, and ownership covered a ${formatK(books.covered)} shortfall to bring funds back to zero` : ''}. `
+      + `${books.covered ? `, and I covered a ${formatK(books.covered)} shortfall to bring funds back to zero` : ''}. `
       + `Club funds going into next season: ${formatK(offer.funds)}. `
     : '';
   const penaltyLine = offer.penaltyPct > 0
-    ? `Ownership hasn't forgotten the payroll cuts it asked for and didn't get — that's reflected below. ` : '';
+    ? `I haven't forgotten the payroll cuts I asked for and didn't get — that's reflected below. ` : '';
   const card = _rosterCard(state, {
     cardId: 'os_ownership', tag: 'OWNERSHIP', sender: owner, avatar: '💼', type: 'urgent',
     _rosterKey: `os:ownership:${state.seasonNum}`, _osGate: 'ownership', _offer: offer,
     subject: "Season review — next year's payroll",
     preview: `${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses}`
-           + `${books ? `, ${net >= 0 ? '+' : '−'}${formatK(Math.abs(net))} on the books` : ''}. Ownership wants to ${dir} the payroll target.`,
+           + `${books ? `, ${net >= 0 ? '+' : '−'}${formatK(Math.abs(net))} on the books` : ''}. I want to ${dir} the payroll target.`,
     body: _ownerOpening(state)
         + `We finished ${last.wins ?? state.userTeam.wins}–${last.losses ?? state.userTeam.losses} against a target of ${last.winTarget ?? '—'} wins`
         + `${last.postseason?.result && last.postseason.result !== 'Did not qualify' ? ` (${last.postseason.result.toLowerCase()})` : ''}. `
         + booksLine + penaltyLine
-        + `For next season ownership is setting a payroll target of ${formatK(offer.payrollTarget)} (was ${formatK(offer.prevPayrollTarget)}). `
-        + `Next season's win target: ${offer.winTarget}. You can accept, or push for 4% more at a cost to ownership's trust. `
-        + `If there's no answer by the time spring training opens, ownership decides — and it will be tighter.`,
+        + `For next season I'm setting a payroll target of ${formatK(offer.payrollTarget)} (was ${formatK(offer.prevPayrollTarget)}). `
+        + `Next season's win target: ${offer.winTarget}. You can accept, or push for 4% more — it will cost you some of my trust. `
+        + `If I don't have an answer by the time spring training opens, I'll decide — and it will be tighter.`,
     yesLabel: 'Accept the target', noLabel: 'Push for more',
     expiresAtMs,
     _raw: { onYes: 'os_owner_accept', onNo: 'os_owner_push', onAuto: 'os_owner_auto' },
@@ -4176,7 +4181,7 @@ export function deliverManagerContractCard(atMs, expiresAtMs) {
   const m = state.userTeam.coachingStaff?.manager || {};
   const last = (state.seasonHistory || [])[state.seasonHistory.length - 1] || {};
   const card = _rosterCard(state, {
-    cardId: 'os_manager', tag: 'MANAGER_CONTRACT', sender: m.name || 'The manager', avatar: '📋', type: 'urgent',
+    cardId: 'os_manager', tag: 'MANAGER_CONTRACT', sender: 'Front Office', avatar: '📋', type: 'urgent',   // r158 a memo about the manager's contract: the front office's
     _rosterKey: `os:manager:${state.seasonNum}`, _osGate: 'manager',
     subject: `${m.name || 'The manager'} — contract decision`,
     preview: 'The manager\'s contract is up. Extend, or open a search?',
@@ -5012,9 +5017,9 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
         const d = _tradeSalaryDelta(state, offer);
         _deliverNotice(`owner:tradeBlocked:${instance.instanceId}`, {
           cardId: 'owner_trade_blocked', tag: 'OWNERSHIP', sender: state.userTeam.ownerName || 'Ownership', avatar: '💼', type: 'urgent',
-          subject: 'Ownership blocked the trade',
-          preview: `It adds ${formatK(d.inK - d.outK)} in salary — more than ownership will approve right now.`,
-          body: `The deal would have added ${formatK(d.inK - d.outK)} a year to the payroll. With the books where they are, ownership won't approve it. `
+          subject: "I'm blocking the trade",
+          preview: `It adds ${formatK(d.inK - d.outK)} in salary — more than I'll approve right now…`,
+          body: `The deal would have added ${formatK(d.inK - d.outK)} a year to the payroll. With the books where they are, I won't approve it. `
               + `Clear some salary first, or find a deal that pays for itself.`,
           yesLabel: 'Understood', expiresAtMs: atMs + 2 * 86_400_000,
         }, atMs);

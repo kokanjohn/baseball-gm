@@ -22,6 +22,7 @@ import { eligibleSlotsFor } from '../../engine/RosterEngine.js';
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { baseballDateIso, springStartIso } from '../../engine/WeatherClimate.js';
 import { writeFileSync } from 'node:fs';
+import { voiceProblems, RULE_NAMES } from './voice-rules.mjs';
 import { runAt, setClock } from '../../engine/Clock.js';
 import { GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP, OFFSEASON_DAYS } from '../../data/constants.js';
 
@@ -287,9 +288,17 @@ await startNewGame({ archetypeId: ARCH, gmName: 'Test GM', city: 'Testville', ni
                      abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: process.env.REGION || 'north' });
 await SM.init();
 const story = [];
+// r158 §122.30 every message over the seasons and winters, and everyone who signed one (staff change).
+const mail = new Map(), persons = new Set();
+const noteMail = () => {
+  const st = SM.get();
+  for (const x of Object.values(st.userTeam?.coachingStaff || {})) if (x?.name && !x.vacant) persons.add(x.name);
+  for (const c of st.inbox || []) if (c?.instanceId && c.body && !mail.has(c.instanceId)) mail.set(c.instanceId, { ...c });
+};
 logStrength('start');
 for (let n = 1; n <= SEASONS; n++) {
   const games = await playSeason();
+  noteMail();
   // (A season that ends in the World Series' last out still needs the league's clock to the summary.)
   for (let g = 0; g < 200 && SM.get().phase !== PHASE.SEASON_SUMMARY && SM.get().phase !== PHASE.OFFSEASON; g++) { clock.advance(3600_000); advanceClock(clock.get()); releaseDueCards(); gmActs(); }
   const prev = snapshot();
@@ -297,6 +306,7 @@ for (let n = 1; n <= SEASONS; n++) {
   if (n === SEASONS) { story.push(`season ${n}: ${rec}; ${games} games`); break; }
   const os = playOffseason();
   advanceClock(clock.get()); releaseDueCards();   // (the app's next tick: the new season's books open)
+  noteMail();
   const R = os.cards.size ? [...os.cards.values()] : [];
   const h = (SM.get().seasonHistory || []).filter(x => x.seasonNum === n).pop() || {};
   const outcome = [...(os.cards.values())].find(c => c.cardId === 'fo_event')?._foOffer?.kind;
@@ -316,6 +326,16 @@ say(`  strength (best 26): ${trend.map(t => `${t.label}: us ${t.user.toFixed(1)}
   const a = trend[0], z = trend[trend.length - 1];
   check(`the league's talent holds across ${SEASONS} seasons (league ${a.avg.toFixed(1)} → ${z.avg.toFixed(1)})`, Math.abs(z.avg - a.avg) <= 4);
   check(`no league club falls apart (weakest ${z.min.toFixed(1)}, league ${z.avg.toFixed(1)})`, z.avg - z.min <= 8);
+}
+noteMail();
+{
+  const owner = SM.get().userTeam?.ownerName;
+  const personOf = (sender) => { const base = String(sender).replace(/\s*\([^)]*\)\s*$/, '').trim();
+    return base === owner ? { name: base, owner: true } : persons.has(base) ? base : null; };
+  const bad = {};
+  for (const c of mail.values()) for (const [rule, f] of voiceProblems(c, personOf)) (bad[rule] ||= new Set()).add(`${c.cardId}${f ? '.' + f : ''} [${c.sender}]`);
+  const kinds = new Set([...mail.values()].map(c => c.cardId)).size;
+  for (const [rule, name] of Object.entries(RULE_NAMES)) check(`messages over ${SEASONS} seasons: ${name} (${mail.size} delivered, ${kinds} kinds)`, !bad[rule], [...(bad[rule] || [])].slice(0, 6).join(', '));
 }
 say(`  card answers: ${Object.entries(tally).filter(([k]) => /^(os_|fo_|il_return|lineup_return)/.test(k)).map(([k, v]) => `${k} ${v.yes}/${v.no}/${v.left}`).join(', ')}`);
 say(`\n${pass}/${pass + fail} checks passed${fail ? ` — FAILED: ${[...new Set(fails)].join(' | ')}` : ''}`);

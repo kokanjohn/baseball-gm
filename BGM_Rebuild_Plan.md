@@ -10384,3 +10384,70 @@ Fresh team: not needed (UI only).
   - a message body at line height ≤1.45 with ≤10px between paragraphs.
 
 Fresh team: not needed. The wording and voices apply to messages from now on. The removed constants were display-only.
+
+---
+
+## §122.30 — r158: every message reads right for who sent it
+
+**Asked:**
+- The owner's handwritten note arrives as a message *about* a note ("A note is waiting on your new desk: …"). Why not just send what the note says?
+- Check every message so it always feels right.
+- Asked how far to go, the user chose a combination:
+  - some messages come straight from the person, in their own voice;
+  - some are relayed by a third party who would plausibly relay them;
+  - department memos are written by the department;
+  - so the inbox has a variety of voices.
+
+**The audit (before):**
+- 287 written messages; 88 of them are signed by a person.
+- **77 of those talked about the signer in the third person.** The owner's own message said "{owner} called before you'd found the coffee machine: '…'", and outcomes said "Ownership loved it."
+- 4 were messages about a note.
+- 8 narrated a call or a conversation.
+- 199 department memos talked about the department by name ("PR has a podium…").
+- The outcome line after a decision shows as a **reply from the same sender** (the Completed thread). So "Ownership was pleased", shown as the owner's reply, was the same mistake.
+
+**The voice rules** (enforced by `tools/harness/voice-rules.mjs`):
+1. **Direct, from a person:** the person writes to you as "I" — in the body, the preview and the outcome lines (their reply).
+   - They never appear in the third person.
+   - The owner never says "ownership."
+   - Your buttons are your reply to them, so they don't name the person either. "Tell Ownership We're Here to Win" → "We're Here to Win"; "Back the Manager" → "You Have My Backing".
+2. **Direct, from a department:** the department writes as "we" ("We have a podium, a backdrop…"). It never names itself: no "PR has…", no "Pro Scouting's package".
+3. **Relayed:** someone else's words, passed on by someone who would plausibly pass them on. The card carries `relay` (copied to the delivered message). The body says whose words they are, and quotes or names them. The relays used:
+   - the Front Office: the owner's handwritten note on your desk, ownership's memos, the owner's payroll-cut order;
+   - the manager: a player's request for a role, a player's personal leave;
+   - Stadium Ops: the groundskeeper's note;
+   - the Player Rep: the players' outing, a captaincy bid, three veterans;
+   - Pro Scouting: an agent's call;
+   - Partnerships: a promoter.
+4. **Never:**
+   - a message about a message ("A note is waiting…") unless it's relayed;
+   - a narrated conversation ("X texted: '…'");
+   - a note on how the game works (d2's "a Compose tab check would have surfaced this" is gone).
+5. **More outside voices:**
+   - **agents** write their own pitches: s1 and s4 (a free agent's agent), s3 and s3h (the extension ultimatum, with no analysis);
+   - **the network** writes its documentary offers (m2, m2_hi);
+   - **a youth tournament** writes its own request (rv2);
+   - **the league** writes the All-Star host award (as_host: "We're pleased to award…"; it no longer claims the money is "in our revenue" or that "ownership has never been happier").
+6. **Unchanged:** every cost, target, consequence, button and effect. Only the wording changed (plus the five buttons above).
+
+**Rewritten:**
+- every live written message: 27 milestones, 25 money messages and all the live messages in the main pool, with their subjects, previews, bodies and outcome lines. The 31 retired cards were skipped;
+- the manager's two clubhouse-read variants;
+- in the game logic:
+  - the owner's mood notes (one line now drawn once, so the preview and the body agree), the order result, the blocked trade and the winter season review are in the owner's own voice;
+  - the cut order is relayed by the Front Office;
+  - "no club can take the contract" now comes from Pro Scouting (who made the calls);
+  - the watch card says "We can keep watching";
+  - the rain message no longer says a short start is "a turn of the rotation";
+  - the owner's discipline follow-up no longer wraps its own words in quotes;
+  - the waiver-claim result now has an id (`claim_won` / `claim_lost`; it had none);
+  - fr4_followup had a duplicate `noMsg` key; the older one won and is now removed.
+- **The CFO token** always resolves to "The CFO", so it's kept out of mid-sentence spots.
+- **A bug in my own tooling, caught and fixed:** a rewrite briefly landed inside four cards' `_promise` follow-up params. Those were restored from r157, and the rewrite was re-applied to the cards' own fields; the script now skips nested follow-ups.
+
+**Checks:**
+- **check-message-voice** (new, 8): the rules over all 267 live written messages and their variants. Run against r157 it fails exactly as expected: 58+ third-person signers, the 4 notes, 8 narrated calls, the Compose-tab explainer, and no relays.
+- **sim-season** (+7): the same rules over every message a real season delivers (tokens resolved; the signer is matched by name). In the run: 457 messages of 154 kinds.
+- **multi-season** (+7): the same rules across three seasons and the winters (the review, the staff, the free agents). Signers are tracked as staff change.
+
+Fresh team: not needed. New messages use the new wording; messages already in an inbox keep theirs.

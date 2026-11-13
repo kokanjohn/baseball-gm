@@ -21,6 +21,7 @@ import { CARD_ACTIONS } from '../../engine/CardActions.js';
 import { onRelease, HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation, playRuns } from '../../engine/SimEngine.js';
+import { voiceProblems, RULE_NAMES } from './voice-rules.mjs';
 import * as Offseason from '../../engine/OffseasonEngine.js';
 import * as AllStar from '../../engine/AllStarEngine.js';
 import * as Pitching from '../../engine/PitchingEngine.js';
@@ -110,7 +111,11 @@ function namedAudit(st, card, ids, text, where) {
     if (SURNAMES.has(w) && !names.has(w) && !OUTSIDE.has(w) && !people.has(w)) namedStats.bad.push(`${where}: "${w}" reads as a player's name, but nobody in the league has it`);
   }
 }
+// r158 every message the season delivers, for the voice rules (§122.30): by instance, as delivered.
+const mailSeen = new Map();
+const noteMail = (list) => { for (const c of list || []) if (c?.instanceId && c.body && !mailSeen.has(c.instanceId)) mailSeen.set(c.instanceId, { ...c }); };
 onRelease((st, due) => {
+  noteMail(due);
   for (const c of due) {
     const ids = [c._targetPlayerId, ...Object.values(c._tokenPlayers || {}), ...(c._playerIds || []),
                  ...(c._choices || []).map(x => String(x.key || '').split(':').pop()).filter(k => /^[0-9a-f-]{20,}$/.test(k))].filter(Boolean);
@@ -1412,6 +1417,25 @@ function checkLeagueTrades(st) {
   check('league trades: the old deadline trade cards are retired (real targets instead)', !(st.inbox || []).some(c => retired.includes(c.cardId)));
   if (process.env.LT_DUMP) for (const e of cpuTrades) console.log('  ·', new Date(e.atMs).toISOString().slice(0, 10), e.text);
   checkOffersToUs(st);
+  checkMessageVoice(st);
+}
+
+/** r158 §122.30 every message a real season delivered reads right for who sent it (tokens resolved). */
+function checkMessageVoice(st) {
+  noteMail(st.inbox);
+  const staff = st.userTeam?.coachingStaff || {};
+  const persons = new Set([st.userTeam?.ownerName, ...Object.values(staff).map(x => x && !x.vacant ? x.name : null)].filter(Boolean));
+  const personOf = (sender) => { const base = String(sender).replace(/\s*\([^)]*\)\s*$/, '').trim();
+    return base === st.userTeam?.ownerName ? { name: base, owner: true } : persons.has(base) ? base : null; };
+  const mail = [...mailSeen.values()];
+  const bad = {};
+  for (const c of mail) for (const [rule, f] of voiceProblems(c, personOf)) (bad[rule] ||= []).push(`${c.cardId}${f ? '.' + f : ''} [${c.sender}]`);
+  const kinds = new Set(mail.map(c => c.cardId)).size;
+  for (const [rule, name] of Object.entries(RULE_NAMES)) {
+    const list = [...new Set(bad[rule] || [])];
+    check(`messages: ${name} (${mail.length} delivered, ${kinds} kinds)`, list.length === 0, list.slice(0, 6).join(', '));
+  }
+  if (process.env.VOICE_DUMP) for (const c of mail) console.log('  ✉', c.cardId, '|', c.sender, '|', c.body);
 }
 
 /**

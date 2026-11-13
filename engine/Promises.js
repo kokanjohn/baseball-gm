@@ -78,8 +78,8 @@ const RESOLVERS = {
         sender: ownName(s), avatar: '🏛️', tag: 'OWNERSHIP', type: kept ? 'good' : 'normal',
         subject: kept ? 'The discipline paid off' : '"The roster is set," you said',
         body: kept
-          ? `"At midseason you banked the profit and told me the roster was set. ${w} wins against a target of ${target}. The discipline paid off."`
-          : `"At midseason you banked the profit and told me the roster was set. ${w} wins against a target of ${target}. I'll remember that the next time you tell me a roster is set."`,
+          ? `At midseason you banked the profit and told me the roster was set. ${w} wins against a target of ${target}. The discipline paid off.`
+          : `At midseason you banked the profit and told me the roster was set. ${w} wins against a target of ${target}. I'll remember that the next time you tell me a roster is set.`,
       },
       land: { effects: { ownerTrust: kept ? 3 : -3 } },
     };
