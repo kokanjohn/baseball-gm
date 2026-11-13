@@ -297,9 +297,10 @@ export function setCondition(draft, playerId, { subRating, amount, games, reason
  * A player whose absence ends gets his lineup spot / rotation turn back (the
  * fill-in returns to the bench; reconcileRoster tidies the rest).
  * r159 §122.31 and the hitters' wear: a start adds to it, a game off or an off
- * day takes it away, and the manager sits anyone at WEAR.autoRest for the next
- * game (every club alike).
- * @returns {Object[]} events — AVAILABLE when someone is back, RESTED when the manager sits someone
+ * day takes it away. r160 §122.32 a CPU manager sits the most worn-down regular
+ * at WEAR.cpuRest for the next game; ours never does on his own (the lineup is
+ * the GM's — the staff writes instead: CardEngine's rest watch).
+ * @returns {Object[]} events — AVAILABLE when someone is back, RESTED when a CPU manager sits someone
  */
 export function countGame(draft, teamId, atMs = null) {
   const events = [];
@@ -324,11 +325,12 @@ export function countGame(draft, teamId, atMs = null) {
     if (p.unavailable.gamesLeft > 0) continue;
     _back(draft, t, p, teamId, events);
   }
-  // The manager's call, on any club: the most worn-down regular at the limit sits the next game
-  // (one a game — never half the lineup at once), and the manager puts the best bench bat in that
-  // spot now (the regular gets it back after the game off).
+  // A CPU manager's call: the most worn-down regular at the limit sits the next game (one a game —
+  // never half the lineup at once), and the best bench bat takes that spot now (the regular gets it
+  // back after the game off). r160 §122.32 not ours: our lineup is the GM's.
+  if (teamId === 'user') return events;
   const worn = [...inLineup].map(id => draft.players[id])
-    .filter(p => p && !isPitcher(p) && !p.unavailable && !p.isInjured && !p.isSuspended && (p.wear || 0) >= WEAR.autoRest)
+    .filter(p => p && !isPitcher(p) && !p.unavailable && !p.isInjured && !p.isSuspended && (p.wear || 0) >= WEAR.cpuRest)
     .sort((a, b) => (b.wear || 0) - (a.wear || 0));
   for (const p of worn) {
     const sub = _fillIn(draft, t, p);
@@ -342,13 +344,18 @@ export function countGame(draft, teamId, atMs = null) {
   return events;
 }
 
-/** r159 a hitter's wear after a game: a start adds to it, a game off or an off day takes it away. */
+/**
+ * r159 a hitter's wear after a game: a start adds to it, off days take some away.
+ * r160 §122.32 a game off clears it, however it came (a day off asked for, the GM
+ * sitting the player on the Team screen, the bench): a day off is a day off.
+ * `straight` counts the starts in a row (the staff's "caught seven straight").
+ */
 function _wear(p, started, offDays) {
   let w = Math.max(0, (p.wear || 0) - offDays * WEAR.offDay);
-  if (p.unavailable?.reason === 'rest' && !started) w = 0;   // a day off clears it
-  else if (started) w += (p.pos === 'C' || p.nativePos === 'C') ? WEAR.catcher : 1;
-  else w = Math.max(0, w - WEAR.gameOff);
+  if (started) w += (p.pos === 'C' || p.nativePos === 'C') ? WEAR.catcher : 1;
+  else w = 0;
   p.wear = Math.round(w * 10) / 10;
+  p.straight = started ? (p.straight || 0) + 1 : 0;
 }
 
 /**
@@ -368,6 +375,8 @@ export function giveDayOff(draft, playerId, atMs) {
 }
 
 /** The bench bat who fills in for `p`: one who plays the position first, then the best (null: nobody to spare). */
+/** r160 who would fill in for `p` (read-only: the staff names the backup). */
+export function fillInFor(draft, t, p) { return _fillIn(draft, t, p); }
 function _fillIn(draft, t, p) {
   const OF = /^(LF|CF|RF|OF)$/;
   const fits = (x) => x.pos === p.pos || x.nativePos === p.pos || (OF.test(x.pos) && OF.test(p.pos)) || (p.pos === 'DH');
@@ -416,11 +425,16 @@ export function releaseDue(draft, atMs) {
   return events;
 }
 
-/** r159 a hitter's wear in words and numbers, for the manager and the physician. */
+/**
+ * r159 a hitter's wear in words and numbers, for the staff, the Team screen and the player card.
+ * r160 §122.32 `level` / `word` (WEAR.levels), `share` for a meter, `straight` starts in a row.
+ */
 export function wearOf(p) {
   const w = p?.wear || 0;
   const dip = w < WEAR.tired ? 0 : Math.min(WEAR.dipMax, WEAR.dip + Math.floor((w - WEAR.tired) / WEAR.dipStep));
-  return { wear: w, tired: w >= WEAR.tired, dip, toRest: Math.max(0, Math.ceil(WEAR.autoRest - w)) };
+  const lv = [...WEAR.levels].reverse().find(([, from]) => w >= from) || WEAR.levels[0];
+  return { wear: w, tired: w >= WEAR.tired, worn: w >= WEAR.worn, dip, level: lv[0], word: lv[2],
+           share: Math.min(1, w / WEAR.meterMax), straight: p?.straight || 0 };
 }
 
 // ─────────────────────────────────────────────────────────────

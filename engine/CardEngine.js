@@ -31,6 +31,7 @@ import {
 
 import {
   PHASE,
+  REST_WATCH,
   PLAYER_GROUP,
   PITCHER_HAND_DISPLAY,
   ARCHETYPE_CARD_WEIGHTS,
@@ -1053,6 +1054,138 @@ function _lineupNudges(atMs) {
   return delivered;
 }
 
+/**
+ * r160 §122.32 the rest watch: a regular in our lineup wearing down → one of the
+ * staff writes, a decision (give the player the next game off, or not). Our
+ * lineup is the GM's: the manager only sits the player when the message went
+ * unanswered and the player is worn down. Who writes fits the case — about a
+ * catcher, the manager or the pitching coach (who'd notice the framing and the
+ * blocks); about a tired bat, the hitting coach; about one worn down, the team
+ * physician; otherwise the manager. Never a pile-up (REST_WATCH): one open at a
+ * time, a gap between any two, the same player not again for days (unless now
+ * worn down), and not the day the staff already asked about a lineup spot.
+ */
+function _restWatch(atMs) {
+  const st = StateManager.get(), u = st.userTeam;
+  if (!u?.lineupSlots?.length || ![PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK, PHASE.POSTSEASON].includes(st.phase)) return 0;
+  // (not while one of our games is on: the staff writes between games)
+  const cur = st.schedule?.[st.currentGameIndex];
+  if (cur && !cur._committed && Number.isFinite(cur.gameTime) && cur.gameTime <= atMs && !cur.cancelled) return 0;
+  const W = st.restWatch || {};
+  if (atMs - (W.lastAt ?? -Infinity) < REST_WATCH.gapMs) return 0;
+  const all = [...(st.inbox || []), ...(st.scheduledCards || [])];
+  if (all.some(c => String(c._rosterKey || '').startsWith('rest:') && !c.resolved)) return 0;
+  if (all.some(c => c.cardId === 'lineup_return' && (!c.resolved || Math.abs((c.deliverAtMs ?? c.arrivedAtMs ?? 0) - atMs) < 12 * 3600_000))) return 0;
+  const game = _nextUserGame(st, atMs);
+  if (!game) return 0;
+  const latest = game.gameTime - REST_WATCH.leadMs;
+  if (latest < atMs) return 0;   // (too close to first pitch — a doubleheader's second game)
+  const cands = [];
+  u.lineupSlots.forEach((sl) => {
+    const p = sl.playerId ? st.players[sl.playerId] : null;
+    if (!p || p.teamId !== 'user' || ['SP', 'RP'].includes(p.pos) || !isAvailable(p)) return;
+    const w = Development.wearOf(p);
+    const catcher = sl.slot === 'C';
+    if (w.wear < (catcher ? REST_WATCH.catcherAt : REST_WATCH.hitterAt)) return;
+    const last = W.byPlayer?.[p.id];
+    if (last && atMs - last.atMs < REST_WATCH.samePlayerMs && !(w.worn && !last.worn)) return;
+    const sub = Development.fillInFor(st, u, p);
+    if (!sub) return;
+    cands.push({ p, w, catcher, sub, slot: sl.slot });
+  });
+  if (!cands.length) return 0;
+  cands.sort((a, b) => (b.w.worn - a.w.worn) || (b.catcher - a.catcher) || (b.w.wear - a.w.wear));
+  const c = cands[0];
+  // (its moment and its words are the situation's — the game before and the one it's about — never
+  //  when the roster clock happened to look, so the message lands the same with the app open or closed)
+  return withDice(dice(diceSeed(st), 'rest', c.p.id, u._lastGameAt ?? 0, game.index), () => {
+    // After the last game (first pitch + a game), and no sooner than the spacing allows; a moment the
+    // roster clock reaches late (the app closed) still lands then. Never before the GM answered an
+    // earlier rest message, nor within half a day of the staff's lineup-spot message.
+    const lastRest = all.filter(x => x.cardId === 'rest_ask' || x.cardId === 'lineup_return')
+      .map(x => (x.cardId === 'lineup_return' ? (x.resolvedAtMs || x.expiresAtMs || 0) + 12 * 3600_000 : x.resolvedAtMs || 0));
+    const prev = W.byPlayer?.[c.p.id];
+    const from = Math.max((u._lastGameAt ?? atMs) + 4 * 3600_000, (W.lastAt ?? -Infinity) + REST_WATCH.gapMs,
+      prev && !(c.w.worn && !prev.worn) ? prev.atMs + REST_WATCH.samePlayerMs : -Infinity, ...lastRest);
+    const at = Math.min(latest, from + _randBetween(20, 50) * 60_000);
+    return _restDeliver(st, c, game, at);
+  });
+}
+
+function _restDeliver(st, c, game, at) {
+  const card = _restCard(st, c, game, at);
+  StateManager.mutate(s => {
+    s.restWatch = { lastAt: at, byPlayer: { ...(s.restWatch?.byPlayer || {}), [c.p.id]: { atMs: at, worn: c.w.worn } } };
+  });
+  return _deliverAt(card, at) ? 1 : 0;
+}
+
+/** The rest message itself: who writes it and how (two ways each, so they don't read the same). */
+function _restCard(st, { p, w, catcher, sub, slot }, game, at) {
+  const staff = st.userTeam.coachingStaff || {};
+  const person = (role) => (staff[role] && !staff[role].vacant ? staff[role].name : null);
+  const mgr = person('manager'), pc = person('pitchingCoach'), hc = person('hittingCoach');
+  const X = p.name, B = sub.name, n = Math.max(w.straight, 1);
+  const when = When.untilFull(game.gameTime, at), day = When.untilDay(game.gameTime, at);
+  const subC = sub.pos === 'C' || sub.nativePos === 'C';
+  const where = slot === 'C' ? 'catch' : slot === 'DH' ? 'DH' : `play ${slot === 'OF' ? 'the outfield' : slot}`;
+  const cover = catcher && !subC ? `We don't carry another catcher, so ${B} would catch, out of position.` : `${B} can ${where}.`;
+  const v = eventRand() < 0.5 ? 0 : 1;
+  // Who writes: about one worn down, the physician; about a catcher, the manager or the pitching coach;
+  // about a tired bat, the hitting coach; else the manager (whoever's chair is filled).
+  const role = w.worn ? 'physician' : catcher ? (pc && (v === 1 || !mgr) ? 'pitchingCoach' : 'manager') : (w.tired && hc ? 'hittingCoach' : 'manager');
+  // The manager steps in only for one worn down, and only with no answer by first pitch.
+  const autoSit = w.worn;
+  const mgrSits = autoSit ? (role === 'manager' ? ` If I don't hear from you by first pitch, I'll sit ${X} myself.`
+                                                : ` If there's no answer by first pitch, ${mgr || 'the manager'} will sit ${X}.`) : '';
+  let sender, avatar, subject, preview, body;
+  if (role === 'physician') {
+    sender = 'Team Physician'; avatar = '🩺';
+    subject = v ? `${X} is worn down` : `A day for ${X}`;
+    preview = `${n} straight starts without a real day off.`;
+    body = (v ? `${X} is worn down: ${n} straight starts without a real day off. This is when hamstrings and obliques go. I'd sit ${X} ${when}.`
+              : `I've been watching ${X}'s workload: ${n} starts in a row, and the body is showing it. Worn-down players get hurt. My advice is a day off ${when}.`)
+         + ` ${cover}${mgrSits}`;
+  } else if (role === 'pitchingCoach') {
+    sender = pc; avatar = '⚾';
+    subject = v ? `${X} needs a day` : `${X} behind the plate`;
+    preview = `${n} straight behind the plate.`;
+    body = (v ? `${X} has caught ${n} straight. My pitchers notice when a catcher's legs go: the low strikes stop getting framed and the blocks get slow. Give ${X} a day off ${when} and the pitchers get a fresh catcher back.`
+              : `That's ${n} in a row behind the plate for ${X}. I'd like ${X} fresh for the next turn through our rotation, so I'm asking for a day off ${when}.`)
+         + ` ${cover}${mgrSits}`;
+  } else if (role === 'hittingCoach') {
+    sender = hc; avatar = '🏏';
+    subject = v ? `${X}'s bat has slowed` : `A day for ${X}?`;
+    preview = `${n} straight starts. The swing is a step late.`;
+    body = (v ? `${X} has started ${n} straight and the bat has slowed down. The swing is fine; it's legs and hands. A day off ${when} clears it.`
+              : `I'm seeing late swings from ${X}. ${n} starts in a row will do that. One day out of the lineup ${when} and the timing comes back.`)
+         + ` ${cover}${mgrSits}`;
+  } else {
+    sender = mgr || 'Front Office'; avatar = '📋';
+    subject = catcher ? (v ? `A day for ${X}?` : `${X} could use a day`) : `${X} could use a day`;
+    preview = catcher ? `${n} straight behind the plate.` : `${n} straight starts.`;
+    body = (catcher
+      ? (v ? `${X} has caught ${n} straight and it's starting to show: slower out of the crouch, a step late on the blocks. I'd like to give ${X} a full day ${when}.`
+           : `That's ${n} games in a row behind the plate for ${X}. I'd rather give ${X} a day now than lose the bat for a week later. I'd sit ${X} ${when}.`)
+      : (v ? `${X} has started ${n} straight and is starting to wear down. Better a day off now than a slump later: I'd like to give ${X} the day ${when}.`
+           : `${n} starts in a row for ${X}. Nothing's wrong yet, but this is when I like to get ahead of it. I'd sit ${X} ${when}.`))
+         + ` ${cover} Your call.${mgrSits}`;
+  }
+  return _rosterCard(st, {
+    cardId: 'rest_ask', tag: 'LINEUP', sender, avatar, type: 'normal',
+    _rosterKey: `rest:${p.id}:${game.index}:${game.gameTime}`, _targetPlayerId: p.id, _playerIds: [sub.id], _restWorn: !!w.worn,
+    _restGame: { index: game.index, gameTime: game.gameTime },   // (our games have no id: the index, and the time — a game moved by weather is a new question)
+    subject, preview, body,
+    yesLabel: `Sit ${X} ${day === 'today' ? 'Today' : day === 'tomorrow' ? 'Tomorrow' : 'Next Game'}`,
+    noLabel: `Keep ${X} In`,
+    yesMsg: `Done. ${X} gets the day and ${B} is in.`,
+    noMsg: `Understood. ${X} plays.`,
+    expiresAtMs: game.gameTime - 10 * 60_000,
+    _raw: { onYes: 'day_off', onNo: null, onAuto: autoSit ? 'rest_auto' : null },
+    _autoLabel: autoSit ? `No answer — ${mgr || 'the manager'} sat ${X}` : `No answer — ${X} played`,
+  });
+}
+
 /** r153 the manager's fill in words: "Pai at SS", "Pai at SS (out of position)", "Ruiz into the rotation". */
 function _spotMoves(st, moves) {
   return (moves || []).filter(m => st.players[m.playerId]).map(m => {
@@ -1303,11 +1436,6 @@ function _rosterEventCards(ev, atMs) {
       }, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'WAIVER_CLEARED' && ev.userClaimed) {
       // (cannot happen: a user claim always makes the user a claimant)
-    } else if (ev.type === 'RESTED' && ev.teamId === 'user') {
-      // r159 §122.31 the manager sat a worn-down regular.
-      const st = StateManager.get(), p = st.players[ev.playerId];
-      const mgr = st.userTeam?.coachingStaff?.manager;
-      if (p) _ourNews(`${mgr?.name && !mgr.vacant ? mgr.name : 'The manager'} is giving ${p.name} the next game off — ${ev.wear} games of wear without a break`, ev.atMs ?? atMs);
     } else if (ev.type === 'DEV_DONE' && ev.teamId === 'user') {
       if (_deliverDevelopmentReport(ev, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'TRADE_EXECUTED' && ev.tx?.league) {
@@ -1340,6 +1468,9 @@ function _rosterConditionCards(delivered, atMs) {
 
   // §113 back from an injury but not back in the lineup → the staff asks.
   delivered += _lineupNudges(atMs);
+
+  // r160 §122.32 a regular wearing down → one of the staff asks about a day off.
+  delivered += _restWatch(atMs);
 
   // r153 open spots waiting for the GM → the manager says what happens at the deadline.
   if (_deliverOpenSpotsCard(atMs)) delivered++;
@@ -1398,6 +1529,11 @@ function _rosterConditionCards(delivered, atMs) {
       const seatedNow = (u.lineupSlots || []).some(sl => sl.playerId === p?.id) || (u.rotation?.order || []).includes(p?.id)
         || (p?._lostSlot?.kind === 'bullpen' && p.group === PLAYER_GROUP.BULLPEN);
       return !p || p.teamId !== 'user' || !p._lostSlot || seatedNow || !isAvailable(p) || !_whoHasSpot(state, p);
+    }
+    if (key.startsWith('rest:')) {   // r160 out of the lineup already (the GM moved them), hurt, away, gone, or the game is past
+      const p = players[c._targetPlayerId];
+      return !p || p.teamId !== 'user' || !isAvailable(p) || !(state.userTeam.lineupSlots || []).some(sl => sl.playerId === p.id)
+        || !(state.schedule || []).some(g => g.index === c._restGame?.index && g.gameTime === c._restGame?.gameTime && !g._committed && !g.cancelled);
     }
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
     if (key.startsWith('openspots:')) return key !== `openspots:${managerFillAt(state)}` || !openSpots(state).any;
@@ -4797,6 +4933,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'fin_call_club',
   'il_return_activate',
   'lineup_restore', 'lineup_keep', 'lineup_auto', 'il_return_wait',
+  'rest_auto',   // r160
   'il_return_waive',
   'il_return_auto',
   'il_return_farm',
@@ -5005,6 +5142,16 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
       break;
     case 'lineup_auto':
       break;   // nothing changes; the manager asks once more after the game
+
+    // ── r160 §122.32 a rest message nobody answered, about a player worn down: the manager sits them ──
+    case 'rest_auto': {
+      const st = StateManager.get();
+      if (!CARD_ACTIONS.day_off.feasible(st, instance)) break;
+      _applyCardAction('day_off', { ...instance, choice: 'auto' }, atMs, true);
+      const p = StateManager.get().players[playerId];
+      if (p?.unavailable?.reason === 'rest') _ourNews(`${_managerName(st)} sat ${p.name} for a game: worn down, and no answer on the rest`, atMs);
+      break;
+    }
 
     case 'il_return_waive': {
       if (!playerId) break;

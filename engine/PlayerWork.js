@@ -84,6 +84,29 @@ export function bestStart(state, atMs, days, horizonMs = PLAYER_WORK.offerDays *
 // THE READS (what the staff would tell the GM)
 // ─────────────────────────────────────────────────────────────
 
+/** Between two points, by OVR (clamped). */
+const _lerp = (ovr, x0, x1, y0, y1) => y0 + (y1 - y0) * Math.max(0, Math.min(1, (ovr - x0) / (x1 - x0)));
+
+/**
+ * r160 §122.32 a focused day's cost, by the player's OVR: $5K for most of the
+ * roster, about $10K for a good regular, $20K only for the very best.
+ */
+export function focusedDayK(p) {
+  const D = PLAYER_WORK.coach.dayK, ovr = p?.ovr || 0;
+  const k = ovr <= D.midOvr ? _lerp(ovr, D.fromOvr, D.midOvr, D.min, D.mid) : _lerp(ovr, D.midOvr, D.topOvr, D.mid, D.max);
+  return Math.round(k);
+}
+
+/** r160 §122.32 the program's whole cost, by OVR ($25K–$75K for nearly everyone), a longer stay a little more. */
+export function programCostK(p, days) {
+  const G = PLAYER_WORK.program, ovr = p?.ovr || 0;
+  const k = ovr <= G.midOvr ? _lerp(ovr, G.fromOvr, G.midOvr, G.minK, G.midK)
+          : ovr <= G.highOvr ? _lerp(ovr, G.midOvr, G.highOvr, G.midK, G.highK)
+          : _lerp(ovr, G.highOvr, G.highOvr + 10, G.highK, G.maxK);
+  const stay = days > G.days ? 1 + 0.04 * (days - G.days) : 1;
+  return Math.min(G.maxK, Math.max(G.minK, Math.round(k * stay / 5) * 5));
+}
+
 /** How much a player has left to find in a skill, in words for the reply. */
 function roomWord(v) {
   const share = roomLeft(v);
@@ -115,7 +138,7 @@ export function coachRead(state, playerId, skill, atMs) {
   const mult = gainMultiplier(state, p) * roomLeft(value);
   return {
     p, skill, value, coach, busy, already,
-    kind, days, costK: days * C.costPerDayK, gain: focused ? C.focusedGain : C.tweaksGain,
+    kind, days, costK: days * focusedDayK(p), gain: focused ? C.focusedGain : C.tweaksGain,
     room: roomWord(value), odds: oddsWord(mult), age: computeAge(p.dob, baseballYear(state)),
     window: days ? bestStart(state, atMs, days) : null,
   };
@@ -133,7 +156,7 @@ export function programRead(state, playerId, skill, atMs) {
   const days = age <= 24 ? G.days : G.daysLow;
   const mult = gainMultiplier(state, p) * roomLeft(value);
   return {
-    p, skill, value, age, busy: activeWork(state, 'program'), days, costK: G.baseK + days * G.perDayK, gain: G.gain,
+    p, skill, value, age, busy: activeWork(state, 'program'), days, costK: programCostK(p, days), gain: G.gain,
     room: roomWord(value), odds: oddsWord(mult), window: bestStart(state, atMs, days),
     already: (state.developmentPlans || []).some(x => x.status === 'active' && x.playerId === p.id && x.keys.includes(skill)),
   };

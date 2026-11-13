@@ -30,6 +30,7 @@ import { PHASE, PLAYER_GROUP } from '../../data/constants.js';
 import { bullpenRoles } from '../../engine/PitchingEngine.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear } from '../../engine/PlayerFactory.js';
+import { wearOf } from '../../engine/DevelopmentEngine.js';
 
 // ─────────────────────────────────────────────────────────────
 // OPEN / CLOSE
@@ -156,6 +157,9 @@ function _renderCard(player, playerId, state) {
 
     <!-- Sub-ratings -->
     ${_renderSubRatings(player, isPitcher)}
+
+    <!-- r160 §122.32 our hitters' wear -->
+    ${isOwnPlayer && !isPitcher && player.group !== PLAYER_GROUP.IL ? _renderWear(player) : ''}
 
     <!-- Season stats -->
     ${_renderStats(player, isPitcher, state)}
@@ -305,6 +309,29 @@ function _renderSubRatings(player, isPitcher) {
       ${bars}
     </div>
   `;
+}
+
+/** r160 §122.32 how worn down one of our hitters is: the meter, the word, what it means now. */
+const WEAR_LINES = {
+  fresh:  'Rested and ready.',
+  fine:   'Holding up fine.',
+  tiring: 'Starting to wear down. A day off soon keeps it from reaching the bat.',
+  tired:  'The bat has slowed a little, and injuries come more often. A day off clears it.',
+  worn:   'Worn down: the bat is slower and the injury risk is up. A day off clears it.',
+};
+function _renderWear(player) {
+  const w = wearOf(player);
+  const n = w.straight, catcher = (player.nativePos || player.pos) === 'C';
+  const run = n ? `${catcher ? 'Caught' : 'Started'} ${n} straight. ` : '';
+  return `
+    <div class="pc-section">
+      <div class="pc-section-label">Wear</div>
+      <div class="pc-wear pc-wear-${w.level}">
+        <div class="pc-subr-bar-wrap"><div class="pc-wear-fill" style="width:${Math.max(4, Math.round(w.share * 100))}%;"></div></div>
+        <div class="pc-wear-word">${w.word}</div>
+      </div>
+      <div class="pc-ask-note">${run}${WEAR_LINES[w.level]}</div>
+    </div>`;
 }
 
 function _renderStats(player, isPitcher, state) {
@@ -499,6 +526,12 @@ function _injectCSS() {
     .pc-career-tot td{font-weight:800;}
     .pc-origin-note{font-size:12px;color:var(--soft);line-height:1.45;margin-top:6px;}
     .pc-ask-note{font-size:12px;color:var(--muted);margin-top:4px;}
+    .pc-wear{display:flex;align-items:center;gap:10px;}
+    .pc-wear-fill{height:100%;border-radius:3px;background:#34C97A;}
+    .pc-wear-word{font-size:12px;font-weight:700;min-width:70px;text-align:right;color:var(--soft);}
+    .pc-wear-tiring .pc-wear-fill{background:#e0a800;} .pc-wear-tiring .pc-wear-word{color:#d49b00;}
+    .pc-wear-tired .pc-wear-fill{background:#f97316;} .pc-wear-tired .pc-wear-word{color:#f97316;}
+    .pc-wear-worn .pc-wear-fill{background:var(--danger);} .pc-wear-worn .pc-wear-word{color:var(--danger);}
     .pc-farm-badge{font-size:10px;font-weight:700;color:var(--text);
       background:var(--chip-accent-bg);padding:1px 6px;border-radius:4px;display:inline-block;}
     .pc-trait{font-size:11px;color:var(--muted);font-style:italic;margin-top:2px;}

@@ -9,7 +9,7 @@ import { startNewGame } from '../../engine/GameEngine.js';
 import { liveUntil } from './drive.mjs';
 import * as CE from '../../engine/CardEngine.js';
 import * as Dev from '../../engine/DevelopmentEngine.js';
-import { coachRead, programRead, bestStart, gamesMissed, skillsOf } from '../../engine/PlayerWork.js';
+import { coachRead, programRead, bestStart, gamesMissed, skillsOf, focusedDayK, programCostK } from '../../engine/PlayerWork.js';
 import { WEAR, PLAYER_WORK } from '../../data/constants.js';
 import { voiceProblems } from './voice-rules.mjs';
 
@@ -52,18 +52,28 @@ const hitters = ours().filter(p => !isArm(p));
 const weak = S().userTeam.lineupSlots.map(x => P(x.playerId)).find(p => p && !isArm(p));
 SM.mutate(s => { s.players[weak.id].subRatings.contact = 44; });
 let read = coachRead(S(), weak.id, 'contact', clock.get());
-check(`the coach's call for contact 44: focused, ${read.days} days, ${read.costK}K`, read.kind === 'focused' && read.days === PLAYER_WORK.coach.focusedDaysLow && read.costK === read.days * PLAYER_WORK.coach.costPerDayK);
+const dayK = focusedDayK(P(weak.id));
+check(`the coach's call for contact 44: focused, ${read.days} days, ${read.costK}K (OVR ${P(weak.id).ovr}: ${dayK}K a day)`, read.kind === 'focused' && read.days === PLAYER_WORK.coach.focusedDaysLow && read.costK === read.days * dayK);
+// r160 §122.32 the costs by OVR: a focused day $5K–$10K for nearly everyone, $20K only at the very top;
+// a program $25K–$75K for nearly everyone, never $100K.
+const day = [50, 60, 70, 75, 85, 92].map(o => focusedDayK({ ovr: o }));
+check(`a focused day by OVR 50/60/70/75/85/92: ${day.map(k => `$${k}K`).join(' ')}`, day[0] === 5 && day[2] <= 10 && day[3] <= 13 && day[5] === 20 && day[4] < 20);
+const progK = [50, 60, 70, 80, 92].map(o => programCostK({ ovr: o }, 5));
+check(`a program by OVR 50/60/70/80/92: ${progK.map(k => `$${k}K`).join(' ')} (7 days at 70: $${programCostK({ ovr: 70 }, 7)}K)`,
+      progK[0] === 25 && progK[2] <= 55 && progK[3] <= 80 && progK[4] < 100 && programCostK({ ovr: 70 }, 7) > progK[2]);
+const ourCosts = ours().map(p => focusedDayK(p));
+check(`our roster: a focused day ${Math.min(...ourCosts)}–${Math.max(...ourCosts)}K, most at $10K or less`, ourCosts.filter(k => k <= 10).length >= ourCosts.length * 0.6 && Math.max(...ourCosts) <= 20);
 let c = ask('hc_work', 'hitting_coach', { playerId: weak.id, skill: 'contact' });
 console.log(`    “${c?.subject}” (${c?.sender}) — ${c?.body?.replace(/\n+/g, ' ')}`);
-check('the reply names the skill, where it stands, the days and the cost', !!c && /contact is 44/.test(c.body) && /3 days away/.test(c.body) && /\$60K/.test(c.body));
+check('the reply names the skill, where it stands, the days and the cost', !!c && /contact is 44/.test(c.body) && /3 days away/.test(c.body) && c.body.includes(`$${3 * dayK}K`));
 check('…and the games those days cover if started now (and a cheaper start, when there is one)', /If we start today/.test(c.body));
-check('…it is a decision: start the work now, or not now', c?.yesLabel === 'Start the Work Now' && c?._raw?.onYes === 'coach_work' && c._raw._workDays === 3 && c._budgetCost === 60);
+check('…it is a decision: start the work now, or not now', c?.yesLabel === 'Start the Work Now' && c?._raw?.onYes === 'coach_work' && c._raw._workDays === 3 && c._budgetCost === 3 * dayK);
 check('…in the coach\'s own voice, gender-neutral', voiceOk(c), c?.body);
 const f0 = funds();
 CE.resolve(c.instanceId, 'yes');
 const away = P(weak.id).unavailable;
 check(`yes: ${weak.name} is away for 3 days (by the clock, not games)`, away?.reason === 'training' && away.untilMs - clock.get() <= 3 * DAY && away.untilMs - clock.get() > 3 * DAY - 60_000 && away.gamesLeft == null);
-check(`…the work costs what the reply said (${Math.round(f0 - funds())}K)`, Math.round(f0 - funds()) === 60);
+check(`…the work costs what the reply said (${Math.round(f0 - funds())}K)`, Math.round(f0 - funds()) === 3 * dayK);
 const plan = (S().developmentPlans || []).find(x => x.playerId === weak.id && x.status === 'active');
 check('…and a plan on contact runs, the hitting coach\'s', !!plan && plan.owner === 'hittingCoach' && plan.keys.join() === 'contact' && plan.from.contact === 44);
 
@@ -126,11 +136,19 @@ CE.resolve(c.instanceId, 'yes');
 check(`yes: ${reg.name} sits the next game`, P(reg.id).unavailable?.reason === 'rest' && P(reg.id).unavailable.gamesLeft === 1);
 SM.mutate(s => { Dev.countGame(s, 'user', clock.get() + DAY); });
 check('after the game off: the wear is gone and the hitter is back', (P(reg.id).wear || 0) === 0 && !P(reg.id).unavailable);
-// The manager sits anyone at the limit, on any club.
+// r160 §122.32 our manager never sits anyone on the manager's own say: the lineup is the GM's.
+const mine = S().userTeam.lineupSlots.map(x => P(x.playerId)).find(p => p && !isArm(p) && !p.unavailable && !p.isInjured);
+SM.mutate(s => { s.players[mine.id].wear = WEAR.cpuRest + 4; s.userTeam._lastGameAt = clock.get(); });
+let evU = [];
+SM.mutate(s => { evU = Dev.countGame(s, 'user', clock.get() + DAY); });
+check(`ours at the CPU limit (${mine.name}): still in the lineup — the GM decides`, !P(mine.id).unavailable && !evU.some(e => e.type === 'RESTED')
+      && S().userTeam.lineupSlots.some(x => x.playerId === mine.id));
+SM.mutate(s => { s.players[mine.id].wear = 0; });
+// A CPU manager sits anyone at the limit.
 const cpu = S().leagueTeams[0];
 const cpuReg = cpu.lineupSlots.map(x => P(x.playerId)).find(p => p && !isArm(p) && !p.unavailable && !p.isInjured);
 // (their last game yesterday: no off days to take the wear back down first)
-SM.mutate(s => { s.players[cpuReg.id].wear = WEAR.autoRest; s.leagueTeams[0]._lastGameAt = clock.get(); });
+SM.mutate(s => { s.players[cpuReg.id].wear = WEAR.cpuRest; s.leagueTeams[0]._lastGameAt = clock.get(); });
 let ev = [];
 SM.mutate(s => { ev = Dev.countGame(s, cpu.id, clock.get() + DAY); });
 check(`a CPU club's regular at the limit sits the next game (${cpuReg.name})`, P(cpuReg.id).unavailable?.reason === 'rest' && ev.some(e => e.type === 'RESTED' && e.playerId === cpuReg.id));
@@ -138,10 +156,10 @@ check(`a CPU club's regular at the limit sits the next game (${cpuReg.name})`, P
 // ── The physician ──────────────────────────────────────────────
 console.log("The team physician on one player");
 const doc = hitters.find(p => p.id !== weak.id && p.id !== prog.id && !P(p.id).unavailable && !P(p.id).isInjured);
-SM.mutate(s => { const q = s.players[doc.id]; q.condition = null; q.wear = 14; q.injuryLog = [{ label: 'Hamstring Strain', severity: 'minor', days: 9, atMs: clock.get() - 20 * DAY }]; });
+SM.mutate(s => { const q = s.players[doc.id]; q.condition = null; q.wear = 14; q.straight = 11; q.injuryLog = [{ label: 'Hamstring Strain', severity: 'minor', days: 9, atMs: clock.get() - 20 * DAY }]; });
 c = ask('doc_health', 'physician', { playerId: doc.id });
 console.log(`    “${c?.subject}” (${c?.sender}) — ${c?.body?.replace(/\n+/g, ' ')}`);
-check('the physician: health now, the file, the wear — read-only, in the first person', !!c && /healthy/.test(c.body) && /hamstring strain/.test(c.body) && /worn down/.test(c.body) && !decision(c) && voiceOk(c) && c.sender === 'Team Physician');
+check('the physician: health now, the file, the wear — read-only, in the first person', !!c && /healthy/.test(c.body) && /hamstring strain/.test(c.body) && /is tired: 11 straight starts/.test(c.body) && !decision(c) && voiceOk(c) && c.sender === 'Team Physician');
 check('an injury goes in the player\'s file', Array.isArray(P(doc.id).injuryLog) && P(doc.id).injuryLog.length === 1);
 
 // ── The coach's report when the work is done ───────────────────

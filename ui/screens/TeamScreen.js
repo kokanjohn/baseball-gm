@@ -24,7 +24,7 @@ import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear, isAvailable } from '../../engine/PlayerFactory.js';
 import { contractIsUp } from '../../engine/OffseasonEngine.js';
-import { developmentStatus } from '../../engine/DevelopmentEngine.js';
+import { developmentStatus, wearOf } from '../../engine/DevelopmentEngine.js';
 import { lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
@@ -285,7 +285,7 @@ export function refresh() {
  * Everyone who reports lands on the bench; an open lineup slot, rotation turn
  * or bullpen spot waits for the GM until the roster deadline (RosterEngine).
  */
-const HIT_COLS = [['hab', 'H/AB'], ['r', 'R'], ['hr', 'HR'], ['rbi', 'RBI'], ['bb', 'BB'], ['sb', 'SB'], ['avg', 'AVG'], ['ops', 'OPS']];
+const HIT_COLS = [['wear', 'Wear'], ['hab', 'H/AB'], ['r', 'R'], ['hr', 'HR'], ['rbi', 'RBI'], ['bb', 'BB'], ['sb', 'SB'], ['avg', 'AVG'], ['ops', 'OPS']];
 const PIT_COLS = [['ip', 'IP'], ['w', 'W'], ['l', 'L'], ['sv', 'SV'], ['era', 'ERA'], ['whip', 'WHIP'], ['k', 'K'], ['bb', 'BB']];
 
 function _renderPlayers(state) {
@@ -427,9 +427,21 @@ function _statCells(p, imp) {
   const v = now ?? lastSeasonIMP(p);
   const impHtml = v == null ? '<span class="tr-imp">--</span>'
     : `<span class="tr-imp ${v >= 1 ? 'tr-imp-pos' : v <= -1 ? 'tr-imp-neg' : ''}" title="${now == null ? 'Last season' : 'This season'}">${v > 0 ? '+' : ''}${v.toFixed(1)}</span>`;
-  return cols.map(([k]) => `<div class="tr-td tr-c-${k}">${_statVal(p, s, k)}</div>`).join('')
+  return cols.map(([k]) => `<div class="tr-td tr-c-${k}">${k === 'wear' ? _wearCell(p) : _statVal(p, s, k)}</div>`).join('')
     + `<div class="tr-td tr-c-imp">${impHtml}</div>`
     + `<div class="tr-td tr-c-ovr"><span class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</span></div>`;
+}
+
+/**
+ * r160 §122.32 a hitter's wear: a short meter and the word (Fresh, Fine, Tiring,
+ * Tired, Worn down) — the first column, so it shows without scrolling.
+ */
+function _wearCell(p) {
+  if (p.group === PLAYER_GROUP.IL) return '<span class="tr-muted">--</span>';
+  const w = wearOf(p);
+  return `<span class="tr-wear tr-wear-${w.level}" title="${w.straight ? `${w.straight} straight start${w.straight === 1 ? '' : 's'}` : 'No recent starts'}">`
+    + `<span class="tr-wear-bar"><i style="width:${Math.max(6, Math.round(w.share * 100))}%"></i></span>`
+    + `<span class="tr-wear-word">${w.level === 'worn' ? 'Worn' : w.word}</span></span>`;
 }
 
 const _blankCells = (cols) => cols.map(([k]) => `<div class="tr-td tr-c-${k}"></div>`).join('') + '<div class="tr-td tr-c-imp"></div><div class="tr-td tr-c-ovr"></div>';
@@ -1080,6 +1092,14 @@ function _injectCSS() {
       font-variant-numeric:tabular-nums;background:var(--bg);}
     .tr-head .tr-td{background:var(--surface2);}
     .tr-c-hab{width:50px;} .tr-c-whip{width:42px;} .tr-c-avg,.tr-c-ops,.tr-c-era{width:42px;}
+    .tr-c-wear{width:52px;}
+    .tr-wear{display:flex;flex-direction:column;align-items:center;gap:3px;width:100%;padding:0 6px;}
+    .tr-wear-bar{display:block;width:100%;height:4px;border-radius:2px;background:var(--surface2);overflow:hidden;}
+    .tr-wear-bar i{display:block;height:100%;border-radius:2px;background:#34C97A;}
+    .tr-wear-word{font-size:9px;font-weight:700;letter-spacing:.2px;color:var(--soft);}
+    .tr-wear-tiring .tr-wear-bar i{background:#e0a800;} .tr-wear-tiring .tr-wear-word{color:#d49b00;}
+    .tr-wear-tired .tr-wear-bar i{background:#f97316;} .tr-wear-tired .tr-wear-word{color:#f97316;}
+    .tr-wear-worn .tr-wear-bar i{background:var(--danger);} .tr-wear-worn .tr-wear-word{color:var(--danger);}
     .tr-c-imp{width:46px;} .tr-c-ovr{width:40px;padding-right:6px;}
     .tr-c-imp,.tr-head .tr-c-imp{border-left:1px solid var(--border);}
     .tr-c-ovr .rating-num{font-size:13px;font-weight:800;}

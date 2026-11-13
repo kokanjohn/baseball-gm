@@ -1224,15 +1224,16 @@ W.mgr_rest = (f, r, who, arg) => {
   const name = p.name, topic = `a day off for ${name}`;
   if (read.away || p.isInjured) return { body: [`${name} is already out, so ${name} is resting either way.`], memo: { playerId: p.id }, topic };
   if (!read.inLineup) return { body: [`${name} isn't in the lineup right now, so ${name} is getting the rest already.`], memo: { playerId: p.id }, topic };
-  const w = Math.round(read.wear);
+  const n = read.straight, starts = n ? `${plural(n, 'straight start')}` : 'no recent starts';
   const out = [read.tired
-    ? `${name} needs it. That's ${plural(w, 'game')} of wear without a real break, and the bat has slowed down. A day off clears it.`
-    : `${name} is holding up. That's ${plural(w, 'game')} of wear since a real break, which is fine. A day off now won't hurt, though.`];
-  if (!read.tired && read.toRest > 0) out.push(`If nobody says anything, I'd sit ${name} myself in about ${plural(read.toRest, 'game')}.`);
+    ? `${name} needs it: ${starts}, and the bat has slowed down. A day off clears it.`
+    : read.level === 'tiring'
+      ? `${name} is starting to wear down: ${starts}. A day off soon keeps it from getting to the bat.`
+      : `${name} is holding up fine: ${starts}. A day off now won't hurt, though.`];
   if (read.next) out.push(`If you want it, ${name} sits ${f.onWhen(read.next.gameTime)} and the bench covers.`);
   return {
     body: out, memo: { playerId: p.id }, topic,
-    decision: { playerId: p.id, onYes: 'day_off', yesLabel: 'Give Them the Day Off', noLabel: 'Keep Them In', expiresInMs: 86_400_000,
+    decision: { playerId: p.id, onYes: 'day_off', yesLabel: `Give ${name} the Day Off`, noLabel: `Keep ${name} In`, expiresInMs: 86_400_000,
                 yesMsg: `${name} sits the next game and comes back fresh.`, noMsg: `${name} stays in the lineup.` },
   };
 };
@@ -1253,8 +1254,12 @@ W.doc_health = (f, r, who, arg) => {
     const last = read.log[read.log.length - 1];
     out.push(`On file: ${plural(read.log.length, 'injury', 'injuries')} with us, the last a ${last.severity} ${String(last.label).toLowerCase()} ${f.onWhen(last.atMs)}.${read.recent.length >= 2 ? ' That many in a short span tells me to keep the workload in check.' : ''}`);
   } else out.push(`There's nothing in ${name}'s file with us.`);
-  if (read.wear) out.push(read.wear.tired ? `${name} is worn down: ${plural(Math.round(read.wear.wear), 'game')} without a real break. That's when hitters get hurt. A day off would help.`
-                                         : `The workload is fine: ${plural(Math.round(read.wear.wear), 'game')} since a real break.`);
+  if (read.wear) {
+    const n = read.wear.straight, starts = n ? plural(n, 'straight start') : 'no recent starts';
+    out.push(read.wear.tired ? `${name} is ${read.wear.worn ? 'worn down' : 'tired'}: ${starts}. That's when hitters get hurt. A day off would help.`
+             : read.wear.level === 'tiring' ? `The workload is starting to show: ${starts}. A day off soon would be smart.`
+             : `The workload is fine: ${starts}.`);
+  }
   if (read.age >= 35) out.push(`At ${read.age}, the body takes longer to bounce back, and injuries come a little more often.`);
   else if (read.age >= 32) out.push(`At ${read.age}, the risk starts to creep up, but nothing unusual yet.`);
   if (read.away?.reason === 'training') out.push(`${name} is away for development work right now.`);

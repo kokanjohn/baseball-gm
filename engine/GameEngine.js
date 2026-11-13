@@ -931,11 +931,11 @@ function _commitAt(gameIndex) {
     if (wasPlayed) _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent));
     // §71: players away (rest, illness, training, benched) and playing-hurt
     // conditions count down one game; whoever is back gets his spot back.
-    const restEv = [];   // r159 §122.31 the managers' rest days (wear)
-    if (wasPlayed) restEv.push(...Development.countGame(s, 'user', g.gameTime));
+    // (r160 §122.32 wear too: ours never sits anyone on the manager's say — the staff's rest
+    //  messages come from CardEngine's rest watch on the roster clock.)
+    if (wasPlayed) Development.countGame(s, 'user', g.gameTime);
     const oppTeam = s.leagueTeams.find(t => t.name === g.opponent);
     if (oppTeam && wasPlayed) Development.countGame(s, oppTeam.id, g.gameTime);
-    _pendingRest.push(...restEv.filter(e => e.type === 'RESTED'));
 
     // (Trades, arrivals and IL clearances are no longer tied to a commit —
     //  they run on the real-time roster clock: advanceClock(), §65.)
@@ -971,9 +971,6 @@ function _commitAt(gameIndex) {
       delete gCommitted.liveLineups;
     }
   });
-
-  // r159 §122.31 the manager sat someone at the wear limit: the news, like any roster event.
-  if (_pendingRest.length) CardEngine.syncRosterCards(_pendingRest.splice(0), endMs);
 
   // ── CPU processing (outside main mutate for clarity) ────
   const dateStr = game.date;
@@ -1674,8 +1671,6 @@ function _playsEndMs(game) {
 // what the schedule does when the weather stops a game
 // ─────────────────────────────────────────────────────────────
 
-/** r159 the managers' rest days from the commit's countdown, handed to CardEngine after it (§122.31). */
-const _pendingRest = [];
 const _WX_PLAN_AHEAD_MS = GAME_WEATHER.PLAN_AHEAD_MIN * 60_000;
 /** r139 an id for something the world records (inside an event: from its stream). */
 function _worldId() { return inEvent() ? diceId(eventRand) : crypto.randomUUID(); }

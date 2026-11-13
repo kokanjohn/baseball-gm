@@ -1742,31 +1742,50 @@ export const DIAMOND = Object.freeze({
 
 /**
  * Wear (hitters, every club alike): each start adds 1 (a catcher 1.5). A game
- * off takes off `gameOff`; each off day beyond the first takes off `offDay`.
- * At `tired` a hitter's contact and power dip (`dip`, plus 1 for every
- * `dipStep` past it, up to `dipMax`) and he's likelier to get hurt (the
- * pitchers' fatigue modifier). At `autoRest` the manager sits him a game,
- * on any club. A day off (the GM's, or the manager's) clears it.
+ * off clears it (a day off, whoever made the call); each off day beyond the
+ * first takes off `offDay`. At `tired` a hitter's contact and power dip (`dip`,
+ * plus 1 for every `dipStep` past it, up to `dipMax`) and the player is likelier
+ * to get hurt (the pitchers' fatigue modifier).
+ *   levels   — wear in words, on the Team screen and the player card (from):
+ *              fresh, fine, tiring, tired, worn.
+ *   cpuRest  — a CPU manager sits the most worn-down regular a game (one a game).
+ *   Our lineup is the GM's: our manager never sits anyone on his own — the
+ *   staff writes instead (REST_WATCH), and only when that message went
+ *   unanswered and the player is `worn` does the manager sit the player.
+ * r160 §122.32
  */
-export const WEAR = Object.freeze({ catcher: 1.5, gameOff: 8, offDay: 3, tired: 12, dip: 2, dipStep: 4, dipMax: 5, autoRest: 20 });
+export const WEAR = Object.freeze({
+  catcher: 1.5, offDay: 2, tired: 12, dip: 2, dipStep: 4, dipMax: 5, cpuRest: 20, worn: 18,
+  levels: Object.freeze([['fresh', 0, 'Fresh'], ['fine', 5, 'Fine'], ['tiring', 9, 'Tiring'], ['tired', 12, 'Tired'], ['worn', 18, 'Worn down']]),
+  meterMax: 24,
+});
 
 /**
- * The GM asks for work with one player on one skill (§122.31).
- *   coach   — the hitting or pitching coach: one player at a time each. The
- *             coach decides: 'tweaks' (extra reps in practice already on the
- *             schedule: no time away, no cost) or 'focused' (days away from
- *             the club, at `costPerDayK` a day for the extra cage and staff time).
- *   program — Scouting/Dev's off-site program: one player at a time, club-wide;
- *             `days` away, `baseK` + `perDayK` a day, the biggest possible gain.
- * Gains are OVR points (DevelopmentEngine.startPlan), then scaled by age, trait,
- * coach and the room left in the skill (`room`). Any plan can fizzle.
+ * r160 §122.32 the staff's rest messages (our club): when a regular wears down,
+ * one of the staff writes — the manager or the pitching coach about a catcher,
+ * the hitting coach about a tired bat, the team physician about one worn down.
+ * Never a pile-up: one open at a time, `gapMs` between any two, the same player
+ * not again for `samePlayerMs` (unless now worn down), never the day the staff
+ * already asked about a lineup spot.
+ *   catcherAt — a catcher's wear when the staff first speaks up (six straight).
+ *   hitterAt  — anyone else's (tiring: the manager; once tired, the hitting coach).
  */
+export const REST_WATCH = Object.freeze({
+  catcherAt: 9, hitterAt: 10, gapMs: 3 * 86_400_000, samePlayerMs: 7 * 86_400_000,
+  leadMs: 90 * 60_000,   // the message lands at least this long before first pitch
+});
+
 export const PLAYER_WORK = Object.freeze({
   coach: {
     tweaksGain: 0.8, focusedGain: 2.0, focusedDays: 2, focusedDaysLow: 3, lowSkill: 45,
-    focusedBelow: 55, focusedGap: 12, focusedCap: 70, costPerDayK: 20,
+    focusedBelow: 55, focusedGap: 12, focusedCap: 70,
+    // r160 a focused day's cost by the player's OVR: $5K at `fromOvr` or below, $10K
+    // around OVR 72, up to $20K only for the very best (OVR `topOvr`).
+    dayK: { min: 5, mid: 10, max: 20, fromOvr: 50, midOvr: 72, topOvr: 88 },
   },
-  program: { gain: 3.6, days: 5, daysLow: 7, baseK: 90, perDayK: 25 },
+  // r160 the program's whole cost by OVR: $25K at `fromOvr`, about $50K around 70,
+  // $75K around 80, never more than `maxK`; a longer stay (older players) a little more.
+  program: { gain: 3.6, days: 5, daysLow: 7, minK: 25, midK: 50, highK: 75, maxK: 95, fromOvr: 50, midOvr: 70, highOvr: 80 },
   room: [[85, 0.25], [75, 0.55], [65, 0.8]],   // skill at or above → share of the gain left
   offerDays: 3,                                // a reply's offer stands this long (time to pick the day)
 });

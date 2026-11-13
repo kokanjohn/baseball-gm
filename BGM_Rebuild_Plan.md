@@ -10523,3 +10523,75 @@ Fresh team: not needed. New messages use the new wording; messages already in an
   - Team shows "training, N days".
 
 Fresh team: not needed. Wear starts at 0 and the injury file starts empty on an existing team.
+
+### §122.32 r160 Wear you can see, staff who ask about rest, the lineup stays yours; cheaper work
+
+**Asked for:**
+- Focused work at $20K a day and a $215K–$265K program were too steep. A focused day should be $5K–$10K normally, with $20K the rare top. A program should be under $100K, mostly $25K–$75K. Costs can rise with OVR.
+- Messages about catchers needing a day, to nudge the GM into managing the lineup and the new wear, and a way to see wear.
+- The GM controls the lineup at all times. The manager steps in only when the GM fails to decide. The staff should write when someone needs rest, but never several coaches about the same player, or several messages the same day.
+
+**Decisions:**
+- **Costs by OVR** (`PlayerWork.focusedDayK`, `programCostK`; `PLAYER_WORK.coach.dayK`, `PLAYER_WORK.program`):
+  - **A focused day:** $5K at OVR 50 or below, $10K around 72, $15K at 80, $20K only at about 88 and up. A 2–3 day stay is $10K–$60K.
+  - **A program:** $25K at OVR 50, $50K around 70, $75K at 80, a $95K cap. A 7-day stay (older players) costs about 4% a day more.
+  - OVR, not archetype: one rule the GM can see on the player.
+- **The lineup is the GM's:**
+  - `countGame` no longer sits anyone on our club; CPU managers still sit their most worn regular at `WEAR.cpuRest` (20), one a game.
+  - Ours is sat only by the GM: a "Sit X" answer, a Compose day off, or a move on Team.
+  - **The one exception:** a staff message about a player who is *worn down* (`WEAR.worn`, 18) that is still unanswered at first pitch. Then the manager sits the player (`rest_auto`), with a news line ("…worn down, and no answer on the rest"). The message says so up front.
+  - An unanswered message about someone merely tiring or tired changes nothing.
+  - `GameEngine._pendingRest` and the user RESTED news are gone.
+- **Wear model changes** (`WEAR`):
+  - **A game off clears wear,** however it came: the GM benching the player, a day off, or the bench. A day off is a day off. `gameOff` is gone.
+  - **Off days take off 2, not 3.** At 3, regulars leveled off around 6 and wear never mattered. Now a regular tires after about three weeks of straight starts, and a catcher about twice as fast.
+  - **New `p.straight`:** starts in a row, for "caught 7 straight".
+  - **`wearOf` adds** `level` / `word` (Fresh <5, Fine 5, Tiring 9, Tired 12, Worn down 18), `share` (of 24, for a meter), `worn` and `straight`.
+- **The rest watch** (`CardEngine._restWatch`, run with the roster cards on the roster clock; `REST_WATCH`):
+  - **Who it's about:** a regular in our lineup, with a catcher at wear 9 (about six straight) and anyone else at 10. The most worn goes first, catchers ahead.
+  - **When it doesn't send:**
+    - in spring;
+    - while our game is on;
+    - within 90 minutes of first pitch;
+    - with no bench player to fill in.
+  - **Who writes:**
+    - about someone worn down, the Team Physician;
+    - about a catcher, the manager or the pitching coach (framing and blocking);
+    - about a tired bat, the hitting coach;
+    - otherwise the manager.
+  - Each sender has two wordings. Each message names the backup ("Mateo can catch"; "We don't carry another catcher, so X would catch, out of position").
+  - **The decision:** `Sit X Today/Tomorrow/Next Game` (`day_off`: the backup takes the slot now and the player is back after the game) or `Keep X In`. It expires 10 minutes before first pitch.
+  - **Never a pile-up:**
+    - one open at a time;
+    - 3 days between any two;
+    - the same player not again for 7 days, unless now worn down;
+    - none within 12 hours of a lineup-spot message from the staff.
+  - **Withdrawn** when the player is no longer in the lineup (the GM moved them), hurt, away or gone, or when the game moved or passed.
+  - Cards key on the game's `index` and `gameTime`. Our schedule games have no `id`.
+  - **The moment is the situation's,** not when the roster clock looked. The message lands 20–50 minutes (drawn from the player, the last game and the game it's about) after the latest of:
+    - the last game (its first pitch plus four hours);
+    - the spacing allowing it;
+    - the GM's answer to the last rest message;
+    - half a day after the staff's last lineup-spot message.
+
+    So it arrives at the same moment with the app open or closed, and the message lookahead foresees it exactly. One already past when the clock reaches it arrived then.
+  - Over five weeks with nobody answering, about three messages arrived, mostly about the catcher.
+- **On screen:**
+  - **Team → Hitters:** a **Wear** column first after the name (visible without scrolling): a short meter and the word. Green when fresh or fine, amber when tiring, orange when tired, red when worn (shown as "Worn").
+  - **The player card** (our hitters): a **Wear** section with the meter, the word, and a line ("Caught 7 straight. Starting to wear down. A day off soon keeps it from reaching the bat.").
+- **Compose:** the manager's day-off reply no longer says "I'd sit X myself in N games". The manager and physician talk in straight starts and the level, not "games of wear". The buttons name the player.
+
+**Checks:**
+- **check-player-work** (31): cost-by-OVR checks; our regular at the CPU limit stays in the lineup; the physician's wear line.
+- **check-rest-watch** (new, 22):
+  - **Five weeks with no answers:** the count, a catcher message from the manager or pitching coach, gaps, the same-player rule, each a decision naming the backup, timing, voice and gender-neutral wording, no unannounced rest, and a game off clears wear.
+  - **Then, step by step on a fresh club** (deterministic):
+    - yes on a catcher: the backup catcher takes C, and after the game the catcher is back with the wear gone;
+    - the GM swaps the player out on Team: the message is withdrawn;
+    - worn down and unanswered: the physician writes, then the manager sits the player, with news;
+    - tired and unanswered: the player plays;
+    - one open at a time, and the spacing holds after an answer.
+- **test-team-roster-ui:** the Hitters header now starts with Wear.
+- **test-wear-ui** (new, dark and light): the Wear column (first, visible, the right words, the meter), the player card's Wear section, and the rest message in the inbox (Sit / Keep, both players tappable).
+
+Fresh team: not needed. Existing players have no `straight` yet (it reads 0) and wear carries over.
