@@ -84,6 +84,7 @@ import { markAvailable, exposeRatings } from './Diamonds.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
 import * as AllStar from './AllStarEngine.js';
 import { recordOutings, starterRested, bullpenRoles } from './PitchingEngine.js';
+import { leaveIssues } from './RosterAdvice.js';
 import { cityOf } from './WeatherMap.js';
 import * as Finance from './FinanceEngine.js';
 import { formatK } from './CardTokens.js';
@@ -112,6 +113,7 @@ import {
   PLAYOFF_DIVISION_SERIES_BEST_OF,
   PLAYOFF_WORLD_SERIES_BEST_OF,
   REGULAR_SEASON_GAME_COUNT,
+  ROSTER_ADVICE,
   SPRING_TRAINING_GAME_COUNT,
   FA_CPU_LOOK_HOUR,
   ALL_STAR_BREAK_AFTER_GAME,
@@ -444,6 +446,15 @@ export async function startNewGame(config) {
 
     // Initial standings
     s.standings = computeFullStandings(s);
+  });
+
+  // r162 §122.34 the roster the GM takes over isn't quite sorted: a few things the staff would change
+  // (a better bat on the bench, a better arm on the pitcher bench) — for the GM to find, or to hear about.
+  StateManager.mutate(s => {
+    const [lo, hi] = ROSTER_ADVICE.startIssues;
+    s.userTeam._takeoverAt = clockNow();
+    s.userTeam._startIssues = leaveIssues(s, Math.random, lo + Math.floor(Math.random() * (hi - lo + 1)));
+    applyRosterMutation(s, reconcileRoster(s, 'user'));
   });
 
   // ── Seed the new-franchise inbox (§60) ────────────────────────────────────

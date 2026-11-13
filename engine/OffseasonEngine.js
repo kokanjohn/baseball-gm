@@ -68,6 +68,7 @@ import {
   MANAGER_EXTENSION_YEARS,
   MANAGER_AUTO_CONFIDENCE,
   FA_UPGRADE_MIN,
+  DEV_REPS,
 } from '../data/constants.js';
 
 import { computeAge, computeOVR, createPlayer, baseballYear, _freshStats } from './PlayerFactory.js';
@@ -406,12 +407,13 @@ export function beginOffseason(draft, atMs) {
     Finance.cpuNextTarget(draft, t.id);
   }
   _lockSeason(draft, atMs);
+  const reps = _playingTime(draft);   // r162 §122.34 (before the season's lines are archived)
   _archiveStats(draft);
   const nextYear = baseballYear(draft) + 1;
   for (const p of Object.values(draft.players || {})) {
     if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
     _develop(p, nextYear, draft.seasonNum || 1, p.teamId === 'user' ? draft.userTeam?.coachingStaff : null,
-             p.teamId === 'user' ? trainingWinterBonus(draft.userTeam) : 0);
+             p.teamId === 'user' ? trainingWinterBonus(draft.userTeam) : 0, reps[p.id]);
   }
   draft.ilReturnQueue = [];
   draft.impScores = {};
@@ -489,7 +491,29 @@ function _archiveStats(draft) {
  * speed/stamina:   +0.5   +0.0  -1.5   -2.5    -4.0
  */
 const CURVES = AGE_CURVES;
-function _develop(p, nextYear, seasonNum, staff = null, facility = 0) {
+/**
+ * r162 §122.34 how much each player played this season, as a share of the club's games (a hitter's
+ * games played — for a starter, nearly all starts) — for a young player's winter.
+ */
+function _playingTime(draft) {
+  const clubGames = {};
+  for (const t of [draft.userTeam, ...(draft.leagueTeams || [])]) {
+    if (!t) continue;
+    clubGames[t === draft.userTeam ? 'user' : t.id] = (t.wins || 0) + (t.losses || 0) + (t.ties || 0);
+  }
+  const out = {};
+  for (const p of Object.values(draft.players || {})) {
+    const n = clubGames[p?.teamId];
+    if (!n) continue;
+    out[p.id] = (p.stats?.g || 0) / n;   // (a starter's games are nearly all starts)
+  }
+  return out;
+}
+
+/** r162 one player's winter (exported for the checks). */
+export function developForWinter(p, nextYear, seasonNum, staff = null, facility = 0, played = null) { return _develop(p, nextYear, seasonNum, staff, facility, played); }
+
+function _develop(p, nextYear, seasonNum, staff = null, facility = 0, played = null) {
   const sr = p.subRatings;
   if (sr) {
     const age = computeAge(p.dob, nextYear);
@@ -507,6 +531,12 @@ function _develop(p, nextYear, seasonNum, staff = null, facility = 0) {
       else if (p.trait === 'veteran' && age >= 30 && i === 0 && change < 0) change *= 0.5;
       if (staff) change += Coach.winterBonus(staff, p, key, age);   // §112.2 our coaches' winter work
       change += facility;                                          // §112.4 the training center
+      // r162 §122.34 a young player grows in games: a regular more, one who sat less.
+      if (idx === 0 && played != null) {
+        const role = p.pos === 'SP' ? 'SP' : p.pos === 'RP' ? 'RP' : 'hitter';
+        if (played >= DEV_REPS.regular[role]) change += DEV_REPS.regularBonus;
+        else if (played < DEV_REPS.sat[role]) change -= DEV_REPS.satPenalty;
+      }
       if (p.trait === 'consistent') variance = _rng(-1, 1);
       if (p.trait === 'volatile')   variance = _rng(-4, 4);
       const delta = Math.max(-5, Math.min(4, Math.round(change + variance)));

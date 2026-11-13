@@ -1809,3 +1809,33 @@ export const PLAYER_WORK = Object.freeze({
   room: [[85, 0.25], [75, 0.55], [65, 0.8]],   // skill at or above → share of the gain left
   offerDays: 3,                                // a reply's offer stands this long (time to pick the day)
 });
+
+/**
+ * r162 §122.34 the staff's roster suggestions (our club). A better bat on the
+ * bench than the starter at a position (the hitting coach); a better arm on the
+ * pitcher bench than one in the rotation or the pen (the pitching coach); a young
+ * bench player who'd grow with regular playing time (Scouting/Dev). Each is a
+ * decision: make the change, or "I have a plan" — quiet for that pairing until
+ * something changes (the gap widens by `quietGrow`, someone involved is hurt or
+ * moved, or `quietMs` passes). Unanswered (it expires after `expireMs`), the same
+ * pairing may come back after `samePairMs`. One open at a time, `gapMs` apart,
+ * never within half a day of a rest message.
+ *   startIssues — a new club starts with this many to find (min, max).
+ */
+export const ROSTER_ADVICE = Object.freeze({
+  hitterGap: 4, armGap: 4, prospectAge: 24, prospectGap: 6,
+  gapMs: 2 * 86_400_000, samePairMs: 7 * 86_400_000, quietMs: 30 * 86_400_000, quietGrow: 4,
+  expireMs: 2 * 86_400_000, startIssues: [2, 4],
+});
+
+/**
+ * r162 §122.34 playing time and a young player's winter (age 24 and under, the
+ * growth window): a regular (share of the club's games — a hitter's games, a
+ * starter's starts, a reliever's appearances) grows `regularBonus` more on each
+ * rating; one who barely played grows `satPenalty` less.
+ */
+export const DEV_REPS = Object.freeze({
+  regular: Object.freeze({ hitter: 0.5, SP: 0.15, RP: 0.3 }),
+  sat:     Object.freeze({ hitter: 0.15, SP: 0.05, RP: 0.1 }),
+  regularBonus: 0.75, satPenalty: 0.5,
+});

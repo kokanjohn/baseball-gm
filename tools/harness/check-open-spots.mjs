@@ -56,11 +56,14 @@ check('eight hours before first pitch: the GM\'s time, not the manager\'s', !man
 
 // ── 1. MOVE: the choices ──
 console.log('\nMOVE');
-const ssIdx = slots().findIndex(sl => sl.slot === 'SS');
+// (r162 a new club's roster isn't fully sorted: the infield spot with a bench backup — SS when it has one)
+const _backed = (sl) => moveOptions(SM.get(), sl.playerId).some(o => o.key.startsWith('in:'));
+const ssIdx = (() => { const i = slots().findIndex(sl => sl.slot === 'SS' && _backed(sl)); return i >= 0 ? i : slots().findIndex(sl => ['2B', '3B', '1B', 'SS'].includes(sl.slot) && _backed(sl)); })();
 const ss = slots()[ssIdx].playerId;
+const SS = slots()[ssIdx].slot;   // (the spot's label)
 const ssOpts = moveOptions(SM.get(), ss);
 check('a starter can go to the bench (open, or a bench bat who can play there takes it)',
-      ssOpts.some(o => o.key === 'bench') && ssOpts.filter(o => o.key.startsWith('in:')).every(o => eligibleSlotsFor(P(o.key.slice(3))).includes('SS')),
+      ssOpts.some(o => o.key === 'bench') && ssOpts.filter(o => o.key.startsWith('in:')).every(o => eligibleSlotsFor(P(o.key.slice(3))).includes(SS)),
       JSON.stringify(ssOpts));
 check('…and to any other slot they can play, never one they can\'t',
       ssOpts.filter(o => o.key.startsWith('slot:')).every(o => eligibleSlotsFor(P(ss)).includes(slots()[+o.key.slice(5)].slot)));
@@ -77,7 +80,7 @@ check('…still open minutes later (the manager waits)', !slots()[ssIdx].playerI
 check('…and it isn\'t an open roster spot (nobody needs signing)', !getInbox().some(c => c.cardId === 'roster_need' && !c.resolved));
 step(30 * 60_000);
 let card = open('open_spots')[0];
-check('the manager says what\'s open and what happens at the deadline', !!card && card.body.includes('SS') && card.expiresAtMs === managerFillAt(SM.get()),
+check('the manager says what\'s open and what happens at the deadline', !!card && card.body.includes(SS) && card.expiresAtMs === managerFillAt(SM.get()),
       JSON.stringify(getInbox().filter(c => !c.resolved).map(c => c.cardId)));
 if (card) {
   console.log(`    ${card.sender}: “${card.subject}” — ${card.body}`);
@@ -85,7 +88,7 @@ if (card) {
   check('gender-neutral, no calendar dates', !GEN.test(card.body + card.subject) && !MONTH.test(card.body + card.preview));
 }
 const pick = moveOptions(SM.get(), ss).length ? U().rosterIds.find(id => !['SP', 'RP'].includes(P(id).pos) && id !== ss
-  && !slots().some(sl => sl.playerId === id) && eligibleSlotsFor(P(id)).includes('SS')) : null;
+  && !slots().some(sl => sl.playerId === id) && eligibleSlotsFor(P(id)).includes(SS)) : null;
 check('the GM fills it from Team: a bench bat to SS', !!pick && move(pick, o => o.key === `slot:${ssIdx}`) && slots()[ssIdx].playerId === pick);
 check('…and the manager\'s message is withdrawn', !open('open_spots').length);
 check('the shortstop goes back (the fill-in to the bench)', move(ss, o => o.key === `slot:${ssIdx}`) && slots()[ssIdx].playerId === ss && P(pick).group === PLAYER_GROUP.BENCH_HITTERS);

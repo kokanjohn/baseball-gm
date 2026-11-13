@@ -32,6 +32,7 @@ import {
 import {
   PHASE,
   REST_WATCH,
+  ROSTER_ADVICE,
   PLAYER_GROUP,
   PITCHER_HAND_DISPLAY,
   ARCHETYPE_CARD_WEIGHTS,
@@ -82,6 +83,7 @@ import * as Coach from './CoachEngine.js';
 import { isDiamond, worthOf } from './Diamonds.js';
 import * as FrontOffice from './FrontOffice.js';
 import * as Development from './DevelopmentEngine.js';
+import { adviceFor, adviceStamp, applyAdvice } from './RosterAdvice.js';
 import { CARD_ACTIONS, cardFeasible, reserveChoices } from './CardActions.js';
 import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
@@ -1055,6 +1057,93 @@ function _lineupNudges(atMs) {
 }
 
 /**
+ * r162 §122.34 the staff's roster suggestions: a better bat on the bench (the hitting coach), a better
+ * arm on the pitcher bench (the pitching coach), a young player who'd grow with regular playing time
+ * (the scouting director). A decision: make the change, or "I have a plan" — then quiet for that
+ * pairing until something changes (ROSTER_ADVICE). Never a pile-up: one open at a time, two days
+ * apart, never within half a day of a rest message (nor while one waits).
+ */
+function _adviceWatch(atMs) {
+  const st = StateManager.get(), u = st.userTeam;
+  if (!u?.lineupSlots?.length || ![PHASE.SPRING_TRAINING, PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK, PHASE.POSTSEASON].includes(st.phase)) return 0;
+  const cur = st.schedule?.[st.currentGameIndex];
+  if (cur && !cur._committed && Number.isFinite(cur.gameTime) && cur.gameTime <= atMs && !cur.cancelled) return 0;   // (between games)
+  const W = st.adviceWatch || {};
+  if (atMs - (W.lastAt ?? -Infinity) < ROSTER_ADVICE.gapMs) return 0;
+  const all = [...(st.inbox || []), ...(st.scheduledCards || [])];
+  if (all.some(c => (c.cardId === 'roster_advice' || c.cardId === 'rest_ask') && !c.resolved)) return 0;
+  if (all.some(c => c.cardId === 'rest_ask' && Math.abs((c.deliverAtMs ?? c.arrivedAtMs ?? 0) - atMs) < 12 * 3600_000)) return 0;
+  const quiet = st.adviceQuiet || {};
+  const cands = adviceFor(st).filter(a => {
+    const q = quiet[a.key];
+    if (q && q.stamp === adviceStamp(st, a) && atMs - q.atMs < ROSTER_ADVICE.quietMs && a.gap < q.gap + ROSTER_ADVICE.quietGrow) return false;   // "I have a plan"
+    const asked = W.asked?.[a.key];
+    return !(asked && atMs - asked < ROSTER_ADVICE.samePairMs);
+  });
+  if (!cands.length) return 0;
+  const a = cands[0];
+  // (the moment is the situation's: after the last game or the takeover, and the spacing — not when
+  //  the roster clock happened to look)
+  return withDice(dice(diceSeed(st), 'advice', a.key, u._lastGameAt ?? u._takeoverAt ?? 0), () => {
+    const answered = all.filter(x => x.cardId === 'roster_advice' || x.cardId === 'rest_ask').map(x => x.resolvedAtMs || 0);
+    const from = Math.max((u._lastGameAt ?? -Infinity) + 4 * 3600_000, (u._takeoverAt ?? -Infinity) + 3 * 3600_000,
+                          (W.lastAt ?? -Infinity) + ROSTER_ADVICE.gapMs, ...answered);
+    const at = Number.isFinite(from) ? from + _randBetween(20, 50) * 60_000 : atMs;
+    const card = _adviceCard(st, a, at);
+    StateManager.mutate(s => { s.adviceWatch = { lastAt: at, asked: { ...(s.adviceWatch?.asked || {}), [a.key]: at } }; });
+    return _deliverAt(card, at) ? 1 : 0;
+  });
+}
+
+/** The suggestion in the sender's own words (two ways each). */
+function _adviceCard(st, a, at) {
+  const staff = st.userTeam.coachingStaff || {};
+  const person = (role) => (staff[role] && !staff[role].vacant ? staff[role].name : null);
+  const IN = st.players[a.inId], OUT = st.players[a.outId];
+  const X = IN.name, Y = OUT.name;
+  const v = eventRand() < 0.5 ? 0 : 1;
+  const age = computeAge(IN.dob, baseballYear(st));
+  const spot = a.slot === 'rotation' ? 'the rotation' : a.slot === 'bullpen' ? 'the bullpen' : a.slot === 'DH' ? 'DH' : a.slot === 'OF' ? 'the outfield' : a.slot;
+  let sender, avatar, subject, preview, body, yesLabel;
+  if (a.kind === 'bat') {
+    sender = person('hittingCoach') || person('manager') || 'Front Office'; avatar = '🏏';
+    subject = v ? `${X} should be playing` : `${X} over ${Y} at ${a.slot}?`;
+    preview = `The better bat is on the bench (${IN.ovr} to ${OUT.ovr}).`;
+    body = v ? `${X} is the better hitter right now, ${IN.ovr} to ${OUT.ovr}, yet sits on the bench while ${Y} plays ${spot}. I'd start ${X} there.`
+             : `I've watched ${X} and ${Y} in the cage. ${X} is ahead (${IN.ovr} to ${OUT.ovr}) and it isn't close. If it were up to me, ${X} plays ${spot} and ${Y} comes off the bench.`;
+    yesLabel = `Start ${X} at ${a.slot}`;
+  } else if (a.kind === 'rotation' || a.kind === 'pen') {
+    sender = person('pitchingCoach') || person('manager') || 'Front Office'; avatar = '⚾';
+    const where = a.kind === 'rotation' ? 'the rotation' : 'the bullpen';
+    subject = v ? `${X} belongs in ${where}` : `${X} for ${Y}?`;
+    preview = `A better arm is on the pitcher bench (${IN.ovr} to ${OUT.ovr}).`;
+    body = v ? `${X} has better stuff than ${Y} right now (${IN.ovr} to ${OUT.ovr}), yet isn't pitching. I'd put ${X} in ${where} and send ${Y} to the pitcher bench.`
+             : `Watching the bullpen sessions, ${X} is the better arm (${IN.ovr} to ${OUT.ovr}). I'd swap ${X} in for ${Y} in ${where}.`;
+    yesLabel = a.kind === 'rotation' ? `Put ${X} in the Rotation` : `Put ${X} in the Bullpen`;
+  } else {
+    const sd = person('scoutingDirector');
+    sender = sd || 'Scouting Director'; avatar = '📈';
+    const reps = a.slot === 'rotation' ? 'regular starts' : 'regular at-bats';
+    subject = v ? `${X} needs to play` : `Playing time for ${X}`;
+    preview = `${age} years old, and ${OUT.ovr - IN.ovr <= 1 ? 'right with' : 'not far behind'} ${Y}.`;
+    body = (v ? `${X} is ${age} and still growing, and the growing happens in games. ${Y} is only a little better today (${OUT.ovr} to ${IN.ovr}). With ${reps} now, ${X} should come out of the winter a better player than sitting would make ${X}.`
+              : `A thought from the development side: ${X} (${age}) would get more out of this year with ${reps}${a.slot === 'rotation' ? '' : ` at ${spot}`}. ${Y} has the edge today, ${OUT.ovr} to ${IN.ovr}, but young players who sit grow slower.`);
+    yesLabel = a.slot === 'rotation' ? `Put ${X} in the Rotation` : `Start ${X} at ${a.slot}`;
+  }
+  return _rosterCard(st, {
+    cardId: 'roster_advice', tag: 'LINEUP', sender, avatar, type: 'normal',
+    _rosterKey: `advice:${a.key}`, _targetPlayerId: a.inId, _playerIds: [a.outId], _advice: a,
+    subject, preview, body,
+    yesLabel, noLabel: 'I Have a Plan',
+    yesMsg: `Done. ${X} is in, and ${Y} ${a.slot === 'rotation' || a.slot === 'bullpen' ? 'goes to the pitcher bench' : 'comes off the bench'}.`,
+    noMsg: `Understood. You have your reasons; I'll leave it unless something changes.`,
+    expiresAtMs: at + ROSTER_ADVICE.expireMs,
+    _raw: { onYes: 'advice_move', onNo: 'advice_quiet', onAuto: null },
+    _autoLabel: 'No answer',
+  });
+}
+
+/**
  * r161 who starts for us at `atMs` by the rotation — the one in turn, or the next who has had his four
  * days (the sim's rule) — skipping `skipId` (who'd take the turn if that one sat).
  */
@@ -1091,6 +1180,7 @@ function _restWatch(atMs) {
   const all = [...(st.inbox || []), ...(st.scheduledCards || [])];
   if (all.some(c => String(c._rosterKey || '').startsWith('rest:') && !c.resolved)) return 0;
   if (all.some(c => c.cardId === 'lineup_return' && (!c.resolved || Math.abs((c.deliverAtMs ?? c.arrivedAtMs ?? 0) - atMs) < 12 * 3600_000))) return 0;
+  if (all.some(c => c.cardId === 'roster_advice' && Math.abs((c.deliverAtMs ?? c.arrivedAtMs ?? 0) - atMs) < 12 * 3600_000)) return 0;   // r162
   const game = _nextUserGame(st, atMs);
   if (!game) return 0;
   const latest = game.gameTime - REST_WATCH.leadMs;
@@ -1564,6 +1654,9 @@ function _rosterConditionCards(delivered, atMs) {
   // r160 §122.32 a regular wearing down → one of the staff asks about a day off.
   delivered += _restWatch(atMs);
 
+  // r162 §122.34 a better player sitting, or a prospect who should play → the staff says so.
+  delivered += _adviceWatch(atMs);
+
   // r153 open spots waiting for the GM → the manager says what happens at the deadline.
   if (_deliverOpenSpotsCard(atMs)) delivered++;
 
@@ -1621,6 +1714,9 @@ function _rosterConditionCards(delivered, atMs) {
       const seatedNow = (u.lineupSlots || []).some(sl => sl.playerId === p?.id) || (u.rotation?.order || []).includes(p?.id)
         || (p?._lostSlot?.kind === 'bullpen' && p.group === PLAYER_GROUP.BULLPEN);
       return !p || p.teamId !== 'user' || !p._lostSlot || seatedNow || !isAvailable(p) || !_whoHasSpot(state, p);
+    }
+    if (key.startsWith('advice:')) {   // r162 the suggestion no longer stands (the GM made the move, or things changed)
+      return !adviceFor(state).some(a => `advice:${a.key}` === key);
     }
     if (key.startsWith('rest:')) {   // r160 out of the lineup already (the GM moved them), hurt, away, gone, or the game is past
       const p = players[c._targetPlayerId];
@@ -5030,6 +5126,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'il_return_activate',
   'lineup_restore', 'lineup_keep', 'lineup_auto', 'il_return_wait',
   'rest_auto',   // r160
+  'advice_move', 'advice_quiet',   // r162
   'il_return_waive',
   'il_return_auto',
   'il_return_farm',
@@ -5238,6 +5335,20 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
       break;
     case 'lineup_auto':
       break;   // nothing changes; the manager asks once more after the game
+
+    // ── r162 §122.34 the staff's roster suggestions ──
+    case 'advice_move': {
+      const a = instance._advice;
+      if (!a) break;
+      StateManager.mutate(s => { if (applyAdvice(s, a)) applyRosterMutation(s, reconcileRoster(s, 'user', { atMs })); });
+      break;
+    }
+    case 'advice_quiet': {   // "I have a plan": quiet for this pairing until something changes
+      const a = instance._advice;
+      if (!a) break;
+      StateManager.mutate(s => { s.adviceQuiet = { ...(s.adviceQuiet || {}), [a.key]: { atMs, gap: a.gap, stamp: adviceStamp(s, a) } }; });
+      break;
+    }
 
     // ── r160 §122.32 a rest message nobody answered, about a player worn down: the manager sits them ──
     case 'rest_auto': {

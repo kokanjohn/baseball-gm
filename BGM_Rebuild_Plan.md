@@ -10659,3 +10659,73 @@ Fresh team: not needed. Existing players have no `straight` yet (it reads 0) and
 - **test-team-roster-ui:** the Pitchers header starts with Wear.
 
 Fresh team: not needed. Pitchers start with no workload, and hitters' wear carries over.
+
+### §122.34 r162 A new club isn't fully sorted; the staff suggests roster changes; playing time grows young players
+
+**Asked for:**
+- A new club's roster shouldn't be 100% optimized, so the GM has something to fix.
+- Staff messages should hint at what to change.
+- The GM can answer "I have a plan" (for a prospect's playing time, or resting a veteran) so the same message doesn't keep coming.
+
+**The user's choices:**
+- 2–4 problems per new club.
+- All four suggestion kinds: bench bat, rotation/bullpen arms, position fit, prospect playing time.
+- One "I Have a Plan" button.
+- After it, quiet until something changes.
+
+**Decisions:**
+- **Position fit is left out:**
+  - the Team screen's MOVE never offers an out-of-position spot (`eligibleSlotsFor`);
+  - the manager only fills one in an emergency, and `reconcileRoster` moves the player back once a natural fit is free;
+  - there are no defensive ratings.
+
+  So a position-fit suggestion would have nothing real to point at. Told to the user.
+- **A new club's roster** (`RosterAdvice.leaveIssues`, in `startNewGame` after the build):
+  - 2–4 of the staff's own suggestions are made true, each with a gap of 4–12 (real, not glaring);
+  - the planted problems: a better bat trades places with a weaker bench bat at the same spot, a rotation arm (never the opener) with a weaker pitcher-bench starter, a bullpen arm with a weaker pitcher-bench reliever;
+  - at most one rotation and one bullpen problem;
+  - the swaps use the Team screen's own moves (`applyMove`);
+  - stored as `userTeam._startIssues` ([{ kind, gap }]), alongside `userTeam._takeoverAt`.
+- **`RosterAdvice.adviceFor(state)`** (pure): the suggestions now, each with the move that carries it out.
+  - **`bat`:** the best bench bat at a spot is 4+ OVR better than the starter there.
+  - **`rotation`:** the best pitcher-bench starter is 4+ better than the weakest rotation arm.
+  - **`pen`:** the best pitcher-bench reliever is 4+ better than the weakest bullpen arm.
+  - **`prospect`:** a bench player aged 24 or under, behind the regular at a spot (or the weakest rotation arm) by 6 or less.
+  - **Ordering:** one suggestion per player, the clearest first: a better player before a prospect, then the widest gap.
+- **The messages** (`CardEngine._adviceWatch`, on the roster clock with the rest watch; cardId `roster_advice`):
+  - **Who writes:**
+    - bats: the hitting coach;
+    - arms: the pitching coach;
+    - a prospect: the scouting director (who says the growing happens in games).
+  - **The choice:** "Start X at 1B" / "Put X in the Rotation" / "Put X in the Bullpen" (`advice_move`, the move itself), or **I Have a Plan** (`advice_quiet`; the reply: "Understood. You have your reasons; I'll leave it unless something changes.").
+  - **When:** in spring too, so a new club hears within hours of the takeover.
+  - **Pacing:**
+    - one open at a time, and none while a rest message is open;
+    - 2 days apart;
+    - never within half a day of a rest message (the rest watch also holds back for half a day after one);
+    - unanswered, it expires after 2 days, and the same pairing may return after 7.
+  - **Moments** follow the situation (after the last game or the takeover, the spacing, the GM's answers), as with the rest messages.
+  - **Withdrawn** when the suggestion no longer stands, for example after the GM makes the move on Team.
+- **"I Have a Plan"** (`state.adviceQuiet[key] = { atMs, gap, stamp }`): quiet for that pairing until something changes:
+  - the gap widens by 4 or more;
+  - the stamp changes (`adviceStamp`: either player's club, group, health or injury file);
+  - 30 days pass.
+- **Playing time and a young player's winter** (`OffseasonEngine._playingTime` before stats are archived; `_develop`, growth window only, age 24 and under; `DEV_REPS`):
+  - **A regular** grows +0.75 more on each rating. Regular means at least half the club's games for a hitter, 15% for a starter, 30% for a reliever.
+  - **One who barely played** grows 0.5 less (under 15% / 5% / 10%).
+  - This applies to every club, so the prospect suggestion has real consequences.
+  - `developForWinter` is exported for the check.
+
+**Checks:**
+- **check-roster-advice** (24, stable across start times):
+  - **A new club:** 2–4 problems, each one a suggestion, gaps 4–12, one suggestion per player.
+  - **Ten days of spring with no answers:** 2–6 messages, the first soon after the takeover; gaps; none near rest messages; the right sender per kind; decisions; voice and gender-neutral wording.
+  - **The answers:**
+    - yes makes the move;
+    - the GM's own move withdraws the message;
+    - "I Have a Plan" stays quiet when nothing changes and through a small widening, but returns at +5, after an injury, and after 30 days.
+  - **A prospect:** from the scouting director.
+  - **A 22-year-old's winter:** a regular grows more than untracked, and one who sat grows less.
+- **test-roster-advice-ui** (dark and light): the inbox message (the buttons, both players tappable), then "I Have a Plan" with its reply.
+
+Fresh team: needed to see the new starting roster (the change is in `startNewGame`). An existing club gets the suggestions too, whenever its roster has one.
