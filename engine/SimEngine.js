@@ -74,7 +74,7 @@ import { computeOVR, isAvailable } from './PlayerFactory.js';
 import { playingRating, trueRatings } from './Diamonds.js';
 import { injuryChancePerExposure } from './InjuryEngine.js';
 import {
-  ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, tireAfterBF, reliefInnings, springStarterInnings,
+  ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, armLoad, tireAfterBF, reliefInnings, springStarterInnings,
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
 
@@ -442,6 +442,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
   const { game, fieldMod, isHome, phase, isSpring, norms = null, exhibition = null, atMs = 0, scout = null, wx = null, staff = null } = ctx;
   // §112.2 the GM's coaching staff, for this game (our players only).
   _staff = staff || null;
+  _simAt = atMs || null;   // r161 §122.33 the arms' workload as of first pitch
   const isGM = (lu) => (lu?.slots || []).some(sl => players[sl.id]?.teamId === 'user');
   const userIsGM = isGM(userLineup), oppIsGM = isGM(oppLineup);
 
@@ -1868,7 +1869,8 @@ function _batterHurt(gs, players, plays, slots, bench, slotIdx, batter, pitcher,
 function _pitcherHurt(gs, players, plays, pitcher, side, tired, inning, outs, bases, halfKey) {
   if (!pitcher || gs.hurt.has(pitcher.id)) return null;
   const role = gs[`${side}Role`] === ROLE.STARTER ? 'starter' : 'reliever';
-  if (_roll() >= injuryChancePerExposure(pitcher, role, gs.injuryYear, tired)) return null;
+  // (r161 §122.33 a worn arm — its workload — is likelier hurt, like a tired one in the game)
+  if (_roll() >= injuryChancePerExposure(pitcher, role, gs.injuryYear, tired || (_simAt && armLoad(pitcher, _simAt) >= WEAR.tired))) return null;
   const phrase = _HURT_PITCHER[Math.floor(_roll() * _HURT_PITCHER.length)];
   const was = { fatigued: gs[`${side}Fatigued`], mustGo: gs[`${side}MustGo`] };
   gs[`${side}Fatigued`] = true;
@@ -2892,6 +2894,7 @@ function _gmRelVariance(gmRel) {
 // §112.2 The GM's coaching staff in this game (CoachEngine.staffEffects), set
 // when a game is simulated: rating points our players get from their coaches.
 let _staff = null;
+let _simAt = null;   // r161 the game's first pitch (a pitcher's workload is read as of then)
 let _userFielding = false;   // our club is in the field this half (the bench coach's defense)
 function _coachPoints(player, key) {
   if (!_staff || player?.teamId !== 'user') return 0;
@@ -2909,6 +2912,11 @@ function _effectiveSR(player, subRatingKey, baseValue, { coached = true } = {}) 
   // r159 §122.31 a worn-down hitter (every club alike): the bat slows.
   if ((subRatingKey === 'contact' || subRatingKey === 'power') && (player?.wear || 0) >= WEAR.tired)
     v -= Math.min(WEAR.dipMax, WEAR.dip + Math.floor((player.wear - WEAR.tired) / WEAR.dipStep));
+  // r161 §122.33 a worn arm (every club alike): stuff and control dip the same way.
+  if ((subRatingKey === 'stuff' || subRatingKey === 'control') && player?.load && _simAt) {
+    const load = armLoad(player, _simAt);
+    if (load >= WEAR.tired) v -= Math.min(WEAR.dipMax, WEAR.dip + Math.floor((load - WEAR.tired) / WEAR.dipStep));
+  }
   return Math.max(40, v);
 }
 

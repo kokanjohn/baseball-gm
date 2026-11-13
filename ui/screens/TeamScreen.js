@@ -286,7 +286,7 @@ export function refresh() {
  * or bullpen spot waits for the GM until the roster deadline (RosterEngine).
  */
 const HIT_COLS = [['wear', 'Wear'], ['hab', 'H/AB'], ['r', 'R'], ['hr', 'HR'], ['rbi', 'RBI'], ['bb', 'BB'], ['sb', 'SB'], ['avg', 'AVG'], ['ops', 'OPS']];
-const PIT_COLS = [['ip', 'IP'], ['w', 'W'], ['l', 'L'], ['sv', 'SV'], ['era', 'ERA'], ['whip', 'WHIP'], ['k', 'K'], ['bb', 'BB']];
+const PIT_COLS = [['wear', 'Wear'], ['ip', 'IP'], ['w', 'W'], ['l', 'L'], ['sv', 'SV'], ['era', 'ERA'], ['whip', 'WHIP'], ['k', 'K'], ['bb', 'BB']];
 
 function _renderPlayers(state) {
   const team      = state.userTeam;
@@ -433,14 +433,17 @@ function _statCells(p, imp) {
 }
 
 /**
- * r160 §122.32 a hitter's wear: a short meter and the word (Fresh, Fine, Tiring,
- * Tired, Worn down) — the first column, so it shows without scrolling.
+ * r160 §122.32 wear: a short meter and the word (Fresh, Fine, Tiring, Tired, Worn
+ * down) — the first column, so it shows without scrolling. r161 §122.33 pitchers
+ * too (the arm's workload); the bar is full and green when fresh and shrinks
+ * toward the left as the wear builds, changing color by level.
  */
 function _wearCell(p) {
   if (p.group === PLAYER_GROUP.IL) return '<span class="tr-muted">--</span>';
-  const w = wearOf(p);
-  return `<span class="tr-wear tr-wear-${w.level}" title="${w.straight ? `${w.straight} straight start${w.straight === 1 ? '' : 's'}` : 'No recent starts'}">`
-    + `<span class="tr-wear-bar"><i style="width:${Math.max(6, Math.round(w.share * 100))}%"></i></span>`
+  const w = wearOf(p, Date.now());
+  const tip = w.pitcher ? `Workload: ${w.word}` : w.straight ? `${w.straight} straight start${w.straight === 1 ? '' : 's'}` : 'No recent starts';
+  return `<span class="tr-wear tr-wear-${w.level}" title="${tip}">`
+    + `<span class="tr-wear-bar"><i style="width:${Math.max(6, Math.round(w.left * 100))}%"></i></span>`
     + `<span class="tr-wear-word">${w.level === 'worn' ? 'Worn' : w.word}</span></span>`;
 }
 

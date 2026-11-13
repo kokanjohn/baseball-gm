@@ -1055,6 +1055,21 @@ function _lineupNudges(atMs) {
 }
 
 /**
+ * r161 who starts for us at `atMs` by the rotation — the one in turn, or the next who has had his four
+ * days (the sim's rule) — skipping `skipId` (who'd take the turn if that one sat).
+ */
+function _nextStarter(team, players, atMs, skipId = null) {
+  const order = team?.rotation?.order || [];
+  const n = order.length;
+  for (let k = 0; k < n; k++) {
+    const id = order[((team.rotation.currentIndex || 0) + k) % n];
+    const p = players[id];
+    if (id !== skipId && p && isAvailable(p) && starterRested(p, atMs)) return id;
+  }
+  return null;
+}
+
+/**
  * r160 §122.32 the rest watch: a regular in our lineup wearing down → one of the
  * staff writes, a decision (give the player the next game off, or not). Our
  * lineup is the GM's: the manager only sits the player when the message went
@@ -1093,6 +1108,22 @@ function _restWatch(atMs) {
     if (!sub) return;
     cands.push({ p, w, catcher, sub, slot: sl.slot });
   });
+  // r161 §122.33 the arms: the next game's starter (his workload as of first pitch — the pitching coach
+  // would skip his turn) and the relievers (two days down).
+  const next = _nextStarter(u, st.players, game.gameTime);
+  for (const id of u.rosterIds || []) {
+    const p = st.players[id];
+    if (!p || p.teamId !== 'user' || !['SP', 'RP'].includes(p.pos) || !isAvailable(p)) continue;
+    const starter = (u.rotation?.order || []).includes(id);
+    if (starter ? id !== next : p.group !== PLAYER_GROUP.BULLPEN) continue;
+    const w = Development.wearOf(p, game.gameTime);
+    if (w.wear < REST_WATCH.pitcherAt) continue;
+    const last = W.byPlayer?.[p.id];
+    if (last && atMs - last.atMs < REST_WATCH.samePlayerMs && !(w.worn && !last.worn)) continue;
+    const sub = starter ? st.players[_nextStarter(u, st.players, game.gameTime, id)] : null;
+    if (starter && !sub) continue;   // (nobody to take the turn)
+    cands.push({ p, w, catcher: false, arm: starter ? 'starter' : 'reliever', sub, slot: null });
+  }
   if (!cands.length) return 0;
   cands.sort((a, b) => (b.w.worn - a.w.worn) || (b.catcher - a.catcher) || (b.w.wear - a.w.wear));
   const c = cands[0];
@@ -1121,7 +1152,9 @@ function _restDeliver(st, c, game, at) {
 }
 
 /** The rest message itself: who writes it and how (two ways each, so they don't read the same). */
-function _restCard(st, { p, w, catcher, sub, slot }, game, at) {
+function _restCard(st, cand, game, at) {
+  if (cand.arm) return _armRestCard(st, cand, game, at);
+  const { p, w, catcher, sub, slot } = cand;
   const staff = st.userTeam.coachingStaff || {};
   const person = (role) => (staff[role] && !staff[role].vacant ? staff[role].name : null);
   const mgr = person('manager'), pc = person('pitchingCoach'), hc = person('hittingCoach');
@@ -1183,6 +1216,65 @@ function _restCard(st, { p, w, catcher, sub, slot }, game, at) {
     expiresAtMs: game.gameTime - 10 * 60_000,
     _raw: { onYes: 'day_off', onNo: null, onAuto: autoSit ? 'rest_auto' : null },
     _autoLabel: autoSit ? `No answer — ${mgr || 'the manager'} sat ${X}` : `No answer — ${X} played`,
+  });
+}
+
+/**
+ * r161 §122.33 the pitching coach (the physician about an arm worn down) on one of our arms: skip the
+ * next start (the next man in the rotation takes the turn), or two days down for a reliever.
+ */
+function _armRestCard(st, { p, w, arm, sub }, game, at) {
+  const staff = st.userTeam.coachingStaff || {};
+  const person = (role) => (staff[role] && !staff[role].vacant ? staff[role].name : null);
+  const mgr = person('manager'), pc = person('pitchingCoach');
+  const X = p.name, starter = arm === 'starter';
+  const when = When.untilFull(game.gameTime, at), day = When.untilDay(game.gameTime, at);
+  const recent = (p.arm || []).filter(o => o.at <= at && game.gameTime - o.at < 7 * 86_400_000);
+  const starts = (p.arm || []).filter(o => o.start).slice(-3);
+  const deep = starts.length ? Math.round(starts.reduce((a, o) => a + o.outs, 0) / starts.length / 3) : 0;
+  const v = eventRand() < 0.5 ? 0 : 1;
+  const role = w.worn ? 'physician' : pc ? 'pitchingCoach' : 'manager';
+  const autoSit = w.worn;
+  const what = starter ? `skip ${X}'s start` : `give ${X} two days down`;
+  const mgrSits = autoSit ? (role === 'manager' ? ` If I don't hear from you by first pitch, I'll ${what} myself.`
+                                                : ` If there's no answer by first pitch, ${mgr || 'the manager'} will ${what}.`) : '';
+  const cover = starter ? `${sub.name} can take the turn instead, and the rotation moves up a day behind.` : '';
+  const many = recent.length >= 2;
+  const used = many ? `pitched ${recent.length} times in the last week` : 'carried a heavy load lately';
+  let sender, avatar, subject, preview, body;
+  if (role === 'physician') {
+    sender = 'Team Physician'; avatar = '🩺';
+    subject = `${X}'s arm is worn down`;
+    preview = starter ? 'The workload has caught up with the arm.' : many ? `Pitched ${recent.length} times in the last week.` : 'A heavy load lately.';
+    body = `${X}'s arm is worn down: ${starter ? `the innings have piled up, ${deep ? `about ${deep} a start lately` : 'start after start'}` : used}. Tired arms are the ones that get hurt. My advice is to ${what}${starter ? '' : ` starting ${day === 'today' ? 'today' : 'with the next game'}`}. ${cover}${mgrSits}`;
+  } else {
+    sender = role === 'manager' ? (mgr || 'Front Office') : pc; avatar = role === 'manager' ? '📋' : '⚾';
+    if (starter) {
+      subject = v ? `Skip ${X}'s start?` : `${X} could use a turn off`;
+      preview = deep ? `About ${deep} innings a start lately.` : 'The workload is building.';
+      body = (v ? `${X} has been going deep${deep ? `, about ${deep} innings a start` : ''}, and the arm is carrying it: the fastball is a tick short late and the slider is flattening out. I'd skip the start ${when} and let the arm catch up.`
+                : `The workload is catching up with ${X}. Nothing's hurt, but the bullpen sessions have been flat. One turn off now saves us a month on the shelf later.`)
+           + ` ${cover}${role === 'manager' ? ' Your call.' : ''}${mgrSits}`;
+    } else {
+      subject = v ? `${X} needs a breather` : `Two days for ${X}?`;
+      preview = many ? `Pitched ${recent.length} times in the last week.` : 'A heavy load lately.';
+      body = (v ? `${X} has ${used}, and the arm is showing it: the velocity is down and the warm-ups take longer. I'd like to keep ${X} down for two days.`
+                : `We've leaned on ${X}${many ? `: ${recent.length} times in the last week` : ' lately'}. Two days without throwing in a game and the arm comes back. The rest of the pen can cover.`)
+           + `${role === 'manager' ? ' Your call.' : ''}${mgrSits}`;
+    }
+  }
+  return _rosterCard(st, {
+    cardId: 'rest_ask', tag: 'LINEUP', sender, avatar, type: 'normal',
+    _rosterKey: `rest:${p.id}:${game.index}:${game.gameTime}`, _targetPlayerId: p.id, _playerIds: sub ? [sub.id] : [], _restWorn: !!w.worn,
+    _restArm: arm, _restGame: { index: game.index, gameTime: game.gameTime },
+    subject, preview, body,
+    yesLabel: starter ? `Skip ${X}'s Start` : `Rest ${X} Two Days`,
+    noLabel: starter ? `${X} Pitches` : `Keep ${X} Available`,
+    yesMsg: starter ? `Done. ${sub.name} takes the turn and ${X} gets the extra rest.` : `Done. ${X} is down for two days.`,
+    noMsg: `Understood. ${X} ${starter ? 'makes the start' : 'stays available'}.`,
+    expiresAtMs: game.gameTime - 10 * 60_000,
+    _raw: { onYes: 'arm_rest', onNo: null, onAuto: autoSit ? 'rest_auto' : null },
+    _autoLabel: autoSit ? `No answer — ${mgr || 'the manager'} rested ${X}` : `No answer — ${X} stayed in line`,
   });
 }
 
@@ -1532,7 +1624,11 @@ function _rosterConditionCards(delivered, atMs) {
     }
     if (key.startsWith('rest:')) {   // r160 out of the lineup already (the GM moved them), hurt, away, gone, or the game is past
       const p = players[c._targetPlayerId];
-      return !p || p.teamId !== 'user' || !isAvailable(p) || !(state.userTeam.lineupSlots || []).some(sl => sl.playerId === p.id)
+      const gone = !p || p.teamId !== 'user' || !isAvailable(p);
+      const out = c._restArm === 'starter' ? _nextStarter(state.userTeam, players, c._restGame?.gameTime) !== p?.id   // (no longer his turn)
+        : c._restArm === 'reliever' ? p?.group !== PLAYER_GROUP.BULLPEN
+        : !(state.userTeam.lineupSlots || []).some(sl => sl.playerId === p?.id);
+      return gone || out
         || !(state.schedule || []).some(g => g.index === c._restGame?.index && g.gameTime === c._restGame?.gameTime && !g._committed && !g.cancelled);
     }
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
@@ -5146,10 +5242,13 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     // ── r160 §122.32 a rest message nobody answered, about a player worn down: the manager sits them ──
     case 'rest_auto': {
       const st = StateManager.get();
-      if (!CARD_ACTIONS.day_off.feasible(st, instance)) break;
-      _applyCardAction('day_off', { ...instance, choice: 'auto' }, atMs, true);
+      const act = instance._restArm ? 'arm_rest' : 'day_off';   // r161 an arm: skip the start / two days down
+      if (!CARD_ACTIONS[act].feasible(st, instance)) break;
+      _applyCardAction(act, { ...instance, choice: 'auto' }, atMs, true);
       const p = StateManager.get().players[playerId];
-      if (p?.unavailable?.reason === 'rest') _ourNews(`${_managerName(st)} sat ${p.name} for a game: worn down, and no answer on the rest`, atMs);
+      if (p?.unavailable?.reason === 'rest') _ourNews(instance._restArm
+        ? `${_managerName(st)} rested ${p.name}${instance._restArm === 'starter' ? ' for a turn' : ' for two days'}: a worn-down arm, and no answer on the rest`
+        : `${_managerName(st)} sat ${p.name} for a game: worn down, and no answer on the rest`, atMs);
       break;
     }
 

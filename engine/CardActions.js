@@ -28,7 +28,7 @@ import { signToClub, signingTerms } from './MarketEngine.js';
 import { queueTrade } from './TradeEngine.js';
 import { eventRand } from './Dice.js';
 import { startWork, workable, isPitcher as pitcherPos } from './PlayerWork.js';
-import { activeWork, giveDayOff } from './DevelopmentEngine.js';
+import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -118,6 +118,12 @@ const work = {
 };
 
 /** r159 §122.31 a day off the GM asked for: the hitter sits the next game (his wear clears). */
+/** r161 §122.33 rest for one of our arms: a starter skips his next turn, a reliever is down two days. */
+const armRest = {
+  feasible: (st, c) => { const p = st.players[c._targetPlayerId]; return workable(st, p) && pitcherPos(p) && isAvailable(p); },
+  apply: (d, c, atMs) => [givePitcherRest(d, c._targetPlayerId, atMs)].filter(Boolean),
+};
+
 const dayOff = {
   feasible: (st, c) => { const p = st.players[c._targetPlayerId]; return workable(st, p) && !pitcherPos(p) && isAvailable(p) && canSpare(st, p.id); },
   apply: (d, c, atMs) => [giveDayOff(d, c._targetPlayerId, atMs)].filter(Boolean),
@@ -504,6 +510,7 @@ export const CARD_ACTIONS = Object.freeze({
   coach_work:           work,      // r159 §122.31
   dev_program:          work,
   day_off:              dayOff,
+  arm_rest:             armRest,   // r161
   train_pitcher_sp:     train,
   train_pitcher_bp:     train,
   ill2_sick_start:      sickStart,

@@ -10595,3 +10595,67 @@ Fresh team: not needed. Wear starts at 0 and the injury file starts empty on an 
 - **test-wear-ui** (new, dark and light): the Wear column (first, visible, the right words, the meter), the player card's Wear section, and the rest message in the inbox (Sit / Keep, both players tappable).
 
 Fresh team: not needed. Existing players have no `straight` yet (it reads 0) and wear carries over.
+
+### §122.33 r161 Wear by age and by the slot played; pitchers' workload; a bar that empties
+
+**Asked for:**
+- Age changes how fast players wear: veterans faster, young players slower ("1 plus 3").
+- The catcher rate should follow the position actually played.
+- Pitchers get wear too, on the Team screen and the player card. The user chose: the bar shows the arm's workload, plus today's arm, with the same age bands.
+- The bar is full and green when fresh, shrinks toward the left and changes color as the player wears.
+
+**Decisions:**
+- **By age** (`WEAR.age`; `PitchingEngine.ageWearMult`): 25 and under ×0.85, 26–30 ×1, 31–34 ×1.2, 35 and up ×1.4.
+  - **Hitters:** applies to what a start adds. Recovery is unchanged (a game off still clears it).
+  - **Pitchers:** applies to what an outing adds, and the daily recovery is divided by it.
+- **The slot, not the listing:** `countGame` gives the catcher's rate (1.5) to whoever is in the C slot that day. A catcher used at DH wears like anyone else.
+- **A pitcher's workload** (`ARM_LOAD`; `p.load` / `p.loadAt` / `p.loadMult`; `armLoad(p, atMs)` reads it lazily, with no per-day processing):
+  - **What an outing adds,** in `recordOutings` (times age):
+    - a start: 0.3 per batter faced;
+    - a relief outing: 1.5 + 0.25 per batter faced, +1 when it's back-to-back.
+  - **Recovery:** 1.2 a day off the load, with age counting half as much as on the way in (35 and up ÷1.2, 25 and under ÷0.93). At 1.5 a starter's load drained to nothing between starts. At 1.2 a deep starter or a heavily used reliever reaches Tiring or Tired over a month or so.
+  - **The relief base is 1.0, not 1.5.** At 1.5, with the full age effect on recovery, older closers hit the CPU limit within weeks. The CPU then rested them so often that the season sim's checks broke: saves left the closers, and relievers pitched a third day in a row.
+  - **Same levels** as hitters (`WEAR.levels`).
+  - **Effects:** at Tired, stuff and control dip like a hitter's bat (`SimEngine._effectiveSR`, read as of first pitch via `_simAt`), and the arm is likelier hurt (`_pitcherHurt`).
+  - **Separate from today's arm** (`armStatus`: pitched yesterday / resting today; starters need four days).
+  - **CPU managers** rest their most worn arm at `ARM_LOAD.cpuRest` (20), one a game.
+- **`givePitcherRest`:**
+  - **A starter** skips his next turn (`unavailable` for 1 game). The rotation moves up behind him, and he's back after that game.
+  - **A reliever** is down 2 days: ours on the clock (`untilMs`), a CPU club's by games (2). Only our roster's day-based absences are released on the clock, so a CPU reliever with `untilMs` never came back. The season sim caught it ("every absence ends").
+  - The card action is `arm_rest`, and `rest_auto` picks it for arms.
+- **The rest watch includes the arms:**
+  - **Who:** the next game's starter (by `_nextStarter`, the sim's rotation rule, with his load as of first pitch) and the relievers, at `REST_WATCH.pitcherAt` (10).
+  - **Who writes:** the pitching coach (the manager if that chair is vacant), or the physician when the arm is worn down.
+  - **The messages:**
+    - "Skip X's start?", naming who takes the turn ("…and the rotation moves up a day behind");
+    - "X needs a breather" / "Two days for X?" ("pitched N times in the last week", or "leaned on lately" when outings are few).
+  - **Buttons:** "Skip X's Start" / "X Pitches"; "Rest X Two Days" / "Keep X Available".
+  - **Shared pacing:** the arms count against the same one-open, 3-day and 7-day rules as the hitters.
+  - **Withdrawn** when it's no longer the starter's turn, or the reliever has left the bullpen.
+  - The worn-down rule is the same: an unanswered message about a worn-down arm means the manager rests the arm, with news.
+- **`wearOf(p, atMs)`:**
+  - **Pitchers:** the arm's workload at `atMs`.
+  - **New field `left`** (1 = fresh): what the bars draw.
+- **Screens:**
+  - **Team → Pitchers:** gets the Wear column first too.
+  - **Both bars:** full and green when fresh, shrinking toward the left with the wear, colored by level.
+  - **The player card's Wear section** (our pitchers too):
+    - pitchers get today's arm ("Today: last start 3 days ago." / "pitched yesterday" / "resting") and the workload line;
+    - an age line for 31 and up or 25 and under ("At 34, it builds faster and comes off slower.");
+    - "Caught N straight" now goes by the C slot.
+  - **The physician's Compose read** covers a pitcher's arm, and the manager's covers hitters as before.
+
+**Checks:**
+- **check-rest-watch** (32):
+  - the DH who caught gets a catcher's start, and the catcher at DH an ordinary one, both times age;
+  - the age bands;
+  - an older arm comes back slower;
+  - a tired next starter: the pitching coach writes, names who takes the turn, yes skips the turn, and he's back after the game;
+  - a reliever: two days down.
+- **test-wear-ui:**
+  - bar widths (fresh about full, tiring smaller, worn smaller still);
+  - the Pitchers table's Wear column ("Tired" for the worked starter);
+  - a pitcher's card Wear section ("Today: …", the workload line).
+- **test-team-roster-ui:** the Pitchers header starts with Wear.
+
+Fresh team: not needed. Pitchers start with no workload, and hitters' wear carries over.

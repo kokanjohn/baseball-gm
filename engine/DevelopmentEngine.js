@@ -40,7 +40,9 @@ import {
   DIAMOND,
   WEAR,
   PLAYER_WORK,
+  ARM_LOAD,
 } from '../data/constants.js';
+import { ageWearMult, armLoad } from './PitchingEngine.js';
 import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
 import { exposeRatings } from './Diamonds.js';
 import { devFactor } from './CoachEngine.js';
@@ -310,11 +312,14 @@ export function countGame(draft, teamId, atMs = null) {
   const offDays = atMs && t._lastGameAt ? Math.max(0, Math.floor((atMs - t._lastGameAt) / DAY) - 1) : 0;
   if (atMs) t._lastGameAt = atMs;
   const inLineup = new Set((t.lineupSlots || []).map(x => x.playerId).filter(Boolean));
+  const caught = (t.lineupSlots || []).find(x => x.slot === 'C')?.playerId || null;   // r161 who caught (the slot, not the listing)
+  const year = baseballYear(draft);
   for (const id of t.rosterIds || []) {
     const p = draft.players[id];
     if (!p) continue;
     // (an away or hurt player keeps his lineup slot until he's back: he didn't start)
-    if (!isPitcher(p)) _wear(p, inLineup.has(id) && !p.unavailable && !p.isInjured && !p.isSuspended, offDays);
+    if (!isPitcher(p)) _wear(p, inLineup.has(id) && !p.unavailable && !p.isInjured && !p.isSuspended, offDays,
+                             { catcher: id === caught, mult: ageWearMult(computeAge(p.dob, year)) });
     if (p.condition) {
       p.condition.gamesLeft -= 1;
       if (p.condition.gamesLeft <= 0) p.condition = null;
@@ -341,6 +346,14 @@ export function countGame(draft, teamId, atMs = null) {
     events.push({ type: 'RESTED', playerId: p.id, teamId, by: 'manager', wear: Math.round(p.wear), subId: sub.id, atMs });
     break;
   }
+  // r161 §122.33 and the arms: the most worn at the limit rests (a starter skips a turn, a reliever
+  // gets two days down) — one a game.
+  if (atMs) {
+    const arm = (t.rosterIds || []).map(id => draft.players[id])
+      .filter(p => p && isPitcher(p) && !p.unavailable && !p.isInjured && armLoad(p, atMs) >= ARM_LOAD.cpuRest)
+      .sort((a, b) => armLoad(b, atMs) - armLoad(a, atMs))[0];
+    if (arm && givePitcherRest(draft, arm.id, atMs)) events.push({ type: 'RESTED', playerId: arm.id, teamId, by: 'manager', atMs });
+  }
   return events;
 }
 
@@ -349,10 +362,13 @@ export function countGame(draft, teamId, atMs = null) {
  * r160 §122.32 a game off clears it, however it came (a day off asked for, the GM
  * sitting the player on the Team screen, the bench): a day off is a day off.
  * `straight` counts the starts in a row (the staff's "caught seven straight").
+ * r161 §122.33 a start behind the plate adds the catcher's rate (whoever is in the
+ * C slot that day), and every start is times WEAR.age (young legs carry more).
  */
-function _wear(p, started, offDays) {
+function _wear(p, started, offDays, { catcher = false, mult = 1 } = {}) {
   let w = Math.max(0, (p.wear || 0) - offDays * WEAR.offDay);
-  if (started) w += (p.pos === 'C' || p.nativePos === 'C') ? WEAR.catcher : 1;
+  // r161 §122.33 behind the plate is what wears (the slot played, not the listed position), and by age.
+  if (started) w += (catcher ? WEAR.catcher : 1) * mult;
   else w = 0;
   p.wear = Math.round(w * 10) / 10;
   p.straight = started ? (p.straight || 0) + 1 : 0;
@@ -372,6 +388,23 @@ export function giveDayOff(draft, playerId, atMs) {
   const ev = setUnavailable(draft, p.id, { reason: 'rest', games: 1 }, atMs);
   if (slot >= 0) t.lineupSlots[slot].playerId = sub.id;
   return ev;
+}
+
+/**
+ * r161 §122.33 rest for an arm: a starter skips his next turn (the rotation moves up behind him), a
+ * reliever is down for ARM_LOAD.relieverDays days.
+ * @returns {Object|null} the UNAVAILABLE event
+ */
+export function givePitcherRest(draft, playerId, atMs) {
+  const p = draft.players?.[playerId];
+  if (!p || !isPitcher(p)) return null;
+  const t = p.teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === p.teamId);
+  const starter = (t?.rotation?.order || []).includes(p.id);
+  if (starter) return setUnavailable(draft, p.id, { reason: 'rest', games: 1 }, atMs);
+  // (ours on the clock — two days, as the message says; a CPU club's by its games: only our roster's
+  //  days-away come back on the clock, every club's games count down)
+  return p.teamId === 'user' ? setUnavailable(draft, p.id, { reason: 'rest', untilMs: atMs + ARM_LOAD.relieverDays * DAY }, atMs)
+                             : setUnavailable(draft, p.id, { reason: 'rest', games: ARM_LOAD.relieverDays }, atMs);
 }
 
 /** The bench bat who fills in for `p`: one who plays the position first, then the best (null: nobody to spare). */
@@ -428,13 +461,16 @@ export function releaseDue(draft, atMs) {
 /**
  * r159 a hitter's wear in words and numbers, for the staff, the Team screen and the player card.
  * r160 §122.32 `level` / `word` (WEAR.levels), `share` for a meter, `straight` starts in a row.
+ * r161 §122.33 pitchers too (their workload at `atMs`); `left` = what's left of the meter (1 fresh).
  */
-export function wearOf(p) {
-  const w = p?.wear || 0;
+export function wearOf(p, atMs = null) {
+  // r161 §122.33 a pitcher's is the arm's workload now (it comes off by the day).
+  const pitcher = isPitcher(p);
+  const w = pitcher ? Math.round(armLoad(p, atMs) * 10) / 10 : (p?.wear || 0);
   const dip = w < WEAR.tired ? 0 : Math.min(WEAR.dipMax, WEAR.dip + Math.floor((w - WEAR.tired) / WEAR.dipStep));
   const lv = [...WEAR.levels].reverse().find(([, from]) => w >= from) || WEAR.levels[0];
-  return { wear: w, tired: w >= WEAR.tired, worn: w >= WEAR.worn, dip, level: lv[0], word: lv[2],
-           share: Math.min(1, w / WEAR.meterMax), straight: p?.straight || 0 };
+  return { wear: w, tired: w >= WEAR.tired, worn: w >= WEAR.worn, dip, level: lv[0], word: lv[2], pitcher,
+           share: Math.min(1, w / WEAR.meterMax), left: Math.max(0, 1 - w / WEAR.meterMax), straight: pitcher ? 0 : (p?.straight || 0) };
 }
 
 // ─────────────────────────────────────────────────────────────

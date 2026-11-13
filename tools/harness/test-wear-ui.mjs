@@ -33,8 +33,11 @@ const S = await page.evaluate(async (theme) => {
     Object.assign(s.players[others[0]], { wear: 19, straight: 19 });          // Worn down
     Object.assign(s.players[others[1]], { wear: 13, straight: 13 });          // Tired
     for (const id of others.slice(2)) Object.assign(s.players[id], { wear: 2, straight: 2 });   // Fresh
+    // r161 an arm: the first starter tired (workload 14 as of now)
+    const sp = s.userTeam.rotation.order[0];
+    Object.assign(s.players[sp], { load: 14, loadAt: Date.now(), loadMult: 1 });
   });
-  return { c, worn: others[0], cName: SM.get().players[c].name };
+  return { c, worn: others[0], cName: SM.get().players[c].name, sp: SM.get().userTeam.rotation.order[0] };
 }, theme);
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); await App.init(); });
 await page.waitForTimeout(800);
@@ -57,7 +60,17 @@ check('…on screen without scrolling', team.inView);
 const word = (id) => team.rows.find(r => r.id === id)?.word;
 check(`…the catcher "Tiring", the worn regular "Worn", the rest "Fresh" (${team.rows.map(r => r.word).join(' · ')})`,
       word(S.c) === 'Tiring' && word(S.worn) === 'Worn' && team.rows.filter(r => r.word === 'Fresh').length >= 6);
-check('…each with a meter that fills with the wear', parseInt(team.rows.find(r => r.id === S.worn).bar) > parseInt(team.rows.find(r => r.word === 'Fresh').bar));
+const fullW = parseInt(team.rows.find(r => r.word === 'Fresh').bar), wornW = parseInt(team.rows.find(r => r.id === S.worn).bar), tiringW = parseInt(team.rows.find(r => r.id === S.c).bar);
+check(`…the bar full when fresh, shrinking toward the left with the wear (fresh ${fullW}%, tiring ${tiringW}%, worn ${wornW}%)`, fullW >= 90 && tiringW < fullW && wornW < tiringW);
+// r161 the Pitchers table too
+const arms = await page.evaluate((sp) => {
+  const block = [...document.querySelectorAll('.tr-block')].find(b => b.querySelector('.tr-row[data-player]') && [...b.querySelectorAll('.tr-head .tr-td')].some(e => e.textContent.trim() === 'ERA'));
+  if (!block) return null;
+  const head = [...block.querySelectorAll('.tr-head .tr-td')].map(e => e.textContent.trim());
+  const r = block.querySelector(`.tr-row[data-player="${sp}"]`);
+  return { head: head.slice(0, 2), word: r?.querySelector('.tr-c-wear .tr-wear-word')?.textContent.trim(), n: block.querySelectorAll('.tr-c-wear .tr-wear-word').length };
+}, S.sp);
+check(`the Pitchers table: Wear first too (${arms?.head.join(', ')}), the worked starter "${arms?.word}"`, arms?.head[0] === 'Wear' && arms.word === 'Tired' && arms.n >= 8);
 await page.screenshot({ path: `${out}/wear-team-${theme}.png` });
 
 // ── The player card ──
@@ -70,6 +83,18 @@ const card = await page.evaluate(() => {
 });
 check(`the player card: a Wear section — "${card?.word}", "${card?.note}"`, card?.word === 'Tiring' && /^Caught 7 straight\./.test(card?.note || ''));
 await page.screenshot({ path: `${out}/wear-card-${theme}.png` });
+await tap('#player-card-close');
+// r161 a pitcher's card: the Wear section, today's arm
+await page.evaluate((sp) => document.querySelector(`.tr-row[data-player="${sp}"]`)?.scrollIntoView({ block: 'center' }), S.sp);
+await tap(`.tr-row[data-player="${S.sp}"] .tr-name`);
+await page.waitForTimeout(400);
+const pcard = await page.evaluate(() => {
+  const sheet = document.getElementById('player-card-sheet');
+  const sec = [...sheet.querySelectorAll('.pc-section')].find(s => s.querySelector('.pc-section-label')?.textContent.trim() === 'Wear');
+  return sec ? { word: sec.querySelector('.pc-wear-word')?.textContent.trim(), note: sec.querySelector('.pc-ask-note')?.textContent.trim() } : null;
+});
+check(`a pitcher's card: Wear — "${pcard?.word}", "${pcard?.note}"`, pcard?.word === 'Tired' && /^Today: /.test(pcard?.note || '') && /stuff and control/.test(pcard?.note || ''));
+await page.screenshot({ path: `${out}/wear-pitcher-card-${theme}.png` });
 await tap('#player-card-close');
 
 // ── A rest message, as the GM reads it ──

@@ -27,9 +27,9 @@ import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
 import { getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { PHASE, PLAYER_GROUP } from '../../data/constants.js';
-import { bullpenRoles } from '../../engine/PitchingEngine.js';
+import { bullpenRoles, armStatus } from '../../engine/PitchingEngine.js';
 import * as StateManager from '../../store/StateManager.js';
-import { baseballYear } from '../../engine/PlayerFactory.js';
+import { baseballYear, computeAge } from '../../engine/PlayerFactory.js';
 import { wearOf } from '../../engine/DevelopmentEngine.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -158,8 +158,8 @@ function _renderCard(player, playerId, state) {
     <!-- Sub-ratings -->
     ${_renderSubRatings(player, isPitcher)}
 
-    <!-- r160 §122.32 our hitters' wear -->
-    ${isOwnPlayer && !isPitcher && player.group !== PLAYER_GROUP.IL ? _renderWear(player) : ''}
+    <!-- r160 §122.32 our players' wear (r161 §122.33 pitchers too: the arm's workload, and today's arm) -->
+    ${isOwnPlayer && player.group !== PLAYER_GROUP.IL ? _renderWear(player, isPitcher, state) : ''}
 
     <!-- Season stats -->
     ${_renderStats(player, isPitcher, state)}
@@ -311,7 +311,11 @@ function _renderSubRatings(player, isPitcher) {
   `;
 }
 
-/** r160 §122.32 how worn down one of our hitters is: the meter, the word, what it means now. */
+/**
+ * r160 §122.32 how worn down one of our players is: the meter (full and green when fresh, shrinking
+ * toward the left as it builds — r161), the word, what it means now. r161 §122.33 pitchers too (the
+ * arm's workload, and how the arm is today), and what age does to it.
+ */
 const WEAR_LINES = {
   fresh:  'Rested and ready.',
   fine:   'Holding up fine.',
@@ -319,18 +323,41 @@ const WEAR_LINES = {
   tired:  'The bat has slowed a little, and injuries come more often. A day off clears it.',
   worn:   'Worn down: the bat is slower and the injury risk is up. A day off clears it.',
 };
-function _renderWear(player) {
-  const w = wearOf(player);
-  const n = w.straight, catcher = (player.nativePos || player.pos) === 'C';
-  const run = n ? `${catcher ? 'Caught' : 'Started'} ${n} straight. ` : '';
+const ARM_LINES = {
+  fresh:  'The arm is fresh.',
+  fine:   'The arm is holding up.',
+  tiring: 'The workload is building. Rest soon keeps it from reaching the stuff.',
+  tired:  'The stuff and control have slipped a little, and a tired arm gets hurt more often. Rest brings it back.',
+  worn:   'Worn down: the stuff is short and the injury risk is up. Rest brings it back.',
+};
+function _armToday(player, now) {
+  const a = armStatus(player, now);
+  if (player.pos === 'SP' && player.group === PLAYER_GROUP.STARTING_PITCHERS) {
+    const last = (player.arm || []).filter(o => o.start && o.at <= now).map(o => Math.floor((now - o.at) / 86_400_000)).sort((x, y) => x - y)[0];
+    return last == null ? 'Today: ready for the next turn.' : `Today: last start ${last === 0 ? 'today' : last === 1 ? 'yesterday' : `${last} days ago`}.`;
+  }
+  return a.status === 'down' ? 'Today: resting, after pitching recently.' : a.status === 'tired' ? 'Today: available, but pitched yesterday.' : 'Today: ready.';
+}
+function _renderWear(player, isPitcher, state) {
+  const now = Date.now();
+  const w = wearOf(player, now);
+  const age = computeAge(player.dob, baseballYear(state));
+  const ageLine = age >= 31 ? ` At ${age}, it builds faster${isPitcher ? ' and comes off slower' : ''}.`
+                : age <= 25 ? ` At ${age}, it builds slower${isPitcher ? ' and comes off quicker' : ''}.` : '';
+  let note;
+  if (isPitcher) note = `${_armToday(player, now)} ${ARM_LINES[w.level]}${ageLine}`;
+  else {
+    const caught = (state.userTeam?.lineupSlots || []).some(s => s.slot === 'C' && s.playerId === player.id);
+    note = `${w.straight ? `${caught ? 'Caught' : 'Started'} ${w.straight} straight. ` : ''}${WEAR_LINES[w.level]}${ageLine}`;
+  }
   return `
     <div class="pc-section">
       <div class="pc-section-label">Wear</div>
       <div class="pc-wear pc-wear-${w.level}">
-        <div class="pc-subr-bar-wrap"><div class="pc-wear-fill" style="width:${Math.max(4, Math.round(w.share * 100))}%;"></div></div>
+        <div class="pc-subr-bar-wrap"><div class="pc-wear-fill" style="width:${Math.max(4, Math.round(w.left * 100))}%;"></div></div>
         <div class="pc-wear-word">${w.word}</div>
       </div>
-      <div class="pc-ask-note">${run}${WEAR_LINES[w.level]}</div>
+      <div class="pc-ask-note">${note}</div>
     </div>`;
 }
 

@@ -15,6 +15,9 @@
  *     can face before he tires (§7.4 modifiers apply past it).
  *   - chooseReliever(...): who the manager brings in, by the situation.
  *
+ *   - armLoad(player, atMs): r161 §122.33 the workload that builds over weeks
+ *     (player.load as of player.loadAt, coming off a day at a time).
+ *
  * player.arm = [{ at, day, bf, outs, start }]   // outings in the last few days
  *   at  — when the game ended;  day — the local calendar day it was played
  *   (rest is counted in calendar days: "pitched yesterday" is about dates, not hours).
@@ -25,9 +28,9 @@ import {
   PITCH_SP_TIRE_BASE_BF, PITCH_SP_TIRE_PER_STAMINA, PITCH_RP_TIRE_BASE_BF, PITCH_RP_TIRE_PER_STAMINA,
   PITCH_SP_REST_DAYS, PITCH_RP_LONG_OUTING_BF, PITCH_RP_HEAVY_OUTING_BF, PITCH_RP_START_BF,
   PITCH_RP_MAX_STRAIGHT_DAYS, PITCH_RP_TIRED_ONSET_SHARE, PITCH_ARM_HISTORY_DAYS, PITCH_LONG_INNINGS,
-  SPRING_SP_INNINGS, SPRING_TRAINING_GAME_COUNT,
+  SPRING_SP_INNINGS, SPRING_TRAINING_GAME_COUNT, WEAR, ARM_LOAD,
 } from '../data/constants.js';
-import { isAvailable } from './PlayerFactory.js';
+import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
 import { playingRating } from './Diamonds.js';
 
 const DAY = 86_400_000;
@@ -119,12 +122,42 @@ export function outingsFrom(plays) {
 export function recordOutings(draft, plays, endMs) {
   const startMs = (plays || []).find(p => p.type === 'game_start')?._timestamp ?? endMs;
   const day = dayOf(startMs);
+  const year = baseballYear(draft);
   for (const [id, o] of Object.entries(outingsFrom(plays))) {
     const p = draft.players[id];
     if (!p) continue;
+    // r161 §122.33 the workload: what's left of it now, plus this outing (times the arm's age).
+    const yesterday = (p.arm || []).some(x => x.day === day - 1);
+    const mult = ageWearMult(computeAge(p.dob, year));
+    const add = o.start ? o.bf * ARM_LOAD.perStartBF
+                        : ARM_LOAD.reliefBase + o.bf * ARM_LOAD.reliefPerBF + (yesterday ? ARM_LOAD.backToBack : 0);
+    if (p.loadAt !== endMs) {
+      p.load = Math.round((armLoad(p, endMs) + add * mult) * 10) / 10;
+      p.loadAt = endMs;
+      p.loadMult = mult;
+    }
     p.arm = [...(p.arm || []).filter(x => endMs - x.at < PITCH_ARM_HISTORY_DAYS * DAY && x.at !== endMs),
              { at: endMs, day, bf: o.bf, outs: o.outs, start: o.start }];
   }
+}
+
+/** r161 §122.33 what a start (hitters) or an outing (pitchers) adds, by age (WEAR.age). */
+export function ageWearMult(age) {
+  return (WEAR.age.find(([upTo]) => (age ?? 28) <= upTo) || [0, 1])[1];
+}
+
+/**
+ * armLoad(player, atMs) — r161 §122.33 a pitcher's workload now: what the last
+ * outing left, less `perDay` for each day since (an older arm comes back slower:
+ * divided by half its age multiplier's lean, as of that outing — 35+ ÷1.2, 25 and under ÷0.93).
+ */
+export function armLoad(player, atMs) {
+  const load = player?.load || 0;
+  if (!load || !player.loadAt || !Number.isFinite(atMs) || atMs <= player.loadAt) return load;
+  const days = (atMs - player.loadAt) / DAY;
+  // (age counts half as much on the way back as on the way in: 35+ comes back a fifth slower)
+  const back = 1 + ((player.loadMult || 1) - 1) / 2;
+  return Math.max(0, load - days * ARM_LOAD.perDay / back);
 }
 
 /**

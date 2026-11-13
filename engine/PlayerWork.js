@@ -168,7 +168,7 @@ export function restRead(state, playerId, atMs) {
   if (!workable(state, p) || isPitcher(p)) return null;
   const next = ourGames(state, atMs).find(g => g.gameTime > atMs) || null;
   const inLineup = (state.userTeam?.lineupSlots || []).some(s => s.playerId === p.id);
-  return { p, ...wearOf(p), next, inLineup, away: !isAvailable(p) };
+  return { p, ...wearOf(p, atMs), next, inLineup, away: !isAvailable(p) };
 }
 
 /** The team physician on one player. */
@@ -179,7 +179,7 @@ export function healthRead(state, playerId, atMs) {
   const log = (p.injuryLog || []).filter(x => x.atMs <= atMs);
   return {
     p, age, now: p.isInjured ? (p.injury || {}) : null, playingHurt: p.condition || null,
-    log, recent: log.filter(x => atMs - x.atMs < 120 * DAY), wear: isPitcher(p) ? null : wearOf(p),
+    log, recent: log.filter(x => atMs - x.atMs < 120 * DAY), wear: wearOf(p, atMs),   // (r161 a pitcher's: the arm's workload)
     away: p.unavailable || null, dev: developmentStatus(state, p.id),
   };
 }

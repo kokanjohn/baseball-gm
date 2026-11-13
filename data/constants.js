@@ -1758,6 +1758,25 @@ export const WEAR = Object.freeze({
   catcher: 1.5, offDay: 2, tired: 12, dip: 2, dipStep: 4, dipMax: 5, cpuRest: 20, worn: 18,
   levels: Object.freeze([['fresh', 0, 'Fresh'], ['fine', 5, 'Fine'], ['tiring', 9, 'Tiring'], ['tired', 12, 'Tired'], ['worn', 18, 'Worn down']]),
   meterMax: 24,
+  // r161 §122.33 by age: what a start adds (hitters) and what an outing adds (pitchers) —
+  // young legs and arms carry more, veterans wear faster. [up to this age, multiplier]
+  age: Object.freeze([[25, 0.85], [30, 1], [34, 1.2], [Infinity, 1.4]]),
+});
+
+/**
+ * r161 §122.33 a pitcher's workload (every club alike), on the same scale and
+ * levels as a hitter's wear: an outing adds to it (a start by the batters faced,
+ * a relief outing a little plus the batters, more on back-to-back days), times
+ * WEAR.age; it comes off a day at a time (`perDay`, divided by WEAR.age — older
+ * arms come back slower). At WEAR.tired stuff and control dip like a hitter's
+ * bat and the arm is likelier to get hurt. Separate from today's arm
+ * (PitchingEngine.armStatus: pitched yesterday, needs four days after a start).
+ *   cpuRest — a CPU manager rests the most worn arm at this (one a game): a
+ *             starter skips a turn, a reliever gets `relieverDays` down.
+ */
+export const ARM_LOAD = Object.freeze({
+  perStartBF: 0.3, reliefBase: 1.0, reliefPerBF: 0.25, backToBack: 1, perDay: 1.2,
+  cpuRest: 20, relieverDays: 2,
 });
 
 /**
@@ -1769,9 +1788,10 @@ export const WEAR = Object.freeze({
  * already asked about a lineup spot.
  *   catcherAt — a catcher's wear when the staff first speaks up (six straight).
  *   hitterAt  — anyone else's (tiring: the manager; once tired, the hitting coach).
+ *   pitcherAt — a starter's (about the next start) or a reliever's workload (the pitching coach).
  */
 export const REST_WATCH = Object.freeze({
-  catcherAt: 9, hitterAt: 10, gapMs: 3 * 86_400_000, samePlayerMs: 7 * 86_400_000,
+  catcherAt: 9, hitterAt: 10, pitcherAt: 10, gapMs: 3 * 86_400_000, samePlayerMs: 7 * 86_400_000,
   leadMs: 90 * 60_000,   // the message lands at least this long before first pitch
 });
 

@@ -67,7 +67,7 @@ let v = await read();
 const [H, Pt] = v.blocks;
 check('two tables, Hitters then Pitchers, no collapsible groups', v.blocks.length === 2 && H?.title === 'Hitters' && Pt?.title === 'Pitchers' && v.groups === 0, JSON.stringify(v.blocks.map(b => b.title)));
 check('hitters: Wear (r160), the stat columns, then IMP and OVR', JSON.stringify(H.head) === JSON.stringify(['Wear', 'H/AB', 'R', 'HR', 'RBI', 'BB', 'SB', 'AVG', 'OPS', 'IMP', 'OVR']), H.head.join(','));
-check('pitchers: the stat columns, then IMP and OVR', JSON.stringify(Pt.head) === JSON.stringify(['IP', 'W', 'L', 'SV', 'ERA', 'WHIP', 'K', 'BB', 'IMP', 'OVR']), Pt.head.join(','));
+check('pitchers: Wear (r161), the stat columns, then IMP and OVR', JSON.stringify(Pt.head) === JSON.stringify(['Wear', 'IP', 'W', 'L', 'SV', 'ERA', 'WHIP', 'K', 'BB', 'IMP', 'OVR']), Pt.head.join(','));
 check('hitters by slot: C 1B 2B 3B SS OF OF OF DH, then the bench',
       H.rows.slice(0, 9).map(r => r.slot).join(' ') === 'C 1B 2B 3B SS OF OF OF DH' && H.rows.slice(9).every(r => ['Bench', 'IL', 'H', 'C', '1B', '2B', '3B', 'SS', 'OF', 'DH'].includes(r.slot)),
       H.rows.map(r => r.slot).join(' '));

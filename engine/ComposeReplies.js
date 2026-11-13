@@ -1254,7 +1254,11 @@ W.doc_health = (f, r, who, arg) => {
     const last = read.log[read.log.length - 1];
     out.push(`On file: ${plural(read.log.length, 'injury', 'injuries')} with us, the last a ${last.severity} ${String(last.label).toLowerCase()} ${f.onWhen(last.atMs)}.${read.recent.length >= 2 ? ' That many in a short span tells me to keep the workload in check.' : ''}`);
   } else out.push(`There's nothing in ${name}'s file with us.`);
-  if (read.wear) {
+  if (read.wear?.pitcher) {
+    out.push(read.wear.tired ? `The arm is ${read.wear.worn ? 'worn down' : 'tired'}: the workload has piled up. Tired arms are the ones that get hurt. Rest would help.`
+             : read.wear.level === 'tiring' ? 'The workload on the arm is building. A little extra rest soon would be smart.'
+             : 'The arm is holding up fine.');
+  } else if (read.wear) {
     const n = read.wear.straight, starts = n ? plural(n, 'straight start') : 'no recent starts';
     out.push(read.wear.tired ? `${name} is ${read.wear.worn ? 'worn down' : 'tired'}: ${starts}. That's when hitters get hurt. A day off would help.`
              : read.wear.level === 'tiring' ? `The workload is starting to show: ${starts}. A day off soon would be smart.`

@@ -13,6 +13,9 @@ import * as CE from '../../engine/CardEngine.js';
 import * as Dev from '../../engine/DevelopmentEngine.js';
 import { WEAR, REST_WATCH } from '../../data/constants.js';
 import { moveOptions } from '../../engine/RosterEngine.js';
+import { rotationStarter } from '../../engine/SimEngine.js';
+import { ageWearMult, armLoad } from '../../engine/PitchingEngine.js';
+import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { voiceProblems } from './voice-rules.mjs';
 
 let pass = 0, fail = 0;
@@ -87,7 +90,7 @@ SM.mutate(s => { s.phase = 'REGULAR_SEASON'; s.userTeam._lastGameAt = game.gameT
 /** A clean slate: no rest message open, the spacing reset; the staff looks now; the message about `id`. */
 const fresh = () => {
   for (const c of restCards().filter(c => !c.resolved)) CE.resolve(c.instanceId, 'no');
-  SM.mutate(s => { s.restWatch = {}; for (const id of s.userTeam.rosterIds) if (s.players[id]) { s.players[id].wear = 0; s.players[id].straight = 0; } });
+  SM.mutate(s => { s.restWatch = {}; for (const id of s.userTeam.rosterIds) if (s.players[id]) { s.players[id].wear = 0; s.players[id].straight = 0; s.players[id].load = 0; } });
 };
 const ask = (id, wear, straight) => {
   SM.mutate(s => { Object.assign(s.players[id], { wear, straight }); });
@@ -141,6 +144,55 @@ check(`${fine.name}, tired: a message, but no step-in behind it`, !!card && card
 CE.expire(card.instanceId, card.expiresAtMs);
 check(`no answer: ${fine.name} plays — the lineup stays the GM's`, P(fine.id).unavailable?.reason !== 'rest' && S().userTeam.lineupSlots.some(x => x.playerId === fine.id)
       && restCards().find(c => c.instanceId === card.instanceId)?.choice === 'auto');
+
+// ── r161 §122.33 the rules: behind the plate is what wears (the slot), and age ──
+console.log('Wear by the slot played and by age');
+fresh();
+{
+  const t = S().userTeam, ci = t.lineupSlots.findIndex(x => x.slot === 'C'), di = t.lineupSlots.findIndex(x => x.slot === 'DH');
+  const cat = t.lineupSlots[ci].playerId, dh = t.lineupSlots[di].playerId;
+  SM.mutate(s => { s.userTeam.lineupSlots[ci].playerId = dh; s.userTeam.lineupSlots[di].playerId = cat; s.userTeam._lastGameAt = game.gameTime - DAY; });
+  const y = baseballYear(S());
+  const m = (id) => ageWearMult(computeAge(P(id).dob, y));
+  SM.mutate(s => { Dev.countGame(s, 'user', game.gameTime); });
+  check(`the DH (${P(dh).name}) caught today: a catcher's start (1.5 × ${m(dh)} = ${P(dh).wear})`, Math.abs(P(dh).wear - Math.round(1.5 * m(dh) * 10) / 10) < 0.01);
+  check(`…the catcher (${P(cat).name}) was the DH: an ordinary start (1 × ${m(cat)} = ${P(cat).wear})`, Math.abs(P(cat).wear - Math.round(m(cat) * 10) / 10) < 0.01);
+  SM.mutate(s => { s.userTeam.lineupSlots[ci].playerId = cat; s.userTeam.lineupSlots[di].playerId = dh; });
+  check(`by age: 24 → ${ageWearMult(24)}, 28 → ${ageWearMult(28)}, 33 → ${ageWearMult(33)}, 36 → ${ageWearMult(36)}`, ageWearMult(24) < 1 && ageWearMult(28) === 1 && ageWearMult(33) > 1 && ageWearMult(36) > ageWearMult(33));
+  // An arm: older ones build faster and come back slower.
+  const young = { load: 12, loadAt: 1, loadMult: ageWearMult(23) }, old = { load: 12, loadAt: 1, loadMult: ageWearMult(36) };
+  check(`an arm two days after reaching 12: a 23-year-old's ${armLoad(young, 2 * DAY).toFixed(1)}, a 36-year-old's ${armLoad(old, 2 * DAY).toFixed(1)}`, armLoad(young, 2 * DAY) < armLoad(old, 2 * DAY));
+}
+
+// ── r161 §122.33 the arms ─────────────────────────────────────
+console.log('A starter worn by the innings: skip the turn');
+fresh();
+const sp = P(rotationStarter(S().userTeam, S().players, game.gameTime));
+SM.mutate(s => { Object.assign(s.players[sp.id], { load: 13, loadAt: game.gameTime, loadMult: 1 }); });
+CE.syncRosterCards([], clock.get());
+card = restCards().find(c => !c.resolved && c._targetPlayerId === sp.id);
+if (card) CE.releaseDueCards(Math.max(clock.get(), card.deliverAtMs + 1000));
+console.log(`    “${card?.subject}” (${card?.sender}) — ${card?.body}  [${card?.yesLabel} / ${card?.noLabel}]`);
+check(`${sp.name}, starting next, tired: the pitching coach writes`, !!card && card.sender === staff().pitchingCoach?.name && card._restArm === 'starter' && !GEN.test(card.body));
+const take = card && P(card._playerIds[0]);
+check(`…naming who takes the turn (${take?.name})`, !!take && card.body.includes(take.name) && take.id !== sp.id);
+CE.resolve(card.instanceId, 'yes');
+check(`yes: ${sp.name} skips the turn — ${P(rotationStarter(S().userTeam, S().players, game.gameTime))?.name} starts`, P(sp.id).unavailable?.reason === 'rest' && rotationStarter(S().userTeam, S().players, game.gameTime) !== sp.id);
+playGame();
+check(`…and is back in the rotation after that game`, !P(sp.id).unavailable && S().userTeam.rotation.order.includes(sp.id));
+
+console.log('A reliever leaned on: two days down');
+fresh();
+const rp = S().userTeam.rosterIds.map(P).find(p => p?.group === 'bp' && p.pos === 'RP' && !p.unavailable);
+SM.mutate(s => { Object.assign(s.players[rp.id], { load: 12.5, loadAt: clock.get(), loadMult: 1 }); });
+CE.syncRosterCards([], clock.get());
+card = restCards().find(c => !c.resolved && c._targetPlayerId === rp.id);
+if (card) CE.releaseDueCards(Math.max(clock.get(), card.deliverAtMs + 1000));
+console.log(`    “${card?.subject}” (${card?.sender}) — ${card?.body}  [${card?.yesLabel} / ${card?.noLabel}]`);
+check(`${rp.name}, tired: the pitching coach asks for two days down`, !!card && card._restArm === 'reliever' && /two days/i.test(card.body) && !GEN.test(card.body));
+CE.resolve(card.instanceId, 'yes');
+const away = P(rp.id).unavailable;
+check('yes: down for two days', away?.reason === 'rest' && Math.abs(away.untilMs - clock.get() - 2 * DAY) < 60_000);
 
 console.log('Spacing');
 fresh();
