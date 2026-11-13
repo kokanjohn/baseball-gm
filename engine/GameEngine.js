@@ -931,9 +931,11 @@ function _commitAt(gameIndex) {
     if (wasPlayed) _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent));
     // §71: players away (rest, illness, training, benched) and playing-hurt
     // conditions count down one game; whoever is back gets his spot back.
-    if (wasPlayed) Development.countGame(s, 'user');
+    const restEv = [];   // r159 §122.31 the managers' rest days (wear)
+    if (wasPlayed) restEv.push(...Development.countGame(s, 'user', g.gameTime));
     const oppTeam = s.leagueTeams.find(t => t.name === g.opponent);
-    if (oppTeam && wasPlayed) Development.countGame(s, oppTeam.id);
+    if (oppTeam && wasPlayed) Development.countGame(s, oppTeam.id, g.gameTime);
+    _pendingRest.push(...restEv.filter(e => e.type === 'RESTED'));
 
     // (Trades, arrivals and IL clearances are no longer tied to a commit —
     //  they run on the real-time roster clock: advanceClock(), §65.)
@@ -969,6 +971,9 @@ function _commitAt(gameIndex) {
       delete gCommitted.liveLineups;
     }
   });
+
+  // r159 §122.31 the manager sat someone at the wear limit: the news, like any roster event.
+  if (_pendingRest.length) CardEngine.syncRosterCards(_pendingRest.splice(0), endMs);
 
   // ── CPU processing (outside main mutate for clarity) ────
   const dateStr = game.date;
@@ -1669,6 +1674,8 @@ function _playsEndMs(game) {
 // what the schedule does when the weather stops a game
 // ─────────────────────────────────────────────────────────────
 
+/** r159 the managers' rest days from the commit's countdown, handed to CardEngine after it (§122.31). */
+const _pendingRest = [];
 const _WX_PLAN_AHEAD_MS = GAME_WEATHER.PLAN_AHEAD_MIN * 60_000;
 /** r139 an id for something the world records (inside an event: from its stream). */
 function _worldId() { return inEvent() ? diceId(eventRand) : crypto.randomUUID(); }
@@ -2201,8 +2208,8 @@ function _finishLeagueGame(date, i) {
       const gate = Finance.homeGate(s, home.id, { atMs: endMs, dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, false) });
       if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
     }
-    if (home) Development.countGame(s, home.id);
-    if (away) Development.countGame(s, away.id);
+    if (home) Development.countGame(s, home.id, g.gameTime);
+    if (away) Development.countGame(s, away.id, g.gameTime);
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
     recordOutings(s, g.plays, endMs);   // §76: the arms' record
     for (const [pid, d] of Object.entries(perGame)) _expose(s, pid, d);   // §122.9
@@ -3233,6 +3240,12 @@ function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
       applied = applyDue(s, atMs, { reconcileAll });
       if (applied.changed || reconcileAll) s.userTeam.finances.payroll = computePayroll(s);
     });
+  }
+  // r159 §122.31 back from days away (focused work, a program): on the clock.
+  if (Development.availabilityDue(StateManager.get(), atMs)) {
+    let back = [];
+    StateManager.mutate(s => { back = Development.releaseDue(s, atMs); });
+    applied = { changed: true, events: [...applied.events, ...back] };
   }
   // §71: development increments due on the clock.
   if (Development.developmentDue(StateManager.get(), atMs)) {

@@ -27,6 +27,8 @@ import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { queueTrade } from './TradeEngine.js';
 import { eventRand } from './Dice.js';
+import { startWork, workable, isPitcher as pitcherPos } from './PlayerWork.js';
+import { activeWork, giveDayOff } from './DevelopmentEngine.js';
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -92,6 +94,33 @@ const train = {
         && { type: 'DEV_STARTED', playerId: id },
     ].filter(Boolean);
   },
+};
+
+/**
+ * r159 §122.31 work the GM asked for: a coach's (tweaks or days away) or Scouting/Dev's program.
+ * Feasible while the player is ours and here, whoever does the work is free, the skill isn't already
+ * being worked on, and — when it takes days away — the club can spare him.
+ */
+const work = {
+  feasible(st, c) {
+    const raw = c._raw || {}, p = st.players[c._targetPlayerId];
+    if (!workable(st, p) || p.isInjured || !isAvailable(p)) return false;
+    const busy = activeWork(st, raw._workOwner);
+    if (busy) return false;
+    if ((st.developmentPlans || []).some(x => x.status === 'active' && x.playerId === p.id && x.keys.includes(raw._workSkill))) return false;
+    return !(raw._workDays > 0) || canSpare(st, p.id);
+  },
+  apply(d, c, atMs) {
+    const raw = c._raw || {};
+    return startWork(d, { playerId: c._targetPlayerId, skill: raw._workSkill, owner: raw._workOwner, days: raw._workDays || 0,
+                          gain: raw._workGain, source: raw._workSource || c.cardId }, atMs);
+  },
+};
+
+/** r159 §122.31 a day off the GM asked for: the hitter sits the next game (his wear clears). */
+const dayOff = {
+  feasible: (st, c) => { const p = st.players[c._targetPlayerId]; return workable(st, p) && !pitcherPos(p) && isAvailable(p) && canSpare(st, p.id); },
+  apply: (d, c, atMs) => [giveDayOff(d, c._targetPlayerId, atMs)].filter(Boolean),
 };
 
 /** In-season extension: the new deal starts when the current one ends. */
@@ -472,6 +501,9 @@ export const CARD_ACTIONS = Object.freeze({
   bench_active_pitcher: away(restReason, 1),
   bench_active_hitter:  away((raw) => raw.tag === 'DISCIPLINE' ? 'suspended' : raw.tag === 'HEALTH' ? 'illness' : 'benched', 2),
   train_hitter:         train,
+  coach_work:           work,      // r159 §122.31
+  dev_program:          work,
+  day_off:              dayOff,
   train_pitcher_sp:     train,
   train_pitcher_bp:     train,
   ill2_sick_start:      sickStart,

@@ -134,6 +134,8 @@ export function beginInjury(player, nowMs, severityOverride = null, rand) {
     injuryReport:   _generateInjuryReport(player, injuryType, severity, days, nowMs),
     _act2Variance:  _rollAct2Variance(severity, rand),
     _pendingILReturn: false,
+    // r159 §122.31 the injuries a player has had (the physician's file): the last eight.
+    injuryLog: [...(player.injuryLog || []), { label: injuryType.label || 'Injury', severity, days, atMs: nowMs }].slice(-8),
     injury: {
       status:     'evaluating',
       typeId:     injuryType.id,

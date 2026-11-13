@@ -1735,3 +1735,38 @@ export const DIAMOND = Object.freeze({
   gapMaxSeeded: 16,
   roleShownRel: 45,    // a role fit's shown OVR, above the league level: under the CPU clubs' radar
 });
+
+// ─────────────────────────────────────────────────────────────
+// r159 §122.31 WEAR AND PLAYER WORK
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Wear (hitters, every club alike): each start adds 1 (a catcher 1.5). A game
+ * off takes off `gameOff`; each off day beyond the first takes off `offDay`.
+ * At `tired` a hitter's contact and power dip (`dip`, plus 1 for every
+ * `dipStep` past it, up to `dipMax`) and he's likelier to get hurt (the
+ * pitchers' fatigue modifier). At `autoRest` the manager sits him a game,
+ * on any club. A day off (the GM's, or the manager's) clears it.
+ */
+export const WEAR = Object.freeze({ catcher: 1.5, gameOff: 8, offDay: 3, tired: 12, dip: 2, dipStep: 4, dipMax: 5, autoRest: 20 });
+
+/**
+ * The GM asks for work with one player on one skill (§122.31).
+ *   coach   — the hitting or pitching coach: one player at a time each. The
+ *             coach decides: 'tweaks' (extra reps in practice already on the
+ *             schedule: no time away, no cost) or 'focused' (days away from
+ *             the club, at `costPerDayK` a day for the extra cage and staff time).
+ *   program — Scouting/Dev's off-site program: one player at a time, club-wide;
+ *             `days` away, `baseK` + `perDayK` a day, the biggest possible gain.
+ * Gains are OVR points (DevelopmentEngine.startPlan), then scaled by age, trait,
+ * coach and the room left in the skill (`room`). Any plan can fizzle.
+ */
+export const PLAYER_WORK = Object.freeze({
+  coach: {
+    tweaksGain: 0.8, focusedGain: 2.0, focusedDays: 2, focusedDaysLow: 3, lowSkill: 45,
+    focusedBelow: 55, focusedGap: 12, focusedCap: 70, costPerDayK: 20,
+  },
+  program: { gain: 3.6, days: 5, daysLow: 7, baseK: 90, perDayK: 25 },
+  room: [[85, 0.25], [75, 0.55], [65, 0.8]],   // skill at or above → share of the gain left
+  offerDays: 3,                                // a reply's offer stands this long (time to pick the day)
+});

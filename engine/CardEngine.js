@@ -1303,6 +1303,11 @@ function _rosterEventCards(ev, atMs) {
       }, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'WAIVER_CLEARED' && ev.userClaimed) {
       // (cannot happen: a user claim always makes the user a claimant)
+    } else if (ev.type === 'RESTED' && ev.teamId === 'user') {
+      // r159 §122.31 the manager sat a worn-down regular.
+      const st = StateManager.get(), p = st.players[ev.playerId];
+      const mgr = st.userTeam?.coachingStaff?.manager;
+      if (p) _ourNews(`${mgr?.name && !mgr.vacant ? mgr.name : 'The manager'} is giving ${p.name} the next game off — ${ev.wear} games of wear without a break`, ev.atMs ?? atMs);
     } else if (ev.type === 'DEV_DONE' && ev.teamId === 'user') {
       if (_deliverDevelopmentReport(ev, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'TRADE_EXECUTED' && ev.tx?.league) {
@@ -1980,7 +1985,12 @@ function _releaseDue(nowMs) {
       Object.assign(out, {
         yesLabel: d.yesLabel, noLabel: d.noLabel, _targetPlayerId: d.playerId, autoResolve: 'no',
         expiresAtMs: c.deliverAtMs + (d.expiresInMs || 2 * 86_400_000),
-        _raw: { ...(c._raw || {}), onYes: d.onYes, onNo: null, _trainGain: d.trainGain, _trainGames: d.trainGames },
+        _raw: { ...(c._raw || {}), onYes: d.onYes, onNo: null, _trainGain: d.trainGain, _trainGames: d.trainGames,
+                // r159 §122.31 work the GM asked for: who does it, on what, for how long
+                ...(d.work ? { _workSkill: d.work.skill, _workOwner: d.work.owner, _workDays: d.work.days, _workGain: d.work.gain,
+                               _workSource: d.work.source } : {}) },
+        ...(d.costK ? { _budgetCost: d.costK } : {}),
+        ...(d.yesMsg ? { yesMsg: d.yesMsg } : {}), ...(d.noMsg ? { noMsg: d.noMsg } : {}),
       });
     }
     // r150 the director's counter is a decision: send it as the next round of the talks, adjust it
@@ -4745,8 +4755,33 @@ function _deliverDevelopmentReport(ev, atMs) {
     : ev.profile === 'slow' ? 'took a while, but it came'
     : 'went about as expected';
   _ourNews(`${p.name}'s development plan ${verdict} — now OVR ${p.ovr}`, atMs);
+  // r159 §122.31 work the GM asked for: whoever did it reports back, in their own words.
+  if (ev.owner && ev.from && ev.to) return _deliverWorkReport(st, p, ev, atMs);
   return null;
 }
+
+function _deliverWorkReport(st, p, ev, atMs) {
+  const staff = st.userTeam?.coachingStaff || {};
+  const person = ev.owner === 'program' ? staff.scoutingDirector : staff[ev.owner];
+  const role = ev.owner === 'program' ? 'Scouting Director' : ev.owner === 'hittingCoach' ? 'Hitting Coach' : 'Pitching Coach';
+  const sender = person?.name && !person.vacant ? `${person.name}, ${role}` : role;
+  const parts = ev.keys.map(k => `${k} from ${ev.from[k]} to ${ev.to[k]}`);
+  const moved = ev.keys.some(k => ev.to[k] > ev.from[k]);
+  const how = ev.profile === 'flop' || ev.realized < ev.planned * 0.4
+    ? (moved ? `It didn't take the way I hoped: ${list(parts)}.` : `It didn't take. ${p.name}'s ${list(ev.keys)} didn't move.`)
+    : ev.realized >= ev.planned * 1.15 ? `It went better than I hoped: ${list(parts)}.`
+    : ev.profile === 'quick' ? `It clicked right away: ${list(parts)}.`
+    : ev.profile === 'slow' ? `It took a while, but it came: ${list(parts)}.`
+    : `It went about the way I expected: ${list(parts)}.`;
+  const who = ev.owner === 'program' ? 'The program' : 'The work';
+  return _deliverNotice(`work:${ev.planId}`, {
+    cardId: 'work_report', tag: 'DEVELOPMENT', sender, avatar: '📈', type: moved ? 'good' : 'normal',
+    subject: `${p.name}'s ${list(ev.keys)} — the results`, _playerIds: [p.id],
+    preview: how,
+    body: `${who} with ${p.name} on ${list(ev.keys)} is done. ${how} ${p.name} is OVR ${p.ovr} now.`,
+  }, atMs);
+}
+function list(xs) { return xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`; }
 
 /**
  * Card actions (onYes / onNo) that have a real handler — in _applyRosterAction

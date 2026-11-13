@@ -31,7 +31,8 @@ export function voiceProblems(c, personOf) {
     if (/^(A (handwritten )?note|A letter|A memo)\b|\b(left|sent) (a|this) note\b/i.test(c.body || '')) out.push(['aboutMsg', 'body']);
     if (/^[^"“]{0,80}\b(texted|called|pulled you aside|caught you|knocked on|over dinner|relayed a message)\b[^"“]{0,40}[:—]\s*["“]/i.test(c.body || '')) out.push(['narrated', 'body']);
   } else {
-    const words = String(c.relay).toLowerCase().replace(/[{}']/g, ' ').split(/\s+/).filter(w => w.length >= 4 && !['veteran', 'three'].includes(w));
+    // (any word of who it's from — a short surname too — but not filler like "the" or "a veteran's")
+    const words = String(c.relay).toLowerCase().replace(/[{}']/g, ' ').split(/\s+/).filter(w => w.length >= 2 && !['the', 'a', 'an', 'of', 's', 'veteran', 'three'].includes(w));
     const body = String(c.body || '').toLowerCase().replace(/[{}']/g, ' ');
     if (c.relay === c.sender || !(words.some(w => body.includes(w)) || /["“]/.test(c.body || ''))) out.push(['relay', 'body']);
   }

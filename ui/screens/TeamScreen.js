@@ -544,6 +544,8 @@ function _statusWord(p) {
   const away = p.unavailable;
   if (away) {
     const what = { rest: 'resting', illness: 'sick', training: 'training', benched: 'sat down', suspended: 'suspended', leave: 'on leave' }[away.reason] || 'away';
+    // r159 away for a stretch of days (focused work, a program): back by the clock, not a game count.
+    if (away.untilMs) { const d = Math.max(1, Math.ceil((away.untilMs - Date.now()) / 86_400_000)); return `${what}, ${d} day${d === 1 ? '' : 's'}`; }
     return `${what}, ${away.gamesLeft} game${away.gamesLeft === 1 ? '' : 's'}`;
   }
   return '';

@@ -38,6 +38,8 @@ import {
   OVR_P_CONTROL_WEIGHT,
   OVR_P_STAMINA_WEIGHT,
   DIAMOND,
+  WEAR,
+  PLAYER_WORK,
 } from '../data/constants.js';
 import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
 import { exposeRatings } from './Diamonds.js';
@@ -83,13 +85,19 @@ export function gainMultiplier(draft, player) {
   return m;
 }
 
+/** r159 §122.31 the share of a hoped-for gain left in a skill at this level (a 90 has little left to find). */
+export function roomLeft(value) {
+  for (const [at, share] of PLAYER_WORK.room) if (value >= at) return share;
+  return 1;
+}
+
 /**
- * startPlan(draft, playerId, { gain, focus, source }, atMs)
+ * startPlan(draft, playerId, { gain, focus, source, owner }, atMs)
  * Rolls the outcome and schedules its increments on the clock.
  * `gain` is in OVR points (the card's _trainGain or its ovr effect).
  * @returns {Object|null} the plan
  */
-export function startPlan(draft, playerId, { gain, focus = null, source = 'card' }, atMs) {
+export function startPlan(draft, playerId, { gain, focus = null, source = 'card', owner = null }, atMs) {
   const p = draft.players?.[playerId];
   if (!p || !gain) return null;
   const keys = (focus && focus.length ? focus : defaultFocus(p)).filter(k => p.subRatings?.[k] != null);
@@ -100,6 +108,8 @@ export function startPlan(draft, playerId, { gain, focus = null, source = 'card'
     && x.keys.some(k => keys.includes(k)));
   // One plan per skill at a time: overlapping work has diminishing returns.
   let planned = gain * gainMultiplier(draft, p) * (active.length ? 0.5 : 1);
+  // r159 one skill, worked on purpose: the room left in it.
+  if (keys.length === 1) planned *= roomLeft(p.subRatings[keys[0]]);
 
   // §118 how the plan goes is its own draw (the player, the moment, what started it).
   const rand = dice(diceSeed(draft), 'dev-plan', playerId, atMs, source);
@@ -113,6 +123,8 @@ export function startPlan(draft, playerId, { gain, focus = null, source = 'card'
   const steps = _schedule(profile, realized, atMs, rand);
   const plan = {
     id: diceId(rand), playerId, source, keys, profile,
+    owner,   // r159 who is doing the work: 'hittingCoach' | 'pitchingCoach' | 'program' (one at a time each)
+    from: Object.fromEntries(keys.map(k => [k, p.subRatings[k]])),   // where the skills stood (the report)
     planned: _round1(planned), realized: _round1(realized), applied: 0,
     steps, createdAt: atMs, status: 'active', pausedSince: null,
     gamesAtStart: _gamesPlayed(p), teamGamesAtStart: _teamGames(draft, p.teamId),
@@ -139,6 +151,11 @@ function _schedule(profile, total, atMs, rand) {
     for (let i = 1; i <= n; i++) add(atMs + i * (span / n) * DAY, total / n);
   }
   return steps;
+}
+
+/** r159 the plan `owner` is running now (one player at a time per coach; one program at a time). */
+export function activeWork(state, owner) {
+  return (state.developmentPlans || []).find(x => x.status === 'active' && x.owner === owner) || null;
 }
 
 /** Is any increment due by `atMs`? (cheap — called every clock step) */
@@ -180,7 +197,9 @@ export function applyDevelopment(draft, atMs) {
       plan.status = 'done';
       plan.doneAt = atMs;
       events.push({ type: 'DEV_DONE', playerId: p.id, teamId: p.teamId, planId: plan.id,
-                    planned: plan.planned, realized: plan.realized, profile: plan.profile, source: plan.source, atMs });
+                    planned: plan.planned, realized: plan.realized, profile: plan.profile, source: plan.source, atMs,
+                    owner: plan.owner || null, keys: plan.keys, from: plan.from || null,
+                    to: Object.fromEntries(plan.keys.map(k => [k, p.subRatings[k]])) });
     }
   }
   // Keep the ledger short: finished plans older than 60 days go.
@@ -245,16 +264,18 @@ export function developmentStatus(state, playerId) {
  * Away for his club's next `games` games. Remembers his lineup spot and
  * rotation turn so he gets them back.
  */
-export function setUnavailable(draft, playerId, { reason, games }, atMs) {
+export function setUnavailable(draft, playerId, { reason, games = 0, untilMs = null }, atMs) {
   const p = draft.players?.[playerId];
-  if (!p || !(games > 0)) return null;
+  // r159 away for a stretch of days (focused work, a program) rather than a count of games.
+  if (!p || !(games > 0 || untilMs > atMs)) return null;
   const t = p.teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === p.teamId);
   const slot = (t?.lineupSlots || []).findIndex(s => s.playerId === playerId);
   const rot  = (t?.rotation?.order || []).indexOf(playerId);
   const prev = p.unavailable;
   p.unavailable = {
     reason, since: atMs,
-    gamesLeft: Math.max(games, prev?.gamesLeft || 0),
+    gamesLeft: untilMs ? null : Math.max(games, prev?.gamesLeft || 0),
+    untilMs: untilMs || null,
     slot: slot >= 0 ? slot : (prev?.slot ?? null),
     rotationIndex: rot >= 0 ? rot : (prev?.rotationIndex ?? null),
   };
@@ -271,42 +292,135 @@ export function setCondition(draft, playerId, { subRating, amount, games, reason
 }
 
 /**
- * countGame(draft, teamId)
+ * countGame(draft, teamId, atMs)
  * After each of the club's games: away players and conditions count down one.
  * A player whose absence ends gets his lineup spot / rotation turn back (the
  * fill-in returns to the bench; reconcileRoster tidies the rest).
- * @returns {Object[]} events — AVAILABLE when someone is back
+ * r159 §122.31 and the hitters' wear: a start adds to it, a game off or an off
+ * day takes it away, and the manager sits anyone at WEAR.autoRest for the next
+ * game (every club alike).
+ * @returns {Object[]} events — AVAILABLE when someone is back, RESTED when the manager sits someone
  */
-export function countGame(draft, teamId) {
+export function countGame(draft, teamId, atMs = null) {
   const events = [];
   const t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
   if (!t) return events;
+  // Off days since the club's last game: each beyond the first takes some wear off.
+  const offDays = atMs && t._lastGameAt ? Math.max(0, Math.floor((atMs - t._lastGameAt) / DAY) - 1) : 0;
+  if (atMs) t._lastGameAt = atMs;
+  const inLineup = new Set((t.lineupSlots || []).map(x => x.playerId).filter(Boolean));
   for (const id of t.rosterIds || []) {
     const p = draft.players[id];
     if (!p) continue;
+    // (an away or hurt player keeps his lineup slot until he's back: he didn't start)
+    if (!isPitcher(p)) _wear(p, inLineup.has(id) && !p.unavailable && !p.isInjured && !p.isSuspended, offDays);
     if (p.condition) {
       p.condition.gamesLeft -= 1;
       if (p.condition.gamesLeft <= 0) p.condition = null;
     }
     if (!p.unavailable) continue;
+    if (p.unavailable.untilMs) continue;   // away for a stretch of days: back on the clock (releaseDue)
     p.unavailable.gamesLeft -= 1;
     if (p.unavailable.gamesLeft > 0) continue;
-    const { slot, rotationIndex, reason } = p.unavailable;
-    p.unavailable = null;
-    events.push({ type: 'AVAILABLE', playerId: id, teamId, reason });
-    if (p.isInjured || p.isSuspended) continue;
-    if (Number.isInteger(slot) && t.lineupSlots?.[slot] && !isPitcher(p)) {
-      const already = t.lineupSlots.findIndex(s => s.playerId === id);
-      if (already >= 0 && already !== slot) t.lineupSlots[already].playerId = null;
-      t.lineupSlots[slot].playerId = id;
-      delete t.lineupSlots[slot].emergency;
-    }
-    if (Number.isInteger(rotationIndex) && p.group === PLAYER_GROUP.STARTING_PITCHERS && t.rotation?.order
-        && !t.rotation.order.includes(id)) {
-      t.rotation.order.splice(Math.min(rotationIndex, t.rotation.order.length), 0, id);
-    }
+    _back(draft, t, p, teamId, events);
+  }
+  // The manager's call, on any club: the most worn-down regular at the limit sits the next game
+  // (one a game — never half the lineup at once), and the manager puts the best bench bat in that
+  // spot now (the regular gets it back after the game off).
+  const worn = [...inLineup].map(id => draft.players[id])
+    .filter(p => p && !isPitcher(p) && !p.unavailable && !p.isInjured && !p.isSuspended && (p.wear || 0) >= WEAR.autoRest)
+    .sort((a, b) => (b.wear || 0) - (a.wear || 0));
+  for (const p of worn) {
+    const sub = _fillIn(draft, t, p);
+    if (!sub) continue;
+    const slot = t.lineupSlots.findIndex(s => s.playerId === p.id);
+    setUnavailable(draft, p.id, { reason: 'rest', games: 1 }, atMs || 0);
+    if (slot >= 0) t.lineupSlots[slot].playerId = sub.id;
+    events.push({ type: 'RESTED', playerId: p.id, teamId, by: 'manager', wear: Math.round(p.wear), subId: sub.id, atMs });
+    break;
   }
   return events;
+}
+
+/** r159 a hitter's wear after a game: a start adds to it, a game off or an off day takes it away. */
+function _wear(p, started, offDays) {
+  let w = Math.max(0, (p.wear || 0) - offDays * WEAR.offDay);
+  if (p.unavailable?.reason === 'rest' && !started) w = 0;   // a day off clears it
+  else if (started) w += (p.pos === 'C' || p.nativePos === 'C') ? WEAR.catcher : 1;
+  else w = Math.max(0, w - WEAR.gameOff);
+  p.wear = Math.round(w * 10) / 10;
+}
+
+/**
+ * r159 a day off: `p` sits the next game and the manager puts the best bench bat in the spot now.
+ * @returns {Object|null} the UNAVAILABLE event (null: nobody to fill in)
+ */
+export function giveDayOff(draft, playerId, atMs) {
+  const p = draft.players?.[playerId];
+  const t = p?.teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === p?.teamId);
+  if (!p || !t) return null;
+  const sub = _fillIn(draft, t, p);
+  if (!sub) return null;
+  const slot = (t.lineupSlots || []).findIndex(s => s.playerId === p.id);
+  const ev = setUnavailable(draft, p.id, { reason: 'rest', games: 1 }, atMs);
+  if (slot >= 0) t.lineupSlots[slot].playerId = sub.id;
+  return ev;
+}
+
+/** The bench bat who fills in for `p`: one who plays the position first, then the best (null: nobody to spare). */
+function _fillIn(draft, t, p) {
+  const OF = /^(LF|CF|RF|OF)$/;
+  const fits = (x) => x.pos === p.pos || x.nativePos === p.pos || (OF.test(x.pos) && OF.test(p.pos)) || (p.pos === 'DH');
+  const bench = (t.rosterIds || []).map(id => draft.players[id])
+    .filter(x => x && !isPitcher(x) && x.id !== p.id && !x.unavailable && !x.isInjured && !x.isSuspended
+      && [PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS].includes(x.group) && !(t.lineupSlots || []).some(s => s.playerId === x.id));
+  return bench.sort((a, b) => (fits(b) - fits(a)) || ((b.ovr || 0) - (a.ovr || 0)))[0] || null;
+}
+
+/** The player is back: his lineup spot and rotation turn return. */
+function _back(draft, t, p, teamId, events) {
+  const id = p.id;
+  const { slot, rotationIndex, reason } = p.unavailable;
+  p.unavailable = null;
+  events.push({ type: 'AVAILABLE', playerId: id, teamId, reason });
+  if (p.isInjured || p.isSuspended) return;
+  if (Number.isInteger(slot) && t.lineupSlots?.[slot] && !isPitcher(p)) {
+    const already = t.lineupSlots.findIndex(s => s.playerId === id);
+    if (already >= 0 && already !== slot) t.lineupSlots[already].playerId = null;
+    t.lineupSlots[slot].playerId = id;
+    delete t.lineupSlots[slot].emergency;
+  }
+  if (Number.isInteger(rotationIndex) && p.group === PLAYER_GROUP.STARTING_PITCHERS && t.rotation?.order
+      && !t.rotation.order.includes(id)) {
+    t.rotation.order.splice(Math.min(rotationIndex, t.rotation.order.length), 0, id);
+  }
+}
+
+/** r159 is anyone away for a stretch of days due back by `atMs`? (cheap — every clock step) */
+export function availabilityDue(state, atMs) {
+  for (const id of state.userTeam?.rosterIds || []) {
+    const u = state.players?.[id]?.unavailable;
+    if (u?.untilMs && u.untilMs <= atMs) return true;
+  }
+  return false;
+}
+
+/** r159 back from a stretch of days away (focused work, a program): on the clock, not by games. */
+export function releaseDue(draft, atMs) {
+  const events = [];
+  const t = draft.userTeam;
+  for (const id of t?.rosterIds || []) {
+    const p = draft.players[id];
+    if (p?.unavailable?.untilMs && p.unavailable.untilMs <= atMs) _back(draft, t, p, 'user', events);
+  }
+  return events;
+}
+
+/** r159 a hitter's wear in words and numbers, for the manager and the physician. */
+export function wearOf(p) {
+  const w = p?.wear || 0;
+  const dip = w < WEAR.tired ? 0 : Math.min(WEAR.dipMax, WEAR.dip + Math.floor((w - WEAR.tired) / WEAR.dipStep));
+  return { wear: w, tired: w >= WEAR.tired, dip, toRest: Math.max(0, Math.ceil(WEAR.autoRest - w)) };
 }
 
 // ─────────────────────────────────────────────────────────────

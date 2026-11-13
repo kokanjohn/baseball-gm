@@ -20,6 +20,8 @@ import { formatK } from './CardTokens.js';
 import { scoutEye as directorEye, scoutLooks } from './CoachEngine.js';
 import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from './TradeAdvice.js';
 import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart } from './TradeEngine.js';
+import { coachRead, programRead, restRead, healthRead, isPitcher as isArm } from './PlayerWork.js';
+import { PLAYER_WORK } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -77,6 +79,7 @@ const STAFF = {
   scouting:        { key: 'scoutingDirector', role: 'Scouting Director' },
   media_relations: { role: 'Media Relations' },
   community:       { role: 'Community Affairs' },
+  physician:       { role: 'Team Physician' },
 };
 
 function _who(state, channelId) {
@@ -859,6 +862,7 @@ const TOPIC_LABELS = {
   tix_renewals: 'season-ticket renewals', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
   mr_narrative: 'the coverage', ca_event: 'community commitments',
+  hc_work: 'the work', pc_work: 'the work', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
 };
 
 
@@ -1115,6 +1119,146 @@ W.sc_shop = (f, r, who, arg) => {
     trade: shop.best ? { teamId: shop.best.teamId, offer: shop.best.offer, round: null, dealKey: null, expiresAtMs: f.atMs + 2 * MS_DAY,
                          yesLabel: 'Make the Offer', yesMsg: `Offer sent to ${shop.best.team}. Their answer comes on their clock.` } : null,
   };
+};
+
+// ─────────────────────────────────────────────────────────────
+// r159 §122.31 WORK WITH ONE PLAYER (the GM picks the player, and the skill)
+// ─────────────────────────────────────────────────────────────
+// `arg`: { playerId, skill? }. Written as the reply comes back, from the
+// player and the schedule as they are then (PlayerWork's reads).
+
+const ROOM_WORDS = {
+  lots: "There's plenty of room there.", some: "There's room to get better.",
+  'a little': "It's already good, so there isn't a lot left to find.", 'very little': "It's about as good as it gets; I'd expect very little.",
+};
+const ODDS_WORDS = {
+  good: (age) => `At ${age}, I like the odds.`, fair: () => 'I think we can move it.',
+  modest: () => "I'd keep expectations modest.", slim: (age) => `At ${age}, I wouldn't expect much.`,
+};
+/** "after tonight's game" / "after the game on June 12". */
+const afterGame = (f, g) => { const w = f.when(g.gameTime); return /^[A-Z]/.test(w) ? `after the game on ${w}` : `after ${w}'s game`; };
+const gamesWord = (n) => (n === 0 ? 'no games' : plural(n, 'game'));
+/** The days away, against the schedule: what starting now costs, and the cheapest start within the offer. */
+function windowWords(f, name, w) {
+  const out = [];
+  const n = w.now.games.length;
+  out.push(n === 0 ? `If we start today, ${name} doesn't miss a game.` : `If we start today, ${name} misses ${gamesWord(n)}.`);
+  if (w.best) out.push(`If you give me the go-ahead ${afterGame(f, w.best.after)}, it's ${gamesWord(w.best.games.length)}.`);
+  return out.join(' ');
+}
+const busyWords = (f, plan, who) => {
+  const p = f.P(plan.playerId), left = Math.max(...plan.steps.filter(x => !x.done).map(x => x.atMs), f.atMs) - f.atMs;
+  const days = Math.max(1, Math.round(left / 86_400_000));
+  return `${who} working with ${p?.name || 'another player'} on ${plan.keys.join(' and ')} right now, with about ${plural(days, 'day')} to go.`;
+};
+
+/** The hitting or pitching coach on working with one player on one skill. */
+function coachWork(f, r, who, arg) {
+  const st = f.state, read = arg?.playerId ? coachRead(st, arg.playerId, arg.skill, f.atMs) : null;
+  const p = arg?.playerId ? st.players[arg.playerId] : null;
+  if (!read) return { body: [`${p?.name || 'That player'} isn't with the club right now, so there's nothing to work on.`], memo: {}, topic: 'that player' };
+  const { skill, value } = read, name = p.name;
+  const topic = `${name}'s ${skill}`;
+  if (p.isInjured) return { body: [`${name} is hurt. The work waits until ${name} is back.`], memo: { playerId: p.id }, topic };
+  if (read.busy) {
+    const mine = read.busy.playerId === p.id;
+    return { body: [mine ? `I'm already working with ${name} on ${read.busy.keys.join(' and ')}. One thing at a time.`
+                         : `${busyWords(f, read.busy, "I'm")} I take one player at a time, so I can start with ${name} once that's done.`],
+             memo: { playerId: p.id }, topic };
+  }
+  if (read.already) return { body: [`${name} already has a plan on ${skill} running. Let it land first.`], memo: { playerId: p.id }, topic };
+  const out = [`${name}'s ${skill} is ${value}. ${ROOM_WORDS[read.room]} ${ODDS_WORDS[read.odds](read.age)}`];
+  const spot = isArm(p) ? (p.pos === 'SP' ? 'between starts' : 'in the bullpen sessions') : 'before games';
+  if (read.kind === 'tweaks') {
+    out.push(`This doesn't need time away. I'll fold it into the work we already do ${spot}: extra reps and a couple of adjustments. ${name} stays available, and it costs us nothing.`);
+  } else {
+    out.push(`This needs focused work: ${plural(read.days, 'day')} away from the club with me at the complex, about ${formatK(read.costK)} for the extra cage and staff time.`);
+    out.push(windowWords(f, name, read.window));
+    out.push(`The offer stands for ${plural(PLAYER_WORK.offerDays, 'day')}, so you can pick the day.`);
+  }
+  out.push('Some of this takes right away and some takes weeks, and sometimes it just doesn\'t take. I\'ll tell you how it went.');
+  return {
+    body: out, memo: { playerId: p.id }, topic,
+    decision: {
+      playerId: p.id, onYes: 'coach_work', yesLabel: read.kind === 'tweaks' ? 'Start the Work' : 'Start the Work Now', noLabel: 'Not Now',
+      work: { skill, owner: read.coach, days: read.days, gain: read.gain, source: read.coach === 'hittingCoach' ? 'hc_work' : 'pc_work' },
+      costK: read.costK || 0, expiresInMs: PLAYER_WORK.offerDays * 86_400_000,
+      yesMsg: read.kind === 'tweaks' ? `I'll start with ${name} today.` : `${name} is with me for the next ${plural(read.days, 'day')}.`,
+      noMsg: 'Understood. Another time.',
+    },
+  };
+}
+W.hc_work = coachWork;
+W.pc_work = coachWork;
+
+/** Scouting/Dev: an off-site development program for one player. */
+W.sc_program = (f, r, who, arg) => {
+  const st = f.state, read = arg?.playerId ? programRead(st, arg.playerId, arg.skill, f.atMs) : null;
+  const p = arg?.playerId ? st.players[arg.playerId] : null;
+  if (!read) return { body: [`${p?.name || 'That player'} isn't with the club right now.`], memo: {}, topic: 'the program' };
+  const { skill, value } = read, name = p.name, topic = `a program for ${name}`;
+  if (p.isInjured) return { body: [`${name} is hurt. A program can wait until ${name} is healthy.`], memo: { playerId: p.id }, topic };
+  if (read.busy) return { body: [`${busyWords(f, read.busy, 'The program is')} It takes one player at a time, so ${name} would go next.`], memo: { playerId: p.id }, topic };
+  if (read.already) return { body: [`${name} already has a plan on ${skill} running. Let it land first.`], memo: { playerId: p.id }, topic };
+  const out = [
+    `We can send ${name} to our development complex for ${plural(read.days, 'day')} of work on ${skill}, which is at ${value} now. It costs ${formatK(read.costK)}: the instructors, the facility and the travel.`,
+    `${ROOM_WORDS[read.room]} ${ODDS_WORDS[read.odds](read.age)} This is the most we can do for a player in-season. It's also the most expensive, and some players come back with less than we hoped.`,
+    windowWords(f, name, read.window),
+  ];
+  return {
+    body: out, memo: { playerId: p.id }, topic,
+    decision: {
+      playerId: p.id, onYes: 'dev_program', yesLabel: 'Send Them Now', noLabel: 'Not Now',
+      work: { skill, owner: 'program', days: read.days, gain: read.gain, source: 'sc_program' },
+      costK: read.costK, expiresInMs: PLAYER_WORK.offerDays * 86_400_000,
+      yesMsg: `${name} leaves for the complex today, back in ${plural(read.days, 'day')}.`, noMsg: 'Understood. The spot stays open.',
+    },
+  };
+};
+
+/** The manager: a day off for one hitter. */
+W.mgr_rest = (f, r, who, arg) => {
+  const st = f.state, read = arg?.playerId ? restRead(st, arg.playerId, f.atMs) : null;
+  const p = arg?.playerId ? st.players[arg.playerId] : null;
+  if (!read) return { body: [`${p?.name || 'That player'} isn't one of our hitters right now.`], memo: {}, topic: 'a day off' };
+  const name = p.name, topic = `a day off for ${name}`;
+  if (read.away || p.isInjured) return { body: [`${name} is already out, so ${name} is resting either way.`], memo: { playerId: p.id }, topic };
+  if (!read.inLineup) return { body: [`${name} isn't in the lineup right now, so ${name} is getting the rest already.`], memo: { playerId: p.id }, topic };
+  const w = Math.round(read.wear);
+  const out = [read.tired
+    ? `${name} needs it. That's ${plural(w, 'game')} of wear without a real break, and the bat has slowed down. A day off clears it.`
+    : `${name} is holding up. That's ${plural(w, 'game')} of wear since a real break, which is fine. A day off now won't hurt, though.`];
+  if (!read.tired && read.toRest > 0) out.push(`If nobody says anything, I'd sit ${name} myself in about ${plural(read.toRest, 'game')}.`);
+  if (read.next) out.push(`If you want it, ${name} sits ${f.onWhen(read.next.gameTime)} and the bench covers.`);
+  return {
+    body: out, memo: { playerId: p.id }, topic,
+    decision: { playerId: p.id, onYes: 'day_off', yesLabel: 'Give Them the Day Off', noLabel: 'Keep Them In', expiresInMs: 86_400_000,
+                yesMsg: `${name} sits the next game and comes back fresh.`, noMsg: `${name} stays in the lineup.` },
+  };
+};
+
+/** The team physician on one player. */
+W.doc_health = (f, r, who, arg) => {
+  const st = f.state, read = arg?.playerId ? healthRead(st, arg.playerId, f.atMs) : null;
+  const p = arg?.playerId ? st.players[arg.playerId] : null;
+  if (!read) return { body: [`${p?.name || 'That player'} isn't one of ours anymore.`], memo: {}, topic: 'that player' };
+  const name = p.name, out = [];
+  if (read.now) {
+    const back = read.now.returnAt ? ` I expect ${name} back ${f.onWhen(read.now.returnAt)}.` : read.now.status === 'evaluating' ? ' We\'re still evaluating it.' : '';
+    out.push(`${name} is hurt: ${String(read.now.label || 'an injury').toLowerCase()}.${back}`);
+  } else if (read.playingHurt) {
+    out.push(`${name} is playing through something. It's costing a little ${read.playingHurt.subRating} for the next ${plural(read.playingHurt.gamesLeft, 'game')}.`);
+  } else out.push(`${name} is healthy. Nothing is bothering ${name} right now.`);
+  if (read.log.length) {
+    const last = read.log[read.log.length - 1];
+    out.push(`On file: ${plural(read.log.length, 'injury', 'injuries')} with us, the last a ${last.severity} ${String(last.label).toLowerCase()} ${f.onWhen(last.atMs)}.${read.recent.length >= 2 ? ' That many in a short span tells me to keep the workload in check.' : ''}`);
+  } else out.push(`There's nothing in ${name}'s file with us.`);
+  if (read.wear) out.push(read.wear.tired ? `${name} is worn down: ${plural(Math.round(read.wear.wear), 'game')} without a real break. That's when hitters get hurt. A day off would help.`
+                                         : `The workload is fine: ${plural(Math.round(read.wear.wear), 'game')} since a real break.`);
+  if (read.age >= 35) out.push(`At ${read.age}, the body takes longer to bounce back, and injuries come a little more often.`);
+  else if (read.age >= 32) out.push(`At ${read.age}, the risk starts to creep up, but nothing unusual yet.`);
+  if (read.away?.reason === 'training') out.push(`${name} is away for development work right now.`);
+  return { body: out, memo: { playerId: p.id }, topic: `${name}'s health` };
 };
 
 /** Topics with a writer. */

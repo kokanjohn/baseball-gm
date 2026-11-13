@@ -10451,3 +10451,75 @@ Fresh team: not needed. The wording and voices apply to messages from now on. Th
 - **multi-season** (+7): the same rules across three seasons and the winters (the review, the staff, the free agents). Signers are tracked as staff change.
 
 Fresh team: not needed. New messages use the new wording; messages already in an inbox keep theirs.
+
+---
+
+## §122.31 — r159: work with one player (coaches, a program, a day off, the physician)
+
+**Asked:**
+- Target Compose messages at specific players. For example, a hitter with a low contact rating: ask the hitting coach (or Scouting/Dev) to work with them on it. It won't always work, but an active GM should have that lever.
+- Add other easy levers like it. Consider bringing back training and discipline.
+- Options came first. The user chose:
+  - coach work costs **days away plus money**, *days rather than games*, so a savvy GM starts it before an off day or a travel day;
+  - **sometimes no time away at all**: the coach decides between "tweaks" during practice that's already scheduled, and "focused" days away;
+  - **one player per coach at a time**;
+  - add-ons: **an off-site program**, **a day off**, **a physician read**.
+
+**What was already there:**
+- development plans (§71): a gain that lands quick, gradual or slow, or fizzles, scaled by age, trait, the coach's quality and relationship;
+- the training and discipline cards, still dealt at random (in a test season, 14 training and 9 conduct cards), but never started by the GM;
+- Compose's player picker (r151 "What could we get for…?").
+
+**Not brought back:** starting discipline yourself. With no incident it's arbitrary, and there's no per-player mood for it to act on. Conduct incidents still come with real choices. "Talk a player through a rough patch" is out for the same reason (no player morale model). Teaching a new position is a bigger change (the lineup logic treats positions as fixed), left for later.
+
+**Built:**
+- **New Compose topics** (player picker; the skill picker shows each skill with its rating):
+  - Hitting Coach → "Work with a hitter on…" (`hc_work`: contact / power / speed);
+  - Pitching Coach → "Work with a pitcher on…" (`pc_work`: stuff / control / stamina);
+  - Scouting / Dev → "A development program" (`sc_program`, any player);
+  - Manager → "A day off for a hitter" (`mgr_rest`);
+  - **Team Physician** (a new recipient) → "A player's health" (`doc_health`).
+- **The coach's call** (`PlayerWork.coachRead`, constants `PLAYER_WORK.coach`):
+  - **Focused** when the skill is under 55, or 12+ below the player's best tool while still under 70. That means 2 days away (3 if under 45) at $20K a day, planned gain 2.0 OVR.
+  - **Tweaks** otherwise: no time away, no cost, planned gain 0.8.
+  - The reply says where the skill stands, the room left (a high rating has little: `roomLeft` gives 85+ ¼ of the gain, 75+ 0.55, 65+ 0.8), the odds in the coach's words (age, trait, coach, room) and, for focused work, **which games the days cover if started now, and the cheapest start** in the offer's 3-day life ("If you give me the go-ahead after today's game, it's 1 game").
+  - The GM's yes **is** the start, so they time it.
+  - One player per coach (`activeWork(owner)`): a second ask gets "I'm working with X… one player at a time", with no decision.
+- **The program** (`PLAYER_WORK.program`): 5 days away (7 if older than 24), $90K plus $25K a day, planned gain 3.6. It's one player at a time and can fizzle.
+- **Days, not games:**
+  - `setUnavailable({ untilMs })` makes a stretch of days away;
+  - `releaseDue` on the roster clock (GameEngine `_rosterStep`) brings the player back with their lineup spot and rotation turn;
+  - Team shows "training, 3 days".
+- **Wear** (every club alike, `WEAR`):
+  - each start adds 1 (a catcher 1.5), a game off takes 8, each off day beyond the first takes 3;
+  - at 12 a hitter's contact and power dip (2, +1 per 4 more, max 5) and the injury odds take the fatigue modifier;
+  - at 20 the manager sits the player for a game, on any club (a news line for ours);
+  - a day off clears it.
+  - `countGame(draft, teamId, atMs)` keeps it, so a day off matters.
+- **The physician:**
+  - what's wrong now (or playing hurt);
+  - the file: `injuryLog`, the last eight injuries, kept from now on;
+  - the wear;
+  - the age. Read-only.
+- **The report back:** when a coach's or the program's plan finishes, whoever did the work writes ("It went better than I hoped: contact from 44 to 47. Thomas is OVR 59 now"), including a plan that didn't take. Plans keep `owner` and `from`.
+- **Plumbing:**
+  - Compose decisions carry `work` (skill, owner, days, gain), `costK` (charged as the decision's budget cost) and the replies;
+  - new card actions `coach_work`, `dev_program`, `day_off`;
+  - the harness game driver is now shared (`tools/harness/drive.mjs`).
+
+**Checks:**
+- **check-player-work** (new, 27, stable over runs), through Compose as the GM would:
+  - a weak skill's call is focused (days, cost, the games covered, a decision); yes takes the player away by the clock and charges the cost;
+  - the coach's plan runs; a second player gets "busy";
+  - the player is back on time; a good skill's call is tweaks (no time away, no cost);
+  - the room left; the program (days, cost, plan);
+  - the cheapest start; wear builds and dips;
+  - the manager's day off clears it; a CPU regular at the limit sits;
+  - the physician's read; the injury file; the coach's report and a free coach after it.
+- **test-player-work-ui** (new, 13, dark and light):
+  - the Physician is listed; the topic; hitters only;
+  - Send waits for a player, then a skill (each with its rating);
+  - the reply's call and decision; yes takes the player away;
+  - Team shows "training, N days".
+
+Fresh team: not needed. Wear starts at 0 and the injury file starts empty on an existing team.

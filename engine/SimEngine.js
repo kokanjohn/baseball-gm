@@ -76,7 +76,7 @@ import { injuryChancePerExposure } from './InjuryEngine.js';
 import {
   ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, tireAfterBF, reliefInnings, springStarterInnings,
 } from './PitchingEngine.js';
-import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS } from '../data/constants.js';
+import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -1835,7 +1835,7 @@ function _injuryPlay(halfKey, fields) {
  */
 function _batterHurt(gs, players, plays, slots, bench, slotIdx, batter, pitcher, outs, bases, halfKey) {
   if (gs.hurt.has(batter.id)) return bases;
-  if (_roll() >= injuryChancePerExposure(batter, 'hitter', gs.injuryYear)) return bases;
+  if (_roll() >= injuryChancePerExposure(batter, 'hitter', gs.injuryYear, (batter?.wear || 0) >= WEAR.tired)) return bases;   // r159 worn down: likelier hurt
   const pos = (p) => p?.nativePos || p?.pos;
   const inGame = new Set(slots.map(s => s.id));
   const avail = (bench || []).filter(b => !b.used && !inGame.has(b.id) && !gs.hurt.has(b.id) && players[b.id] && isAvailable(players[b.id]));
@@ -2906,6 +2906,9 @@ function _effectiveSR(player, subRatingKey, baseValue, { coached = true } = {}) 
   if (player?.injuryPenalty?.subRating === subRatingKey) v -= player.injuryPenalty.amount || 0;
   // §71: playing sick or hurt — a temporary dip for a few games.
   if (player?.condition?.subRating === subRatingKey) v -= player.condition.amount || 0;
+  // r159 §122.31 a worn-down hitter (every club alike): the bat slows.
+  if ((subRatingKey === 'contact' || subRatingKey === 'power') && (player?.wear || 0) >= WEAR.tired)
+    v -= Math.min(WEAR.dipMax, WEAR.dip + Math.floor((player.wear - WEAR.tired) / WEAR.dipStep));
   return Math.max(40, v);
 }
 

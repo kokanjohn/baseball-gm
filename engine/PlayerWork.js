@@ -1,0 +1,178 @@
+/**
+ * engine/PlayerWork.js
+ * r159 §122.31 Work the GM asks for, one player at a time.
+ *
+ *   Coach work  — the hitting or pitching coach works with one player on one
+ *                 skill (one player per coach at a time). The coach makes the
+ *                 call: 'tweaks' (extra reps in practice already on the
+ *                 schedule — no time away, no cost, a small gain) or 'focused'
+ *                 (days away from the club, at a cost, a bigger gain). Days,
+ *                 not games: a GM who starts it before an off day or a travel
+ *                 day loses fewer games — the coach says which games the days
+ *                 cover now and when the cheapest start is.
+ *   A program   — Scouting/Dev's off-site development program: a week away,
+ *                 a real price, the biggest possible gain (one at a time).
+ *   A day off   — the manager sits a hitter for the next game: his wear clears.
+ *   Health read — the team physician on one player: what's wrong now, what's
+ *                 happened before, how worn down, the age.
+ *
+ * Every plan runs on DevelopmentEngine (it can land fast, slowly, or fizzle).
+ * Pure: never imports StateManager. Reads take the state; `start*` mutate the
+ * draft the caller passes (inside StateManager.mutate) and return events.
+ */
+
+import { PLAYER_WORK, PLAYER_GROUP } from '../data/constants.js';
+import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
+import { gainMultiplier, roomLeft, activeWork, setUnavailable, startPlan, wearOf, developmentStatus } from './DevelopmentEngine.js';
+
+const DAY = 86_400_000, HOUR = 3_600_000;
+const GAME_SPAN = 3.5 * HOUR;   // a game, first pitch to the last out (when a start "after the game" begins)
+
+export const SKILLS = Object.freeze({ hitter: ['contact', 'power', 'speed'], pitcher: ['stuff', 'control', 'stamina'] });
+export const SKILL_WORDS = Object.freeze({
+  contact: 'contact', power: 'power', speed: 'speed', stuff: 'stuff', control: 'control', stamina: 'stamina',
+});
+export const isPitcher = (p) => p?.pos === 'SP' || p?.pos === 'RP';
+export const coachOf = (p) => (isPitcher(p) ? 'pitchingCoach' : 'hittingCoach');
+export const skillsOf = (p) => (isPitcher(p) ? SKILLS.pitcher : SKILLS.hitter);
+
+/** Ours, on the club (active or bench), not hurt, not away. */
+export function workable(state, p) {
+  return !!p && p.teamId === 'user' && (state.userTeam?.rosterIds || []).includes(p.id)
+    && ![PLAYER_GROUP.IL, PLAYER_GROUP.RETIRED, PLAYER_GROUP.DEPARTED].includes(p.group);
+}
+
+/** The players a topic can be about: ours, best first (hitters or pitchers or both). */
+export function workPlayers(state, kind = 'any') {
+  return (state.userTeam?.rosterIds || []).map(id => state.players?.[id])
+    .filter(p => workable(state, p) && (kind === 'any' || (kind === 'pitchers') === isPitcher(p)))
+    .sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
+}
+
+// ─────────────────────────────────────────────────────────────
+// THE CALENDAR: which games a stretch of days covers
+// ─────────────────────────────────────────────────────────────
+
+const ourGames = (state, fromMs) => (state.schedule || [])
+  .filter(g => !g._committed && !g.cancelled && Number.isFinite(g.gameTime) && g.gameTime + GAME_SPAN > fromMs)
+  .sort((a, b) => a.gameTime - b.gameTime);
+
+/** The games of ours a player away from `fromMs` for `days` days would miss. */
+export function gamesMissed(state, fromMs, days) {
+  const until = fromMs + days * DAY;
+  return ourGames(state, fromMs).filter(g => g.gameTime >= fromMs && g.gameTime < until);
+}
+
+/**
+ * Starting now, or after one of the next few games (within the offer's life):
+ * the start that costs the fewest games (the earliest of those).
+ */
+export function bestStart(state, atMs, days, horizonMs = PLAYER_WORK.offerDays * DAY) {
+  const now = { atMs, games: gamesMissed(state, atMs, days) };
+  let best = now;
+  for (const g of ourGames(state, atMs)) {
+    const t = g.gameTime + GAME_SPAN;
+    if (t > atMs + horizonMs) break;
+    if (t <= atMs) continue;
+    const games = gamesMissed(state, t, days);
+    if (games.length < best.games.length) best = { atMs: t, games, after: g };
+  }
+  return { now, best: best === now ? null : best };
+}
+
+// ─────────────────────────────────────────────────────────────
+// THE READS (what the staff would tell the GM)
+// ─────────────────────────────────────────────────────────────
+
+/** How much a player has left to find in a skill, in words for the reply. */
+function roomWord(v) {
+  const share = roomLeft(v);
+  return share >= 1 ? 'lots' : share >= 0.8 ? 'some' : share >= 0.5 ? 'a little' : 'very little';
+}
+
+/** The odds as the coach would put them (age, trait, the coach, the room left). */
+function oddsWord(mult) {
+  return mult >= 1.15 ? 'good' : mult >= 0.85 ? 'fair' : mult >= 0.55 ? 'modest' : 'slim';
+}
+
+/**
+ * coachRead(state, playerId, skill, atMs)
+ * The coach's call on working with a player on one skill.
+ * @returns {Object|null} { p, skill, value, coach, busy, already, kind, days, costK, gain, room, odds, window }
+ */
+export function coachRead(state, playerId, skill, atMs) {
+  const p = state.players?.[playerId];
+  if (!workable(state, p) || !skillsOf(p).includes(skill)) return null;
+  const C = PLAYER_WORK.coach, sr = p.subRatings || {};
+  const value = sr[skill] ?? 50;
+  const coach = coachOf(p);
+  const busy = activeWork(state, coach);
+  const already = (state.developmentPlans || []).some(x => x.status === 'active' && x.playerId === p.id && x.keys.includes(skill));
+  const best = Math.max(...skillsOf(p).map(k => sr[k] ?? 0));
+  const focused = value < C.focusedBelow || (best - value >= C.focusedGap && value < C.focusedCap);
+  const kind = focused ? 'focused' : 'tweaks';
+  const days = focused ? (value < C.lowSkill ? C.focusedDaysLow : C.focusedDays) : 0;
+  const mult = gainMultiplier(state, p) * roomLeft(value);
+  return {
+    p, skill, value, coach, busy, already,
+    kind, days, costK: days * C.costPerDayK, gain: focused ? C.focusedGain : C.tweaksGain,
+    room: roomWord(value), odds: oddsWord(mult), age: computeAge(p.dob, baseballYear(state)),
+    window: days ? bestStart(state, atMs, days) : null,
+  };
+}
+
+/**
+ * programRead(state, playerId, skill, atMs)
+ * Scouting/Dev's off-site program for one player on one skill.
+ */
+export function programRead(state, playerId, skill, atMs) {
+  const p = state.players?.[playerId];
+  if (!workable(state, p) || !skillsOf(p).includes(skill)) return null;
+  const G = PLAYER_WORK.program, value = p.subRatings?.[skill] ?? 50;
+  const age = computeAge(p.dob, baseballYear(state));
+  const days = age <= 24 ? G.days : G.daysLow;
+  const mult = gainMultiplier(state, p) * roomLeft(value);
+  return {
+    p, skill, value, age, busy: activeWork(state, 'program'), days, costK: G.baseK + days * G.perDayK, gain: G.gain,
+    room: roomWord(value), odds: oddsWord(mult), window: bestStart(state, atMs, days),
+    already: (state.developmentPlans || []).some(x => x.status === 'active' && x.playerId === p.id && x.keys.includes(skill)),
+  };
+}
+
+/** The manager's read on a day off for one hitter. */
+export function restRead(state, playerId, atMs) {
+  const p = state.players?.[playerId];
+  if (!workable(state, p) || isPitcher(p)) return null;
+  const next = ourGames(state, atMs).find(g => g.gameTime > atMs) || null;
+  const inLineup = (state.userTeam?.lineupSlots || []).some(s => s.playerId === p.id);
+  return { p, ...wearOf(p), next, inLineup, away: !isAvailable(p) };
+}
+
+/** The team physician on one player. */
+export function healthRead(state, playerId, atMs) {
+  const p = state.players?.[playerId];
+  if (!p || p.teamId !== 'user') return null;
+  const age = computeAge(p.dob, baseballYear(state));
+  const log = (p.injuryLog || []).filter(x => x.atMs <= atMs);
+  return {
+    p, age, now: p.isInjured ? (p.injury || {}) : null, playingHurt: p.condition || null,
+    log, recent: log.filter(x => atMs - x.atMs < 120 * DAY), wear: isPitcher(p) ? null : wearOf(p),
+    away: p.unavailable || null, dev: developmentStatus(state, p.id),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// STARTING THE WORK (inside StateManager.mutate)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * startWork(draft, { playerId, skill, owner, kind, days, gain, source }, atMs)
+ * Days away (if any) and the plan, run by its owner. Returns events.
+ */
+export function startWork(draft, { playerId, skill, owner, days = 0, gain, source }, atMs) {
+  const out = [];
+  if (days > 0) out.push(setUnavailable(draft, playerId, { reason: 'training', untilMs: atMs + days * DAY }, atMs));
+  const plan = startPlan(draft, playerId, { gain, focus: [skill], source, owner }, atMs);
+  if (plan) out.push({ type: 'DEV_STARTED', playerId, owner, skill, days });
+  return out.filter(Boolean);
+}

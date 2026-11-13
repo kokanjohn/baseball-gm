@@ -30,6 +30,7 @@ import { snapshotMetrics } from '../formatters.js';
 import * as When from '../../engine/When.js';
 import { dealsFor, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
 import { namedPlayers } from '../../engine/ComposeReplies.js';
+import { workPlayers, skillsOf } from '../../engine/PlayerWork.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -41,7 +42,8 @@ let _openCard       = null;     // §115 instanceId of the message open in the r
 let _listScroll     = 0;        // the list's scroll position, restored on the way back
 let _composeChannel = null;     // currently selected compose channel id
 let _composeTopic   = null;     // currently selected compose topic id
-let _composeDeal    = null;     // r150 the deal a trade topic asks about (its key)
+let _composeDeal    = null;     // r150 the deal a trade topic asks about (its key) — or r151 the player a topic is about
+let _composeSkill   = null;     // r159 the skill a work topic is about
 let _mounted      = false;
 let _listeners    = [];
 
@@ -72,6 +74,7 @@ const COMPOSE_CHANNELS = [
       { id: 'mgr_rotation',  label: 'Rotation status',          desc: 'Check on SP workload and next starts' },
       { id: 'mgr_matchup',   label: 'Upcoming series prep',     desc: 'Discuss the next opponent\'s tendencies' },
       { id: 'mgr_trade',     label: 'A trade on the table',     desc: 'How a deal would change us on the field, with the coaches\' read on who\'s coming in', deal: true },
+      { id: 'mgr_rest',      label: 'A day off for a hitter',   desc: 'Pick a hitter: how worn down they are, and a day off if you want one', player: 'hitters' },
     ],
   },
   {
@@ -84,6 +87,7 @@ const COMPOSE_CHANNELS = [
       { id: 'pc_rotation',   label: 'Rotation health',          desc: 'Check arm health across the rotation' },
       { id: 'pc_reliever',   label: 'Bullpen workload',         desc: 'Review reliever usage and recovery' },
       { id: 'pc_prospect',   label: 'Young pitcher check-in',   desc: 'A report on a young arm — and a development plan if you want one' },
+      { id: 'pc_work',       label: 'Work with a pitcher on…',  desc: 'Pick a pitcher and a skill: the coach decides how much work it takes', player: 'pitchers', skill: true },
     ],
   },
   {
@@ -96,6 +100,7 @@ const COMPOSE_CHANNELS = [
       { id: 'hc_slump',      label: 'Hitter in a slump',        desc: 'Ask about a struggling hitter\'s approach' },
       { id: 'hc_development', label: 'Development check-in',    desc: 'A young hitter\'s progress — and a development plan if you want one' },
       { id: 'hc_lineup',     label: 'Lineup optimization',      desc: 'Discuss batting order construction' },
+      { id: 'hc_work',       label: 'Work with a hitter on…',   desc: 'Pick a hitter and a skill: the coach decides how much work it takes', player: 'hitters', skill: true },
     ],
   },
   {
@@ -163,9 +168,21 @@ const COMPOSE_CHANNELS = [
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
       { id: 'sc_trade',      label: 'Is there a better deal?',  desc: 'The director\'s counter to a trade on the table, and what the deal does to payroll', deal: true },
       { id: 'sc_shop',       label: 'What could we get for…?',  desc: 'Pick one of our players: the director calls the clubs that could use them', player: true },
+      { id: 'sc_program',    label: 'A development program',    desc: 'Send a player to our complex for focused work on one skill', player: 'any', skill: true },
     ],
   },
   // Low priority — event-driven
+  // r159 §122.31 the team physician on one player.
+  {
+    id:       'physician',
+    label:    'Team Physician',
+    icon:     '🩺',
+    role:     'Medical Staff',
+    priority: 'medium',
+    topics: [
+      { id: 'doc_health',    label: 'A player\'s health',        desc: 'Pick a player: what\'s bothering them, their history, how worn down they are', player: 'any' },
+    ],
+  },
   {
     id:       'media_relations',
     label:    'Media Relations',
@@ -212,6 +229,7 @@ export function mount() {
     _composeChannel = null;
     _composeTopic = null;
     _composeDeal = null;
+    _composeSkill = null;
   });
 
   const wire = (event, handler) => {
@@ -634,6 +652,13 @@ function _topicState(t, state) {
     }
     return { deals: open };
   }
+  // r159 a player topic (work, a day off, health): any of ours it fits, not one already asked about.
+  if (t.player && t.player !== true) {
+    const asked = new Set((state.scheduledCards || []).filter(c => c.isCompose && c._composeTopic === t.id).map(c => c._composeArg?.playerId));
+    const ps = workPlayers(state, t.player).filter(p => !asked.has(p.id));
+    if (!ps.length) return asked.size ? { waiting: (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id) } : { none: 'No player to ask about' };
+    return { players: ps };
+  }
   // r151 shopping a player: one of ours who can be traded now, not shopped in the last few days.
   if (t.player) {
     const now = Date.now();
@@ -708,25 +733,31 @@ function _composeTopics(state, ch) {
     const byOvr = (a, b) => (b.ovr || 0) - (a.ovr || 0);
     const opt = (p) => `<option value="${p.id}"${_composeDeal === p.id ? ' selected' : ''}>${_escape(p.name)} — ${_escape(p.nativePos || p.pos)}, OVR ${p.ovr}</option>`;
     const isP = (p) => p.pos === 'SP' || p.pos === 'RP';
+    const hit = st.players ? st.players.filter(p => !isP(p)).sort(byOvr) : [], arm = st.players ? st.players.filter(isP).sort(byOvr) : [];
     const players = isSel && !off && st.players ? `<div class="compose-h compose-deal-h">Which player?</div>
       <select class="compose-player-select" id="compose-player" aria-label="Which player">
         <option value=""${_composeDeal ? '' : ' selected'}>Choose a player</option>
-        <optgroup label="Hitters">${st.players.filter(p => !isP(p)).sort(byOvr).map(opt).join('')}</optgroup>
-        <optgroup label="Pitchers">${st.players.filter(isP).sort(byOvr).map(opt).join('')}</optgroup>
+        ${hit.length ? `<optgroup label="Hitters">${hit.map(opt).join('')}</optgroup>` : ''}
+        ${arm.length ? `<optgroup label="Pitchers">${arm.map(opt).join('')}</optgroup>` : ''}
       </select>` : '';
+    // r159 a work topic, a player picked: which skill (with where it stands now).
+    const pick = isSel && !off && t.skill && _composeDeal ? state.players[_composeDeal] : null;
+    const skills = pick ? `<div class="compose-h compose-deal-h">Work on what?</div>
+      <div class="compose-skills">${skillsOf(pick).map(k => `<button type="button" class="compose-skill${_composeSkill === k ? ' selected' : ''}" data-skill="${k}">
+        <span class="cs-name">${k[0].toUpperCase() + k.slice(1)}</span><span class="cs-val">${pick.subRatings?.[k] ?? '—'}</span></button>`).join('')}</div>` : '';
     return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
       <span>${_escape(t.label)}</span>
       <span class="topic-desc">${_escape(note || t.desc)}</span>
-    </div>${deals}${players}`;
+    </div>${deals}${players}${skills}`;
   }).join('');
   const sel = ch.topics.find(t => t.id === _composeTopic);
-  const canSend = !!_composeTopic && (!(sel?.deal || sel?.player) || !!_composeDeal);
+  const canSend = !!_composeTopic && (!(sel?.deal || sel?.player) || !!_composeDeal) && (!sel?.skill || !!_composeSkill);
   return `
     <button type="button" class="compose-back" id="compose-back">‹ All recipients</button>
     <div class="compose-to"><span class="compose-to-label">To</span> ${_escape(ch.label)}<span class="compose-to-role">${_escape(ch.role)}</span></div>
     <div class="compose-h">What about?</div>
     <div class="compose-topic-list">${rows}</div>
-    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : !_composeTopic ? 'Pick a topic' : sel?.player ? 'Pick a player' : 'Pick a deal'}</button>`;
+    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : !_composeTopic ? 'Pick a topic' : sel?.player && !_composeDeal ? 'Pick a player' : sel?.skill ? 'Pick a skill' : 'Pick a deal'}</button>`;
 }
 
 /** A trade topic with one deal on the table: that deal, picked already. */
@@ -775,6 +806,7 @@ function _attachTabListeners(state) {
         _composeChannel = null;
         _composeTopic   = null;
         _composeDeal    = null;
+        _composeSkill   = null;
       }
       _activeTab = tab;
       _openCard  = null;
@@ -858,12 +890,13 @@ function _attachTabListeners(state) {
       const open = ch.topics.filter(t => { const st = _topicState(t, StateManager.get()); return !st.waiting && !st.left && !st.none; });
       _composeTopic = open.length === 1 ? open[0].id : null;
       _composeDeal = _onlyDeal(ch, _composeTopic);
+      _composeSkill = null;
       refresh();
       _composeToTop();
     });
   });
   document.getElementById('compose-back')?.addEventListener('click', () => {
-    _composeChannel = null; _composeTopic = null; _composeDeal = null;
+    _composeChannel = null; _composeTopic = null; _composeDeal = null; _composeSkill = null;
     refresh();
     _composeToTop();
   });
@@ -872,7 +905,7 @@ function _attachTabListeners(state) {
   document.querySelectorAll('[data-topic]').forEach(el => {
     el.addEventListener('click', () => {
       if (el.classList.contains('disabled')) return;
-      if (_composeTopic !== el.dataset.topic) _composeDeal = null;
+      if (_composeTopic !== el.dataset.topic) { _composeDeal = null; _composeSkill = null; }
       _composeTopic = el.dataset.topic;
       const ch = COMPOSE_CHANNELS.find(c => c.id === _composeChannel);
       _composeDeal = _composeDeal || _onlyDeal(ch, _composeTopic);
@@ -882,7 +915,10 @@ function _attachTabListeners(state) {
   document.querySelectorAll('[data-deal]').forEach(el => {
     el.addEventListener('click', () => { _composeDeal = el.dataset.deal; refresh(); });
   });
-  document.getElementById('compose-player')?.addEventListener('change', (e) => { _composeDeal = e.target.value || null; refresh(); });
+  document.getElementById('compose-player')?.addEventListener('change', (e) => { _composeDeal = e.target.value || null; _composeSkill = null; refresh(); });
+  document.querySelectorAll('[data-skill]').forEach(el => {
+    el.addEventListener('click', () => { _composeSkill = el.dataset.skill; refresh(); });
+  });
 
   // Compose send button
   const sendBtn = document.getElementById('compose-send-btn');
@@ -958,7 +994,12 @@ async function _sendCompose(topicId, channelId, state) {
   const deal = topic?.deal ? (_topicState(topic, state).deals || []).find(d => d.key === _composeDeal) : null;
   if (topic?.deal && !deal) { App.showToast('That deal is no longer waiting on us.', 'neutral', 2500); refresh(); return; }
   const player = topic?.player ? (_topicState(topic, state).players || []).find(p => p.id === _composeDeal) : null;
-  if (topic?.player && !player) { App.showToast('That player can\'t be traded right now.', 'neutral', 2500); refresh(); return; }
+  if (topic?.player && !player) { App.showToast(topic.player === true ? 'That player can\'t be traded right now.' : 'That player isn\'t available to ask about.', 'neutral', 2500); refresh(); return; }
+  const skill = topic?.skill ? _composeSkill : null;
+  if (topic?.skill && !skillsOf(player).includes(skill)) { App.showToast('Pick a skill to work on.', 'neutral', 2500); refresh(); return; }
+  const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`,
+                       sc_program: (p) => `A development program for ${p.name}`, mgr_rest: (p) => `A day off for ${p.name}`,
+                       doc_health: (p) => `${p.name}'s health` };
 
   // Record cooldown immediately
   if (!topic?.deal && !topic?.player) StateManager.mutate(s => {
@@ -970,6 +1011,7 @@ async function _sendCompose(topicId, channelId, state) {
     const { deliverComposeCard } = await import('../../engine/CardEngine.js');
     deliverComposeCard(topicId, channelId, deal
       ? { topicLabel: deal.label, arg: { key: deal.key, label: deal.label, instanceId: deal.instanceId, expiresAtMs: deal.expiresAtMs } }
+      : player && WORK_LABEL[topicId] ? { topicLabel: WORK_LABEL[topicId](player), arg: { playerId: player.id, skill, label: player.name } }
       : player ? { topicLabel: `What could we get for ${player.name}?`, arg: { playerId: player.id, label: player.name } }
       : { topicLabel: topic?.label || '' });
     import('../PushClient.js').then(P => P.syncPushSchedule()).catch(() => {});
@@ -981,6 +1023,7 @@ async function _sendCompose(topicId, channelId, state) {
   _composeChannel = null;
   _composeTopic   = null;
   _composeDeal    = null;
+  _composeSkill   = null;
   App.showToast(`Message sent to ${ch?.label || 'staff'}. You'll hear back.`, 'positive', 2500);
   refresh();
   _composeToTop();
