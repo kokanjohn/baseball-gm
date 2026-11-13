@@ -74,6 +74,9 @@ export function mount() {
   _injectCSS();
 
   App.registerTabReset('dashboard', refresh);
+  // r155 leaving the dashboard: the live game opens on its first view again (Play by Play; the
+  // box once it's final), and Recent closed.
+  App.registerTabLeave('dashboard', () => { _shownGameKey = null; _recentOpen = false; });
 
   // Store as { event, handler } so unmount can remove them cleanly
   const wire = (event, handler) => {

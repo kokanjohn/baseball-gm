@@ -45,9 +45,11 @@ let _activeTab  = 'players';
 let _mounted    = false;
 let _listeners  = [];
 
-// Players tab filter/sort state
-let _playerFilter = { pos: 'batters', view: 'available', team: 'all', health: 'all' };   // §122.7
-let _playerSort   = { col: 'ovr', dir: 'desc' };
+// Players tab filter/sort state (r155 the defaults, which leaving the screen returns to)
+const DEFAULT_FILTER = Object.freeze({ pos: 'batters', view: 'available', team: 'all', health: 'all' });   // §122.7
+const DEFAULT_SORT   = Object.freeze({ col: 'ovr', dir: 'desc' });
+let _playerFilter = { ...DEFAULT_FILTER };
+let _playerSort   = { ...DEFAULT_SORT };
 let _lpSearch     = '';
 let _rowLimit     = 100;   // r146 the list shows this many; "Show more" adds the next hundred
 let _limitKey     = '';    // the filters the limit was raised for (new filters start at 100 again)
@@ -64,6 +66,16 @@ export function mount() {
   _injectCSS();
 
   App.registerTabReset('league', () => refresh());
+  // r155 leaving League: next time it opens on Players, default filters, sort and search.
+  App.registerTabLeave('league', () => {
+    _activeTab = 'players';
+    _playerFilter = { ...DEFAULT_FILTER };
+    _playerSort = { ...DEFAULT_SORT };
+    _lpSearch = '';
+    _rowLimit = 100;
+    _limitKey = '';
+    _wireFilter = 'all';
+  });
 
   const wire = (event, handler) => {
     EventBus.on(event, handler);
@@ -71,8 +83,6 @@ export function mount() {
   };
 
   wire('game:committed',    () => { if (_activeTab === 'standings' || _activeTab === 'playoffs') refresh(); });
-  wire('game:phaseChanged', () => refresh());
-  wire('roster:changed',    () => { if (_activeTab === 'playoffs') refresh(); });
   wire('game:phaseChanged', () => refresh());
   wire('roster:changed',    () => refresh());
   wire('nav:tabActivated',  ({ tab }) => { if (tab === 'league') refresh(); });
@@ -89,7 +99,7 @@ export function showAvailable({ side = 'hitter', pos = null } = {}) {
   _lpSearch = '';
   const key = side === 'pitcher' ? (pos === 'SP' || pos === 'RP' ? pos : 'pitchers') : (pos && pos !== 'DH' ? pos : 'batters');
   _playerFilter = { pos: key, view: 'available', team: 'all', health: 'healthy' };
-  _playerSort = { col: 'ovr', dir: 'desc' };
+  _playerSort = { ...DEFAULT_SORT };
   App.switchTab('league');
   refresh();
 }

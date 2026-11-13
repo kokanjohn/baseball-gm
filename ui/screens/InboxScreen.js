@@ -204,6 +204,15 @@ export function mount() {
     _openCard = null;
     refresh();
   });
+  // r155 leaving the Inbox: next time it opens on To Do, at the top, no message open, no half-made message.
+  App.registerTabLeave('decisions', () => {
+    _activeTab = 'todo';
+    _openCard = null;
+    _listScroll = 0;
+    _composeChannel = null;
+    _composeTopic = null;
+    _composeDeal = null;
+  });
 
   const wire = (event, handler) => {
     EventBus.on(event, handler);
@@ -346,19 +355,14 @@ function _avatar(sender, cls = 'ml-av', { me = false } = {}) {
   return `<div class="${cls}" style="background:${bg}">${_escape(_initials(sender))}</div>`;
 }
 
-/** The message's labels (Gmail's chips): its kind, urgent / good news / All-Star, and a deadline. */
-function _labels(card, { withDue = true } = {}) {
-  const out = [];
-  if (card._prominent) out.push(['All-Star', 'lbl-gold']);
-  else if (card.type === 'urgent') out.push(['Urgent', 'lbl-red']);
-  else if (card.type === 'good') out.push(['Good news', 'lbl-green']);
-  if (card.tag && !['INFO'].includes(card.tag)) {
-    const t = String(card.tag).replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).replace(/\bIl\b/, 'IL');
-    out.push([t, 'lbl-plain']);
-  }
-  const due = withDue ? _dueText(card) : null;
-  if (due) out.push([due.text, due.soon ? 'lbl-red' : 'lbl-amber']);
-  return out.map(([t, c]) => `<span class="ml-label ${c}">${_escape(t)}</span>`).join('');
+/**
+ * r155 A message carries no tags (no "Good news", "Urgent", "Trade" …): the
+ * subject and the sender say what it is. The one chip left is a decision's
+ * deadline, "Due 7:05 PM", which is information, not a tag.
+ */
+function _labels(card) {
+  const due = _dueText(card);
+  return due ? `<span class="ml-label ${due.soon ? 'lbl-red' : 'lbl-amber'}">${_escape(due.text)}</span>` : '';
 }
 
 /**
@@ -481,7 +485,6 @@ function _renderReading(card, inbox, state) {
       </div>
       <div class="mr-head">
         <h2 class="mr-subject">${_escape(card.subject || '')}</h2>
-        <div class="mr-labels">${_labels(card, { withDue: false })}</div>
       </div>
       <div class="mr-sender">
         ${_avatar(card.sender, 'mr-av')}
@@ -571,7 +574,6 @@ function _renderThread(card, state) {
       </div>
       <div class="mr-head">
         <h2 class="mr-subject">${_escape(card.subject || '')}</h2>
-        <div class="mr-labels">${_labels(card, { withDue: false })}</div>
       </div>
       <div class="mt-msg">
         <div class="mr-sender">

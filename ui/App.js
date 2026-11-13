@@ -34,7 +34,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r155';
+export const APP_VERSION = 'tfo-v2-r156';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -61,6 +61,23 @@ export function registerTabReset(tab, fn) {
   _tabResetFns[tab] = fn;
 }
 
+// r155 Tab → the screen's "back to its first view" function, run as the user leaves it.
+const _tabLeaveFns = {};
+
+/**
+ * registerTabLeave(tab, fn)
+ * A screen goes back to its default view when the user leaves it, so coming
+ * back always lands on its first view (Team → Players, League → Players,
+ * Inbox → To Do), scrolled to the top. `fn` only resets the screen's own view
+ * state; the screen draws it when the user returns (its registerTabReset).
+ * Leaving is moving to a different tab: tapping the tab you're on, or a jump
+ * that lands on a chosen view (the funds pill → Finances, an open spot →
+ * League's available players), is not.
+ */
+export function registerTabLeave(tab, fn) {
+  _tabLeaveFns[tab] = fn;
+}
+
 // ─────────────────────────────────────────────────────────────
 // TAB SWITCHING
 // ─────────────────────────────────────────────────────────────
@@ -74,6 +91,15 @@ export function registerTabReset(tab, fn) {
  */
 export function switchTab(tab) {
   if (_milestoneActive) return;
+
+  // Leaving a screen: it goes back to its first view, at the top.
+  const prev = _activeTab;
+  if (prev && prev !== tab) {
+    try { _tabLeaveFns[prev]?.(); }
+    catch (err) { console.error(`App.switchTab: leave error on '${prev}':`, err); }
+    const prevPanel = document.getElementById(`tab-${prev}`);
+    if (prevPanel) prevPanel.scrollTop = 0;
+  }
 
   // Deactivate all tab content panels and nav buttons
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));

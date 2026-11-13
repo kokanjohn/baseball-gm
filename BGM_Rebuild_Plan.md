@@ -10276,3 +10276,42 @@ Fresh team: not needed. The display, the card and the swipe apply to any save. S
 - for the delete confirm, that closing it deletes nothing.
 
 Fresh team: not needed (UI only).
+
+---
+
+## §122.28 — r156: no tags on messages; screens go back to their first view
+
+**Asked:**
+- remove the tags like "Good news" from inbox messages;
+- a screen you leave and come back to opens on its default view. For example: Team → Staff, then Messages, then Team again lands on Players. The same goes for League.
+
+**Inbox tags:**
+- **Removed** from the list and the reading view:
+  - the kind chips: All-Star, Urgent, Good news;
+  - the category chips: Operations, Trade, Roster and the rest.
+  - The subject and the sender say what a message is.
+- **Kept:** the deadline chip on a decision ("Due 7:05 PM", "Due in 2 games"). It is information about when to act, not a tag. In the reading view it stays where it was, beside "Your decision".
+- **Clean-up:** the `.mr-labels` row, and the unused `lbl-green` and `lbl-gold` CSS, are gone.
+- **Unchanged:** the All-Star message's prominent styling.
+
+**Screens reset on leaving:**
+- **The model:** `App.registerTabLeave(tab, fn)` sits beside `registerTabReset`. `switchTab` runs the previous tab's leave function, and puts that panel back at the top, only when moving to a *different* tab. Each screen owns its reset: the leave function resets the screen's view state, and its existing `registerTabReset` draws it on return.
+- **What each screen resets:**
+  - **Team:** back to Players.
+  - **League:** back to Players, with the default filters and sort, an empty search, the row limit back to 100, and the Moves filter back to All.
+  - **Inbox:** back to To Do, no message open, the list at the top, and compose choices cleared. The arrival reset already closed an open message.
+  - **Dashboard:** the live card back to its first view (Play by Play; the box once the game is final, as a new game already does) and Recent closed.
+  - **Schedule:** already scrolled to the current game on every arrival.
+- **Not a reset:**
+  - tapping the tab you're on;
+  - a jump that lands on a chosen view: the funds pill → Team Finances, an open spot → League's available players for it. These set their view after the leave runs, so they still work.
+- **League listener fix:** `game:phaseChanged` and `roster:changed` were each wired twice; now each is wired once.
+
+**Checks: test-screen-reset-ui** (new, 21, dark and light; real taps on the bottom bar):
+- Team: Staff, and Finances, come back as Players; re-tapping Team keeps Staff; the funds pill still opens Finances.
+- League: Standings comes back as Players; a changed position filter and search come back as the defaults; the open-spot jump keeps its RP filter.
+- Inbox: Completed comes back as To Do; an open message comes back as the list; there are no chips but deadlines, on the list and in an open message.
+- Dashboard: Recent comes back closed.
+- No page errors.
+
+Fresh team: not needed (UI only).

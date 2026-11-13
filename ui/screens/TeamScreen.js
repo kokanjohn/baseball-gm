@@ -169,6 +169,7 @@ export function mount() {
   _injectCSS();
 
   App.registerTabReset('roster', () => refresh());
+  App.registerTabLeave('roster', () => { _activeTab = 'players'; });   // r155 back on Players next time
 
   const wire = (event, handler) => {
     EventBus.on(event, handler);
