@@ -10729,3 +10729,68 @@ Fresh team: not needed. Pitchers start with no workload, and hitters' wear carri
 - **test-roster-advice-ui** (dark and light): the inbox message (the buttons, both players tappable), then "I Have a Plan" with its reply.
 
 Fresh team: needed to see the new starting roster (the change is in `startNewGame`). An existing club gets the suggestions too, whenever its roster has one.
+
+### §122.35 Design (agreed, not yet built): positions you earn, practice, and pitchers' roles
+
+**Hitters**
+- **Three levels at each position:** eligible, practiced (some familiarity), unfamiliar.
+  - DH is open to everyone, and starts there count for nothing.
+  - The outfield is one OF position.
+  - Today's labels seed the eligible positions ("2B/SS" means eligible at both).
+- **Eligibility comes only from games:** 10 starts in the regular season. Spring, teaching and sim games never count.
+- **Familiarity** only shrinks the extra error chance out of position, never to zero until the player is eligible.
+  - **How it builds:** Bench Coach teaching (free, in practices already on the schedule, one player at a time), spring starts (each worth about a day of teaching), and regular-season out-of-position starts.
+  - **Caps by difficulty:**
+    - down the defensive spectrum (to 1B or OF): builds fast, up to about 75% off the extra error chance;
+    - up the spectrum (to SS or 2B): builds slowly, up to about 50%;
+    - catcher: slowest, up to about 35%, which also covers the extra stolen bases and passed balls.
+  - **At the season turn:** it carries over at half strength if the player practiced or played there, and resets to zero once a position is lost.
+- **The season turn:**
+  - a position is kept with 20 starts or 25% of the player's starts last season (minimum 5);
+  - the primary position is wherever the player started most, and is always kept;
+  - a player hurt all season is judged on the last season played;
+  - a lost position must be earned again.
+- **Out-of-position play:**
+  - **MOVE:** the eligible spots are listed first. A "Show out-of-position spots (N)" button below them lists the rest, each labeled e.g. "3B — practiced, 3 of 10".
+  - **The error cost:** each unfamiliar fielder raises the chance of a ground-ball error, scaled down by familiarity.
+  - **A non-catcher catching:** more steal attempts, more successful steals, and a new passed-ball play.
+- **Spring:** no limits on trying players at new positions.
+
+**Pitchers (designations SP and RP; a pitcher can hold both, SP/RP)**
+- **A starter in relief:**
+  - **Always allowed.** There's no error cost, but a relief outing pushes his next start back two days and adds 50% extra wear.
+  - **He earns RP after 5 regular-season relief outings.** After that the push is one day and there's no extra wear.
+  - **The short-stint boost by age** (stuff / control): 25 and under +4 / −3, 26–30 +3 / −2, 31–34 +2 / −1, 35 and up +1 / 0.
+  - **He loses RP** with fewer than 8 relief outings last season.
+- **A reliever starting:**
+  - **Always allowed,** but he tires early until stretched out.
+  - **The stretched-out level runs 0 to 3** (3 = a starter's length). It's raised by a start, long relief, a sim game (through the pitching coach), or a spring outing.
+  - **He earns SP after 3 regular-season starts.** With fewer than 5 starts last season he loses SP but keeps a head start (level 2).
+- **The pitching coach suggests moves** from real stats and situations: a short rotation, a reliever with a starter's stamina, a starter who falls apart the third time through, a starter in relief piling up wear.
+- **About half of new clubs** start with an SP/RP swingman: more likely for Lab and Gambler, less for Empire and Institution.
+
+**Other clubs and free agents**
+- **Other clubs:** the same tracking and rules for their real starts, plus a few simulated position changes a week around the league in season.
+  - Lower-rated players get a line in Recent.
+  - Higher-rated players, or ones who fit a need of ours, become a Pro Scouting message.
+- **Free agents** add a position about every week or two ("working out at 2B"), as a news line or a message if they fit a need.
+
+**Messages**
+- **News lines:** a player becomes eligible somewhere new.
+- **The Bench Coach's late-season notes:**
+  - around 25 games left (earlier if someone needs many starts, later if all are close);
+  - around 10 games left;
+  - both cover players within reach of a new position and eligible positions at risk, higher-rated players first, and what's still doable or no longer reachable;
+  - skipped when nothing is in reach or at risk.
+- **The season-turn notice** of who lost which positions.
+- **A staff suggestion:** a bench player who could cover a thin lineup spot if taught.
+
+**Build order (each phase shipped and tested on its own)**
+1. **The model:** hitters' positions and familiarity, pitchers' designations and stretched-out level, one shared eligibility question used everywhere the label is read today, and old saves read through it. No change in play.
+2. **Tracking and display:** regular-season starts by position, familiarity from spring and out-of-position starts, the season-turn rules, the Team screen and player card, the news line, the late-season notes, and the season-turn notice.
+3. **Out-of-position hitters:** MOVE (the button), the error cost, and stolen bases and passed balls.
+4. **Teaching:** the Bench Coach Compose topic, and the "cover a thin spot" suggestion.
+5. **Pitchers:** starters in relief, relievers stretched out, the pitching coach's suggestions, and the SP/RP seed.
+6. **The league:** simulated position changes and free agents adding positions.
+
+Fresh team: after phase 1.
