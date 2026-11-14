@@ -48,7 +48,9 @@ export function workable(state, p) {
 /** The players a topic can be about: ours, best first (hitters or pitchers or both). */
 export function workPlayers(state, kind = 'any') {
   return (state.userTeam?.rosterIds || []).map(id => state.players?.[id])
-    .filter(p => workable(state, p) && (kind === 'any' || (kind === 'pitchers') === isPitcher(p)))
+    .filter(p => workable(state, p) && (kind === 'any'
+      || (kind === 'relievers' ? isPitcher(p) && [PLAYER_GROUP.BULLPEN, PLAYER_GROUP.PITCHER_BENCH].includes(p.group)   // r169
+         : (kind === 'pitchers') === isPitcher(p))))
     .sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
 }
 

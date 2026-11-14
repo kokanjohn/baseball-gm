@@ -22,7 +22,10 @@ import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from
 import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart } from './TradeEngine.js';
 import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teachRead, stretchRead } from './PlayerWork.js';
 import { PLAYER_WORK, POSITION_RULES } from '../data/constants.js';
-import { posLabel } from './Positions.js';   // r163 §122.35
+import { posLabel, pitchRoles } from './Positions.js';   // r163 §122.35
+import { strategyOf, battingOrder, recommendOrder, styleChoices, ORDER_STYLES, RUN_STYLES, HOOK_STYLES, penRolesOf } from './Strategy.js';   // r169
+import { bullpenRoles } from './PitchingEngine.js';   // r169
+import { PROMOTIONS } from '../data/constants.js';   // r169
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -75,11 +78,8 @@ const STAFF = {
   bench_coach:     { key: 'benchCoach',    role: 'Bench Coach' },
   bullpen_coach:   { key: 'bullpenCoach',  role: 'Bullpen Coach' },
   groundskeeper:   { rel: 'groundskeeperRelationship',  role: 'Head Groundskeeper' },
-  facilities:      { rel: 'facilitiesRelationship',     role: 'Facilities & Ops' },
   ticket_office:   { rel: 'ticketOfficeRelationship',   role: 'Ticket Office' },
   scouting:        { key: 'scoutingDirector', role: 'Scouting Director' },
-  media_relations: { role: 'Media Relations' },
-  community:       { role: 'Community Affairs' },
   physician:       { role: 'Team Physician' },
 };
 
@@ -282,35 +282,6 @@ W.gk_weather = (f, r, who) => {
 
 // ── Manager ────────────────────────────────────────────────────
 
-W.mgr_lineup = (f, r, who) => {
-  const out = [];
-  const lu = f.lineup();
-  if (!lu.length) return { body: ['We don\'t have a lineup set yet.'], memo: {} };
-  const bats = f.recentBats(10);
-  const top = lu.slice(0, 2).map(x => x.p), heart = lu.slice(2, 5).map(x => x.p);
-  if (f.season === 'spring') out.push(`It's spring, so the lineup is still a working draft — I'm giving everybody looks before Opening Day.`);
-  out.push(`At the top, ${list(top.map(p => `${p.name} (${fmtAvg(obpS(p))} on-base)`))}. ${top.every(p => obpS(p) >= .33) ? 'They\'re doing their job — getting on in front of the middle of the order.' : 'I want more traffic in front of the middle of the order than we\'re getting.'}`);
-  const hot = lu.map(x => ({ p: x.p, b: bats[x.p.id] })).filter(x => x.b && x.b.ab >= 18 && avgOf(x.b.h, x.b.ab) >= .330).sort((a, b) => avgOf(b.b.h, b.b.ab) - avgOf(a.b.h, a.b.ab))[0];
-  const cold = lu.map(x => ({ p: x.p, b: bats[x.p.id], i: lu.indexOf(x) })).filter(x => x.b && x.b.ab >= 20 && avgOf(x.b.h, x.b.ab) < .190).sort((a, b) => avgOf(a.b.h, a.b.ab) - avgOf(b.b.h, b.b.ab))[0];
-  if (hot) out.push(`${hot.p.name} is the hottest bat we have — ${line(hot.b)} over the last ${plural(hot.b.g, 'game')}. ${lu.findIndex(x => x.p.id === hot.p.id) >= 5 ? 'I\'m thinking about moving that bat up.' : 'Right where I want that bat.'}`);
-  if (cold) out.push(`${cold.p.name} is ${line(cold.b)} over the last ${plural(cold.b.g, 'game')}. ${cold.i <= 3 ? 'If it goes on much longer I\'ll drop that spot in the order to take some pressure off.' : 'Hitting down in the order for now, which is the right place to work through it.'}`);
-  // The next opponent's starter.
-  const ser = f.nextSeries();
-  if (ser?.opp) {
-    const sp = theirStarters(f, ser.opp, 1)[0];
-    if (sp && S(sp)?.ip > 10) out.push(`${Cap(gameWords(f, ser.games[0]))} we probably see ${sp.name} (${eraS(sp).toFixed(2)} ERA). ${sp.subRatings?.stuff >= 75 ? 'Big stuff — I want our hitters ready to hit early in the count rather than chase.' : sp.subRatings?.control >= 75 ? 'Throws strikes, so we have to be ready to swing.' : 'Hittable if we stay patient.'}`);
-  }
-  // Recent arrivals in the order.
-  const trade = f.tradesSince(f.atMs - 21 * MS_DAY)[0];
-  if (trade) {
-    const newIds = new Set(trade.offer?.incomingIds || []);
-    const inOrder = lu.find(x => newIds.has(x.p.id));
-    if (inOrder) out.push(`${inOrder.p.name} has settled in at ${inOrder.slot} since the trade, batting ${ord(lu.indexOf(inOrder))}.`);
-  }
-  const hurt = f.injured().filter(p => p.pos !== 'SP' && p.pos !== 'RP');
-  if (hurt.length) out.push(`We're still without ${list(hurt.slice(0, 2).map(p => p.name))}, so it's not the lineup I'd draw up healthy.`);
-  return { body: out, memo: { cold: cold?.p?.id || null } };
-};
 
 W.mgr_morale = (f, r, who) => {
   const out = [];
@@ -342,7 +313,7 @@ W.mgr_morale = (f, r, who) => {
   return { body: out.filter(Boolean), memo: { morale: m } };
 };
 
-W.mgr_rotation = (f, r, who) => {
+const _turns = (f, r, who) => {
   const out = [];
   const rot = f.rotation();
   if (!rot.order.length) return { body: ['We don\'t have a full rotation set right now.'], memo: {} };
@@ -369,25 +340,10 @@ W.mgr_rotation = (f, r, who) => {
   return { body: out.filter(Boolean), memo: {} };
 };
 
-W.mgr_matchup = (f, r, who) => {
-  const out = [];
-  const ser = f.nextSeries();
-  if (!ser?.opp) return { body: [offseasonNote(f) || 'No series on the board yet.'], memo: {} };
-  const o = ser.opp, vs = vsRecord(f, o.id);
-  const n = ser.games.length;
-  out.push(`${o.name} — ${n > 1 ? `${num(n)} games` : 'one game'} ${ser.home ? 'here' : 'on the road'}, starting ${f.when(ser.games[0].gameTime)} at ${f.clock(ser.games[0].gameTime)}. ${o.wins + o.losses ? `They're ${o.wins}-${o.losses}` : 'Their season hasn\'t started yet'}${o.streak >= 3 ? ` and have won ${num(o.streak)} straight` : o.streak <= -3 ? ` and have lost ${num(-o.streak)} straight` : ''}.${vs.w + vs.l ? ` We're ${vs.w}-${vs.l} against them this year.` : ''}`);
-  const sps = theirStarters(f, o, n);
-  if (sps.length) out.push(`Probable starters: ${list(sps.map(p => S(p).ip ? `${p.name} (${eraS(p).toFixed(2)} ERA)` : p.name))}.`);
-  const bats = theirBats(f, o).slice(0, 2);
-  if (bats.length) out.push(`The bats to worry about are ${list(bats.map(p => `${p.name} (${statLine(p)}${S(p)?.hr ? `, ${S(p).hr} HR` : ''})`))}. ${S(bats[0]).hr >= 15 ? `We don't give ${bats[0].name} anything to drive with runners on.` : 'We pitch them carefully and make the rest of the lineup beat us.'}`);
-  const { fc, text } = forecastWords(f, ser.games[0]);
-  if (fc && fc.chance >= 30) out.push(`One more thing: the opener's forecast is ${text}. I'll have a plan for the pitching if it starts late.`);
-  return { body: out, memo: { opp: o.id } };
-};
 
 // ── Pitching Coach ─────────────────────────────────────────────
 
-W.pc_rotation = (f, r, who) => {
+const _armNotes = (f, r, who) => {
   const out = [];
   const rot = f.rotation().order;
   const arms = f.recentArms(15);
@@ -412,7 +368,7 @@ W.pc_rotation = (f, r, who) => {
   return { body: out, memo: {} };
 };
 
-W.pc_reliever = (f, r, who) => {
+const _penUsage = (f, r, who) => {
   const out = [];
   const bp = f.bullpen();
   const arms = f.recentArms(7);
@@ -552,31 +508,10 @@ W.hc_development = (f, r, who) => {
   return { body: out, memo: { playerId: p.id }, decision: offer };
 };
 
-W.hc_lineup = (f, r, who) => {
-  const lu = f.lineup();
-  if (lu.length < 9) return { body: ['We need a full lineup before I can say much about the order.'], memo: {} };
-  const out = [];
-  const ab = (p) => S(p)?.ab || 0;
-  if (lu.every(x => ab(x.p) < 30)) return { body: ['It\'s early — not enough at-bats yet to argue about the order.'], memo: {} };
-  const byObp = [...lu].filter(x => ab(x.p) >= 30).sort((a, b) => obpS(b.p) - obpS(a.p));
-  const bySlg = [...lu].filter(x => ab(x.p) >= 30).sort((a, b) => slgS(b.p) - slgS(a.p));
-  const lead = lu[0].p;
-  const bestObp = byObp[0];
-  if (bestObp && bestObp.p.id !== lead.id && obpS(bestObp.p) - obpS(lead) >= 0.03) out.push(`${bestObp.p.name} has the best on-base percentage on the club (${fmtAvg(obpS(bestObp.p))}) and is hitting ${ord(lu.indexOf(bestObp))}. ${lead.name} leads off at ${fmtAvg(obpS(lead))}. I'd flip that.`);
-  else out.push(`${lead.name} at leadoff makes sense — ${fmtAvg(obpS(lead))} on-base.`);
-  const power = bySlg[0];
-  const pi = lu.indexOf(power);
-  if (power && (pi < 2 || pi > 4)) out.push(`Our best slugger, ${power.p.name} (${fmtAvg(slgS(power.p))} slugging${S(power.p)?.hr ? `, ${S(power.p).hr} homers` : ''}), is hitting ${pi < 2 ? 'too high to drive anybody in' : 'too low to come up with runners on'}. Third or fourth is where that bat does the most damage.`);
-  else if (power) out.push(`${power.p.name} in the middle of the order is right — that's where the power belongs.`);
-  const weak = [...lu].filter(x => ab(x.p) >= 50).sort((a, b) => (obpS(a.p) + slgS(a.p)) - (obpS(b.p) + slgS(b.p)))[0];
-  if (weak && lu.indexOf(weak) <= 4) out.push(`${weak.p.name} is hitting ${statLine(weak.p)} — too low for the ${lu.indexOf(weak) + 1 === 1 ? 'top' : 'middle'} of the order.`);
-  out.push(`My suggestions are in. The manager has the final say on the order.`);
-  return { body: out, memo: {} };
-};
 
 // ── Bench Coach ────────────────────────────────────────────────
 
-W.bc_morale = (f, r, who) => {
+const _tactics = (f, r, who) => {
   const out = [];
   if (f.played().filter(g => !g.isSpring).length < 5) return { body: ['Not enough games yet to see patterns in how we manage them.'], memo: {} };
   const one = f.oneRun(), xi = f.extraInnings();
@@ -594,7 +529,7 @@ W.bc_morale = (f, r, who) => {
 
 // ── Bullpen Coach ──────────────────────────────────────────────
 
-W.bpc_health = (f, r, who) => {
+const _bpcAvailable = (f, r, who) => {
   const bp = f.bullpen();
   if (!bp.arms.length) return { body: ['Nobody is in the bullpen right now.'], memo: {} };
   const g = f.nextGame();
@@ -619,33 +554,10 @@ W.bpc_health = (f, r, who) => {
 
 // ── Facilities & Ops ───────────────────────────────────────────
 
-W.fac_status = (f, r, who) => {
-  const out = [];
-  const FAC = /clubhouse|ballpark|stadium|concession|lighting|scoreboard|seat|upgrade|facility|facilities|inspection|hvac|restroom|parking/i;
-  const spent = f.ledger(e => e.k < 0 && FAC.test(e.label || ''), 120);
-  const homes = f.homeGamesWithin(10);
-  if (homes.length) {
-    const first = homes[0], last = homes[homes.length - 1];
-    out.push(`We have ${plural(homes.length, 'home game')} in the next ten days, starting ${f.when(first.gameTime)}${homes.length > 1 ? ` through ${f.when(last.gameTime)}` : ''}. Staffing and concessions are set for it.`);
-    const fc = first.gameTime - f.atMs <= 4 * MS_DAY ? f.forecastFor(first) : null;
-    if (fc?.tempF >= 90) out.push(`It's going to be hot — around ${fc.tempF}° at first pitch. We're adding water stations and the misting fans on the concourse.`);
-    else if (fc && fc.tempF <= 50) out.push(`Only about ${fc.tempF}° at first pitch — the concourse heaters are going on and we're pushing hot drinks at the stands.`);
-    if (fc?.chance >= 40) out.push(`The forecast for ${f.when(first.gameTime)} is ${fc.label.toLowerCase()} (${fc.chance}%), so the weather policy${fc.kind === 'snow' || fc.kind === 'mix' ? '' : ' and covered-seating info'} ${fc.kind === 'snow' || fc.kind === 'mix' ? 'goes' : 'go'} out to ticket holders.`);
-  } else out.push(`No home games in the next ten days, so this is our window for maintenance.`);
-  const sellouts = f.homeGates().filter(x => x.sellout).length;
-  if (sellouts >= 3) out.push(`${Cap(num(sellouts))} of the last ${plural(f.homeGates().length, 'home game')} were sellouts. The building is holding up, but the restrooms and the concourse are working hard.`);
-  if (spent.length) out.push(`The ${topicStem(spent[0].label)} work ${f.atMs - spent[0].at < 21 * MS_DAY ? 'is finished' : 'from earlier this year is holding up well'}.`);
-  const no = deskDecisions(f, { tags: ['FACILITIES', 'OPERATIONS'], days: 120 }).filter(d => FAC.test(d.subject)).find(d => d.choice === 'no');
-  if (no) out.push(`${Cap(aboutOf(no.subject))} we passed on is still on my list. It's not urgent, but it doesn't get cheaper.`);
-  const ign = deskIgnored(f, { tags: ['FACILITIES', 'OPERATIONS'], days: 30 }).filter(c => FAC.test(c.subject || ''))[0];
-  if (ign) out.push(`When ${aboutOf(ign.subject)} came up and couldn't wait, we handled it ourselves.`);
-  if (out.length < 3) out.push(`Otherwise, nothing needs your attention.`);
-  return { body: out, memo: {} };
-};
 
 // ── Ticket Office ──────────────────────────────────────────────
 
-W.tix_attendance = (f, r, who) => {
+const _attendance = (f, r, who) => {
   const out = [];
   const gates = f.homeGates(), cap = f.capacity();
   if (gates.length) {
@@ -687,7 +599,7 @@ W.tix_attendance = (f, r, who) => {
   return { body: out, memo: {} };
 };
 
-W.tix_renewals = (f, r, who) => {
+const _renewals = (f, r, who) => {
   const out = [];
   const { w, l } = f.record();
   const wp = w + l ? w / (w + l) : 0.5;
@@ -804,65 +716,189 @@ W.sc_opponent = (f, r, who) => {
 
 // ── Media Relations ────────────────────────────────────────────
 
-W.mr_narrative = (f, r, who) => {
-  const out = [];
-  const { w, l, streak } = f.record();
-  const sd = f.standing();
-  if (f.season === 'regular' || f.season === 'post') {
-    if (streak >= 5) out.push(`The ${num(streak)}-game winning streak is the story. Every column this week is about it.`);
-    else if (streak <= -5) out.push(`The ${num(-streak)}-game losing streak is the story, and the questions are getting sharper.`);
-    else if (sd?.place === 1) out.push(`Being in first is the story. Coverage is positive, and the national writers are starting to call.`);
-    else if (sd && sd.gb !== '-' && Number(sd.gb) >= 10) out.push(`At ${w}-${l}, ${sd.gb} games back, the coverage has turned to what comes next.`);
-    else out.push(`At ${w}-${l}, the coverage is about whether this club is a contender. It could go either way.`);
-  } else out.push(f.season === 'spring' ? `In camp, the stories are about the roster battles and who makes the club.` : `The offseason coverage is all about what we do next.`);
-  const t = f.tradesSince(f.atMs - 21 * MS_DAY)[0];
-  if (t) {
-    const inn = (t.offer?.incomingIds || []).map(f.P).filter(Boolean).map(p => p.name);
-    const outN = (t.offer?.outgoingIds || []).map(f.P).filter(Boolean).map(p => p.name);
-    if (inn.length) out.push(`The ${list(inn)} trade is still getting coverage. ${outN.length ? `Some writers miss ${list(outN.slice(0, 2))}, but the reaction has been fair.` : ''}`.trim());
-  }
-  const hr = f.roster().filter(p => S(p)?.hr).sort((a, b) => S(b).hr - S(a).hr)[0];
-  if (hr && S(hr).hr >= 10) out.push(`${hr.name} (${S(hr).hr} homers) is the player everyone wants to talk to.`);
-  const big = f.gmLog().find(x => x.type === 'injury' && /season-ending/i.test(x.headline || '') && x.season === f.state.seasonNum && (f.state.currentGameIndex || 0) - (x.gameIdx || 0) <= 20);
-  if (big) out.push(`Expect questions about how we replace ${big.headline.split(' — ')[0]}.`);
-  const leak = (f.state.inbox || []).find(c => c.resolved && /leak|reporter|media|press/i.test(c.subject || '') && f.atMs - (c.resolvedAtMs || 0) < 30 * MS_DAY);
-  if (leak) out.push(leak.choice === 'yes' ? `How we handled ${aboutOf(leak.subject)} earned us some good will with the beat writers.` : leak.choice === 'no' ? `The beat writers haven't forgotten ${aboutOf(leak.subject)}. I'd be careful there.` : `We never said anything about ${aboutOf(leak.subject)}, and the beat writers noticed. I'd be careful there.`);
-  if ((f.u.ownerTrust ?? 60) < 40) out.push(`Some writers are asking about the owner's patience. We're not commenting.`);
-  return { body: out, memo: {} };
-};
 
 // ── Community Affairs ──────────────────────────────────────────
 
-W.ca_event = (f, r, who) => {
-  const out = [];
-  const COMM = /youth|charity|community|hospital|school|clinic|tournament|foundation|fundrais|little league|volunteer/i;
-  const off = f.offDays(10);
-  if (off.length) out.push(`We're holding the off day ${f.onWhen(off[0])} for the youth clinic at the ballpark. A few players would be great, but it's voluntary.`);
-  else if (f.upcoming().length) out.push(`The schedule is packed for the next ten days, so we're keeping player appearances light. Mostly front-office events and a pregame ceremony.`);
-  else out.push(`It's quiet on the schedule, which is when we do most of our community work.`);
-  const dec = deskDecisions(f, { words: COMM, days: 90 });
-  const yes = dec.find(d => d.choice === 'yes'), no = dec.find(d => d.choice === 'no');
-  if (yes) out.push(`${Cap(aboutOf(yes.subject))} you approved was well received. People still mention it.`);
-  if (no) out.push(`We sent our regrets on ${aboutOf(no.subject)}. They understood, but they'll ask again next year.`);
-  const ign = deskIgnored(f, { words: COMM, days: 45 })[0];
-  if (ign) out.push(`Nobody got back to them on ${aboutOf(ign.subject)}, so we handled it at our level.`);
-  const homes = f.homeGamesWithin(10).length;
-  if (homes >= 4) out.push(`With ${plural(homes, 'home game')} coming up, the pregame ceremonies are booked: first pitches and local honorees.`);
-  return { body: out, memo: {} };
-};
 
 // ─────────────────────────────────────────────────────────────
 // THE REPLY
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+// r169 HOW THE CLUB PLAYS, AND THE MERGED REPORTS
+// ─────────────────────────────────────────────────────────────
+
+const styleWord = { classic: 'the traditional way, with speed and contact at the top and power in the middle',
+                    onbase: 'with our best contact hitters at the top', best: 'with our best bats at the top' };
+
+/** The Manager on the batting order: how it's built, and how the GM wants it built. */
+W.mgr_lineup = (f, r, who) => {
+  const out = [];
+  const lu = f.lineup();
+  if (lu.length < 9) return { body: ['We need a full lineup before I can say much about the order.'], memo: {} };
+  const cur = strategyOf(f.u).order;
+  const nine = lu.map(x => x.p);
+  const rec = recommendOrder(nine, cur);
+  const bats = f.recentBats(10);
+  if (f.season === 'spring') out.push(`It's spring, so the order is still a working draft. I'm giving everybody looks before Opening Day.`);
+  out.push(`Right now I'm building the order ${styleWord[cur]}. ${list(lu.slice(0, 5).map(x => x.p.name))} hit first through fifth.`);
+  const top = lu.slice(0, 2).map(x => x.p);
+  if (top.some(p => (S(p)?.ab || 0) >= 30)) out.push(`At the top, ${list(top.map(p => `${p.name} (${fmtAvg(obpS(p))} on-base)`))}. ${top.every(p => obpS(p) >= .33) ? 'They\'re doing their job: getting on in front of the middle of the order.' : 'I want more traffic in front of the middle of the order than we\'re getting.'}`);
+  const hot = lu.map(x => ({ p: x.p, b: bats[x.p.id] })).filter(x => x.b && x.b.ab >= 18 && avgOf(x.b.h, x.b.ab) >= .330).sort((a, b) => avgOf(b.b.h, b.b.ab) - avgOf(a.b.h, a.b.ab))[0];
+  const cold = lu.map(x => ({ p: x.p, b: bats[x.p.id], i: lu.indexOf(x) })).filter(x => x.b && x.b.ab >= 20 && avgOf(x.b.h, x.b.ab) < .190).sort((a, b) => avgOf(a.b.h, a.b.ab) - avgOf(b.b.h, b.b.ab))[0];
+  if (hot) out.push(`${hot.p.name} is the hottest bat we have: ${line(hot.b)} over the last ${plural(hot.b.g, 'game')}.`);
+  if (cold) out.push(`${cold.p.name} is ${line(cold.b)} over the last ${plural(cold.b.g, 'game')}.${cold.i <= 3 ? ' That\'s a lot of at-bats to give a cold bat near the top.' : ''}`);
+  const hurt = f.injured().filter(p => p.pos !== 'SP' && p.pos !== 'RP');
+  if (hurt.length) out.push(`We're still without ${list(hurt.slice(0, 2).map(p => p.name))}, so it's not the order I'd draw up healthy.`);
+  out.push(rec === cur ? `I'd keep it the way it is, but it's your call how we build it.` : `I'd build it ${styleWord[rec]}. It's your call.`);
+  const top5 = (k) => battingOrder(nine, k).slice(0, 5).map(p => p.name).join(', ');
+  return {
+    body: out, memo: { order: cur, rec },
+    decision: { team: true, onYes: 'set_strategy', choices: styleChoices('order', cur, rec, (k) => `${ORDER_STYLES[k].sub}: ${top5(k)}`), expiresInMs: 3 * MS_DAY },
+  };
+};
+
+/** The Manager on the hook: how long the starters stay in. */
+W.mgr_hook = (f, r, who) => {
+  const out = [];
+  const cur = strategyOf(f.u).hook;
+  const rot = f.rotation().order;
+  const pen = f.bullpen().arms;
+  const sum = (ps) => ps.reduce((a, p) => ({ er: a.er + (S(p)?.er || 0), ip: a.ip + (S(p)?.ip || 0), gs: a.gs + (S(p)?.gs || 0) }), { er: 0, ip: 0, gs: 0 });
+  const R = sum(rot), P = sum(pen.map(x => x.p));
+  const rEra = eraOf(R.er, R.ip), pEra = eraOf(P.er, P.ip);
+  const worn = pen.filter(x => x.status !== 'fresh').length;
+  let rec = 'normal';
+  if (R.ip >= 40 && P.ip >= 20) {
+    out.push(`Our starters are going ${(R.ip / Math.max(1, R.gs)).toFixed(1)} innings a start with a ${rEra.toFixed(2)} ERA. The bullpen is at ${pEra.toFixed(2)}.`);
+    if (pEra <= rEra - 0.75 && worn <= 1) { rec = 'quick'; out.push(`The bullpen has been the better group. Getting to it earlier would save us runs.`); }
+    else if (pEra >= rEra + 0.75 || worn >= Math.ceil(pen.length / 2)) { rec = 'long'; out.push(worn >= Math.ceil(pen.length / 2) ? `The bullpen is worn down: ${plural(worn, 'arm')} need${worn === 1 ? 's' : ''} rest. The starters have to carry more for a while.` : `The starters have been the better group, so I'd let them work deeper.`); }
+    else out.push(`The two groups are close, so the starters go as far as their stamina carries them.`);
+  } else {
+    out.push(f.season === 'spring' ? `In spring the starters are building up, so the hook doesn't apply until Opening Day.` : `It's too early to judge the two groups against each other.`);
+    rec = cur;
+  }
+  out.push(`A quick hook means fresher arms on the mound and a busier bullpen. A long leash rests the bullpen, but tired starters give up more late and pile up workload.`);
+  out.push(cur === 'normal' ? `Right now I'm going to the bullpen when the starter's stamina runs out.` : cur === 'quick' ? `Right now I'm going to the bullpen early.` : `Right now I'm letting the starters work deep.`);
+  return { body: out, memo: { hook: cur, rec }, decision: { team: true, onYes: 'set_strategy', choices: styleChoices('hook', cur, rec), expiresInMs: 3 * MS_DAY } };
+};
+
+/** The Pitching Coach on the rotation: the turns ahead, and each starter's arm. */
+W.pc_rotation = (f, r, who) => {
+  const t = _turns(f, r, who), a = _armNotes(f, r, who);
+  const notes = a.body.slice(1).filter(x => !(/still on the IL/.test(t.body.join(' ')) && /^On the IL/.test(x)));
+  return { body: [...t.body, ...notes], memo: {} };
+};
+
+/** The Bullpen Coach on the bullpen: who's available, the work it has done, and who has which role. */
+W.bpc_health = (f, r, who) => {
+  const h = _bpcAvailable(f, r, who), u = _penUsage(f, r, who);
+  const mine = penRolesOf(f.u);
+  const named = [mine.closer && `${f.P(mine.closer)?.name} closing`, ...mine.setup.map(id => `${f.P(id)?.name} setting up`)].filter(Boolean);
+  const extra = u.body.filter(x => !/needs? the day off|available, but only if/.test(x) && !/ is closing/.test(x));
+  if (named.length) extra.push(`The roles you set: ${list(named)}.`);
+  return { body: [...h.body, ...extra], memo: {} };
+};
+
+/** The Bench Coach on the running game: how it's going, and how much the GM wants us to run. */
+W.bc_tactics = (f, r, who) => {
+  const t = _tactics(f, r, who);
+  const cur = strategyOf(f.u).run;
+  const team = f.roster();
+  const sb = team.reduce((a, p) => a + (S(p)?.sb || 0), 0), cs = team.reduce((a, p) => a + (S(p)?.cs || 0), 0);
+  let rec;
+  const out = [...t.body];
+  if (sb + cs >= 10) rec = sb / (sb + cs) >= 0.75 ? 'more' : sb / (sb + cs) < 0.68 ? 'less' : 'normal';
+  else {
+    const nine = f.lineup().map(x => x.p);
+    const spd = nine.length ? nine.reduce((a, p) => a + (p.subRatings?.speed ?? 50), 0) / nine.length : 50;
+    rec = spd >= 60 ? 'more' : spd <= 45 ? 'less' : 'normal';
+    out.push(spd >= 60 ? `We have speed in this lineup (${Math.round(spd)} on average). I'd use it.` : spd <= 45 ? `This isn't a fast lineup (${Math.round(spd)} on average). Running costs us more outs than it gains.` : `We have some speed, not a lot. The fast runners should pick their spots.`);
+  }
+  out.push(cur === 'normal' ? `Right now the fast runners pick their spots.` : cur === 'more' ? `Right now we're running a lot.` : `Right now we're holding the runners.`);
+  return { body: out, memo: { run: cur, rec }, decision: { team: true, onYes: 'set_strategy', choices: styleChoices('run', cur, rec), expiresInMs: 3 * MS_DAY } };
+};
+
+/** The Bullpen Coach on one reliever's role (the GM picks the pitcher and the role). */
+W.bpc_roles = (f, r, who, arg) => {
+  const st = f.state, p = arg?.playerId ? st.players[arg.playerId] : null, role = arg?.skill;
+  if (!p || p.teamId !== 'user' || !['closer', 'setup', 'auto'].includes(role)) return { body: [`${p?.name || 'That pitcher'} isn't someone I can give a role right now.`], memo: {}, topic: 'that pitcher' };
+  const name = p.name, topic = `${name}'s role`;
+  const now = bullpenRoles(st.userTeam, st.players), auto = bullpenRoles({ ...st.userTeam, penRoles: null }, st.players);
+  const mine = penRolesOf(st.userTeam);
+  const has = mine.closer === p.id ? 'closer' : mine.setup.includes(p.id) ? 'setup' : null;
+  const s = S(p) || {};
+  const out = [];
+  if (p.isInjured) return { body: [`${name} is hurt. We can talk about a role when ${name} is back.`], memo: { playerId: p.id }, topic };
+  if ((role === 'auto' && !has) || role === has) return { body: [role === 'auto' ? `${name}'s role is already the manager's call.` : `${name} is already ${role === 'closer' ? 'our closer' : 'setting up'}.`], memo: { playerId: p.id }, topic };
+  out.push(`${name}: ${s.g ? `${plural(s.g, 'appearance')}, ${eraS(p).toFixed(2)} ERA${s.sv ? `, ${plural(s.sv, 'save')}` : ''}` : 'no innings yet this year'}. Stuff ${p.subRatings?.stuff ?? '—'}, control ${p.subRatings?.control ?? '—'}.`);
+  const closerNow = now.closer && f.P(now.closer);
+  if (role === 'closer') {
+    if (closerNow && closerNow.id !== p.id) out.push(`${closerNow.name} closes now${mine.closer === closerNow.id ? ' (your call)' : ''}, and would go back to the manager's call.`);
+    out.push(auto.closer === p.id ? `That's who the manager would pick too.` : `The manager would go with ${f.P(auto.closer)?.name || 'someone else'} for the ninth, but it's your call.`);
+  } else if (role === 'setup') {
+    if (mine.setup.length >= 2) out.push(`${f.P(mine.setup[0])?.name} would go back to the manager's call: two setup arms is the most I'd name.`);
+    out.push(auto.setup.includes(p.id) || auto.closer === p.id ? `The manager would use ${name} late in games anyway. This makes it certain.` : `On the numbers, the manager wouldn't use ${name} that late, but it's your call.`);
+  } else {
+    out.push(`Back to the manager's call: ${name} pitches wherever the numbers say, and the manager fills the ${has === 'closer' ? 'ninth' : 'setup spot'} from the rest.`);
+  }
+  if (role !== 'auto' && !pitchRoles(p).includes('RP')) out.push(`${name} isn't a reliever by trade: out of role, and back-to-back days take more out of the arm.`);
+  out.push(`A named closer still sits when the arm needs rest; the manager goes to the next one.`);
+  const label = { closer: `Make ${name} the Closer`, setup: `Make ${name} a Setup Arm`, auto: `Back to the Manager's Call` }[role];
+  return { body: out, memo: { playerId: p.id }, topic,
+           decision: { playerId: p.id, onYes: 'pen_role', penRole: role, yesLabel: label, noLabel: 'Not Now', expiresInMs: 2 * MS_DAY,
+                       yesMsg: role === 'auto' ? `${name} is back to the manager's call.` : `Done. ${name} ${role === 'closer' ? 'closes' : 'sets up'} from tonight.` } };
+};
+
+/** The Ticket Office on attendance, with the renewals. */
+W.tix_attendance = (f, r, who) => {
+  const a = _attendance(f, r, who), n = _renewals(f, r, who);
+  return { body: [...a.body, n.body[0]].filter(Boolean), memo: { ...a.memo, ...n.memo } };
+};
+
+/** The Ticket Office on a promotion for the next homestand: what each would do, and a choice. */
+W.tix_promo = (f, r, who) => {
+  const st = f.state, fin = f.fin();
+  const promo = fin?.promo;
+  if (promo?.gamesLeft > 0) return { body: [`We already have a promotion running, with ${plural(promo.gamesLeft, 'home game')} left on it. One at a time.`], memo: {} };
+  if (f.season !== 'regular') return { body: [f.season === 'spring' ? `Spring games aren't part of the gate. Ask me once the season starts.` : `There are no home games to sell right now.`], memo: {} };
+  const homes = f.homeGamesWithin(21).filter(g => g.gameTime > f.atMs && !g.isSpring && !g.isPlayoff);
+  if (homes.length < 3) return { body: [`We only have ${plural(homes.length, 'home game')} in the next three weeks. Not enough to build a promotion around.`], memo: {} };
+  const cap = f.capacity() || 1;
+  const withPromo = (pr) => ({ ...st, userTeam: { ...st.userTeam, finances: { ...fin, promo: pr ? { price: pr.price, fill: pr.fill, gamesLeft: pr.games } : null } } });
+  const run = (pr) => homes.slice(0, pr.games).reduce((a, g) => {
+    const base = crowdFor(withPromo(null), 'user', { atMs: g.gameTime, expected: true });
+    const with_ = crowdFor(withPromo(pr), 'user', { atMs: g.gameTime, expected: true });
+    return { fans: a.fans + ((with_?.attendance || 0) - (base?.attendance || 0)), gate: a.gate + ((with_?.gateK || 0) - (base?.gateK || 0)), n: a.n + 1 };
+  }, { fans: 0, gate: 0, n: 0 });
+  const opts = Object.entries(PROMOTIONS).map(([k, pr]) => {
+    const x = run(pr), costK = pr.costPerGameK * x.n;
+    return { k, pr, n: x.n, fans: Math.round(x.fans / Math.max(1, x.n)), net: Math.round(x.gate - costK), costK };
+  }).sort((a, b) => b.net - a.net);
+  const base = homes.slice(0, 6).map(g => crowdFor(withPromo(null), 'user', { atMs: g.gameTime, expected: true })?.attendance || 0);
+  const share = base.reduce((a, b) => a + b, 0) / base.length / cap;
+  const out = [`For the next ${plural(homes.length, 'home game')}, we're projecting about ${pct(share)} of the seats filled.`];
+  const word = (o) => `${PROMOTIONS[o.k].label} (${plural(o.n, 'game')}): about ${Math.max(0, Math.round(o.fans / 100) * 100).toLocaleString()} more fans a game, ${o.net >= 0 ? `${formatK(o.net)} more` : `${formatK(-o.net)} less`} at the gate after costs.`;
+  out.push(...opts.map(o => `• ${word(o)}`));
+  const good = opts[0].net >= 0;
+  out.push(share >= 0.97 ? `We're selling out without one. A promotion would only fill the seats we're already selling and give away money; I'd hold off.`
+         : good ? `I'd go with ${PROMOTIONS[opts[0].k].label.toLowerCase()}. A bigger crowd helps the atmosphere too.`
+         : `None of them pays for itself at the gate. They help the atmosphere, and the crowd, if that's what you're after.`);
+  const sub = (o) => `${plural(o.n, 'home game')}, about ${Math.max(0, Math.round(o.fans / 100) * 100).toLocaleString()} more fans a game, ${o.net >= 0 ? '+' : '−'}${formatK(Math.abs(o.net))}`;
+  return {
+    body: out, memo: { share },
+    decision: { team: true, onYes: 'ticket_promo', recommend: good && share < 0.97, noLabel: 'Not Now', expiresInMs: 2 * MS_DAY,
+                choices: opts.map(o => ({ key: `promo:${o.k}`, label: `Run ${PROMOTIONS[o.k].label}`, sub: sub(o) })) },
+  };
+};
+
 const TOPIC_LABELS = {
-  gk_field: 'the field', gk_weather: 'the weather', mgr_lineup: 'the lineup', mgr_morale: 'the clubhouse',
-  mgr_rotation: 'the rotation', mgr_matchup: 'the next series', pc_rotation: 'the rotation', pc_reliever: 'the bullpen',
-  pc_prospect: 'our young pitchers', hc_slump: 'the slump', hc_development: 'our young hitters', hc_lineup: 'the batting order',
-  bc_morale: 'our in-game decisions', bpc_health: 'the bullpen', fac_status: 'the ballpark', tix_attendance: 'attendance',
-  tix_renewals: 'season-ticket renewals', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
+  gk_field: 'the field', gk_weather: 'the weather', mgr_lineup: 'the batting order', mgr_morale: 'the clubhouse',
+  mgr_hook: 'the hook', pc_rotation: 'the rotation',
+  pc_prospect: 'our young pitchers', hc_slump: 'the slump', hc_development: 'our young hitters',
+  bc_tactics: 'the running game', bpc_health: 'the bullpen', bpc_roles: 'the bullpen roles', tix_attendance: 'attendance',
+  tix_promo: 'a promotion', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
-  mr_narrative: 'the coverage', ca_event: 'community commitments',
   hc_work: 'the work', pc_work: 'the work', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
 };
 

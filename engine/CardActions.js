@@ -31,6 +31,9 @@ import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeac
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
 import { setPitchRole } from './Positions.js';   // r163
 import { signBlocker, sign as signFA } from './FreeAgency.js';   // r168
+import { setStrategy, setPenRole } from './Strategy.js';   // r169
+import { startPromo, post as postMoney, canSpend } from './FinanceEngine.js';   // r169
+import { PROMOTIONS } from '../data/constants.js';   // r169
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -122,6 +125,35 @@ const simGames = {
 const faPosSign = {
   feasible: (st, c) => !signBlocker(st, c._targetPlayerId, c._dropId || null),
   apply: (d, c, atMs) => signFA(d, c._targetPlayerId, atMs, c._dropId || null),
+};
+
+/** r169 how the club plays (the batting order, the running game, the hook): the choice the GM tapped. */
+const pickOf = (c) => c._pick || c._choices?.[0]?.key || '';
+const strategy = {
+  feasible: (st, c) => !!st.userTeam && /^(order|run|hook):/.test(pickOf(c)),
+  apply: (d, c) => { const [part, style] = pickOf(c).split(':'); setStrategy(d.userTeam, part, style); return []; },
+};
+
+/** r169 a bullpen role the GM gives one pitcher (or hands back to the manager). */
+const penRole = {
+  feasible: (st, c) => { const p = st.players[c._targetPlayerId]; return !!p && p.teamId === 'user' && ['SP', 'RP'].includes(p.pos); },
+  apply: (d, c) => { setPenRole(d.userTeam, c._targetPlayerId, c._raw?._penRole); return []; },
+};
+
+/** r169 the Ticket Office's promotion for the next homestand. */
+const promoOf = (c) => { const k = pickOf(c).replace(/^promo:/, ''); return PROMOTIONS[k] ? { k, ...PROMOTIONS[k] } : null; };
+const ticketPromo = {
+  feasible: (st, c) => {
+    const pr = promoOf(c), fin = st.userTeam?.finances;
+    return !!pr && !!fin && !(fin.promo?.gamesLeft > 0) && canSpend(st, pr.costPerGameK * pr.games);
+  },
+  apply: (d, c, atMs) => {
+    const pr = promoOf(c), u = d.userTeam, fin = u.finances;
+    startPromo(fin, { price: pr.price, fill: pr.fill, homeGames: pr.games });
+    if (pr.costPerGameK) postMoney(fin, -pr.costPerGameK * pr.games, 'events', `${pr.label} promotion`, atMs);
+    u.atmosphere = Math.max(0, Math.min(100, (u.atmosphere ?? 60) + (pr.atmo || 0)));
+    return [];
+  },
 };
 
 const work = {
@@ -533,6 +565,9 @@ export const CARD_ACTIONS = Object.freeze({
   coach_work:           work,      // r159 §122.31
   teach_position:       teach,     // r166 §122.35
   fa_pos_sign:          faPosSign, // r168 §122.35
+  set_strategy:         strategy,  // r169
+  pen_role:             penRole,   // r169
+  ticket_promo:         ticketPromo, // r169
   sim_games:            simGames,  // r167 §122.35
   dev_program:          work,
   day_off:              dayOff,

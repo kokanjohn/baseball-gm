@@ -73,7 +73,7 @@ const summarize = () => {
 // ── §106 compose replies: every topic, written from the live state ─
 const composeStats = { n: 0, bad: [], slow: 0, maxMs: 0 };
 const COMPOSE_CH = { gk_: 'groundskeeper', mgr_: 'manager', pc_: 'pitching_coach', hc_: 'hitting_coach', bc_: 'bench_coach', bpc_: 'bullpen_coach',
-                     fac_: 'facilities', tix_: 'ticket_office', sc_: 'scouting', mr_: 'media_relations', ca_: 'community' };
+                     tix_: 'ticket_office', sc_: 'scouting' };
 function composeAudit(st, atMs, where) {
   const G = /\b(he|him|his|himself|he's|he'll|he'd|she|her|hers|herself|guy|guys|fella|fellas|man|men|boys)\b/i;
   for (const topicId of COMPOSE_TOPICS) {

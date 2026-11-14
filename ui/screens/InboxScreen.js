@@ -32,6 +32,7 @@ import { dealsFor, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js'
 import { namedPlayers } from '../../engine/ComposeReplies.js';
 import { workPlayers, skillsOf, teachablePositions } from '../../engine/PlayerWork.js';
 import { posLabel, startsAt, familiarity } from '../../engine/Positions.js';   // r163 §122.35
+import { penRoleOf } from '../../engine/Strategy.js';   // r169
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -70,10 +71,9 @@ const COMPOSE_CHANNELS = [
     role:     'Field Staff',
     priority: 'high',
     topics: [
-      { id: 'mgr_lineup',    label: 'Lineup strategy',          desc: 'Ask about the lineup plan for upcoming games' },
+      { id: 'mgr_lineup',    label: 'The batting order',        desc: 'How the order is built, and how you want it built' },
       { id: 'mgr_morale',    label: 'Team morale check-in',     desc: 'Get a read on clubhouse atmosphere' },
-      { id: 'mgr_rotation',  label: 'Rotation status',          desc: 'Check on SP workload and next starts' },
-      { id: 'mgr_matchup',   label: 'Upcoming series prep',     desc: 'Discuss the next opponent\'s tendencies' },
+      { id: 'mgr_hook',      label: 'When to go to the bullpen', desc: 'How long the starters stay in: a quick hook or a long leash' },
       { id: 'mgr_trade',     label: 'A trade on the table',     desc: 'How a deal would change us on the field, with the coaches\' read on who\'s coming in', deal: true },
       { id: 'mgr_rest',      label: 'A day off for a hitter',   desc: 'Pick a hitter: how worn down they are, and a day off if you want one', player: 'hitters' },
     ],
@@ -85,8 +85,7 @@ const COMPOSE_CHANNELS = [
     role:     'Field Staff',
     priority: 'high',
     topics: [
-      { id: 'pc_rotation',   label: 'Rotation health',          desc: 'Check arm health across the rotation' },
-      { id: 'pc_reliever',   label: 'Bullpen workload',         desc: 'Review reliever usage and recovery' },
+      { id: 'pc_rotation',   label: 'The rotation',             desc: 'The next turns, and how each starter\'s arm is doing' },
       { id: 'pc_prospect',   label: 'Young pitcher check-in',   desc: 'A report on a young arm — and a development plan if you want one' },
       { id: 'pc_work',       label: 'Work with a pitcher on…',  desc: 'Pick a pitcher and a skill: the coach decides how much work it takes', player: 'pitchers', skill: true },
       { id: 'pc_stretch',    label: 'Stretch a pitcher out',     desc: 'Pick a reliever: sim games to build the length to start', player: 'pitchers' },
@@ -101,7 +100,6 @@ const COMPOSE_CHANNELS = [
     topics: [
       { id: 'hc_slump',      label: 'Hitter in a slump',        desc: 'Ask about a struggling hitter\'s approach' },
       { id: 'hc_development', label: 'Development check-in',    desc: 'A young hitter\'s progress — and a development plan if you want one' },
-      { id: 'hc_lineup',     label: 'Lineup optimization',      desc: 'Discuss batting order construction' },
       { id: 'hc_work',       label: 'Work with a hitter on…',   desc: 'Pick a hitter and a skill: the coach decides how much work it takes', player: 'hitters', skill: true },
     ],
   },
@@ -124,7 +122,7 @@ const COMPOSE_CHANNELS = [
     role:     'Field Staff',
     priority: 'medium',
     topics: [
-      { id: 'bc_morale',     label: 'In-game decisions',        desc: 'Get bench coach\'s read on game tactics' },
+      { id: 'bc_tactics',    label: 'The running game',         desc: 'Close games, steals, and how much you want us to run' },
       { id: 'bc_teach',      label: 'Teach a player a position', desc: 'Pick a hitter and a position: extra reps there in practice', player: 'hitters', skill: true, choices: 'positions' },
     ],
   },
@@ -135,17 +133,8 @@ const COMPOSE_CHANNELS = [
     role:     'Field Staff',
     priority: 'medium',
     topics: [
-      { id: 'bpc_health',    label: 'Reliever health check',    desc: 'Review which relievers are available today' },
-    ],
-  },
-  {
-    id:       'facilities',
-    label:    'Facilities & Ops',
-    icon:     '🏟️',
-    role:     'Front Office',
-    priority: 'medium',
-    topics: [
-      { id: 'fac_status',    label: 'Ballpark status',          desc: 'Check on any facility concerns or projects' },
+      { id: 'bpc_health',    label: 'The bullpen',              desc: 'Who\'s available, the work they\'ve done, and the roles' },
+      { id: 'bpc_roles',     label: 'A reliever\'s role',        desc: 'Pick a pitcher: name the closer or a setup arm, or leave it to the manager', player: 'relievers', skill: true, choices: 'roles' },
     ],
   },
   {
@@ -155,8 +144,8 @@ const COMPOSE_CHANNELS = [
     role:     'Front Office',
     priority: 'medium',
     topics: [
-      { id: 'tix_attendance', label: 'Attendance outlook',       desc: 'Review attendance trends and forecasts' },
-      { id: 'tix_renewals',   label: 'Season ticket renewals',   desc: 'Check on renewal campaign status' },
+      { id: 'tix_attendance', label: 'Attendance outlook',       desc: 'The crowds lately, the next homestand, and renewals' },
+      { id: 'tix_promo',      label: 'Run a promotion',          desc: 'A promotion for the next homestand: what each would do for the crowd and the gate' },
     ],
   },
   {
@@ -184,26 +173,6 @@ const COMPOSE_CHANNELS = [
     priority: 'medium',
     topics: [
       { id: 'doc_health',    label: 'A player\'s health',        desc: 'Pick a player: what\'s bothering them, their history, how worn down they are', player: 'any' },
-    ],
-  },
-  {
-    id:       'media_relations',
-    label:    'Media Relations',
-    icon:     '📰',
-    role:     'Front Office',
-    priority: 'low',
-    topics: [
-      { id: 'mr_narrative',  label: 'Team narrative',           desc: 'Discuss how the team is being covered' },
-    ],
-  },
-  {
-    id:       'community',
-    label:    'Community Affairs',
-    icon:     '🤝',
-    role:     'Front Office',
-    priority: 'low',
-    topics: [
-      { id: 'ca_event',      label: 'Community event check',    desc: 'Review upcoming community commitments' },
     ],
   },
 ];
@@ -480,8 +449,8 @@ function _renderReading(card, inbox, state) {
   const reply = card._choices?.length ? `
       <div class="msg-choices">
         ${card._choices.map((c, k) => `
-        <button class="msg-choice${k === 0 ? ' recommended' : ''}" data-resolve="${card.instanceId}" data-choice="yes" data-pick="${_escape(c.key)}">
-          <span class="mc-label">${_escape(c.label)}${k === 0 ? ' <span class="mc-rec">Recommended</span>' : ''}</span>
+        <button class="msg-choice${k === 0 && !card._noRec ? ' recommended' : ''}" data-resolve="${card.instanceId}" data-choice="yes" data-pick="${_escape(c.key)}">
+          <span class="mc-label">${_escape(c.label)}${k === 0 && !card._noRec ? ' <span class="mc-rec">Recommended</span>' : ''}</span>
           ${c.sub ? `<span class="mc-sub">${_escape(c.sub)}</span>` : ''}
         </button>`).join('')}
         ${card.noLabel ? `<button class="msg-choice alt" data-resolve="${card.instanceId}" data-choice="no">
@@ -745,7 +714,7 @@ function _composeTopics(state, ch) {
       </select>` : '';
     // r159 a work topic, a player picked: which skill (with where it stands now).
     const pick = isSel && !off && t.skill && _composeDeal ? state.players[_composeDeal] : null;
-    const skills = pick ? `<div class="compose-h compose-deal-h">${t.choices === 'positions' ? 'Which position?' : 'Work on what?'}</div>
+    const skills = pick ? `<div class="compose-h compose-deal-h">${t.choices === 'positions' ? 'Which position?' : t.choices === 'roles' ? 'Which role?' : 'Work on what?'}</div>
       <div class="compose-skills">${_choicesFor(t, pick).map(c => `<button type="button" class="compose-skill${_composeSkill === c.key ? ' selected' : ''}" data-skill="${c.key}">
         <span class="cs-name">${c.name}</span><span class="cs-val">${c.val}</span></button>`).join('')}</div>` : '';
     return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
@@ -760,7 +729,7 @@ function _composeTopics(state, ch) {
     <div class="compose-to"><span class="compose-to-label">To</span> ${_escape(ch.label)}<span class="compose-to-role">${_escape(ch.role)}</span></div>
     <div class="compose-h">What about?</div>
     <div class="compose-topic-list">${rows}</div>
-    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : !_composeTopic ? 'Pick a topic' : sel?.player && !_composeDeal ? 'Pick a player' : sel?.skill ? 'Pick a skill' : 'Pick a deal'}</button>`;
+    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : !_composeTopic ? 'Pick a topic' : sel?.player && !_composeDeal ? 'Pick a player' : sel?.skill ? (sel.choices === 'positions' ? 'Pick a position' : sel.choices === 'roles' ? 'Pick a role' : 'Pick a skill') : 'Pick a deal'}</button>`;
 }
 
 /** A trade topic with one deal on the table: that deal, picked already. */
@@ -992,6 +961,11 @@ async function _resolveCard(instanceId, choice, pick = null) {
 /** r159 a work topic's choices: a skill (its rating) — r166 §122.35 or a position to teach (where it stands). */
 function _choicesFor(t, p) {
   if (!p) return [];
+  if (t.choices === 'roles') {   // r169 a reliever's role
+    const now = penRoleOf(StateManager.get().userTeam, p.id);
+    return [{ key: 'closer', name: 'Closer', val: now === 'closer' ? 'now' : '' }, { key: 'setup', name: 'Setup', val: now === 'setup' ? 'now' : '' },
+            { key: 'auto', name: 'Manager\'s call', val: now ? '' : 'now' }];
+  }
   if (t.choices === 'positions') return teachablePositions(p).map(x => {
     const n = startsAt(p, x);
     return { key: x, name: x, val: n ? `${n}/10` : familiarity(p, x) > 0 ? 'practiced' : 'new' };
@@ -1009,11 +983,11 @@ async function _sendCompose(topicId, channelId, state) {
   const player = topic?.player ? (_topicState(topic, state).players || []).find(p => p.id === _composeDeal) : null;
   if (topic?.player && !player) { App.showToast(topic.player === true ? 'That player can\'t be traded right now.' : 'That player isn\'t available to ask about.', 'neutral', 2500); refresh(); return; }
   const skill = topic?.skill ? _composeSkill : null;
-  if (topic?.skill && !_choicesFor(topic, player).some(c => c.key === skill)) { App.showToast(topic.choices === 'positions' ? 'Pick a position.' : 'Pick a skill to work on.', 'neutral', 2500); refresh(); return; }
+  if (topic?.skill && !_choicesFor(topic, player).some(c => c.key === skill)) { App.showToast(topic.choices === 'positions' ? 'Pick a position.' : topic.choices === 'roles' ? 'Pick a role.' : 'Pick a skill to work on.', 'neutral', 2500); refresh(); return; }
   const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`,
                        sc_program: (p) => `A development program for ${p.name}`, mgr_rest: (p) => `A day off for ${p.name}`,
                        doc_health: (p) => `${p.name}'s health`, bc_teach: (p) => `Teach ${p.name} ${skill}`,
-                       pc_stretch: (p) => `Stretch ${p.name} out` };
+                       pc_stretch: (p) => `Stretch ${p.name} out`, bpc_roles: (p) => `${p.name}'s role` };
 
   // Record cooldown immediately
   if (!topic?.deal && !topic?.player) StateManager.mutate(s => {

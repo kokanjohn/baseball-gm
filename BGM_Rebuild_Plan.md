@@ -11139,3 +11139,70 @@ Fresh team: required (from r163).
 This completes the positions project (§122.35 phases 1–6).
 
 **Suite (r168):** season sim 3827/3827, multi-season 59/59. check-message-lookahead failed once (its known intermittent timing mismatch) and passed three times on rerun.
+
+### §122.42 r169 Compose: decisions about how the club plays, and a smaller menu
+
+**The audit** (34 topics, 14 recipients):
+- 11 topics could lead to a decision; the other 23 were reports.
+- Media Relations, Community Affairs and Facilities had a single report topic each.
+- Several pairs repeated each other, and the Hitting Coach's batting-order advice couldn't be acted on, because the order was automatic.
+
+**Removed** (their own event messages still come): Media Relations (`mr_narrative`), Community Affairs (`ca_event`), Facilities & Ops (`fac_status`).
+
+**Merged:**
+- **Upcoming series prep** (`mgr_matchup`) is dropped; Scouting's **Opponent scouting** covers it.
+- **The rotation** (`pc_rotation`, Pitching Coach): the Manager's turns ahead (`_turns`) plus the coach's notes on each arm (`_armNotes`).
+- **The bullpen** (`bpc_health`, Bullpen Coach): who's available today (`_bpcAvailable`), the work they've done (`_penUsage`: usage, saves, group ERA, starters not going five) and the roles the GM set.
+- **Attendance outlook** (`tix_attendance`) now ends with the renewals projection (`_renewals`).
+- **Lineup optimization** (`hc_lineup`) is gone; the Manager's **The batting order** is a decision now.
+- **Renamed:** `bc_morale` → `bc_tactics` ("The running game").
+
+**How the club plays** (`engine/Strategy.js`, pure; `team.strategy = { order, run, hook }`, `team.penRoles = { closer, setup[≤2] }`; the CPU clubs play the defaults):
+- **The batting order** (Manager, `mgr_lineup`):
+  - **The styles** (`battingOrder(pool, style)`):
+    - `classic` (Traditional): contact and speed first and second, the best overall third, power fourth and fifth;
+    - `onbase` (On-Base at the Top): the best contact hitters first;
+    - `best` (Best Bats at the Top): the four best overall first through fourth, the best contact of them leading off.
+  - **Where it's used:** the sim (`_buildLineup`, which replaced `_simDeriveBattingOrder`) and the Compose facts (`f.lineup()` is in batting order now). Before this, the replies read the lineup in slot order (C, 1B, …) as if it were the batting order.
+  - **The recommendation** (`recommendOrder`): the style with the best plate-appearance-weighted value (`orderValue`); the current style gets a small edge.
+  - **The choices** show each style's top five names.
+- **The running game** (Bench Coach, `bc_tactics`):
+  - **What it changes** (`STRATEGY.run`): the attempt rate ×, the speed a runner needs (±), and the success rate (±):
+    - less: ×0.45, +8, +4%;
+    - more: ×1.7, −8, −7%.
+  - **The recommendation:** from our success rate (75%+ → more, under 68% → less) after 10 attempts; before that, from the nine's average speed (60+ more, 45 or under less).
+- **The hook** (Manager, `mgr_hook`):
+  - **What it changes** (`STRATEGY.hook`): quick is −1 inning and −3 batters before tiring; long is +1 and +3. It never applies in spring or the All-Star Game.
+  - **The recommendation:** from the rotation's ERA against the bullpen's (±0.75) and how worn the bullpen is.
+- **A reliever's role** (Bullpen Coach, `bpc_roles`):
+  - **The picker:** a pitcher from the bullpen or the pitcher bench (`workPlayers('relievers')`), then a role: Closer / Setup / Manager's call (the current role is marked "now").
+  - **The coach's read** says who closes now and who the manager would pick (`bullpenRoles` without the GM's roles), and notes when the pitcher is out of role.
+  - **The decision:** Make X the Closer / Make X a Setup Arm / Back to the Manager's Call (`pen_role` → `setPenRole`).
+  - **`bullpenRoles`** puts the named closer and setup arms first; the rest follow by value. A named closer who needs rest still sits.
+- **The decision itself:** a reply with `decision.team` and `choices` becomes a card with `_choices` (one tap each, the recommended first; `_noRec` drops the badge). `set_strategy` sets the part the GM tapped.
+
+**A promotion** (Ticket Office, `tix_promo`, regular season only, one at a time):
+- **The options** (`PROMOTIONS`):
+  - Discount Tickets: −20%, +12% of seats, 6 games;
+  - Giveaway Nights: +8%, 4 games, $12K a game;
+  - Family Packs: −10%, +15%, 3 games, $4K a game.
+- **The reply** projects, from `crowdFor` with and without each promotion, the extra fans a game and the gate after costs, then recommends the best.
+  - When we're selling out, or none pays for itself, the reply says to hold off and the first choice carries no Recommended badge.
+- **Yes** (`ticket_promo`) runs `startPromo`, charges the cost (category events) and raises atmosphere by +1 to +3.
+
+**Checks:**
+- **check-compose-strategy** (23):
+  - the menu: the old topics are gone, the new ones are there, and the three recipients are removed;
+  - every order style is all nine; the Manager's reply and its choices; the tap; the sim bats in that order;
+  - over 500 sim games each: run less / normal / more (attempts and success rate), and quick / normal / long hook (the starter's innings);
+  - a reliever named closer gets most of the saves (against almost none when the manager picks), and "Back to the Manager's Call" undoes it;
+  - the running game and hook replies and taps;
+  - the promotion: cost, crowd and atmosphere, and one at a time.
+- **test-compose-strategy-ui** (dark and light): the recipients; Bullpen Coach → A reliever's role (the role buttons, the reply, the tap); the Manager's batting order reply with three choices, the first recommended, tapped.
+
+Fresh team: required (from r163).
+
+**Suite (r169):**
+- **A fix found by the suite:** the hook's three-inning floor first caught the spring build-up and the All-Star Game's one-inning stints. It now applies only when a hook moves the innings (`_hooked`).
+- **The results after the fix:** season sim 3827/3827, multi-season 59/59.
+- **Flakes:** check-roster-advice's prospect case failed once and passed twice on rerun.

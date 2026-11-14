@@ -12,6 +12,7 @@
  *   composeFacts(state, atMs) → facts (lazy getters, see below)
  */
 
+import { battingOrder, strategyOf } from './Strategy.js';   // r169
 import { PHASE, PLAYER_GROUP, PITCH_SP_REST_DAYS } from '../data/constants.js';
 import { weatherContext, MS_HOUR, MS_DAY, localHour, localDayStart, baseballDateIso } from './WeatherClimate.js';
 import { forecastForGame } from './GameWeather.js';
@@ -142,7 +143,12 @@ export function composeFacts(state, atMs) {
 
   // ── The roster ─────────────────────────────────────────────────
   const roster = once('roster', () => (u.rosterIds || []).map(P).filter(Boolean));
-  const lineup = once('lineup', () => (u.lineupSlots || []).map(s => ({ slot: s.slot, p: P(s.playerId) })).filter(x => x.p));
+  // r169 in batting order (the order the sim uses: Strategy.battingOrder by the GM's style), each with the slot played.
+  const lineup = once('lineup', () => {
+    const rows = (u.lineupSlots || []).map(s => ({ slot: s.slot, p: P(s.playerId) })).filter(x => x.p);
+    const order = battingOrder(rows.map(x => x.p), strategyOf(u).order);
+    return order.map(p => rows.find(x => x.p.id === p.id));
+  });
   const rotation = once('rotation', () => {
     const order = (u.rotation?.order || []).map(P).filter(Boolean);
     const idx = u.rotation?.currentIndex || 0;

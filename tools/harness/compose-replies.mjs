@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { writeComposeReply, COMPOSE_TOPICS } from '../../engine/ComposeReplies.js';
 const CH = { gk_: 'groundskeeper', mgr_: 'manager', pc_: 'pitching_coach', hc_: 'hitting_coach', bc_: 'bench_coach', bpc_: 'bullpen_coach',
-             fac_: 'facilities', tix_: 'ticket_office', sc_: 'scouting', mr_: 'media_relations', ca_: 'community' };
+             tix_: 'ticket_office', sc_: 'scouting' };
 export const channelOf = (t) => CH[Object.keys(CH).find(k => t.startsWith(k))];
 const [file, after = '30', only = null] = process.argv.slice(2);
 const { state, clockMs } = JSON.parse(readFileSync(file, 'utf8'));

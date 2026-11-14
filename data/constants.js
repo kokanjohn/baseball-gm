@@ -1848,6 +1848,28 @@ export const LEAGUE_POSITIONS = Object.freeze({
   notableOvr: 75, msgGapMs: 7 * 86_400_000, faFloorOvr: 50, fitGap: 4,
 });
 
+/**
+ * r169 how the GM wants the club to play (engine/Strategy.js), set through Compose.
+ *   run   the steal attempt rate ×; how much faster (+) / slower (−) than the usual speed threshold
+ *         a runner must be to go; the success rate ± (picking the best counts, or running into bad ones)
+ *   hook  the starter's innings wanted (±) and batters before tiring (±)
+ */
+export const STRATEGY = Object.freeze({
+  run: Object.freeze({ less: { attempt: 0.45, speedShift: 8, success: 0.04 }, normal: { attempt: 1, speedShift: 0, success: 0 }, more: { attempt: 1.7, speedShift: -8, success: -0.07 } }),
+  hook: Object.freeze({ quick: { innings: -1, bf: -3 }, normal: { innings: 0, bf: 0 }, long: { innings: 1, bf: 3 } }),
+});
+
+/**
+ * r169 the Ticket Office's promotions for the next homestand (Compose → Ticket Office): the price
+ * change (−0.2 = 20% off), the lift in seats filled, the home games it runs, its cost per game ($K),
+ * and what it does for the ballpark's atmosphere.
+ */
+export const PROMOTIONS = Object.freeze({
+  discount: { label: 'Discount Tickets', price: -0.2, fill: 0.12, games: 6, costPerGameK: 0, atmo: 1 },
+  giveaway: { label: 'Giveaway Nights', price: 0, fill: 0.08, games: 4, costPerGameK: 12, atmo: 2 },
+  family:   { label: 'Family Packs', price: -0.1, fill: 0.15, games: 3, costPerGameK: 4, atmo: 3 },
+});
+
 export const DEV_REPS = Object.freeze({
   regular: Object.freeze({ hitter: 0.5, SP: 0.15, RP: 0.3 }),
   sat:     Object.freeze({ hitter: 0.15, SP: 0.05, RP: 0.1 }),

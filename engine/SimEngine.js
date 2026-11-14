@@ -79,6 +79,7 @@ import {
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
 import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost } from './Positions.js';
+import { battingOrder, strategyOf, runStyle, hookStyle } from './Strategy.js';   // r169
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -478,10 +479,11 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     userRoles: userLineup.roles || null, oppRoles: oppLineup.roles || null,
     userUsed:  new Set([userSP?.id].filter(Boolean)), oppUsed: new Set([oppSP?.id].filter(Boolean)),
     userRole:  ROLE.STARTER, oppRole: ROLE.STARTER,
-    userTireAt: exhibition ? Infinity : tireAfterBF(userSP && players[userSP.id], true),
-    oppTireAt:  exhibition ? Infinity : tireAfterBF(oppSP && players[oppSP.id], true),
-    userTarget: _pitcherTargetInnings(userSP && players[userSP.id], { exhibition, isSpring, springNum: game?.index }),
-    oppTarget:  _pitcherTargetInnings(oppSP && players[oppSP.id], { exhibition, isSpring, springNum: game?.index }),
+    // (r169 the hook moves a starter's innings and batters, never a spring build-up or the All-Star Game)
+    userTireAt: exhibition ? Infinity : tireAfterBF(userSP && players[userSP.id], true) + (isSpring ? 0 : userLineup.hook?.bf || 0),
+    oppTireAt:  exhibition ? Infinity : tireAfterBF(oppSP && players[oppSP.id], true) + (isSpring ? 0 : oppLineup.hook?.bf || 0),
+    userTarget: _hooked(_pitcherTargetInnings(userSP && players[userSP.id], { exhibition, isSpring, springNum: game?.index }), exhibition || isSpring ? null : userLineup.hook),
+    oppTarget:  _hooked(_pitcherTargetInnings(oppSP && players[oppSP.id], { exhibition, isSpring, springNum: game?.index }), exhibition || isSpring ? null : oppLineup.hook),
     userRuns: 0, oppRuns: 0,
     // §118 injuries on the field: the season year (for age), and who has already left hurt.
     injuryYear: ctx.injuryYear ?? null,
@@ -505,6 +507,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     const userBats = isTop ? !userBatsBottom : userBatsBottom;
     _userFielding = userBats ? oppIsGM : userIsGM;
     _fieldDef = (userBats ? oppLineup : userLineup)?.defense || null;   // r165 the fielding side's defense
+    _runBat = (userBats ? userLineup : oppLineup)?.run || null;         // r169 the batting side's running game
     gs.halfIdx = (gs.inning - 1) * 2 + (isTop ? 0 : 1);
     gs.env = _envFor(gs.wx, gs.halfIdx);
     const hp = _simulateHalfInning(
@@ -659,7 +662,9 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
  * Only the lead runner attempts (second takes priority over first if both on).
  */
 /** r165 §122.35 a non-catcher behind the plate: runners go more often. */
-const _runMore = () => 1 + POSITION_RULES.oop.sbAttempt * (_fieldDef?.catcher || 0);
+const _runMore = () => (1 + POSITION_RULES.oop.sbAttempt * (_fieldDef?.catcher || 0)) * (_runBat?.attempt ?? 1);
+/** r169 the speed a runner needs to go, by the batting side's running game. */
+const _runSpeed = () => SIM_H_SPEED_SB_THRESHOLD + (_runBat?.speedShift || 0);
 
 /**
  * r165 §122.35 a passed ball: a non-catcher behind the plate lets one by — every runner moves up a
@@ -692,13 +697,13 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
   if (bases.second && !bases.third) {
     const runner = players[bases.second];
     const spd    = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
-    if (spd >= SIM_H_SPEED_SB_THRESHOLD && _roll() < SIM_SB_ATTEMPT_PROB * 0.7 * _runMore()) {
+    if (spd >= _runSpeed() && _roll() < SIM_SB_ATTEMPT_PROB * 0.7 * _runMore()) {
       runnerId = bases.second; fromBase = 'second'; toBase = 'third';
     }
   } else if (bases.first && !bases.second) {
     const runner = players[bases.first];
     const spd    = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
-    if (spd >= SIM_H_SPEED_SB_THRESHOLD && _roll() < SIM_SB_ATTEMPT_PROB * _runMore()) {
+    if (spd >= _runSpeed() && _roll() < SIM_SB_ATTEMPT_PROB * _runMore()) {
       runnerId = bases.first; fromBase = 'first'; toBase = 'second';
     }
   }
@@ -707,7 +712,7 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
 
   const runner   = players[runnerId];
   const spd      = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
-  const success  = _roll() < (SIM_SB_BASE_SUCCESS + (spd / SIM_SB_SPEED_BONUS_DIVISOR) + POSITION_RULES.oop.sbSuccess * (_fieldDef?.catcher || 0));   // r165
+  const success  = _roll() < (SIM_SB_BASE_SUCCESS + (spd / SIM_SB_SPEED_BONUS_DIVISOR) + POSITION_RULES.oop.sbSuccess * (_fieldDef?.catcher || 0) + (_runBat?.success || 0));   // r165, r169 the running game
 
   const newBases = { ...bases };
 
@@ -1946,6 +1951,11 @@ function _pitcherHurt(gs, players, plays, pitcher, side, tired, inning, outs, ba
 // Target innings for the current pitcher, by role + stamina. Starters ~5–8 IP,
 // relievers ~1–2 IP. Keyed to innings (not batters) so the hook doesn't drift
 // with how much offense a game happens to produce.
+/** r169 a starter's innings wanted, moved by the hook (never under three; untouched without one). */
+function _hooked(innings, hook) {
+  return hook?.innings ? Math.max(3, innings + hook.innings) : innings;
+}
+
 function _pitcherTargetInnings(pitcher, gs = null) {
   if (gs?.exhibition) return gs.exhibition.starterIds.has(pitcher?.id) ? ALLSTAR_STARTER_INNINGS : 1;
   const stam = playingRating(pitcher, 'stamina') ?? 60;
@@ -2576,9 +2586,10 @@ function _buildLineup(team, players, isCPU) {
   // Batting order: CPU uses OVR sort, user team uses sub-rating derivation.
   // lineupSlots defines WHO is in the lineup; batting order defines SEQUENCE.
   // An All-Star squad's manager builds a real order too (§75).
+  // r169 our club's order by the GM's style (Strategy); an All-Star squad's the traditional one.
   const orderedStarters = isCPU && !team.isAllStar
     ? [...starterPlayers].sort((a,b) => b.ovr - a.ovr)
-    : _simDeriveBattingOrder(starterPlayers);
+    : battingOrder(starterPlayers, team.isAllStar ? 'classic' : strategyOf(team).order);
 
   // §75 All-Star squad: the bench and staff are the squad's own (named), not
   // roster groups — selected starters and relievers both pitch in relief.
@@ -2620,39 +2631,8 @@ function _buildLineup(team, players, isCPU) {
     bullpen: bullpen.map(id => ({ id })),
     roles,
     defense: lineupSlots.length === 9 ? defenseOf(lineupSlots, players) : null,   // r165 §122.35 who's out of position
+    run: runStyle(team), hook: hookStyle(team),   // r169 how the club plays (Strategy)
   };
-}
-
-/**
- * _simDeriveBattingOrder(players)
- * Baseball-realistic batting order for the sim lineup.
- * Mirrors DashboardScreen._deriveBattingOrder — kept separate to avoid
- * cross-module import (SimEngine is a pure engine with no UI dependencies).
- */
-function _simDeriveBattingOrder(pool) {
-  if (!pool || !pool.length) return [];
-  const p9 = pool.slice(0, 9);
-
-  const leadoffScore = p => ((p.subRatings?.contact || p.ovr) * 0.55)
-                           + ((p.subRatings?.speed   || 50)   * 0.45);
-  const powerScore   = p =>   p.subRatings?.power   || p.ovr;
-  const overallScore = p =>   p.ovr;
-
-  const byLeadoff = [...p9].sort((a,b) => leadoffScore(b) - leadoffScore(a));
-  const byPower   = [...p9].sort((a,b) => powerScore(b)   - powerScore(a));
-  const byOverall = [...p9].sort((a,b) => overallScore(b) - overallScore(a));
-
-  const used = new Set();
-  const pick = arr => { const p = arr.find(x => !used.has(x.id)); if (p) used.add(p.id); return p; };
-
-  const s1 = pick(byLeadoff);
-  const s2 = pick(byLeadoff);
-  const s3 = pick(byOverall);
-  const s4 = pick(byPower);
-  const s5 = pick(byPower);
-  const rest = byOverall.filter(p => !used.has(p.id));
-
-  return [s1, s2, s3, s4, s5, ...rest].filter(Boolean);
 }
 
 function _buildCPULineup(team, players) {
@@ -2940,6 +2920,7 @@ function _gmRelVariance(gmRel) {
 let _staff = null;
 let _simAt = null;   // r161 the game's first pitch (a pitcher's workload is read as of then)
 let _fieldDef = null;          // r165 §122.35 the fielding side's defense this half (defenseOf)
+let _runBat = null;            // r169 the batting side's running game this half (Strategy.runStyle)
 let _userFielding = false;   // our club is in the field this half (the bench coach's defense)
 function _coachPoints(player, key) {
   if (!_staff || player?.teamId !== 'user') return 0;

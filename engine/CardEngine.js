@@ -2367,7 +2367,17 @@ function _releaseDue(nowMs) {
                   ...(named.length ? { _playerIds: [...new Set(named)] } : {}) };
     // §122.9 a reply that offers something (a development plan) is a decision.
     const d = reply.decision;
-    if (d && state.players[d.playerId]?.teamId === 'user') {
+    // r169 a decision about how the club plays (no one player): the reply's choices, one tap each.
+    if (d?.team) {
+      Object.assign(out, {
+        yesLabel: d.choices?.[0]?.label || d.yesLabel || 'Yes', noLabel: d.noLabel || null, autoResolve: 'no',
+        expiresAtMs: c.deliverAtMs + (d.expiresInMs || 2 * 86_400_000),
+        _choices: d.choices || null, ...(d.recommend === false ? { _noRec: true } : {}),
+        _raw: { ...(c._raw || {}), onYes: d.onYes, onNo: null, ...(d.promo ? { _promo: d.promo } : {}) },
+        ...(d.yesMsg ? { yesMsg: d.yesMsg } : {}), ...(d.noMsg ? { noMsg: d.noMsg } : {}),
+      });
+    }
+    if (d && !d.team && state.players[d.playerId]?.teamId === 'user') {
       Object.assign(out, {
         yesLabel: d.yesLabel, noLabel: d.noLabel, _targetPlayerId: d.playerId, autoResolve: 'no',
         expiresAtMs: c.deliverAtMs + (d.expiresInMs || 2 * 86_400_000),
@@ -2376,7 +2386,8 @@ function _releaseDue(nowMs) {
                 ...(d.work ? { _workSkill: d.work.skill, _workOwner: d.work.owner, _workDays: d.work.days, _workGain: d.work.gain,
                                _workSource: d.work.source } : {}),
                 // r166 §122.35 teaching a position: which, and the odds a day of reps takes
-                ...(d.teach ? { _teachPos: d.teach.pos, _teachOdds: d.teach.odds } : {}) },
+                ...(d.teach ? { _teachPos: d.teach.pos, _teachOdds: d.teach.odds } : {}),
+                ...(d.penRole ? { _penRole: d.penRole } : {}) },   // r169 a bullpen role
         ...(d.costK ? { _budgetCost: d.costK } : {}),
         ...(d.yesMsg ? { yesMsg: d.yesMsg } : {}), ...(d.noMsg ? { noMsg: d.noMsg } : {}),
       });

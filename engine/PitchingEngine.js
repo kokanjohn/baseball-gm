@@ -23,6 +23,7 @@
  *   (rest is counted in calendar days: "pitched yesterday" is about dates, not hours).
  */
 
+import { penRolesOf } from './Strategy.js';   // r169
 import {
   PLAYER_GROUP,
   PITCH_SP_TIRE_BASE_BF, PITCH_SP_TIRE_PER_STAMINA, PITCH_RP_TIRE_BASE_BF, PITCH_RP_TIRE_PER_STAMINA,
@@ -85,6 +86,21 @@ export function bullpenRoles(team, players) {
   }
   // A thin staff: the long men pitch where they're needed.
   if (!rest.length) { rest = long; long = []; }
+  // r169 the GM's roles (Strategy.penRolesOf): the closer and setup men named, if they're here to pitch;
+  // everyone else by value behind them.
+  const mine = penRolesOf(team);
+  const named = [mine.closer, ...mine.setup].filter(Boolean);
+  if (named.length) {
+    const here = (id) => pool.find(p => p.id === id);
+    const front = named.map(here).filter(Boolean);
+    if (front.length) {
+      long = long.filter(p => !front.includes(p));
+      rest = rest.filter(p => !front.includes(p));
+      const closerP = mine.closer ? here(mine.closer) : null;
+      rest = closerP ? [closerP, ...front.filter(p => p !== closerP), ...rest]
+                     : [rest[0], ...front, ...rest.slice(1)].filter(Boolean);   // (the manager's closer, then the named setup men)
+    }
+  }
   const ids = (xs) => xs.map(p => p.id);
   const closer = rest[0]?.id || null;
   const setup  = ids(rest.slice(1, 3));
