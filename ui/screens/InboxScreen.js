@@ -112,6 +112,7 @@ const COMPOSE_CHANNELS = [
     topics: [
       { id: 'gk_field',      label: 'Field conditions',         desc: 'Check on playing surface status' },
       { id: 'gk_weather',    label: 'Weather impact',           desc: 'Assess upcoming weather on field conditions' },
+      { id: 'gk_prep',       label: 'Get the field ready',      desc: 'The next home game: the extra crew and the full tarp, by the forecast' },
     ],
   },
   // Medium priority

@@ -25,7 +25,8 @@ import { PLAYER_WORK, POSITION_RULES } from '../data/constants.js';
 import { posLabel, pitchRoles } from './Positions.js';   // r163 §122.35
 import { strategyOf, battingOrder, recommendOrder, styleChoices, ORDER_STYLES, RUN_STYLES, HOOK_STYLES, penRolesOf } from './Strategy.js';   // r169
 import { bullpenRoles } from './PitchingEngine.js';   // r169
-import { PROMOTIONS } from '../data/constants.js';   // r169
+import { PROMOTIONS, FIELD_CARE } from '../data/constants.js';   // r169, r170
+import { drainageAt, drainageLevel, prepCostK } from './FieldCare.js';   // r170
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -228,6 +229,11 @@ W.gk_field = (f, r, who) => {
     if (nf && nf.chance >= 30) out.push(`For ${gameWords(f, next)}, the forecast is ${text}. The tarp crew will be here early.`);
     else if (nf) out.push(`For ${gameWords(f, next)}: ${text}. Should be a clean ${nightOf(f, next)} for the field.`);
   }
+  // r170 the drainage, and the crew for the next home game.
+  const lvlNow = drainageAt(f.state, f.atMs), lvlAll = drainageLevel(f.state);
+  if (lvlAll > lvlNow) out.push(`The drainage work is under way while we're on the road. It'll be in before we're home.`);
+  else if (lvlNow && rain24 >= 0.25) out.push(`The new drainage earned its keep: the field took the rain${lvlNow >= 2 ? ' without much trouble' : ' better than it used to'}.`);
+  if (nh && f.state.fieldPrep?.[nh.gameTime]) out.push(`The extra crew is booked for ${gameWords(f, nh)}.`);
   // What the GM did for the crew.
   const mine = f.decisions().filter(d => ['FACILITIES', 'OPERATIONS', 'FINANCE', 'WEATHER'].includes(d.tag) && GROUNDS_WORDS.test(d.subject) && f.atMs - d.at < 120 * MS_DAY);
   const d = mine[0];   // the latest call the GM made on the crew's work
@@ -236,6 +242,32 @@ W.gk_field = (f, r, who) => {
   const lt = lastTime(f, 'gk_field');
   if (lt && lt.days <= 3 && rain24 < 0.1) out.unshift(`Not much has changed since I wrote ${f.onWhen(lt.prev.atMs)}.`);
   return { body: out, memo: { rain24 } };
+};
+
+/** r170 the groundskeeper on the next home game: the extra crew and the full tarp, by the forecast. */
+W.gk_prep = (f, r, who) => {
+  const close = FIELD_CARE.prep.closeH * MS_HOUR;
+  const g = f.upcoming().filter(f.atHome).find(x => !x.isSpring && x.gameTime - close - f.atMs >= 2 * MS_HOUR);
+  if (!g || g.gameTime - f.atMs > 4 * MS_DAY) return { body: [offseasonNote(f) || `We don't have a home game in the next few days that I could still get a crew in for. Ask me when we're back.`], memo: {} };
+  const booked = f.state.fieldPrep?.[g.gameTime];
+  if (booked) return { body: [`The extra crew is already booked for ${gameWords(f, g)}. The tarp setup goes in the day before.`], memo: {} };
+  const { fc, text } = forecastWords(f, g);
+  const chance = fc?.chance ?? 0;
+  const wetIn = f.rainPast(24);
+  const costK = prepCostK(chance, wetIn);
+  const lvl = drainageAt(f.state, g.gameTime);
+  const out = [`For ${gameWords(f, g)}, the forecast is ${text || 'not out yet'}.${wetIn >= 0.25 ? ` We've taken ${inches(wetIn)} of rain in the last day already.` : ''}`];
+  out.push(`For ${formatK(costK)} I can bring in the extra crew and set up the full tarp: if it rains before the game the field is ready sooner, if play stops we're back out faster, and the infield stays firmer. It won't stop lightning or a downpour.`);
+  if (lvl) out.push(`The drainage we put in already helps${lvl >= 3 ? ' a lot' : ''}; this is on top of it.`);
+  const worth = chance >= FIELD_CARE.prep.minChance || wetIn >= FIELD_CARE.prep.wetIn;
+  out.push(worth ? `I'd do it.` : chance >= 20 ? `It's a maybe. I'd lean toward saving the money.` : `Honestly, with that forecast I'd save the money.`);
+  out.push(`I need an answer ${FIELD_CARE.prep.closeH} hours before first pitch.`);
+  return {
+    body: out, memo: { gameTime: g.gameTime, chance },
+    decision: { team: true, onYes: 'field_prep', yesLabel: `Bring In the Crew (${formatK(costK)})`, noLabel: "We'll Manage",
+                expiresAtMs: g.gameTime - close, card: { _fieldGameTime: g.gameTime, _fieldCostK: costK },
+                yesMsg: 'The extra crew is booked.', noMsg: 'The regular crew it is.' },
+  };
 };
 
 W.gk_weather = (f, r, who) => {
@@ -893,7 +925,7 @@ W.tix_promo = (f, r, who) => {
 };
 
 const TOPIC_LABELS = {
-  gk_field: 'the field', gk_weather: 'the weather', mgr_lineup: 'the batting order', mgr_morale: 'the clubhouse',
+  gk_field: 'the field', gk_weather: 'the weather', gk_prep: 'getting the field ready', mgr_lineup: 'the batting order', mgr_morale: 'the clubhouse',
   mgr_hook: 'the hook', pc_rotation: 'the rotation',
   pc_prospect: 'our young pitchers', hc_slump: 'the slump', hc_development: 'our young hitters',
   bc_tactics: 'the running game', bpc_health: 'the bullpen', bpc_roles: 'the bullpen roles', tix_attendance: 'attendance',

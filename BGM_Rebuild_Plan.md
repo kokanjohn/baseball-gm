@@ -11206,3 +11206,58 @@ Fresh team: required (from r163).
 - **A fix found by the suite:** the hook's three-inning floor first caught the spring build-up and the All-Star Game's one-inning stints. It now applies only when a hook moves the innings (`_hooked`).
 - **The results after the fix:** season sim 3827/3827, multi-season 59/59.
 - **Flakes:** check-roster-advice's prospect case failed once and passed twice on rerun.
+
+### §122.43 r170 The Head Groundskeeper: field prep before a wet home game, and the field's drainage
+
+**The model** (`engine/FieldCare.js`, pure; `GameWeather.fieldParams(field)`):
+- **What counts:** a game at our park carries `field = { drainage, prep }` (`fieldFor`; null elsewhere, and in spring).
+- **The plan:** `gameWeatherPlan` and `gameRecord` read the field's numbers in place of `GAME_WEATHER`'s. The plan keeps `field` and `fieldKey`; a plan made for another field is made again (`_ensureWeatherPlans`, `_wxAtFirstPitch`).
+- **What it changes:**
+  - how long steady rain can fall before the tarp (`soakMin`);
+  - the rain before first pitch that makes a late start (`soggyIn`) or a washout (`washoutIn`);
+  - how light the rain must be, and for how long, before the tarp comes off (`dryRate`, `dryMin`);
+  - the crew's work after a delay (`prepMin`, `prepPerMm`, `prepMax`) and on a wet field (`soggyWorkMin`);
+  - how soft the infield gets (`softIn`, into `fieldCondition.infieldSoftness`, which the sim uses).
+- **The numbers** (`FIELD_CARE`):
+  - **drainage, per level (0–3):** +6 soak minutes, +0.4 in soggy, +0.6 in washout, the crew 20% faster a millimetre, +0.35 in to soften fully, tarp off at +0.5 mm/h and 3 minutes sooner;
+  - **prep:** +0.3 in soggy, a wet field ready in 15 minutes (not 30), the crew 8 + ½ minute a millimetre (at most 25), the tarp off 7 minutes sooner, the infield softening 40% less.
+- **Nothing stops lightning or a downpour.**
+- **Measured** over one season of our home games, planned with and without (game by game, ±5 minutes):
+  - the crew alone: 5 of 6 weather games better, none worse;
+  - drainage 3: 2 better, none worse;
+  - infield softness: 5.1 → 3.9 with the crew, 5.1 → 3.3 with drainage 3.
+
+**The field prep decision:**
+- **The groundskeeper's message:**
+  - **When it comes:** a clock event, `fieldask`, 30 hours before each of our regular-season home games.
+  - **When it's sent:** the forecast shows 40%+, or the park took 0.75 in in the last day.
+  - **What it says:** the chance, how wet the field is, and the price. `prepCostK` runs $8K at 40% up to $20K, +$2K when the field is already wet.
+  - **Buttons:** Bring In the Crew / We'll Manage.
+  - **Deadline:** an answer is needed 5 hours before first pitch, ahead of the plan made at 4 hours.
+  - **Withdrawal:** the message goes when the game is postponed (`wx:field:`).
+- **Compose → Head Groundskeeper → "Get the field ready"** (`gk_prep`): the same offer for the next home game there's still time for, with the coach's view ("I'd do it" / "I'd save the money").
+- **Yes** (`field_prep`) books `state.fieldPrep[gameTime]`, charges the crew (category facilities), and drops the game's plan if it was already made.
+- **The field report** (`gk_field`) mentions the booked crew, drainage under way, and drainage that earned its keep.
+
+**The drainage** (`userTeam.facilities.field`, levels 0–3, $150K / $250K / $400K):
+- **The mid-season pitch** (`_drainagePitch`, at the day's desk, regular season):
+  - **Who sends it:** the Head Groundskeeper.
+  - **When:** 3+ home games postponed or delayed 20+ minutes in the last six weeks (`wetHomeGames`), and a road trip long enough for the 6-day job within 30 days (`roadWindow`). At most once a month.
+  - **What it says:** the wet games, what drainage does and costs, and when the work happens (now on the road, after this homestand, or "on the long road trip coming up in about N days").
+  - **Yes** (`field_drainage`) books `userTeam.fieldWork { level, startAt, readyAt }` and charges the cost; the level counts from `readyAt` (`drainageAt`). A finished job is folded into the park (`settleDrainage`).
+- **The winter:** `FrontOffice.facilityOffer` offers the drainage first after a wet year (6+ home games). The groundskeeper sends it, with its own wording, and it's built by spring.
+- **Team → Finances** lists "field drainage N of 3" (or "being put in").
+
+**Checks:**
+- **check-field-care** (21):
+  - the numbers;
+  - a season of home games, four ways;
+  - the message on the clock (some wet games, a day ahead, answered before the plan, the groundskeeper's voice);
+  - Compose → yes → booked, charged, the game planned with the crew (`d0p`);
+  - the drainage pitch after a wet stretch, its road trip, yes, counting from `readyAt`;
+  - the winter offer after a wet year, and the usual offer after a dry one.
+- **test-field-care-ui** (dark and light): the Compose topic; the message (Bring In the Crew ($17K) / We'll Manage), tapped and booked; the drainage pitch.
+
+Fresh team: required (from r163).
+
+**Suite (r170):** season sim 3830/3830, multi-season 59/59. check-diamonds, test-swipe-close-ui (light) and test-wear-ui (dark) each failed once and passed on rerun; they're known intermittent failures.

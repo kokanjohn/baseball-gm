@@ -34,6 +34,7 @@ import { signBlocker, sign as signFA } from './FreeAgency.js';   // r168
 import { setStrategy, setPenRole } from './Strategy.js';   // r169
 import { startPromo, post as postMoney, canSpend } from './FinanceEngine.js';   // r169
 import { PROMOTIONS } from '../data/constants.js';   // r169
+import { drainageLevel, startDrainage } from './FieldCare.js';   // r170
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -152,6 +153,34 @@ const ticketPromo = {
     startPromo(fin, { price: pr.price, fill: pr.fill, homeGames: pr.games });
     if (pr.costPerGameK) postMoney(fin, -pr.costPerGameK * pr.games, 'events', `${pr.label} promotion`, atMs);
     u.atmosphere = Math.max(0, Math.min(100, (u.atmosphere ?? 60) + (pr.atmo || 0)));
+    return [];
+  },
+};
+
+/** r170 the extra grounds crew for one home game (the groundskeeper's message, or Compose). */
+const fieldPrep = {
+  feasible: (st, c) => {
+    const gt = c._fieldGameTime, g = (st.schedule || []).find(x => x.gameTime === gt && x.isHome && !x._committed && !x.cancelled);
+    return !!g && !st.fieldPrep?.[gt] && canSpend(st, c._fieldCostK || 0);
+  },
+  apply: (d, c, atMs) => {
+    const gt = c._fieldGameTime;
+    d.fieldPrep = { ...(d.fieldPrep || {}), [gt]: { costK: c._fieldCostK || 0, atMs } };
+    if (c._fieldCostK) postMoney(d.userTeam.finances, -c._fieldCostK, 'facilities', 'Extra grounds crew', atMs);
+    // (the game's weather is worked out again with the crew, if it already was)
+    const g = (d.schedule || []).find(x => x.gameTime === gt);
+    if (g?.wx && !g.plays?.length) g.wx = null;
+    return [];
+  },
+};
+
+/** r170 new drainage for the field: done over a road trip, it counts from the day it's ready. */
+const fieldDrainage = {
+  feasible: (st, c) => !!c._drainage && drainageLevel(st) < c._drainage.level && !st.userTeam?.fieldWork && canSpend(st, c._drainage.costK || 0),
+  apply: (d, c, atMs) => {
+    const w = c._drainage;
+    startDrainage(d, { level: w.level, startAt: w.startAt, readyAt: w.readyAt });
+    postMoney(d.userTeam.finances, -(w.costK || 0), 'facilities', 'Field drainage', atMs);
     return [];
   },
 };
@@ -568,6 +597,8 @@ export const CARD_ACTIONS = Object.freeze({
   set_strategy:         strategy,  // r169
   pen_role:             penRole,   // r169
   ticket_promo:         ticketPromo, // r169
+  field_prep:           fieldPrep,   // r170
+  field_drainage:       fieldDrainage, // r170
   sim_games:            simGames,  // r167 §122.35
   dev_program:          work,
   day_off:              dayOff,

@@ -17,13 +17,15 @@
  *                 concourse +1.5% of seats a level (crowdFor) and atmosphere;
  *                 training center: development ×(1 + 0.05 a level)
  *                 (DevelopmentEngine) and +0.15 a level on the winter's growth
+ *                 r170 field drainage (levels 0–3, FieldCare): offered first after a wet year at home
  *   Fan event     atmosphere, owner trust, sponsors (local income)
  *
  * Pure: never imports StateManager.
  */
 
-import { REGULAR_SEASON_GAME_COUNT, FIN_PRICE_ELASTICITY } from '../data/constants.js';
+import { REGULAR_SEASON_GAME_COUNT, FIN_PRICE_ELASTICITY, FIELD_CARE } from '../data/constants.js';
 import * as Finance from './FinanceEngine.js';
+import { drainageLevel, drainageCostK, wetHomeGames, settleDrainage } from './FieldCare.js';   // r170
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const r5 = (k) => Math.max(5, Math.round(k / 5) * 5);
@@ -121,13 +123,16 @@ export function applyCampaign(draft, offer, atMs) {
 export function facilityOffer(state) {
   const u = state.userTeam || {};
   const R = state.offseason?.review || {};
-  const f = u.facilities || {};
+  const f = { ...(u.facilities || {}), field: drainageLevel(state) };
   const lowCrowd = (u.atmosphere ?? 50) < 62 || (R.gate?.fill ?? 1) < 0.72;
-  let kind = lowCrowd ? 'concourse' : 'training';
-  if ((f[kind] || 0) >= FAC_MAX) kind = kind === 'concourse' ? 'training' : 'concourse';
+  // r170 a wet year at home (games postponed or delayed): the field's drainage first
+  const wet = wetHomeGames(state, -Infinity, Infinity);
+  const order = [...(wet >= FIELD_CARE.drainage.winterWet ? ['field'] : []), lowCrowd ? 'concourse' : 'training', lowCrowd ? 'training' : 'concourse'];
+  const kind = order.find(k => (f[k] || 0) < FAC_MAX);
+  if (!kind) return null;
   const level = f[kind] || 0;
-  if (level >= FAC_MAX) return null;
-  const cost = r5(target(state) * (kind === 'concourse' ? 0.06 : 0.05) * (1 + 0.25 * level));
+  const cost = kind === 'field' ? drainageCostK(level) : r5(target(state) * (kind === 'concourse' ? 0.06 : 0.05) * (1 + 0.25 * level));
+  if (kind === 'field') return { kind, level: level + 1, cost, why: `${wet} home games were postponed or delayed by the weather this year`, wet };
   const why = kind === 'concourse'
     ? ((u.atmosphere ?? 50) < 62 ? `the atmosphere at the park is ${u.atmosphere ?? 50} out of 100, and a flat park costs us crowds` : `the park was ${Math.round((R.gate?.fill ?? 0) * 100)}% full`)
     : `${R.core?.length ? `the young core (${R.core.length} player${R.core.length === 1 ? '' : 's'}) is where our future is` : 'development is where clubs like ours win'}`;
@@ -137,8 +142,9 @@ export function facilityOffer(state) {
 export function applyFacility(draft, offer, atMs) {
   const u = draft.userTeam, fin = u?.finances;
   if (!fin) return null;
-  Finance.post(fin, -offer.cost, 'facilities', offer.kind === 'concourse' ? 'Ballpark concourse upgrade' : 'Training center upgrade', atMs);
-  u.facilities = { concourse: 0, training: 0, ...(u.facilities || {}) };
+  Finance.post(fin, -offer.cost, 'facilities', offer.kind === 'concourse' ? 'Ballpark concourse upgrade' : offer.kind === 'field' ? 'Field drainage' : 'Training center upgrade', atMs);
+  settleDrainage(draft, Infinity);   // (r170 a job done in the season is the park's now)
+  u.facilities = { concourse: 0, training: 0, field: 0, ...(u.facilities || {}) };
   u.facilities[offer.kind] = Math.min(FAC_MAX, (u.facilities[offer.kind] || 0) + 1);
   if (offer.kind === 'concourse') u.atmosphere = clamp((u.atmosphere ?? 50) + 3, 0, 100);
   return u.facilities;

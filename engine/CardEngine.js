@@ -59,6 +59,7 @@ import {
   GAME_STATUS,
   ROSTER_DECISION_LEAD_MS,
   LEAGUE_POSITIONS,
+  FIELD_CARE,
 } from '../data/constants.js';
 
 import {
@@ -2371,9 +2372,10 @@ function _releaseDue(nowMs) {
     if (d?.team) {
       Object.assign(out, {
         yesLabel: d.choices?.[0]?.label || d.yesLabel || 'Yes', noLabel: d.noLabel || null, autoResolve: 'no',
-        expiresAtMs: c.deliverAtMs + (d.expiresInMs || 2 * 86_400_000),
+        expiresAtMs: d.expiresAtMs ?? c.deliverAtMs + (d.expiresInMs || 2 * 86_400_000),
         _choices: d.choices || null, ...(d.recommend === false ? { _noRec: true } : {}),
         _raw: { ...(c._raw || {}), onYes: d.onYes, onNo: null, ...(d.promo ? { _promo: d.promo } : {}) },
+        ...(d.card || {}),   // r170 what the decision acts on (the game a crew is for, its price)
         ...(d.yesMsg ? { yesMsg: d.yesMsg } : {}), ...(d.noMsg ? { noMsg: d.noMsg } : {}),
       });
     }
@@ -3654,6 +3656,60 @@ export function deliverDoubleheaderCard(info, atMs) {
   }), atMs);
 }
 
+/**
+ * r170 the groundskeeper reads the forecast for one of our home games (FIELD_CARE.prep.leadH ahead):
+ * the extra crew and the full tarp setup for that game, at a price by the forecast — answered before
+ * the game's weather is settled. It won't stop a storm; if the rain misses us, the money is spent.
+ */
+export function deliverFieldPrepCard(info, atMs) {
+  const state = StateManager.get();
+  const what = info.kind === 'storms' ? 'storms' : info.kind === 'snow' ? 'snow' : 'rain';
+  const wet = info.wetIn >= FIELD_CARE.prep.wetIn;
+  const inches = (x) => `${(Math.round(x * 10) / 10).toFixed(1)} inch${Math.round(x * 10) === 10 ? '' : 'es'}`;
+  return _deliverAt(_rosterCard(state, {
+    cardId: 'field_prep', tag: 'WEATHER', sender: 'Head Groundskeeper', avatar: '🌱', type: 'normal',
+    _rosterKey: `wx:field:${state.seasonNum || 1}:${info.gameTime}`, _fieldGameTime: info.gameTime, _fieldCostK: info.costK,
+    subject: `${info.chance >= FIELD_CARE.prep.minChance ? `${what[0].toUpperCase()}${what.slice(1)} in the forecast` : 'A wet field'} for the ${info.opp} game: the extra crew?`,
+    preview: `${_wxPct(info.chance)} chance of ${what}${wet ? `, and the field is already wet` : ''}. The extra crew and the full tarp setup: ${formatK(info.costK)}.`,
+    body: `The forecast for the game against the ${info.opp} (first pitch ${_clock(info.gameTime)}) gives a ${_wxPct(info.chance)} chance of ${what}`
+        + `${wet ? `, and we've already taken ${inches(info.wetIn)} of rain in the last day` : ''}. `
+        + `For ${formatK(info.costK)} I can bring in the extra crew and set up the full tarp. If it rains before the game, the field is ready sooner. If play stops, we're back on the field faster. The infield stays firmer either way. `
+        + `It won't stop lightning or a downpour, and if the rain misses us, the money is spent.`
+        + `${info.drainage ? ` The drainage we put in already helps; this is on top of it.` : ''} `
+        + `I need an answer ${FIELD_CARE.prep.closeH} hours before first pitch.`,
+    yesLabel: `Bring In the Crew (${formatK(info.costK)})`, noLabel: "We'll Manage",
+    autoResolve: 'no', expiresAtMs: info.gameTime - FIELD_CARE.prep.closeH * 3_600_000,
+    yesMsg: 'The extra crew is booked.', noMsg: 'The regular crew it is.',
+    _raw: { onYes: 'field_prep', onNo: null },
+  }), atMs);
+}
+
+/**
+ * r170 the groundskeeper's pitch for new drainage (mid-season, after a wet stretch at home): the work
+ * is done while we're on the road and counts from the day it's finished.
+ */
+export function deliverDrainageCard(info, atMs) {
+  const state = StateManager.get();
+  const days = FIELD_CARE.drainage.workDays;
+  const onRoad = info.startAt <= atMs;
+  return _deliverAt(_rosterCard(state, {
+    cardId: 'field_drainage', tag: 'WEATHER', sender: 'Head Groundskeeper', avatar: '🌱', type: 'normal',
+    _rosterKey: `wx:drainage:${state.seasonNum || 1}:${info.level}`, _drainage: { level: info.level, startAt: info.startAt, readyAt: info.readyAt, costK: info.costK },
+    subject: 'New drainage for the field?',
+    preview: `${info.wet} home games postponed or delayed lately. ${formatK(info.costK)}, done while we're on the road.`,
+    body: `We've had ${info.wet} home games postponed, delayed or started late for the weather in the last six weeks. `
+        + `New drainage${info.level > 1 ? ` (phase ${info.level} of ${FIELD_CARE.drainage.max})` : ''} would let the field take more rain before we have to stop or call a game, get us back on the field faster after a delay, and keep the infield firmer. Every home game from then on. `
+        + `It costs ${formatK(info.costK)} from club funds (${formatK(state.userTeam.finances?.funds || 0)} today). `
+        + `The work takes ${days} days, and we'd do it ${onRoad ? 'now, while we\'re on the road'
+            : info.startAt - atMs <= 3 * 86_400_000 ? 'on the next road trip, starting the day after this homestand'
+            : `on the long road trip coming up in about ${Math.round((info.startAt - atMs) / 86_400_000)} days`}; it's ready before we're home again.`,
+    yesLabel: `Put In the Drainage (${formatK(info.costK)})`, noLabel: 'Not Now',
+    autoResolve: 'no', expiresAtMs: Math.max(atMs + 86_400_000, Math.min(atMs + 3 * 86_400_000, info.startAt)),
+    yesMsg: 'The drainage work is on the schedule.', noMsg: "Understood. We'll make do.",
+    _raw: { onYes: 'field_drainage', onNo: null },
+  }), atMs);
+}
+
 /** Withdraw unresolved weather cards whose key starts with `prefix` (the game moved or was called off). */
 export function withdrawWeatherCards(prefix) {
   return _withdraw(c => c.tag === 'WEATHER' && String(c._rosterKey || '').startsWith(prefix));
@@ -4809,9 +4865,11 @@ export function deliverFacilityCard(atMs, expiresAtMs) {
   if (!o || !Finance.canSpend(state, o.cost)) return null;
   const what = o.kind === 'concourse'
     ? { name: 'the ballpark concourse', does: 'wider concourses, better food and shade: a park people want to spend an afternoon in. It lifts the atmosphere now and fills about 1.5% more of the seats every game from here on' }
+    : o.kind === 'field'   // r170
+    ? { name: 'the field\'s drainage', does: 'new drainage under the field: it takes more rain before we stop or call a game, the crew gets us back on the field faster after a delay, and the infield stays firmer. Fewer postponements means fewer makeup doubleheaders, and less of the gate lost to the weather' }
     : { name: 'the training center', does: 'a new pitching lab and hitting cages: our players get more out of their work. Development plans gain about 5% more, and every player grows a little more each winter' };
   const card = _rosterCard(state, {
-    cardId: 'fo_facility', tag: 'BUSINESS', sender: 'Facilities & Ops', avatar: '🏗️', type: 'normal',
+    cardId: 'fo_facility', tag: 'BUSINESS', sender: o.kind === 'field' ? 'Head Groundskeeper' : 'Facilities & Ops', avatar: o.kind === 'field' ? '🌱' : '🏗️', type: 'normal',
     _rosterKey: `fo:facility:${state.seasonNum}`, _foOffer: o,
     subject: `Upgrade ${what.name}?`,
     preview: `${formatK(o.cost)}: ${o.why}.`,

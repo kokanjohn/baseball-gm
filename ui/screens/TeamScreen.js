@@ -19,6 +19,7 @@
  * Screen label is "Team" not "Roster" (Section 1.14 — LOCKED).
  */
 
+import { drainageAt, drainageLevel } from '../../engine/FieldCare.js';   // r170
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
@@ -675,6 +676,9 @@ function _ballparkExtras(state) {
   const f = u.facilities || {};
   if (f.concourse) bits.push(`concourse upgrades ${f.concourse} of 3`);
   if (f.training) bits.push(`training center ${f.training} of 3`);
+  // r170 the field's drainage (a job under way counts once it's done)
+  const dNow = drainageAt(state, Date.now()), dAll = drainageLevel(state);
+  if (dAll) bits.push(dAll > dNow ? `field drainage ${dAll} of 3 being put in` : `field drainage ${dNow} of 3`);
   return bits.length ? `<div class="fin-sub">${_escape(bits.join(' · ').replace(/^./, c => c.toUpperCase()))}.</div>` : '';
 }
 

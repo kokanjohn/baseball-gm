@@ -34,7 +34,30 @@ import { LIGHTNING_KM, LIGHTNING_DBZ, conditionsAt, windAtPark, rainTotal } from
 import { localHour } from './WeatherClimate.js';
 import { chanceOfPrecip, gameForecast } from './WeatherForecast.js';
 import { venueOf, parkBearing } from './WeatherMap.js';
-import { GAME_WEATHER as GW } from '../data/constants.js';
+import { GAME_WEATHER as GW, FIELD_CARE as FC } from '../data/constants.js';
+
+/**
+ * r170 fieldParams(field) — the field's numbers for a game: GAME_WEATHER's, moved by our park's
+ * drainage (field.drainage, 0–3) and the game's prep (field.prep). No field: the league's numbers.
+ */
+export function fieldParams(field = null) {
+  const lvl = Math.max(0, Math.min(FC.drainage.max, field?.drainage || 0)), prep = !!field?.prep, D = FC.drainage, P = FC.prep;
+  return {
+    soakMin: GW.SOAK_MIN + D.soakPerLevel * lvl,
+    soggyIn: GW.SOGGY_IN + D.soggyPerLevel * lvl + (prep ? P.soggy : 0),
+    washoutIn: GW.WASHOUT_IN + D.washoutPerLevel * lvl,
+    soggyWorkMin: prep ? P.soggyWork : GW.SOGGY_WORK_MIN,
+    prepMin: prep ? P.prepMin : GW.PREP_MIN,
+    prepPerMm: GW.PREP_PER_MM * (1 - D.prepPerMmCut * lvl) * (prep ? P.prepPerMm : 1),
+    prepMax: prep ? P.prepMax : GW.PREP_MAX_MIN,
+    dryRate: GW.DRY_RATE_MMH + D.dryRatePerLevel * lvl,              // the rain the field can take with the tarp off
+    dryMin: Math.max(5, GW.DRY_MIN - D.dryMinPerLevel * lvl - (prep ? P.dryMinCut : 0)),   // how long it has to be that light first
+    softIn: (1 + D.softPerLevel * lvl) / (prep ? P.soft : 1),   // the rain before first pitch that makes the infield fully soft
+  };
+}
+/** A plan's field, as a key (a plan made for another field is made again). */
+export const fieldKey = (field) => (field ? `d${field.drainage || 0}${field.prep ? 'p' : ''}` : '');
+const NO_FIELD = fieldParams(null);
 
 const MIN = 60_000;
 const STEP = GW.STEP_MIN * MIN;
@@ -62,10 +85,10 @@ function _sampler(ctx, x, y) {
 }
 
 /** Is play possible right now? And if not, why. */
-function _stopReason(s, soakMin) {
+function _stopReason(s, soakMin, F = NO_FIELD) {
   if (s.lightning) return STOP_REASON.LIGHTNING;
   if (s.kind !== PRECIP_RAIN && s.dbz >= GW.SNOW_DBZ) return STOP_REASON.SNOW;
-  if (s.rate >= GW.STOP_RATE_MMH || soakMin >= GW.SOAK_MIN) return STOP_REASON.RAIN;
+  if (s.rate >= GW.STOP_RATE_MMH || soakMin >= F.soakMin) return STOP_REASON.RAIN;
   return null;
 }
 
@@ -79,8 +102,10 @@ const _afterCurfew = (ctx, t) => { const h = localHour(t, ctx.tzMin); return h >
  * Returns { outcome, delays, startAt, endT, decidedAt, calledBy, reason, played }.
  * opts.crew(state) → true when the crew's forecast check says call it now.
  * opts.until: stop once this many playing minutes are in (the forecast only needs to know whether the game gets far enough).
+ * opts.field: r170 the field's numbers (fieldParams).
  */
 function _run(ctx, sample, gameTime, state, opts = {}) {
+  const F = opts.field || NO_FIELD;
   let { t, phase, played, soak = 0 } = state;
   let delay = state.delay ? { ...state.delay } : null;
   let startAt = state.startAt ?? null;
@@ -96,7 +121,7 @@ function _run(ctx, sample, gameTime, state, opts = {}) {
   while (t < hardEnd) {
     const s = sample(t);
     soak = s.rate >= GW.SOAK_RATE_MMH ? soak + GW.STEP_MIN : 0;
-    const why = _stopReason(s, soak);
+    const why = _stopReason(s, soak, F);
 
     if (phase === 'play') {
       if (why) {
@@ -114,15 +139,15 @@ function _run(ctx, sample, gameTime, state, opts = {}) {
     // In a delay (or waiting to start).
     delay.mm += s.rate * (GW.STEP_MIN / 60);
     if (s.lightning) { delay.lastLightning = t; if (delay.reason !== STOP_REASON.LIGHTNING && delay.atPlayMin === played && t === delay.startT) delay.reason = STOP_REASON.LIGHTNING; }
-    const sprinkle = !s.lightning && s.rate < GW.DRY_RATE_MMH && !(s.kind !== PRECIP_RAIN && s.dbz > DBZ_MIN);
+    const sprinkle = !s.lightning && s.rate < F.dryRate && !(s.kind !== PRECIP_RAIN && s.dbz > DBZ_MIN);
     if (!sprinkle) { delay.dryFrom = null; delay.resumeAt = null; }
     else if (delay.dryFrom == null) delay.dryFrom = t;
     if (delay.resumeAt == null && sprinkle && !delay.fieldOnly
-        && t - delay.lastLightning >= GW.LIGHTNING_CLEAR_MIN * MIN && t - delay.dryFrom >= GW.DRY_MIN * MIN) {
-      delay.resumeAt = t + Math.min(GW.PREP_MAX_MIN, GW.PREP_MIN + Math.round(delay.mm * GW.PREP_PER_MM)) * MIN;
+        && t - delay.lastLightning >= GW.LIGHTNING_CLEAR_MIN * MIN && t - delay.dryFrom >= F.dryMin * MIN) {
+      delay.resumeAt = t + Math.min(F.prepMax, F.prepMin + Math.round(delay.mm * F.prepPerMm)) * MIN;
     }
     if (delay.fieldOnly && delay.resumeAt == null && sprinkle && t - delay.lastLightning >= GW.LIGHTNING_CLEAR_MIN * MIN) {
-      delay.resumeAt = Math.max(t, delay.startT + GW.SOGGY_WORK_MIN * MIN);
+      delay.resumeAt = Math.max(t, delay.startT + F.soggyWorkMin * MIN);
     }
 
     const waited = t - delay.startT;
@@ -152,11 +177,11 @@ function _run(ctx, sample, gameTime, state, opts = {}) {
  * Not started: failing = no first pitch, or called before it's official.
  * Under way: failing = no restart before the limits.
  */
-function _forecastSaysNo(ctx, venue, gameTime, state, issueT = state.t) {
+function _forecastSaysNo(ctx, venue, gameTime, state, issueT = state.t, F = NO_FIELD) {
   const fctx = forecastContext(ctx, issueT);
   const sample = _sampler(fctx, venue.x, venue.y);
   const notStarted = state.startAt == null;
-  const r = _run(fctx, sample, gameTime, state, { until: notStarted ? GW.OFFICIAL_PLAY_MIN : Math.min(GW.PLAN_MAX_MIN, state.played + GW.STEP_MIN) });
+  const r = _run(fctx, sample, gameTime, state, { field: F, until: notStarted ? GW.OFFICIAL_PLAY_MIN : Math.min(GW.PLAN_MAX_MIN, state.played + GW.STEP_MIN) });
   return r.outcome !== PLAN_OUTCOME.PLAYED ? r : null;
 }
 
@@ -206,7 +231,9 @@ function _before(ctx, venue, gameTime) {
 export function gameWeatherPlan(ctx, game) {
   const venue = venueOf(ctx.map, game);
   const gameTime = game.gameTime;
-  const base = { v: PLAN_VERSION, venueId: venue.teamId, gameTime, playMin: GW.PLAY_MIN };
+  // r170 our park's field (drainage, the game's prep): null elsewhere
+  const F = fieldParams(game.field), field = game.field || null;
+  const base = { v: PLAN_VERSION, venueId: venue.teamId, gameTime, playMin: GW.PLAY_MIN, field, fieldKey: fieldKey(field) };
   const sample = _sampler(ctx, venue.x, venue.y);
   const postpone = (decidedAt, calledBy, reason) => ({
     ...base, outcome: PLAN_OUTCOME.POSTPONED, decidedAt, calledBy, reason, startAt: null, delays: [], endT: null, stopAtPlayMin: null,
@@ -216,14 +243,14 @@ export function gameWeatherPlan(ctx, game) {
   const pre = _before(ctx, venue, gameTime);
   const fieldCall = gameTime - Math.min(...GW.PREGAME_CALLS_MIN) * MIN;
   if (pre.snowMm >= GW.SNOW_COVER_MM) return postpone(fieldCall, 'field', STOP_REASON.SNOW);
-  if (pre.rainIn >= GW.WASHOUT_IN) return postpone(fieldCall, 'field', STOP_REASON.FIELD);
+  if (pre.rainIn >= F.washoutIn) return postpone(fieldCall, 'field', STOP_REASON.FIELD);
 
   // The club reads the forecast before first pitch (the run the GM sees then).
   // It takes both: the forecast shows no game, and the chance of rain the GM
   // sees for the game is high — a club doesn't call off a 30% chance.
   for (let i = 0; i < GW.PREGAME_CALLS_MIN.length; i++) {
     const t = gameTime - GW.PREGAME_CALLS_MIN[i] * MIN;
-    const no = _forecastSaysNo(ctx, venue, gameTime, { t: gameTime, phase: 'play', played: 0, startAt: null, delay: null }, t);
+    const no = _forecastSaysNo(ctx, venue, gameTime, { t: gameTime, phase: 'play', played: 0, startAt: null, delay: null }, t, F);
     const wet = no ? null : _steadyRain(forecastContext(ctx, t), venue, gameTime);
     if ((no || wet) && chanceOfPrecip(ctx, t, venue.x, venue.y, gameTime, gameTime + GW.PLAY_MIN * MIN).chance >= GW.PREGAME_CALL_CHANCE[i]) {
       return postpone(t, 'forecast', no ? (no.reason ?? STOP_REASON.RAIN) : wet);
@@ -231,13 +258,14 @@ export function gameWeatherPlan(ctx, game) {
   }
 
   // Game day, as it happens.
-  const soggy = pre.rainIn >= GW.SOGGY_IN;
+  const soggy = pre.rainIn >= F.soggyIn;
   const start = soggy
     ? { t: gameTime, phase: 'delay', played: 0, startAt: null,
         delay: { startT: gameTime, atPlayMin: 0, reason: STOP_REASON.FIELD, mm: 0, lastLightning: -Infinity, dryFrom: gameTime, resumeAt: null, fieldOnly: true } }
     : { t: gameTime, phase: 'play', played: 0, startAt: null, delay: null };
   const r = _run(ctx, sample, gameTime, start, {
-    crew: (st) => _forecastSaysNo(ctx, venue, gameTime, st),
+    field: F,
+    crew: (st) => _forecastSaysNo(ctx, venue, gameTime, st, st.t, F),
   });
   const out = {
     ...base, outcome: r.outcome,
@@ -307,7 +335,7 @@ export function gameRecord(ctx, plan, conditions) {
   const park = ctx.map.parks[plan.venueId] || ctx.map.parks.user;
   const first = plan.startAt ?? plan.gameTime;
   const rainIn = rainTotal(ctx, park.x, park.y, first - 12 * 60 * MIN, first, 20);
-  const soft = Math.min(1, rainIn / 1.0);
+  const soft = Math.min(1, rainIn / fieldParams(plan.field).softIn);   // r170 drainage and prep: a firmer infield
   return {
     weather: c ? { label: c.label, icon: c.icon, tempF: Math.round(c.tempF), humidity: c.humidity, windMph: c.windMph,
                    windOutMph: c.windOutMph, windText: c.windText, scoringMod: 1.0 } : null,

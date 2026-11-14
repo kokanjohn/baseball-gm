@@ -96,7 +96,9 @@ import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import * as Coach from './CoachEngine.js';
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso, weatherContext } from './WeatherClimate.js';
-import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME } from './GameWeather.js';
+import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME, fieldKey } from './GameWeather.js';
+import { fieldFor, drainageLevel, drainageCostK, roadWindow, prepCostK, wetHomeGames, settleDrainage } from './FieldCare.js';   // r170
+import { rainTotal } from './WeatherConditions.js';   // r170
 import { findMakeupSlot, seriesShift, gameTeams, clubFreeAt } from './WeatherSchedule.js';
 
 import {
@@ -151,6 +153,7 @@ import {
   GAME_WEATHER,
   FIN_WEATHER,
   WAIVER_CLAIM_WINDOW_MS,
+  FIELD_CARE,
 } from '../data/constants.js';
 import { clockNow, runAt } from './Clock.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
@@ -1729,7 +1732,10 @@ function _gateWeather(state, g, isUser) {
 /** Where a game is played and when, for its weather (the All-Star Game: the host's park). */
 function _wxVenueGame(state, g, isUser) {
   if (g.isAllStar) return { gameTime: g.gameTime, homeId: state.allStar?.season?.hostId || 'user' };
-  return { gameTime: g.gameTime, ...gameTeams(g, isUser) };
+  const t = gameTeams(g, isUser);
+  // r170 our park's field: its drainage, and the crew's prep for this game
+  const field = isUser && !g.isSpring ? fieldFor(state, t.venueId, g.gameTime) : null;
+  return { gameTime: g.gameTime, ...t, ...(field ? { field } : {}) };
 }
 
 /**
@@ -1750,7 +1756,8 @@ function _ensureWeatherPlans(clockMs) {
     if (!susp && !_WX_OPEN.has(g.status)) return;
     const vg = _wxVenueGame(st, g, isUser);
     const venueId = vg.venueId ?? vg.homeId;
-    if (g.wx && g.wx.gameTime === g.gameTime && g.wx.venueId === venueId && !!g.wx.resumption === susp) return;
+    if (g.wx && g.wx.gameTime === g.gameTime && g.wx.venueId === venueId && !!g.wx.resumption === susp
+        && (g.wx.fieldKey || '') === fieldKey(vg.field || null)) return;   // (r170 or the field changed)
     todo.push({ ref: _wxRefOf(g, isUser), vg, susp, g });
   };
   st.schedule.forEach(g => consider(g, true));
@@ -1835,6 +1842,63 @@ function _wxUserCards(clockMs) {
     CardEngine.deliverRainStartCard({ key: `wx:start:${st.seasonNum || 1}:${g.gameTime}`, gameTime: g.gameTime, starterId, altId,
                                       chance: ch.chance, kind: ch.kind, city: cityOf(ctx.map, venueId, st.userTeam.city) }, at);
   }
+}
+
+/** r170 when the groundskeeper next reads the forecast for one of our home games (first pitch minus the lead). */
+function _fieldNextAsk(st, uptoMs) {
+  const lead = FIELD_CARE.prep.leadH * 3_600_000;
+  for (let i = st.currentGameIndex || 0; i < (st.schedule || []).length; i++) {
+    const g = st.schedule[i];
+    if (!Number.isFinite(g.gameTime) || g.gameTime - lead > uptoMs) return null;
+    if (g._committed || g.isSpring || g.cancelled || !g.isHome || g.fieldAsked === g.gameTime || g.status !== GAME_STATUS.SCHEDULED) continue;
+    return g.gameTime - lead;
+  }
+  return null;
+}
+
+/**
+ * r170 the groundskeeper reads the forecast for a home game a day and a bit ahead: rain likely (or the
+ * park already soaked), the extra crew and the full tarp setup for that game — answered before the
+ * game's weather is settled (FIELD_CARE.prep.closeH before first pitch).
+ */
+function _fieldPrepCards(clockMs) {
+  const st = StateManager.get();
+  const lead = FIELD_CARE.prep.leadH * 3_600_000, close = FIELD_CARE.prep.closeH * 3_600_000;
+  for (let i = st.currentGameIndex || 0; i < (st.schedule || []).length; i++) {
+    const g = st.schedule[i];
+    if (!Number.isFinite(g.gameTime) || g.gameTime - lead > clockMs) break;
+    if (g._committed || g.isSpring || g.cancelled || !g.isHome || g.fieldAsked === g.gameTime || g.status !== GAME_STATUS.SCHEDULED) continue;
+    StateManager.mutate(s => { const x = s.schedule[i]; if (x) x.fieldAsked = x.gameTime; });
+    if (clockMs > g.gameTime - close || st.fieldPrep?.[g.gameTime]) continue;
+    const ctx = weatherContext(st);
+    const at = g.gameTime - lead;
+    const fc = forecastForGame(ctx, at, g);
+    const park = ctx.map.parks.user;
+    const wetIn = park ? rainTotal(ctx, park.x, park.y, at - 24 * 3_600_000, at, 30) : 0;
+    if (!(fc.chance >= FIELD_CARE.prep.minChance) && wetIn < FIELD_CARE.prep.wetIn) continue;
+    CardEngine.deliverFieldPrepCard({ gameTime: g.gameTime, opp: g.opponent || '', chance: fc.chance, kind: fc.kind, label: fc.label,
+                                      wetIn, costK: prepCostK(fc.chance, wetIn), drainage: drainageLevel(st) }, Math.max(at, clockMs));
+  }
+}
+
+/**
+ * r170 the groundskeeper's pitch for the drainage, mid-season: after a wet stretch at home (games
+ * postponed, delayed or started late for the weather), when a road trip is long enough for the work.
+ * At most once a month; the work counts from the day it's done.
+ */
+function _drainagePitch(atMs) {
+  const st = StateManager.get();
+  if (st.phase !== PHASE.REGULAR_SEASON && st.phase !== PHASE.TRADE_DEADLINE) return;
+  if (st.userTeam.fieldWork?.readyAt <= atMs) StateManager.mutate(s => { settleDrainage(s, atMs); });   // (a finished job is the park's)
+  const u = StateManager.get().userTeam;
+  const level = drainageLevel(StateManager.get());
+  if (level >= FIELD_CARE.drainage.max || u.fieldWork || atMs - (u.fieldPitchAt ?? -Infinity) < 30 * 86_400_000) return;
+  const wet = wetHomeGames(st, atMs - 42 * 86_400_000, atMs);
+  if (wet < 3) return;
+  const w = roadWindow(st, atMs);
+  if (!w || w.startAt - atMs > 30 * 86_400_000) return;
+  StateManager.mutate(s => { s.userTeam.fieldPitchAt = atMs; });
+  CardEngine.deliverDrainageCard({ level: level + 1, costK: drainageCostK(level), wet, ...w }, atMs);
 }
 
 /** §102.5 a makeup made our day a doubleheader: who starts game two? */
@@ -1961,7 +2025,7 @@ function _postponeGame(ref, atMs) {
   const moves = g.isPlayoff || g.isAllStar ? seriesShift(st, g, isUser).map(m => ({ ...m, venueId: null })) : null;
   const slot = moves ? null : findMakeupSlot(st, g, isUser, atMs);
   // §102.5 a question about this game's start is moot now (and any doubleheader that date is undone).
-  if (isUser) { CardEngine.withdrawWeatherCards(`wx:start:${st.seasonNum || 1}:${g.gameTime}`); CardEngine.withdrawWeatherCards(`wx:dh:${st.seasonNum || 1}:${g.date}`); }
+  if (isUser) { CardEngine.withdrawWeatherCards(`wx:start:${st.seasonNum || 1}:${g.gameTime}`); CardEngine.withdrawWeatherCards(`wx:dh:${st.seasonNum || 1}:${g.date}`); CardEngine.withdrawWeatherCards(`wx:field:${st.seasonNum || 1}:${g.gameTime}`); }
   StateManager.mutate(s => {
     const x = _wxResolve(s, ref).g;
     x.postponements = [...(x.postponements || []), entry];
@@ -2109,7 +2173,7 @@ function _wxHoldForClubs(ref, atMs) {
 function _wxAtFirstPitch(state, g, isUser) {
   const ctx = weatherContext(state);
   const vg = _wxVenueGame(state, g, isUser);
-  const plan = g.wx && g.wx.gameTime === g.gameTime && !g.wx.resumption ? g.wx : gameWeatherPlan(ctx, vg);
+  const plan = g.wx && g.wx.gameTime === g.gameTime && !g.wx.resumption && (g.wx.fieldKey || '') === fieldKey(vg.field || null) ? g.wx : gameWeatherPlan(ctx, vg);
   if (plan.outcome === PLAN_OUTCOME.POSTPONED) return null;
   const conditions = gameConditions(ctx, plan);
   return { plan, sim: { plan, conditions }, record: gameRecord(ctx, plan, conditions) };
@@ -2812,10 +2876,13 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     // asked only if the app happened to be open then; reopened later, "too late to ask").
     const askAt = _wxNextAsk(st, clockMs);
     const ask = askAt != null ? { kind: 'wxask', at: askAt } : null;
+    // r170 the groundskeeper reads the forecast for our next home game: the extra crew?
+    const prepAt = _fieldNextAsk(st, clockMs);
+    const prep = prepAt != null ? { kind: 'fieldask', at: prepAt } : null;
     // §122 each day, the CPU clubs look at the free agents.
     const lookAt = _nextFaLook(st, clockMs);
     const look = lookAt != null ? { kind: 'falook', at: lookAt } : null;
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, look].filter(Boolean);
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, look].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     // r139 §121 the cards due by this moment arrive before it (a card the event withdraws, after it, never does).
@@ -2833,9 +2900,10 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'resume') _resumeGame(next.ref, next.at);
     else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, next.teamId); });
     else if (next.kind === 'fin:payday') events.push(...(next.teamId === 'user' ? _payday(next.i, next.at) : _cpuPayday(next.teamId, next.i, next.at)));
-    else if (next.kind === 'desk') { events.push(..._runTradeDesk(next.at)); _leaguePositions(next.at); }
+    else if (next.kind === 'desk') { events.push(..._runTradeDesk(next.at)); _leaguePositions(next.at); _drainagePitch(next.at); }
     else if (next.kind === 'roster') { /* the roster step above was the event */ }
     else if (next.kind === 'wxask') _wxUserCards(next.at);
+    else if (next.kind === 'fieldask') _fieldPrepCards(next.at);
     else if (next.kind === 'falook') {
       CardEngine.directorTips(next.at);   // §122.15 our scouting director hears first (or doesn't)
       StateManager.mutate(s => { s.faLookAt = next.at; events.push(...cpuFreeAgentLook(s, next.at)); });

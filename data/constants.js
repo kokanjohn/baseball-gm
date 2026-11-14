@@ -1870,6 +1870,24 @@ export const PROMOTIONS = Object.freeze({
   family:   { label: 'Family Packs', price: -0.1, fill: 0.15, games: 3, costPerGameK: 4, atmo: 3 },
 });
 
+/**
+ * r170 the field at our ballpark (GameWeather.fieldParams): what drainage and a game's prep change.
+ *   drainage (levels 0–3, a ballpark upgrade): per level the field takes more steady rain before the
+ *     tarp (soak minutes), more rain before first pitch before it's too wet to start on time (soggy)
+ *     or washed out, the crew's work after a delay is shorter, and the infield softens less.
+ *   prep (one home game, the groundskeeper's extra crew and full tarp setup): a wet field is ready
+ *     sooner, the crew's work after a delay is shorter, the infield softens less. Costs by the forecast.
+ *   The offer comes `leadH` before first pitch when the forecast shows `minChance`% or more (or the
+ *   park already took `wetIn` of rain), and must be answered by `closeH` before (the plan is made at 4).
+ */
+export const FIELD_CARE = Object.freeze({
+  drainage: Object.freeze({ soakPerLevel: 6, soggyPerLevel: 0.4, washoutPerLevel: 0.6, prepPerMmCut: 0.2, softPerLevel: 0.35, max: 3,
+                            dryRatePerLevel: 0.5, dryMinPerLevel: 3,
+                            costK: Object.freeze([150, 250, 400]), workDays: 6, winterWet: 6 }),
+  prep: Object.freeze({ soggy: 0.3, soggyWork: 15, prepMin: 8, prepPerMm: 0.5, prepMax: 25, soft: 0.6, dryMinCut: 7,
+                        costMinK: 8, costMaxK: 20, minChance: 40, wetIn: 0.75, leadH: 30, closeH: 5 }),
+});
+
 export const DEV_REPS = Object.freeze({
   regular: Object.freeze({ hitter: 0.5, SP: 0.15, RP: 0.3 }),
   sat:     Object.freeze({ hitter: 0.15, SP: 0.05, RP: 0.1 }),
