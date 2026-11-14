@@ -17,6 +17,10 @@ const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, de
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
+// (the test's moment is fixed in the evening, 9:30 PM Eastern: the first game is tomorrow afternoon, so the
+//  manager's hour before it hasn't come; run in the late morning, the first game was too close and SS filled)
+const evening = new Date(); evening.setUTCHours(26, 30, 0, 0);
+await page.clock.setFixedTime(evening);
 await page.goto('http://localhost:8765/baseball-gm/', { waitUntil: 'networkidle' });
 await page.waitForTimeout(500);
 

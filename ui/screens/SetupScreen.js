@@ -5,7 +5,8 @@
  * Flow (3 steps):
  *   Step 1 — Archetype selection (6 cards, grouped by difficulty)
  *   Step 2 — Region selection (4 cards)
- *   Step 3 — Name and Colors: team city + nickname + primary/secondary hue sliders
+ *   Step 3 — Name and Colors: a live preview of the club (tap it to name the club in a sheet that sits
+ *            on the keyboard — r171) + primary/secondary hue sliders that color the preview
  *   → "Take the Job" → GameEngine.startNewGame() → App.init()
  *
  * Rules:
@@ -234,32 +235,30 @@ function _renderNameColorsStep() {
   // Convert stored hex to hue for slider initial position
   const primaryHue   = _hexToHue(_primaryColor);
   const secondaryHue = _hexToHue(_secondaryColor);
-
-  const bothFilled = _teamCity.trim() && _teamNick.trim();
+  const arch = ARCHETYPES.find(a => a.id === _archetype);
+  const region = REGIONS[_region] || Object.values(REGIONS).find(r => r.id === _region);
 
   return `
     <div class="step-layout">
-      <div class="step-header-block">
+      <div class="step-header-block nc-header">
         <div class="step-label">Step 3 of 3</div>
         <div class="step-title">Name and Colors</div>
-        <div class="step-sub">Your team identity — these can be changed later</div>
       </div>
 
       <div class="namecolors-body">
 
-        <div class="input-group">
-          <label for="team-city">Team City</label>
-          <input type="text" id="team-city" placeholder="e.g. Chicago"
-            maxlength="14" value="${_escape(_teamCity)}" autocomplete="off">
-        </div>
-
-        <div class="input-group">
-          <label for="team-nick">Team Nickname</label>
-          <input type="text" id="team-nick" placeholder="e.g. Wolves"
-            maxlength="12" value="${_escape(_teamNick)}" autocomplete="off">
-        </div>
-
-        <div class="namecolors-divider"></div>
+        <!-- r171 the club, as it'll look: tap to name it (the typing happens in a sheet above the keyboard) -->
+        <button type="button" class="nc-preview" id="nc-preview" aria-label="Name your club">
+          <div class="nc-band" id="nc-band">
+            <div class="nc-ball">⚾</div>
+            <div class="nc-names" id="nc-names">${_previewNames()}</div>
+          </div>
+          <div class="nc-stripe" id="nc-stripe"></div>
+          <div class="nc-meta">
+            <span>${_escape(arch?.name || '')}${region ? ` · ${_escape(region.label)}` : ''}</span>
+            <span class="nc-edit">${_teamCity || _teamNick ? 'Edit name' : 'Tap to name'}</span>
+          </div>
+        </button>
 
         <!-- Primary color slider -->
         <div class="color-row">
@@ -271,7 +270,7 @@ function _renderNameColorsStep() {
           <div class="hue-track-wrap">
             <div class="hue-track"></div>
             <input type="range" class="hue-slider" id="primary-hue"
-              min="0" max="359" step="1" value="${primaryHue}">
+              min="0" max="359" step="1" value="${primaryHue}" aria-label="Primary color">
           </div>
         </div>
 
@@ -285,7 +284,7 @@ function _renderNameColorsStep() {
           <div class="hue-track-wrap">
             <div class="hue-track"></div>
             <input type="range" class="hue-slider" id="secondary-hue"
-              min="0" max="359" step="1" value="${secondaryHue}">
+              min="0" max="359" step="1" value="${secondaryHue}" aria-label="Secondary color">
           </div>
         </div>
 
@@ -294,18 +293,58 @@ function _renderNameColorsStep() {
       <div class="step-footer">
         <div style="display:flex;gap:10px;">
           <button class="btn-back" id="namecolors-back-btn">Back</button>
-          <button id="start-btn" style="flex:1;letter-spacing:2px;
-            padding:14px;border:none;border-radius:10px;
-            font-family:'DM Sans',sans-serif;font-size:15px;font-weight:700;
-            text-transform:uppercase;cursor:pointer;transition:opacity .15s;
-            background:#F5D253;color:#0F1117;opacity:${bothFilled ? '1' : '0.45'};"
-            ${!bothFilled ? 'disabled' : ''}>
-            TAKE THE JOB
-          </button>
+          <button id="start-btn" class="nc-start">${_named() ? 'TAKE THE JOB' : 'NAME YOUR CLUB'}</button>
+        </div>
+      </div>
+
+      <!-- r171 the name sheet: sits on the keyboard -->
+      <div class="nc-scrim" id="nc-scrim" hidden></div>
+      <div class="nc-sheet" id="nc-sheet" role="dialog" aria-label="Name your club" hidden>
+        <!-- (the name as it's typed: the big preview can sit behind the keyboard) -->
+        <div class="nc-sheet-preview" id="nc-sheet-preview">${_sheetPreview()}</div>
+        <div class="nc-sheet-row">
+          <label for="team-city">City</label>
+          <input type="text" id="team-city" placeholder="e.g. Riverton" maxlength="14"
+            value="${_escape(_teamCity)}" autocomplete="off" autocapitalize="words" enterkeyhint="next">
+        </div>
+        <div class="nc-sheet-row">
+          <label for="team-nick">Nickname</label>
+          <input type="text" id="team-nick" placeholder="e.g. Rails" maxlength="12"
+            value="${_escape(_teamNick)}" autocomplete="off" autocapitalize="words" enterkeyhint="done">
+          <button type="button" class="nc-done" id="nc-done">Done</button>
         </div>
       </div>
     </div>
   `;
+}
+
+const _named = () => !!(_teamCity.trim() && _teamNick.trim());
+
+/** The preview's two lines: the name as typed so far, or the invitation to name it. */
+function _previewNames() {
+  if (!_teamCity.trim() && !_teamNick.trim()) return `<div class="nc-city nc-empty">Your City</div><div class="nc-nick nc-empty">Your Club</div>`;
+  return `<div class="nc-city">${_escape(_teamCity.trim() || 'Your City')}</div><div class="nc-nick">${_escape(_teamNick.trim() || 'Your Club')}</div>`;
+}
+
+/** The sheet's one-line preview. */
+function _sheetPreview() {
+  const c = _teamCity.trim(), n = _teamNick.trim();
+  return c || n ? `${_escape(c || 'Your City')} <b>${_escape(n || 'Your Club')}</b>` : 'Your City <b>Your Club</b>';
+}
+
+/** The preview in the chosen colors: the band in the primary (its text dark or light to read), the stripe in the secondary. */
+function _paintPreview() {
+  const band = document.getElementById('nc-band'), stripe = document.getElementById('nc-stripe');
+  if (band) { band.style.background = _primaryColor; band.style.color = _readableOn(_primaryColor); }
+  if (stripe) stripe.style.background = _secondaryColor;
+  const mini = document.getElementById('nc-sheet-preview');
+  if (mini) { mini.style.background = _primaryColor; mini.style.color = _readableOn(_primaryColor); mini.style.borderBottomColor = _secondaryColor; }
+}
+
+function _readableOn(hex) {
+  const c = (i) => { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const L = 0.2126 * c(1) + 0.7152 * c(3) + 0.0722 * c(5);
+  return L > 0.35 ? '#0F1117' : '#FFFFFF';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -351,31 +390,31 @@ function _attachListeners() {
     _render();
   });
 
-  // ── Step 3: name fields ───────────────────────────────────
+  // ── Step 3: the name, in a sheet above the keyboard ───────
   const cityInput = document.getElementById('team-city');
   const nickInput = document.getElementById('team-nick');
   const startBtn  = document.getElementById('start-btn');
-
-  function _checkFields() {
-    _teamCity = cityInput?.value.trim() || '';
-    _teamNick = nickInput?.value.trim() || '';
-    const ready = _teamCity.length > 0 && _teamNick.length > 0;
-    if (startBtn) {
-      startBtn.disabled = !ready;
-      startBtn.style.opacity = ready ? '1' : '0.45';
-      startBtn.style.cursor  = ready ? 'pointer' : 'not-allowed';
-    }
+  if (cityInput) {
+    _paintPreview();
+    const refresh = () => {
+      _teamCity = cityInput.value;
+      _teamNick = nickInput.value;
+      const names = document.getElementById('nc-names');
+      if (names) names.innerHTML = _previewNames();
+      const edit = document.querySelector('.nc-edit');
+      if (edit) edit.textContent = _teamCity.trim() || _teamNick.trim() ? 'Edit name' : 'Tap to name';
+      if (startBtn) startBtn.textContent = _named() ? 'TAKE THE JOB' : 'NAME YOUR CLUB';
+      const mini = document.getElementById('nc-sheet-preview');
+      if (mini) mini.innerHTML = _sheetPreview();
+    };
+    cityInput.addEventListener('input', refresh);
+    nickInput.addEventListener('input', refresh);
+    cityInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); nickInput.focus(); } });
+    nickInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); _closeSheet(); } });
+    document.getElementById('nc-preview')?.addEventListener('click', () => _openSheet(!_teamCity.trim() || _teamNick.trim() ? cityInput : nickInput));
+    document.getElementById('nc-done')?.addEventListener('click', _closeSheet);
+    document.getElementById('nc-scrim')?.addEventListener('click', _closeSheet);
   }
-
-  cityInput?.addEventListener('input', _checkFields);
-  nickInput?.addEventListener('input', _checkFields);
-
-  // Focus border — hardcoded gold so it doesn't track the primary color slider
-  [cityInput, nickInput].forEach(input => {
-    if (!input) return;
-    input.addEventListener('focus', () => { input.style.borderColor = '#F5D253'; });
-    input.addEventListener('blur',  () => { input.style.borderColor = 'var(--border)'; });
-  });
 
   // ── Step 3: hue sliders ───────────────────────────────────
   document.getElementById('primary-hue')?.addEventListener('input', (e) => {
@@ -383,6 +422,7 @@ function _attachListeners() {
     const swatch = document.getElementById('primary-swatch');
     if (swatch) swatch.style.background = _primaryColor;
     applyTeamColors(_primaryColor, _secondaryColor);
+    _paintPreview();
   });
 
   document.getElementById('secondary-hue')?.addEventListener('input', (e) => {
@@ -390,15 +430,62 @@ function _attachListeners() {
     const swatch = document.getElementById('secondary-swatch');
     if (swatch) swatch.style.background = _secondaryColor;
     applyTeamColors(_primaryColor, _secondaryColor);
+    _paintPreview();
   });
 
   // ── Step 3: back + start ──────────────────────────────────
   document.getElementById('namecolors-back-btn')?.addEventListener('click', () => {
+    _closeSheet();
     _step = 2;
     _render();
   });
 
-  document.getElementById('start-btn')?.addEventListener('click', _handleStart);
+  // (not named yet: the button opens the sheet)
+  document.getElementById('start-btn')?.addEventListener('click', () => {
+    if (_named()) _handleStart();
+    else _openSheet(_teamCity.trim() ? nickInput : cityInput);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// r171 THE NAME SHEET — sits on top of the keyboard
+// ─────────────────────────────────────────────────────────────
+
+let _vvHandler = null;
+
+/** Keep the sheet's bottom on the keyboard's top: the visual viewport shrinks when the keyboard opens. */
+function _placeSheet() {
+  const sheet = document.getElementById('nc-sheet'), vv = window.visualViewport;
+  if (!sheet) return;
+  const covered = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+  sheet.style.bottom = `${covered}px`;
+}
+
+function _openSheet(focusEl) {
+  const sheet = document.getElementById('nc-sheet'), scrim = document.getElementById('nc-scrim');
+  if (!sheet) return;
+  sheet.hidden = false; scrim.hidden = false;
+  requestAnimationFrame(() => { sheet.classList.add('open'); scrim.classList.add('open'); });
+  if (window.visualViewport && !_vvHandler) {
+    _vvHandler = () => _placeSheet();
+    window.visualViewport.addEventListener('resize', _vvHandler);
+    window.visualViewport.addEventListener('scroll', _vvHandler);
+  }
+  _placeSheet();
+  focusEl?.focus({ preventScroll: true });
+}
+
+function _closeSheet() {
+  const sheet = document.getElementById('nc-sheet'), scrim = document.getElementById('nc-scrim');
+  if (window.visualViewport && _vvHandler) {
+    window.visualViewport.removeEventListener('resize', _vvHandler);
+    window.visualViewport.removeEventListener('scroll', _vvHandler);
+    _vvHandler = null;
+  }
+  if (!sheet || sheet.hidden) return;
+  document.activeElement?.blur?.();
+  sheet.classList.remove('open'); scrim.classList.remove('open');
+  sheet.hidden = true; scrim.hidden = true;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -410,8 +497,8 @@ async function _handleStart() {
   if (btn) { btn.disabled = true; btn.textContent = 'Building franchise…'; }
 
   // Capture final field values
-  _teamCity = document.getElementById('team-city')?.value.trim() || 'Springfield';
-  _teamNick = document.getElementById('team-nick')?.value.trim() || 'Bears';
+  _teamCity = (document.getElementById('team-city')?.value || _teamCity).trim() || 'Springfield';
+  _teamNick = (document.getElementById('team-nick')?.value || _teamNick).trim() || 'Bears';
 
   try {
     const { startNewGame } = await import('../../engine/GameEngine.js');
@@ -746,49 +833,117 @@ function _injectCSS() {
     }
 
     /* ── Step 3: name + colors body ── */
+    .nc-header { padding-bottom: 4px; }
     .namecolors-body {
       flex: 1;
       min-height: 0;
-      padding: 0 20px;
+      padding: 8px 20px 0;
       display: flex;
       flex-direction: column;
-      gap: 14px;
-      justify-content: center;
-    }
-    .namecolors-divider {
-      height: 1px;
-      background: var(--border);
-      flex-shrink: 0;
+      gap: 22px;
+      justify-content: flex-start;
+      padding-bottom: 8px;
     }
 
-    /* Input groups */
-    .input-group {
-      flex-shrink: 0;
-    }
-    .input-group label {
-      font-size: 10px;
-      letter-spacing: 3px;
-      text-transform: uppercase;
-      color: var(--soft);
-      font-weight: 600;
-      display: block;
-      margin-bottom: 5px;
-    }
-    .input-group input {
-      width: 100%;
-      background: var(--surface);
-      border: 2px solid var(--border);
-      color: var(--text);
-      font-family: 'DM Sans', sans-serif;
-      font-size: 16px;
-      padding: 11px 14px;
-      border-radius: 10px;
-      outline: none;
-      transition: border-color .2s;
+    /* r171 the club preview: fills the space the empty fields used to leave */
+    .nc-preview {
+      all: unset;
       box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: 430px;
+      border-radius: 18px;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform .12s;
     }
-    .input-group input::placeholder { color: var(--muted); }
+    .nc-preview:active { transform: scale(.985); }
+    .nc-preview:focus-visible { outline: 2px solid #F5D253; outline-offset: 3px; }
+    .nc-band {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 18px 16px;
+      transition: background .1s, color .1s;
+    }
+    .nc-ball { font-size: 30px; line-height: 1; margin-bottom: 10px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.25)); }
+    .nc-names { text-align: center; }
+    .nc-city {
+      font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 800;
+      letter-spacing: 4px; text-transform: uppercase; opacity: .85;
+    }
+    .nc-nick {
+      font-family: 'Bebas Neue', sans-serif; font-size: clamp(40px, 13vw, 58px);
+      letter-spacing: 2px; line-height: 1; margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+    .nc-empty { opacity: .45; }
+    .nc-stripe { height: 10px; transition: background .1s; }
+    .nc-meta {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 11px 16px;
+      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600; color: var(--muted);
+    }
+    .nc-edit { color: var(--text); font-weight: 700; }
+    .nc-edit::after { content: ' ›'; }
 
+    .nc-start {
+      flex: 1; letter-spacing: 2px; padding: 14px; border: none; border-radius: 10px;
+      font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 700; text-transform: uppercase;
+      cursor: pointer; background: #F5D253; color: #0F1117;
+    }
+
+    /* r171 the name sheet, on top of the keyboard */
+    .nc-scrim {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 900;
+      opacity: 0; transition: opacity .15s;
+    }
+    .nc-scrim.open { opacity: 1; }
+    .nc-sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 901;
+      background: var(--surface);
+      border-top: 1.5px solid var(--border);
+      border-radius: 16px 16px 0 0;
+      padding: 14px 16px 12px;
+      display: flex; flex-direction: column; gap: 10px;
+      box-shadow: 0 -8px 24px rgba(0,0,0,.35);
+      transform: translateY(12px); opacity: 0; transition: transform .15s, opacity .15s;
+    }
+    .nc-sheet.open { transform: none; opacity: 1; }
+    .nc-sheet[hidden], .nc-scrim[hidden] { display: none; }
+    .nc-sheet-row { display: flex; align-items: center; gap: 10px; }
+    .nc-sheet-preview {
+      margin: -14px -16px 2px; padding: 10px 16px;
+      border-radius: 16px 16px 0 0; border-bottom: 4px solid transparent;
+      font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .nc-sheet-preview b { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 1.5px; font-weight: 400; margin-left: 6px; text-transform: none; }
+    .nc-sheet-row label {
+      width: 70px; flex-shrink: 0;
+      font-size: 10px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--muted);
+    }
+    .nc-sheet-row input {
+      flex: 1; min-width: 0;
+      background: var(--bg, #0F1117); border: 2px solid var(--border); color: var(--text);
+      font-family: 'DM Sans', sans-serif; font-size: 16px; padding: 10px 12px; border-radius: 10px; outline: none;
+    }
+    .nc-sheet-row input:focus { border-color: #F5D253; }
+    .nc-done {
+      flex-shrink: 0; padding: 11px 16px; border: none; border-radius: 10px;
+      background: #F5D253; color: #0F1117; font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 800; cursor: pointer;
+    }
     /* Color rows */
     .color-row {
       flex-shrink: 0;

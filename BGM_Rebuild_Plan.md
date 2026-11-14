@@ -11261,3 +11261,45 @@ Fresh team: required (from r163).
 Fresh team: required (from r163).
 
 **Suite (r170):** season sim 3830/3830, multi-season 59/59. check-diamonds, test-swipe-close-ui (light) and test-wear-ui (dark) each failed once and passed on rerun; they're known intermittent failures.
+
+### §122.44 r171 Setup, step 3 (Name and Colors): a live preview, and the name typed in a sheet on the keyboard
+
+**What the user found:**
+- Typing the city and nickname was clunky on a phone: the keyboard covered the color sliders and the button.
+- About a third of the screen was empty.
+
+**The user's choices:** type the name in a sheet (not pick from suggestions); keep the hue sliders.
+
+**The screen** (`SetupScreen._renderNameColorsStep`):
+- **A live preview of the club** (`.nc-preview`) fills the space between the header and the sliders (up to 430 px):
+  - a band in the primary color, holding the ball, the city (spaced capitals) and the nickname (large display face);
+  - the text goes dark or light so it reads on the color (`_readableOn`, by relative luminance);
+  - a stripe in the secondary color;
+  - a footer row with the team type, the region, and "Tap to name ›" (or "Edit name ›").
+- **The sliders** sit under the preview and color it as they move (`_paintPreview`).
+- **No text field on the screen.**
+- **The button** reads **Name Your Club** until both names are in. Tapping it opens the sheet; after that it reads **Take the Job**.
+- The subtitle line is gone.
+
+**The name sheet** (`.nc-sheet`, `_openSheet` / `_closeSheet`):
+- Tapping the preview or "Name Your Club" opens a bottom sheet over a scrim. It has the City and Nickname fields, and Done.
+- **Above the fields,** a one-line preview in the club's colors shows the name as it's typed, because the big preview can sit behind the keyboard.
+- **The keyboard:** the sheet's bottom follows the keyboard's top through `visualViewport` resize and scroll; those listeners are removed on close.
+- **The keys:** Enter on the city moves to the nickname; Enter on the nickname, Done, or a tap outside closes the sheet.
+- Each field gets the right keyboard hints (`enterkeyhint` next/done, `autocapitalize` words).
+
+**Check:** test-setup-name-ui runs at 390×844 and 375×667. It covers:
+- before naming: no text field, the preview's size, the type and region shown, nothing scrolling;
+- the button opening the sheet with the city field ready;
+- Enter moving to the nickname, and the name showing as it's typed;
+- Enter closing the sheet and the button turning to Take the Job;
+- reopening the sheet and tapping outside to close it;
+- the slider coloring the preview with readable text;
+- Take the Job creating the club with that name and color.
+
+No engine change: a fresh team is not needed for this release.
+
+**Suite (r171):**
+- **Results:** season sim 3829/3829, multi-season 59/59.
+- **test-team-roster-ui** (both themes) depended on the time of day. Run in the late morning, the first spring game was within the manager's hour, so the benched shortstop's spot filled before the test looked. The test now fixes the page clock at 9:30 PM Eastern.
+- **Known intermittent failures:** check-game-sim-weather, check-rest-watch, check-roster-advice and test-fa-screens-ui (light) each failed once and passed on rerun.
