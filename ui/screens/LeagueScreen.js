@@ -344,7 +344,7 @@ function _renderMoves(state) {
   }
   const dayKey = (ms) => new Date(ms).toDateString();
   const dayLabel = (ms) => When.agoDay(ms, Date.now());   // r149 relative: "Today", "Yesterday", "3 days ago"
-  const KIND = { trade: 'Trade', signing: 'Signing', claim: 'Waiver claim', release: 'Free agent', retire: 'Retirement' };
+  const KIND = { trade: 'Trade', signing: 'Signing', claim: 'Waiver claim', release: 'Free agent', retire: 'Retirement', position: 'Position' };
   let html = head, last = null;
   for (const e of shown.slice(0, 200)) {
     const k = dayKey(e.atMs);

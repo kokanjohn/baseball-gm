@@ -58,6 +58,7 @@ import {
   OFFSEASON_CARD_HOUR,
   GAME_STATUS,
   ROSTER_DECISION_LEAD_MS,
+  LEAGUE_POSITIONS,
 } from '../data/constants.js';
 
 import {
@@ -99,6 +100,8 @@ import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
 import { rapportOf, rapportGrade, adjustRapport, wouldStart, clubMode, isRental, playsSlot } from './TradeEngine.js';
 import * as LeagueTrades from './LeagueTrades.js';
+import * as LeaguePos from './LeaguePositions.js';   // r168 §122.35
+import * as FreeAgency from './FreeAgency.js';   // r168
 import { buildActivityFeedEntry, pruneActivityFeed } from './SeasonEngine.js';
 const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
@@ -4889,6 +4892,82 @@ function _deliverTeachReport(ev, atMs) {
     body: `${how}${ev.reason === 'eligible' ? '' : `\n\n${n ? `${n} of ten starts at ${ev.pos} so far.` : `Ten starts at ${ev.pos} makes it official.`}`}`,
   }, atMs);
 }
+
+/**
+ * r168 §122.35 phase 6 — positions around the league. A player who'd start for us at the new spot
+ * (or cover one nobody on our bench plays) is a Pro Scouting message: a club's player as a trade
+ * idea (`_deliverIdea`), a free agent as a signing. At most one every LEAGUE_POSITIONS.msgGapMs;
+ * everything else is a line in Recent.
+ */
+export function leaguePositionNews(events, atMs) {
+  let delivered = 0;
+  for (const ev of events || []) {
+    if (ev.type !== 'LEAGUE_POS') continue;
+    const st = StateManager.get(), p = st.players[ev.playerId];
+    if (!p) continue;
+    const fit = LeaguePos.fitsUs(st, p, ev.pos);
+    const room = atMs - (st.leaguePos?.lastMsgAt ?? -Infinity) >= LEAGUE_POSITIONS.msgGapMs;
+    const sent = fit && room && withDice(dice(diceSeed(st), 'leaguepos-msg', ev.playerId, ev.atMs), () =>
+      (ev.kind === 'fa' ? _faPosCard(st, p, ev, fit) : _clubPosCard(st, p, ev, fit)));
+    if (sent) {
+      delivered++;
+      StateManager.mutate(s => { s.leaguePos = { ...(s.leaguePos || {}), lastMsgAt: atMs }; });
+    } else if (ev.text) {
+      StateManager.mutate(s => { s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('position', ev.teamId ? _abbrOf(s, ev.teamId) : 'FA', ev.text, Math.min(ev.atMs ?? atMs, clockNow()))]); });
+    }
+  }
+  return delivered;
+}
+
+const _abbrOf = (st, id) => (st.leagueTeams || []).find(t => t.id === id)?.abbr || id;
+const _posWord = (pos) => ({ C: 'catcher', '1B': 'first', '2B': 'second', '3B': 'third', SS: 'short', OF: 'the outfield', SP: 'the rotation', RP: 'the bullpen' }[pos] || pos);
+
+/** Why it matters to us, as the end of a sentence about the player ("…and would start over Cahill (75) there."). */
+function _fitClause(st, p, pos, fit) {
+  const over = fit.over ? st.players[fit.over] : null;
+  if (fit.thin) return `nobody on our bench plays ${pos}`;
+  if (pos === 'SP') return over ? `would take ${over.name}'s turn in our rotation (${over.ovr})` : 'would fill our open turn in the rotation';
+  if (pos === 'RP') return `would be an upgrade on ${over?.name || 'the back of our bullpen'}${over ? ` (${over.ovr})` : ''}`;
+  return `would start over ${over?.name || 'our starter'}${over ? ` (${over.ovr})` : ''} there`;
+}
+
+function _clubPosCard(st, p, ev, fit) {
+  if (!tradeWindow(st).open) return false;
+  const team = (st.leagueTeams || []).find(t => t.id === ev.teamId);
+  const deal = team && LeagueTrades.scoutPackage(st, team.id, p.id, ev.atMs ?? atMsNow());
+  if (!deal) return false;
+  const what = ev.pos === 'SP' ? 'stretching out to start' : ev.pos === 'RP' ? 'working in relief' : `playing ${ev.pos}`;
+  return !!_deliverIdea(st, {
+    key: `lp:${p.id}:${ev.pos}`, teamId: team.id, deal, atMs: (ev.atMs ?? atMsNow()) + 2 * 3600_000,
+    subject: `${p.name} is ${what} now`,
+    preview: `${team.name} have ${p.name} at ${_posWord(ev.pos)} too.`,
+    lead: `${team.name} have ${_ref(p)} ${what} as well${fit.thin ? `, and ${_fitClause(st, p, ev.pos, fit)}` : `, and ${p.name} ${_fitClause(st, p, ev.pos, fit)}`}.`,
+  });
+}
+
+function _faPosCard(st, p, ev, fit) {
+  const room = FreeAgency.roomFor(st, p);
+  const drop = room.needsDrop ? (room.candidates.find(c => !c.starter && c.player.id !== fit.over) || null)?.player : null;
+  if (room.needsDrop && !drop) return false;
+  if (FreeAgency.signBlocker(st, p.id, drop?.id || null)) return false;
+  const t = FreeAgency.termsFor(st, p);
+  const at = (ev.atMs ?? atMsNow()) + 2 * 3600_000;
+  const where = ev.pos === 'SP' ? 'as a starter' : ev.pos === 'RP' ? 'in relief' : `at ${ev.pos}`;
+  return !!_deliverAt(_rosterCard(st, {
+    cardId: 'fa_pos', tag: 'SCOUTING', sender: 'Pro Scouting', avatar: '🔎', type: 'normal',
+    _targetPlayerId: p.id, _playerIds: drop ? [drop.id] : [], _dropId: drop?.id || null,
+    subject: `${p.name} is working out ${where}`,
+    preview: `A free agent who fits: ${_ref(p)}.`,
+    body: `${_ref(p)}, a free agent, has been working out ${where}${fit.thin ? `, and ${_fitClause(st, p, ev.pos, fit)}` : ` and ${_fitClause(st, p, ev.pos, fit)}`}. `
+        + `The terms: ${formatK(t.salary || 0)}${t.years > 1 ? ` a year for ${t.years} years` : ' for the year'}`
+        + `${drop ? `; ${drop.name} would go to make room` : ''}.`,
+    yesLabel: `Sign ${p.name}`, noLabel: 'Pass',
+    autoResolve: 'roster', expiresAtMs: at + 2 * 86_400_000,
+    _rosterKey: `lp:fa:${p.id}:${ev.pos}`,
+    _raw: { onYes: 'fa_pos_sign', onNo: null, onAuto: null },
+  }), at);
+}
+const atMsNow = () => clockNow();
 
 /** r167 §122.35 the pitching coach's sim games are over: how far the pitcher got. */
 function _deliverSimReport(ev, atMs) {

@@ -11080,3 +11080,62 @@ Fresh team: required (from r163).
 - season sim 3828/3828; multi-season 59/59 (after the check update above);
 - check-pitcher-roles 33/33; test-pitcher-move-ui passes in dark and light;
 - check-weather-cards and test-wear-ui (light) are known flakes: each failed once and passed on rerun.
+
+### §122.41 r168 Positions, phase 6: positions around the league
+
+**The engine** (`engine/LeaguePositions.js`, pure):
+- **Clubs** (in season only: regular season, trade deadline, All-Star break):
+  - **How often:** one club move every 1.5–3 days (`LEAGUE_POSITIONS.cpuGapDays`), about three a week.
+  - **Which club:** a random one.
+  - **Pitcher moves** (a quarter of them):
+    - a starter not in the rotation picks up RP;
+    - or a reliever with stamina 55+ is stretched out (SP, stretch 3).
+  - **Hitter moves:**
+    - **Who:** a bench player 70% of the time.
+    - **Where:** a spot the club has nobody on the bench for, if the move is easy (a hard one 25% of the time); otherwise an easy spot, sometimes a hard one; never catcher.
+- **Free agents** (spring, season, offseason): one every 7–14 days (`faGapDays`), rated 50+: a hitter at an easy spot, or a pitcher's other role.
+- **`Positions.grantPosition(p, pos)`** gives the position or role outright (a pitcher's `p.pos` stays the primary role). The season's keep rules apply as for anyone, so a club's new position is kept only if the player starts there.
+- **The clock** is `state.leaguePos { nextAt, faNextAt, lastMsgAt }`.
+  - It is set on the first look and checked at the day's trade desk (`GameEngine._leaguePositions`).
+  - Draws come from `dice(seed, 'leaguepos', atMs)`.
+  - Out of season the club clock waits.
+
+**What we hear:**
+- **The wire** (League → Moves) lists every change as kind `position` ("Position"):
+  - "Gulfport Mullets have Caceres (OVR 58) playing 3B too (1B/3B)";
+  - "… are stretching X out to start", "… have X pitching in relief too";
+  - "Free agent X is working out at OF".
+- **Recent** gets the short line (abbreviation, no OVR) for every change that isn't a message (feed type `position`).
+- **A Pro Scouting message** (`CardEngine.leaguePositionNews`) when the player fits us at the new spot (`fitsUs`). Fitting means one of:
+  - starting over our player there by 4+ OVR (`fitGap`);
+  - 4+ better than our weakest starter (SP) or our weakest reliever (RP);
+  - covering a spot nobody on our bench plays, better than our weakest bench bat.
+
+  At most one every 7 days (`msgGapMs`); the rest go to Recent.
+  - **A club's player:**
+    - **The message:** a trade idea through `_deliverIdea` with Pro Scouting's package (`scoutPackage`), only while the trade window is open.
+    - **Subject:** "X is playing 2B now".
+    - **Lead:** "Millbay Sails have X (1B/3B/2B, OVR 66) playing 2B as well, and X would start over Keating (62) there."
+    - **Buttons:** Make the Offer / Pass.
+  - **A free agent:**
+    - **The card:** `fa_pos`, sent only when we could actually sign: someone off the bench can make room and ownership would pay.
+    - **Subject:** "X is working out at SS".
+    - **Body:** why the player fits; "The terms: $50K a year for 3 years; Harper would go to make room."
+    - **Buttons:** **Sign X** (`fa_pos_sign` → `FreeAgency.sign` with that drop) / Pass.
+
+**Checks:**
+- **check-league-positions** (18):
+  - a position or role given outright;
+  - no club moves in spring;
+  - a month of the season: 8–22 club moves and 2–6 free agents, all real, lines in Recent for at least half, messages at least 7 days apart;
+  - `fitsUs` both ways;
+  - the free-agent message (who, why, the terms, who makes room, Pro Scouting's voice) and yes signs;
+  - a club's player as a trade idea;
+  - a second fit inside the gap goes to Recent.
+- **test-league-positions-ui** (dark and light): the Recent line, the wire's "Position" row, the free-agent message with Sign / Pass.
+
+Fresh team: required (from r163).
+
+This completes the positions project (§122.35 phases 1–6).
+
+**Suite (r168):** season sim 3827/3827, multi-season 59/59. check-message-lookahead failed once (its known intermittent timing mismatch) and passed three times on rerun.

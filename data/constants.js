@@ -1837,6 +1837,17 @@ export const ROSTER_ADVICE = Object.freeze({
  * starter's starts, a reliever's appearances) grows `regularBonus` more on each
  * rating; one who barely played grows `satPenalty` less.
  */
+/**
+ * r168 §122.35 phase 6 — the league's position changes: in season, a club somewhere moves a player
+ * every `cpuGapDays` (a few a week); a free agent works out at a new spot every `faGapDays`. Lower-rated
+ * players are a line in Recent; one rated `notableOvr`+, or who'd start for us there, is a Pro
+ * Scouting message (at most one every `msgGapMs`; "start for us" = `fitGap`+ better than who'd sit).
+ */
+export const LEAGUE_POSITIONS = Object.freeze({
+  cpuGapDays: [1.5, 3], faGapDays: [7, 14], hardShare: 0.25, pitcherShare: 0.25,
+  notableOvr: 75, msgGapMs: 7 * 86_400_000, faFloorOvr: 50, fitGap: 4,
+});
+
 export const DEV_REPS = Object.freeze({
   regular: Object.freeze({ hitter: 0.5, SP: 0.15, RP: 0.3 }),
   sat:     Object.freeze({ hitter: 0.15, SP: 0.05, RP: 0.1 }),

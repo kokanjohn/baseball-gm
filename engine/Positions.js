@@ -197,6 +197,31 @@ export function recordStart(p, slot, kind = 'regular') {
   return null;
 }
 
+/**
+ * r168 §122.35 phase 6 — a position (or a pitcher's role) given outright: a club around the league
+ * moving a player, a free agent working out somewhere new. The season's keep rules apply as usual.
+ * @returns {Boolean} whether anything changed
+ */
+export function grantPosition(p, pos) {
+  if (!p) return false;
+  if (isPitcher(p)) {
+    if (!['SP', 'RP'].includes(pos)) return false;
+    const s = _ownP(p);
+    if (s.roles.includes(pos)) return false;
+    s.roles = [...s.roles, pos];
+    if (pos === 'SP') s.stretch = 3;
+    p.nativePos = posLabel(p);
+    return true;
+  }
+  const x = norm(pos);
+  if (!FIELD_POSITIONS.includes(x) || eligibleAt(p).includes(x)) return false;
+  const s = _own(p);
+  s.elig = [...(s.elig || []), x];
+  delete s.fam[x];
+  _sync(p);
+  return true;
+}
+
 /** What keeping a position takes, from where he stands now: starts still needed (0 = safe). */
 export function keepNeed(p, pos, startsSoFar = null) {
   const s = positionsOf(p), x = norm(pos);

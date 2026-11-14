@@ -85,6 +85,7 @@ import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint 
 import * as AllStar from './AllStarEngine.js';
 import { recordOutings, starterRested, bullpenRoles } from './PitchingEngine.js';
 import { leaveIssues } from './RosterAdvice.js';
+import * as LeaguePos from './LeaguePositions.js';   // r168 §122.35
 import { cityOf } from './WeatherMap.js';
 import * as Finance from './FinanceEngine.js';
 import { formatK } from './CardTokens.js';
@@ -2832,7 +2833,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'resume') _resumeGame(next.ref, next.at);
     else if (next.kind === 'fin:accrue') StateManager.mutate(s => { Finance.accrueDay(s, next.day, next.teamId); });
     else if (next.kind === 'fin:payday') events.push(...(next.teamId === 'user' ? _payday(next.i, next.at) : _cpuPayday(next.teamId, next.i, next.at)));
-    else if (next.kind === 'desk') events.push(..._runTradeDesk(next.at));
+    else if (next.kind === 'desk') { events.push(..._runTradeDesk(next.at)); _leaguePositions(next.at); }
     else if (next.kind === 'roster') { /* the roster step above was the event */ }
     else if (next.kind === 'wxask') _wxUserCards(next.at);
     else if (next.kind === 'falook') {
@@ -3164,6 +3165,38 @@ function _wireAdd(draft, entries) {
   draft.leagueWire = [...(draft.leagueWire || []), ...add]
     .filter(e => e.season >= season - 1)
     .slice(-LEAGUE_TRADES.wireKeep);
+}
+
+/**
+ * r168 §122.35 phase 6 — at the day's desk: a club somewhere moves a player to a new spot, a free
+ * agent works out at one. On the wire; Pro Scouting tells us when it matters (CardEngine), Recent otherwise.
+ */
+function _leaguePositions(atMs) {
+  if (!LeaguePos.leaguePositionsDue(StateManager.get(), atMs)) return;
+  let ev = [];
+  StateManager.mutate(s => { ev = LeaguePos.leaguePositionSteps(s, atMs, dice(diceSeed(s), 'leaguepos', atMs)); });
+  if (!ev.length) return;
+  const st = StateManager.get();
+  StateManager.mutate(s => _wireAdd(s, ev.map(e => ({ atMs: e.atMs, kind: 'position', teamIds: e.teamId ? [e.teamId] : [],
+                                                       text: _leaguePosLine(st, e) })).filter(e => e.text)));
+  CardEngine.leaguePositionNews(ev.map(e => ({ ...e, text: _leaguePosLine(st, e, { short: true }) })), atMs);
+}
+
+/** "Portland have Ruiz playing 2B too (SS/2B)", "Free agent Ruiz is working out at 2B". */
+function _leaguePosLine(st, e, { short = false } = {}) {
+  const p = st.players[e.playerId];
+  if (!p) return '';
+  const who = short ? p.name : `${p.name} (OVR ${p.ovr})`;
+  const label = posLabel(p);
+  if (e.kind === 'fa') {
+    return e.pos === 'SP' ? `Free agent ${who} is working out as a starter (${label})`
+         : e.pos === 'RP' ? `Free agent ${who} is working out in relief (${label})`
+         : `Free agent ${who} is working out at ${e.pos} (${label})`;
+  }
+  const club = short ? _clubAbbr(st, e.teamId) : _clubName(st, e.teamId);
+  return e.pos === 'SP' ? `${club} are stretching ${who} out to start (${label})`
+       : e.pos === 'RP' ? `${club} have ${who} pitching in relief too (${label})`
+       : `${club} have ${who} playing ${e.pos} too (${label})`;
 }
 
 /** §90 the roster clock's moves on the wire, and CPU trades in Recent. */

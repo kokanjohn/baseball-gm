@@ -30,6 +30,7 @@ import { eventRand } from './Dice.js';
 import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeaching, teachablePositions, startSimGames, activeSimGames, stretchRead } from './PlayerWork.js';
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
 import { setPitchRole } from './Positions.js';   // r163
+import { signBlocker, sign as signFA } from './FreeAgency.js';   // r168
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -115,6 +116,12 @@ const teach = {
 const simGames = {
   feasible(st, c) { const r = stretchRead(st, c._targetPlayerId); return !!r && r.need > 0 && !activeSimGames(st); },
   apply: (d, c, atMs) => startSimGames(d, { playerId: c._targetPlayerId }, atMs),
+};
+
+/** r168 §122.35 a free agent working out at a spot we need: sign (the card names who'd make room). */
+const faPosSign = {
+  feasible: (st, c) => !signBlocker(st, c._targetPlayerId, c._dropId || null),
+  apply: (d, c, atMs) => signFA(d, c._targetPlayerId, atMs, c._dropId || null),
 };
 
 const work = {
@@ -525,6 +532,7 @@ export const CARD_ACTIONS = Object.freeze({
   train_hitter:         train,
   coach_work:           work,      // r159 §122.31
   teach_position:       teach,     // r166 §122.35
+  fa_pos_sign:          faPosSign, // r168 §122.35
   sim_games:            simGames,  // r167 §122.35
   dev_program:          work,
   day_off:              dayOff,
