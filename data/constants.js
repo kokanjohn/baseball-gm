@@ -1826,6 +1826,9 @@ export const ROSTER_ADVICE = Object.freeze({
   hitterGap: 4, armGap: 4, prospectAge: 24, prospectGap: 6,
   gapMs: 2 * 86_400_000, samePairMs: 7 * 86_400_000, quietMs: 30 * 86_400_000, quietGrow: 4,
   expireMs: 2 * 86_400_000, startIssues: [2, 4],
+  // r167 §122.35 the pitching coach on roles: stretch a reliever with a starter's stamina, at least as
+  // good as the weakest starter; move a starter who can't go deep (ip per start) but has the stuff
+  stretchStamina: 60, toPenStarts: 6, toPenIpPerStart: 5, toPenStuff: 65,
 });
 
 /**
@@ -1868,4 +1871,16 @@ export const POSITION_RULES = Object.freeze({
   // player at a time): `days` of extra reps by difficulty; each day takes (adds one famStep) with
   // `odds`, better with a good coach (quality − 60) / 200, a young player +0.05, one 32+ −0.1.
   teach: Object.freeze({ days: Object.freeze({ easy: 4, hard: 7, C: 9 }), odds: Object.freeze({ easy: 0.85, hard: 0.6, C: 0.45 }) }),
+  // r167 phase 5 — pitchers' designations. RP: `gainRelief` regular-season relief outings (kept with
+  // `keepRelief` last season); SP: `gainStarts` regular-season starts (kept with `keepStarts`).
+  // A starter in relief without RP: his next start waits `pushNoRP` days after it (`pushRP` with
+  // RP), and the outing's workload is ×`extraLoad`. The short-stint boost by age [upTo, stuff,
+  // control]. Stretched out 0–3: a start, a long outing (`longBF`+ batters), a spring outing or a sim
+  // game each add one; a starter's length at 3. Losing SP: a natural starter keeps `keepHead`.
+  pitch: Object.freeze({
+    gainRelief: 5, keepRelief: 8, gainStarts: 3, keepStarts: 5,
+    pushNoRP: 2, pushRP: 1, extraLoad: 1.5, longBF: 12, keepHead: 2,
+    boost: Object.freeze([[25, 4, -3], [30, 3, -2], [34, 2, -1], [Infinity, 1, 0]]),
+    simEveryDays: 3, simBF: 15,
+  }),
 });

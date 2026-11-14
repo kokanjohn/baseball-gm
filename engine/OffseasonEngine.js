@@ -92,7 +92,7 @@ import { trainingWinterBonus } from './FrontOffice.js';
 import { fillsNeed } from './LeagueTrades.js';
 import { clockNow } from './Clock.js';
 import { fillShortRosters } from './TransactionEngine.js';
-import { primaryPos, posLabel, seasonTurn } from './Positions.js';   // r163 §122.35
+import { primaryPos, posLabel, seasonTurn, pitcherSeasonTurn } from './Positions.js';   // r163 §122.35
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
 
@@ -421,7 +421,7 @@ export function beginOffseason(draft, atMs) {
   const posTurn = [];
   for (const p of Object.values(draft.players || {})) {
     if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
-    const ch = seasonTurn(p);
+    const ch = seasonTurn(p) || pitcherSeasonTurn(p);   // (r167 a pitcher's SP / RP)
     if (ch && p.teamId === 'user') posTurn.push({ playerId: p.id, ...ch });
   }
   draft.ilReturnQueue = [];

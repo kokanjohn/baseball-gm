@@ -20,8 +20,8 @@ import { formatK } from './CardTokens.js';
 import { scoutEye as directorEye, scoutLooks } from './CoachEngine.js';
 import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from './TradeAdvice.js';
 import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart } from './TradeEngine.js';
-import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teachRead } from './PlayerWork.js';
-import { PLAYER_WORK } from '../data/constants.js';
+import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teachRead, stretchRead } from './PlayerWork.js';
+import { PLAYER_WORK, POSITION_RULES } from '../data/constants.js';
 import { posLabel } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
@@ -863,7 +863,7 @@ const TOPIC_LABELS = {
   tix_renewals: 'season-ticket renewals', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
   mr_narrative: 'the coverage', ca_event: 'community commitments',
-  hc_work: 'the work', pc_work: 'the work', bc_teach: 'the position work', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
+  hc_work: 'the work', pc_work: 'the work', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
 };
 
 
@@ -1191,6 +1191,31 @@ function coachWork(f, r, who, arg) {
 }
 W.hc_work = coachWork;
 W.pc_work = coachWork;
+
+/** r167 §122.35 the pitching coach on stretching one pitcher out (sim games). */
+W.pc_stretch = function pitchStretch(f, r, who, arg) {
+  const st = f.state, p = arg?.playerId ? st.players[arg.playerId] : null;
+  const read = p ? stretchRead(st, p.id) : null;
+  if (!read) return { body: [`${p?.name || 'That pitcher'} isn't someone I can stretch out right now.`], memo: {}, topic: 'that pitcher' };
+  const name = p.name, topic = `${name}, stretched out`;
+  if (!read.need) return { body: [read.starter ? `${name} is a starter already: stretched out and ready to go deep.` : `${name} is already stretched out. Three starts makes it official.`], memo: { playerId: p.id }, topic };
+  if (read.busy) {
+    const b = st.players[read.busy.playerId];
+    return { body: [read.busy.playerId === p.id ? `${name} is already in the middle of the sim games.` : `I'm stretching ${b?.name || 'someone'} out right now, one at a time. ${name} is next if you want.`], memo: { playerId: p.id }, topic };
+  }
+  const lenNow = read.stretch === 0 ? `Right now ${name} is a one- or two-inning arm.` : `${name} is part of the way there already.`;
+  const body = [
+    `${lenNow} To start, ${name} needs length: ${plural(read.need, 'sim game')}, one every ${POSITION_RULES.pitch.simEveryDays} days, each a little longer than the last.`,
+    `${name} can't pitch in relief the day of a sim game or the day after, so the bullpen is one arm short now and then.`,
+    read.stamina >= 60 ? `The stamina is there. I like this.` : read.stamina >= 45 ? `The stamina is average: ${name} will be a five-inning starter at best.` : `Honestly, the stamina is thin. Short starts are the most I'd expect.`,
+    `Once the length is there, three starts makes it official.`,
+  ];
+  return {
+    body, memo: { playerId: p.id }, topic,
+    decision: { playerId: p.id, onYes: 'sim_games', yesLabel: 'Start the Sim Games', noLabel: 'Not Now', expiresInMs: 3 * 86_400_000,
+                yesMsg: `${name} throws the first sim game tomorrow.`, noMsg: 'Understood. Another time.' },
+  };
+};
 
 /** r166 §122.35 the Bench Coach on teaching one hitter a position. */
 const POS_NAME = { C: 'catcher', '1B': 'first', '2B': 'second', '3B': 'third', SS: 'short', OF: 'the outfield' };

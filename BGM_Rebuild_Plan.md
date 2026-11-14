@@ -10990,3 +10990,93 @@ Fresh team: required (from r163).
 Fresh team: required (from r163).
 
 **Suite (r166):** season sim 3826/3826, multi-season 59/59. check-game-injuries and test-wear-ui (dark) each failed once and passed twice on rerun. test-sheet-close-ui (dark) is its known intermittent failure.
+
+### §122.40 r167 Positions, phase 5: pitchers' designations (SP, RP, the swingman), sim games, the pitching coach's role moves
+
+**The model** (`Positions.js`, pitcher record `{ primary, roles, stretch 0–3, starts, relief, lastStarts, lastRelief }`):
+- **Earned in the regular season only** (`recordOuting`, called from `PitchingEngine.recordOutings` for every game, ours and the CPU's):
+  - RP after 5 relief outings; SP after 3 starts (and SP sets stretch to 3);
+  - `ROLE_GAINED` → a Recent line for us ("X is now SP/RP: three starts this season").
+- **Stretched out** (`stretch`, 0–3): +1 for a start, a relief outing of 12+ batters, or any spring outing; +1 per sim game.
+  - `tireAfterBF` for a starter is interpolated between a reliever's length (0) and a starter's (3).
+  - So the GM can put a reliever in the rotation any time (MOVE), but the start runs short until stretched out.
+- **A starter working in relief:**
+  - the short-stint boost by age (`reliefBoost`: ≤25 stuff +4 / control −3; ≤30 +3/−2; ≤34 +2/−1; older +1/0), passed to the sim as `context.relief`;
+  - the next start waits (`reliefPushDays`: 2 days, 1 with RP; `starterRested`);
+  - a starter without RP takes the outing ×1.5 on the arm (`reliefLoadMult`).
+- **The season turn** (`pitcherSeasonTurn`, in `OffseasonEngine` with the hitters'):
+  - SP kept with 5 starts, RP with 8 relief outings; the primary is the role done more, always kept;
+  - a pitcher who never pitched keeps everything;
+  - a starter who loses SP keeps a head start (stretch 2); a reliever without SP goes back to 0.
+- **`p.pos` stays the primary role** ('SP' / 'RP'); `nativePos` carries the full label ("SP/RP").
+
+**MOVE for pitchers** (`RosterEngine.moveOptions` / `applyMove`, rewritten):
+- **Anyone can go to the rotation** (`turn:k`, `turn:new`) **or the bullpen** (`pen:id`, `pen:new`).
+- **Out of role:**
+  - the role not held is marked out of role and listed after the rest, behind "Show out-of-role spots (N)";
+  - the rotation shows how far stretched out ("not stretched out: a short start", "stretched out 1 of 3").
+- From the rotation or the bullpen: a pitcher-bench arm with the role takes the spot (`in:`), or leave it open.
+- **The tidy-up** keeps a GM's out-of-role placement. The Team row says "out of role"; pitchers working toward a designation show "RP 3/5" / "SP 1/3".
+- **The MOVE sheet's label column** is wider for pitchers (Rotation, Bullpen, Pitcher bench).
+
+**The pitching coach's sim games** (`PlayerWork`):
+- **Compose → Pitching Coach → "Stretch a pitcher out"** (`pc_stretch`).
+- **The reply** (`W.pc_stretch`) gives:
+  - how far the pitcher is now;
+  - the sim games needed (one every 3 days);
+  - that the bullpen is one arm short the day of each, and the day after;
+  - a read on the stamina;
+  - "three starts makes it official".
+- **The decision:** **Start the Sim Games** (`sim_games` → `startSimGames`) / Not Now. One pitcher at a time; other replies cover busy and already stretched out.
+- **On the roster clock** (`simGamesDue` / `simGameSteps`), each sim game:
+  - adds stretch +1;
+  - adds a short start's workload to the arm;
+  - makes the pitcher unavailable ('sim game') for 1.5 days.
+
+  A hurt pitcher skips it.
+- **`SIM_DONE`** → the pitching coach's notice (`sim_report`): "X is stretched out" (and whether X is already in the rotation), or "part of the way there".
+- Still a reliever by designation: three regular-season starts makes SP official.
+
+**The pitching coach's suggestions** (`RosterAdvice.adviceFor`, same pacing and "I Have a Plan" as the rest):
+- **`stretch`:**
+  - **Who:** a reliever not in the rotation, without SP and not stretched out, with stamina ≥ 60 and OVR at least the weakest starter's.
+  - **When:** the coach has no sim games going.
+  - **The message:** "X could start" / "Stretch X out?" → **Start the Sim Games**.
+- **`to_pen`:**
+  - **Who:** a rotation starter with 6+ starts, averaging under 5 innings a start, with stuff ≥ 65.
+  - **When:** there is a starter on the pitcher bench to take the turn.
+  - **The message:** "X in the bullpen?" → **Move X to the Bullpen**.
+- **Thresholds** live in `ROSTER_ADVICE` (stretchStamina, toPenStarts, toPenIpPerStart, toPenStuff).
+
+**A new club's swingman** (`Positions.seedSwingman`, in `startNewGame` after `leaveIssues`):
+- **Odds by archetype:** lab/gambler .7, ember/contender .5, empire/institution .3.
+- **What it does:** the best-stamina SP on the pitcher bench is made SP/RP.
+
+**Checks:**
+- **check-pitcher-roles** (33):
+  - the boost by age; the push to the next start; the extra workload;
+  - a reliever's start tiring early and part-way stretched;
+  - spring stretching without counting; SP at three starts; RP at five relief outings; a long outing stretching;
+  - the season turn (a swingman who mostly relieved, one who kept both, one who never pitched);
+  - the swingman seed;
+  - MOVE for a reliever (out of role, stretched words, the placement staying);
+  - the sim games end to end (Compose, yes, out of the bullpen that day, stretched to 3, still RP, the report);
+  - both suggestions and the to_pen card's yes.
+- **test-pitcher-move-ui** (dark and light):
+  - the sheet's bullpen moves, then "Show out-of-role spots (N)";
+  - the rotation rows with how far stretched out;
+  - choosing one, the row's "out of role";
+  - the card's Roles section.
+- **check-roster-advice:** the new kinds are counted for the pitching coach.
+
+Fresh team: required (from r163).
+
+**Also in r167:**
+- Tapping an empty rotation or bullpen spot (or lineup slot) lists the bench only. MOVE now offers a starter the bullpen, so filling one hole could otherwise open another. Role-holders are listed first, out-of-role pitchers after (marked).
+- **multi-season:** "five in the rotation" counts anyone with SP (swingmen too) and checks no pitcher without SP is in the rotation.
+- **check-roster-advice:** handles suggestions with no one giving way (stretch, cover).
+
+**Suite (r167):**
+- season sim 3828/3828; multi-season 59/59 (after the check update above);
+- check-pitcher-roles 33/33; test-pitcher-move-ui passes in dark and light;
+- check-weather-cards and test-wear-ui (light) are known flakes: each failed once and passed on rerun.

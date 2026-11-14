@@ -29,7 +29,7 @@ import { lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
-import { PLAYER_GROUP, ROSTER_LIMITS, PHASE } from '../../data/constants.js';
+import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, POSITION_RULES } from '../../data/constants.js';
 import { eligibleSlotsFor, moveOptions, tradedAway, managerFillAt }
   from '../../engine/RosterEngine.js';
 import * as GameEngine from '../../engine/GameEngine.js';
@@ -37,7 +37,7 @@ import { getRosterNeeds } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as Coach from '../../engine/CoachEngine.js';
 import * as When from '../../engine/When.js';
-import { posLabel, eligibleAt } from '../../engine/Positions.js';   // r163 §122.35
+import { posLabel, eligibleAt, pitchRoles } from '../../engine/Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -456,7 +456,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
   const canMove = !coming && !il && moveOptions(state, p.id).length > 0;
   const shown = _statsShown(p);
   const pitcher = ['SP', 'RP'].includes(p.pos);
-  const pos = pitcher ? `${p.pos} · ${p.hand === 'L' ? 'L' : 'R'}` : posLabel(p);
+  const pos = pitcher ? `${posLabel(p)} · ${p.hand === 'L' ? 'L' : 'R'}` : posLabel(p);   // r167 SP/RP
   // The sub-line: position (and hand), then what matters about the row today.
   // A row with a status (reporting, traded, on the IL) shows that alone, so it fits.
   const subBits = [];
@@ -466,6 +466,14 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
   else {
     subBits.push(pos);
     // r164 §122.35 working toward a new position: its regular-season starts so far
+    // r167 §122.35 a pitcher working toward a designation, or out of role where he is
+    if (pitcher) {
+      const roles = pitchRoles(p), s = p.positions || {};
+      if (!roles.includes('RP') && (s.relief || 0) > 0) subBits.push(`<span class="tr-learn">RP ${s.relief}/${POSITION_RULES.pitch.gainRelief}</span>`);
+      if (!roles.includes('SP') && (s.starts || 0) > 0) subBits.push(`<span class="tr-learn">SP ${s.starts}/${POSITION_RULES.pitch.gainStarts}</span>`);
+      const inRot = (state.userTeam.rotation?.order || []).includes(p.id);
+      if ((inRot && !roles.includes('SP')) || (p.group === PLAYER_GROUP.BULLPEN && !roles.includes('RP'))) subBits.push('<span class="tr-hurt">out of role</span>');
+    }
     if (!pitcher) for (const [x, n] of Object.entries(p.positions?.starts || {})) {
       if (x !== 'DH' && n > 0 && !eligibleAt(p).includes(x)) subBits.push(`<span class="tr-learn">${x} ${n}/10</span>`);
     }
@@ -563,7 +571,7 @@ function _statusWord(p) {
   if (p.isSuspended)       return 'suspended';
   const away = p.unavailable;
   if (away) {
-    const what = { rest: 'resting', illness: 'sick', training: 'training', benched: 'sat down', suspended: 'suspended', leave: 'on leave' }[away.reason] || 'away';
+    const what = { rest: 'resting', illness: 'sick', training: 'training', benched: 'sat down', suspended: 'suspended', leave: 'on leave', 'sim game': 'after a sim game' }[away.reason] || 'away';
     // r159 away for a stretch of days (focused work, a program): back by the clock, not a game count.
     if (away.untilMs) { const d = Math.max(1, Math.ceil((away.untilMs - Date.now()) / 86_400_000)); return `${what}, ${d} day${d === 1 ? '' : 's'}`; }
     return `${what}, ${away.gamesLeft} game${away.gamesLeft === 1 ? '' : 's'}`;
@@ -806,13 +814,18 @@ function _attachListeners(state) {
       const idx = el.dataset.fillSlot != null ? Number(el.dataset.fillSlot) : null;
       const key = idx != null ? `slot:${idx}` : el.dataset.fillTurn ? 'turn:new' : 'pen:new';
       const label = idx != null ? `the ${st.userTeam.lineupSlots[idx]?.slot} slot` : el.dataset.fillTurn ? 'the open rotation spot' : 'the open bullpen spot';
-      const who = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(p => p && moveOptions(st, p.id).some(o => o.key === key))
-        .sort((a, b) => b.ovr - a.ovr);
+      // (the bench only: r167 MOVE offers a starter the bullpen too, but filling one hole shouldn't open another;
+      //  those holding the role first, out of role after)
+      const seated = new Set((st.userTeam.lineupSlots || []).map(sl => sl.playerId).filter(Boolean));
+      const onBench = (p) => p.group === PLAYER_GROUP.PITCHER_BENCH || (p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id));
+      const optFor = (p) => moveOptions(st, p.id).find(o => o.key === key);
+      const who = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(p => p && onBench(p) && optFor(p))
+        .sort((a, b) => (!!optFor(a).oop - !!optFor(b).oop) || (b.ovr - a.ovr));
       if (!who.length) { App.showToast(`Nobody on the bench can fill ${label}.`, 'negative'); return; }
       _showSwapSheet(`Fill ${_escape(label)}`, null, who.map(p => `
         <div class="sm-row" data-pick="${p.id}">
           <div class="sm-pick-info"><span class="sm-pick-name">${_escape(p.name)}</span>
-            <span class="sm-pick-sub">${['SP', 'RP'].includes(p.pos) ? p.pos : posLabel(p)}</span></div>
+            <span class="sm-pick-sub">${posLabel(p)}${optFor(p).oop ? ` · <span class="sm-oop-tag">Out of ${['SP', 'RP'].includes(p.pos) ? 'role' : 'position'}</span>` : ''}</span></div>
           <span class="rating-num ${_ovrColor(p.ovr)} sm-pick-ovr">${p.ovr}</span>
         </div>`).join(''), (overlay) => {
         overlay.querySelectorAll('.sm-row[data-pick]').forEach(row => row.addEventListener('click', () => {
@@ -855,16 +868,19 @@ function _openMoveSheet(playerId) {
   const leaves = opts.some(o => o.key === 'bench');
   const row = (o) => `
     <div class="sm-row${o.oop ? ' sm-oop' : ''}" data-key="${o.key}">
-      <div class="sm-slot-label">${_escape(o.label)}</div>
-      <div class="sm-slot-sub">${o.oop ? '<span class="sm-oop-tag">Out of position</span> ' : ''}<span class="${o.detail === 'Open' ? 'sm-empty' : 'sm-current'}">${_escape(o.detail)}</span></div>
+      <div class="sm-slot-label${['SP', 'RP'].includes(p.pos) ? ' sm-wide' : ''}">${_escape(o.label)}</div>
+      <div class="sm-slot-sub">${o.oop ? `<span class="sm-oop-tag">Out of ${['SP', 'RP'].includes(p.pos) ? 'role' : 'position'}</span> ` : ''}<span class="${o.detail === 'Open' ? 'sm-empty' : 'sm-current'}">${_escape(o.detail)}</span></div>
     </div>`;
   // r165 §122.35 the spots he's eligible at first; out-of-position spots behind a button, clearly lesser choices
   const elig = opts.filter(o => !o.oop), oop = opts.filter(o => o.oop);
+  // (r167 a pitcher's are out of role)
+  const arm = ['SP', 'RP'].includes(p.pos);
+  const oopWord = (show) => `${show ? 'Show' : 'Hide'} out-of-${arm ? 'role' : 'position'} spots`;
   const rows = elig.map(row).join('')
-    + (oop.length ? `<button class="sm-oop-toggle" type="button">Show out-of-position spots (${oop.length})</button>
+    + (oop.length ? `<button class="sm-oop-toggle" type="button">${oopWord(true)} (${oop.length})</button>
        <div class="sm-oop-list" hidden>${oop.map(row).join('')}</div>` : '')
     + (leaves && deadline ? `<div class="sm-note">An open spot waits for you until ${_clockText(deadline)}, an hour before first pitch. Then ${_escape(st.userTeam.coachingStaff?.manager?.name || 'the manager')} fills it from the bench.</div>` : '');
-  const pos = ['SP', 'RP'].includes(p.pos) ? p.pos : posLabel(p);
+  const pos = posLabel(p);
   _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}`, rows, (overlay) => {
     overlay.querySelectorAll('.sm-row[data-key]').forEach(row => row.addEventListener('click', () => {
       App.playClick(); overlay.remove(); _doMove(playerId, row.dataset.key);
@@ -873,7 +889,7 @@ function _openMoveSheet(playerId) {
       App.playClick();
       const list = overlay.querySelector('.sm-oop-list');
       list.hidden = !list.hidden;
-      e.currentTarget.textContent = list.hidden ? `Show out-of-position spots (${oop.length})` : 'Hide out-of-position spots';
+      e.currentTarget.textContent = list.hidden ? `${oopWord(true)} (${oop.length})` : oopWord(false);
     });
   });
 }
@@ -1141,6 +1157,7 @@ function _injectCSS() {
     .sm-row:active{background:var(--surface2);}
     .sm-slot-label{font-size:14px;font-weight:800;color:var(--text);
       width:36px;flex-shrink:0;text-align:center;}
+    .sm-slot-label.sm-wide{width:78px;text-align:left;font-size:13px;line-height:1.25;}   /* r167 Rotation, Bullpen, Pitcher bench */
     .sm-slot-sub{flex:1;font-size:12px;}
     .sm-current{color:var(--text);font-weight:600;}
     .sm-empty{color:var(--text);font-weight:600;}

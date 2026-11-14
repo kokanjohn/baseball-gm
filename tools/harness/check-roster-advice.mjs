@@ -37,7 +37,7 @@ await startNewGame({ archetypeId: 'contender', gmName: 'Test GM', city: 'Testvil
 console.log('A new club starts with a few things to fix');
 const issues = S().userTeam._startIssues || [];
 const adv0 = adviceFor(S());
-console.log(`    left: ${issues.map(i => `${i.kind} (${i.gap})`).join(', ')} · the staff sees: ${adv0.map(a => `${a.kind} ${P(a.inId).name}(${P(a.inId).ovr}) over ${P(a.outId).name}(${P(a.outId).ovr})`).join(' · ')}`);
+console.log(`    left: ${issues.map(i => `${i.kind} (${i.gap})`).join(', ')} · the staff sees: ${adv0.map(a => `${a.kind} ${P(a.inId).name}(${P(a.inId).ovr}) ${a.outId ? ` over ${P(a.outId).name}(${P(a.outId).ovr})` : ""}`).join(' · ')}`);
 check(`${issues.length} problems left (between ${ROSTER_ADVICE.startIssues.join(' and ')})`, issues.length >= ROSTER_ADVICE.startIssues[0] && issues.length <= ROSTER_ADVICE.startIssues[1]);
 check('…each one a suggestion the staff would make', issues.every(i => adv0.some(a => a.kind === i.kind)));
 check(`…real but not glaring (each 4–12 apart: ${issues.map(i => i.gap).join(', ')})`, issues.every(i => i.gap >= 4 && i.gap <= 12));
@@ -57,7 +57,7 @@ const gaps = got.slice(1).map((c, i) => c.deliverAtMs - got[i].deliverAtMs);
 check(`…never two close together (shortest ${(Math.min(...gaps, Infinity) / DAY).toFixed(1)} days)`, gaps.every(g => g >= ROSTER_ADVICE.gapMs));
 const rest = [...seen.values()].filter(c => c.cardId === 'rest_ask');
 check('…nor within half a day of a rest message', got.every(c => rest.every(r => Math.abs(r.deliverAtMs - c.deliverAtMs) >= 12 * 3600_000)));
-const who = { bat: staff().hittingCoach?.name, rotation: staff().pitchingCoach?.name, pen: staff().pitchingCoach?.name, prospect: staff().scoutingDirector?.name, cover: staff().benchCoach?.name };
+const who = { bat: staff().hittingCoach?.name, rotation: staff().pitchingCoach?.name, pen: staff().pitchingCoach?.name, stretch: staff().pitchingCoach?.name, to_pen: staff().pitchingCoach?.name, prospect: staff().scoutingDirector?.name, cover: staff().benchCoach?.name };
 check('…each from the right person (bats: the hitting coach; arms: the pitching coach; a prospect: the scouting director)', got.every(c => c.sender === who[c._advice.kind]), got.map(c => `${c._advice.kind}:${c.sender}`).join(' '));
 check('…each a decision: make the change, or "I Have a Plan"', got.every(c => c._raw.onYes === 'advice_move' && c.noLabel === 'I Have a Plan'));
 const bad = got.map(c => [c, voiceProblems(c, personOf)]).filter(([c, v]) => v.length || GEN.test(c.body) || GEN.test(c.yesLabel));
@@ -75,8 +75,11 @@ check('a suggestion waits', !!card, JSON.stringify(adviceFor(S()).map(a => a.key
 const a1 = card._advice;
 CE.resolve(card.instanceId, 'yes');
 const inNow = a1.kind === 'bat' || a1.kind === 'prospect' ? S().userTeam.lineupSlots.some(sl => sl.playerId === a1.inId)
-            : a1.kind === 'rotation' ? S().userTeam.rotation.order.includes(a1.inId) : P(a1.inId).group === PLAYER_GROUP.BULLPEN;
-check(`yes: ${P(a1.inId).name} is in (${a1.kind}), ${P(a1.outId).name} out`, inNow && !adviceFor(S()).some(a => a.key === a1.key));
+            : a1.kind === 'rotation' ? S().userTeam.rotation.order.includes(a1.inId)
+            : a1.kind === 'stretch' ? (S().simGames || []).some(t => t.playerId === a1.inId && t.status === 'active')
+            : a1.kind === 'cover' ? (S().teaching || []).some(t => t.playerId === a1.inId && t.status === 'active')
+            : P(a1.inId).group === PLAYER_GROUP.BULLPEN;
+check(`yes: ${P(a1.inId).name} is in (${a1.kind})${a1.outId ? `, ${P(a1.outId).name} out` : ''}`, inNow && !adviceFor(S()).some(a => a.key === a1.key));
 
 // ── The GM makes the move instead: the message goes ───────────
 console.log('The GM makes the move on the Team screen instead');

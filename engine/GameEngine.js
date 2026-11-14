@@ -153,7 +153,7 @@ import {
 } from '../data/constants.js';
 import { clockNow, runAt } from './Clock.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
-import { naturalFor } from './Positions.js';
+import { naturalFor, seedSwingman } from './Positions.js';
 import * as Teaching from './PlayerWork.js';   // r166 the Bench Coach's position work
 import { posLabel } from './Positions.js';   // r163 §122.35
 
@@ -454,6 +454,7 @@ export async function startNewGame(config) {
     const [lo, hi] = ROSTER_ADVICE.startIssues;
     s.userTeam._takeoverAt = clockNow();
     s.userTeam._startIssues = leaveIssues(s, Math.random, lo + Math.floor(Math.random() * (hi - lo + 1)));
+    seedSwingman(s, config.archetypeId, Math.random);   // r167 §122.35
     applyRosterMutation(s, reconcileRoster(s, 'user'));
   });
 
@@ -903,7 +904,8 @@ function _commitAt(gameIndex) {
         s.players[playerId][statKey] = mutation[statKey];
       }
       // §76: each pitcher's outing goes on his arm's record (rest for the next games).
-      recordOutings(s, g.plays, _playsEndMs(g));
+      // (r167 §122.35 and toward SP / RP: our earned designations become news)
+      _pendingPos.push(...recordOutings(s, g.plays, _playsEndMs(g), g.isPlayoff ? 'playoff' : g.isSpring ? 'spring' : 'regular').filter(e => e.teamId === 'user'));
 
       // IMP game log — append this game's stat delta (not lifetime totals)
       // to each player's rolling log for hot/cold calculation.
@@ -2226,7 +2228,7 @@ function _finishLeagueGame(date, i) {
     if (home) Development.countGame(s, home.id, g.gameTime, { kind: posKind });
     if (away) Development.countGame(s, away.id, g.gameTime, { kind: posKind });
     for (const [pid, m] of Object.entries(stats.players || {})) if (s.players[pid]) s.players[pid][statKey] = m[statKey];
-    recordOutings(s, g.plays, endMs);   // §76: the arms' record
+    recordOutings(s, g.plays, endMs, posKind);   // §76: the arms' record (r167 and toward SP / RP)
     for (const [pid, d] of Object.entries(perGame)) _expose(s, pid, d);   // §122.9
     if (statKey === 'stats') for (const [pid, d] of Object.entries(perGame)) {
       if (s.players[pid]) s.players[pid]._impGameLog = appendGameLog(s.players[pid], s.currentGameIndex || 0, date, d, g.gameTime)._impGameLog;
@@ -3242,6 +3244,7 @@ function _nextRosterDue(state, uptoMs, { overdue = true } = {}) {
   }
   for (const x of state.developmentPlans || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);
   for (const x of state.teaching || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);   // r166
+  for (const x of state.simGames || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);   // r167
   take(state.userTeam?.vacancyDeadlineAt);
   // r153 the manager fills what the GM left open, at the roster deadline — or at once when that has
   // already passed (the second game of a doubleheader: its deadline fell during the first).
@@ -3270,6 +3273,12 @@ function _rosterStep(atMs, { reconcileAll = false, events: extra = [] } = {}) {
   if (Teaching.teachingDue(StateManager.get(), atMs)) {
     let ev = [];
     StateManager.mutate(s => { ev = Teaching.teachSteps(s, atMs); });
+    applied = { changed: true, events: [...applied.events, ...ev] };
+  }
+  // r167 §122.35 a sim game (the pitching coach stretching a reliever out).
+  if (Teaching.simGamesDue(StateManager.get(), atMs)) {
+    let ev = [];
+    StateManager.mutate(s => { ev = Teaching.simGameSteps(s, atMs); });
     applied = { changed: true, events: [...applied.events, ...ev] };
   }
   // §71: development increments due on the clock.

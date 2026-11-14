@@ -22,10 +22,11 @@
  */
 
 import { PLAYER_WORK, PLAYER_GROUP, POSITION_RULES } from '../data/constants.js';
-import { difficulty, familiarity, eligibleAt, startsAt, addFamiliarity, FIELD_POSITIONS, isPitcher as isP } from './Positions.js';
+import { difficulty, familiarity, eligibleAt, startsAt, addFamiliarity, FIELD_POSITIONS, isPitcher as isP, pitchRoles, stretchOf, addStretch } from './Positions.js';
 import { dice, diceSeed, withDice, eventRand } from './Dice.js';
 import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { gainMultiplier, roomLeft, activeWork, setUnavailable, startPlan, wearOf, developmentStatus } from './DevelopmentEngine.js';
+import { armLoad } from './PitchingEngine.js';
 
 const DAY = 86_400_000, HOUR = 3_600_000;
 const GAME_SPAN = 3.5 * HOUR;   // a game, first pitch to the last out (when a start "after the game" begins)
@@ -286,5 +287,66 @@ export function teachSteps(draft, atMs) {
     if (s.took) t.gained += addFamiliarity(p, t.pos, 1);
   }
   if (t.steps.every(s => s.done)) end('done');
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────
+// r167 §122.35 PHASE 5 — THE PITCHING COACH STRETCHES A RELIEVER OUT (SIM GAMES)
+// ─────────────────────────────────────────────────────────────
+//   state.simGames = [{ id, playerId, status, steps: [{ atMs, done }] }]
+// One pitcher at a time. A sim game every few days until he's at a starter's length (stretched out
+// 3); each adds a step and some workload, and he can't relieve that day or the next. The SP
+// designation still takes three regular-season starts.
+
+export const activeSimGames = (state) => (state.simGames || []).find(t => t.status === 'active') || null;
+
+/** The pitching coach's read on stretching one pitcher out. */
+export function stretchRead(state, playerId) {
+  const p = state.players?.[playerId];
+  if (!workable(state, p) || !isP(p)) return null;
+  const st = stretchOf(p), need = Math.max(0, 3 - st);
+  return { p, stretch: st, need, days: need * POSITION_RULES.pitch.simEveryDays, starter: pitchRoles(p).includes('SP'),
+           stamina: p.subRatings?.stamina ?? 50, busy: activeSimGames(state) };
+}
+
+/** startSimGames(draft, { playerId }, atMs) — the sim games on the clock. */
+export function startSimGames(draft, { playerId }, atMs) {
+  if (activeSimGames(draft)) return [];
+  const read = stretchRead(draft, playerId);
+  if (!read || !read.need) return [];
+  const every = POSITION_RULES.pitch.simEveryDays * DAYMS;
+  (draft.simGames ||= []).push({
+    id: `sim:${playerId}:${atMs}`, playerId, status: 'active', startAt: atMs,
+    steps: Array.from({ length: read.need }, (_, i) => ({ atMs: atMs + DAYMS + i * every, done: false })),
+  });
+  return [{ type: 'SIM_STARTED', playerId, games: read.need }];
+}
+
+export function simGamesDue(state, atMs) {
+  const t = activeSimGames(state);
+  return !!t && t.steps.some(s => !s.done && s.atMs <= atMs);
+}
+
+/**
+ * simGameSteps(draft, atMs) — each sim game due: a step longer, a starter-like workload, and out of
+ * the bullpen that day and the next. A hurt pitcher skips it. Ends with SIM_DONE.
+ */
+export function simGameSteps(draft, atMs) {
+  const t = activeSimGames(draft);
+  if (!t) return [];
+  const p = draft.players?.[t.playerId];
+  const out = [];
+  const end = (reason) => { t.status = 'done'; t.endAt = atMs; out.push({ type: 'SIM_DONE', playerId: t.playerId, stretch: p ? stretchOf(p) : 0, reason, atMs }); };
+  if (!p || p.teamId !== 'user') { end('gone'); return out; }
+  for (const s of t.steps) {
+    if (s.done || s.atMs > atMs) continue;
+    s.done = true;
+    if (p.isInjured) continue;
+    addStretch(p, 1);
+    p.load = Math.round((armLoad(p, s.atMs) + POSITION_RULES.pitch.simBF * 0.3) * 10) / 10;   // (the arm's workload, like a short start)
+    p.loadAt = s.atMs;
+    if (!p.unavailable) setUnavailable(draft, p.id, { reason: 'sim game', untilMs: s.atMs + 1.5 * DAYMS }, s.atMs);
+  }
+  if (t.steps.every(s => s.done) || stretchOf(p) >= 3) end('done');
   return out;
 }

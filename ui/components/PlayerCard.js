@@ -26,12 +26,12 @@
 import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
 import { getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
-import { PHASE, PLAYER_GROUP } from '../../data/constants.js';
+import { PHASE, PLAYER_GROUP, POSITION_RULES } from '../../data/constants.js';
 import { bullpenRoles, armStatus } from '../../engine/PitchingEngine.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear, computeAge } from '../../engine/PlayerFactory.js';
 import { wearOf } from '../../engine/DevelopmentEngine.js';
-import { primaryPos, eligibleAt, keepNeed, familiarity } from '../../engine/Positions.js';   // r164
+import { primaryPos, eligibleAt, keepNeed, familiarity, pitchRoles, stretchOf } from '../../engine/Positions.js';   // r164
 
 // ─────────────────────────────────────────────────────────────
 // OPEN / CLOSE
@@ -163,7 +163,7 @@ function _renderCard(player, playerId, state) {
     ${isOwnPlayer && player.group !== PLAYER_GROUP.IL ? _renderWear(player, isPitcher, state) : ''}
 
     <!-- r164 §122.35 where a hitter plays: eligible, working toward, practiced -->
-    ${!isPitcher ? _renderPositions(player, state, isOwnPlayer) : ''}
+    ${!isPitcher ? _renderPositions(player, state, isOwnPlayer) : _renderRoles(player, state, isOwnPlayer)}
 
     <!-- Season stats -->
     ${_renderStats(player, isPitcher, state)}
@@ -395,6 +395,32 @@ function _renderPositions(player, state, ours) {
       <div class="pc-section-label">Positions</div>
       ${rows.join('')}
       ${primary === 'DH' && !elig.length ? '<div class="pc-ask-note">A designated hitter: no fielding position.</div>' : ''}
+    </div>`;
+}
+
+/**
+ * r167 §122.35 a pitcher's roles: SP and RP — each held (with this season's starts / relief outings),
+ * or in progress for ours ("RP: 3 of 5 relief outings"); how stretched out he is when short of a
+ * starter's length.
+ */
+function _renderRoles(player, state, ours) {
+  const s = player.positions || {}, roles = pitchRoles(player), primary = primaryPos(player);
+  const inSeason = [PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK].includes(state.phase);
+  const P = POSITION_RULES.pitch;
+  const n = { SP: s.starts || 0, RP: s.relief || 0 }, word = { SP: 'start', RP: 'relief outing' };
+  const rows = [];
+  for (const r of [primary, ...roles.filter(x => x !== primary)]) {
+    rows.push(`<div class="pc-pos-row"><span class="pc-pos-name">${r}</span><span class="pc-pos-note">${r === primary ? 'primary' : 'eligible'}</span><span class="pc-pos-n">${inSeason ? `${n[r]} ${word[r]}${n[r] === 1 ? '' : 's'}` : ''}</span></div>`);
+  }
+  if (ours) for (const r of ['SP', 'RP'].filter(x => !roles.includes(x) && n[x] > 0)) {
+    rows.push(`<div class="pc-pos-row learn"><span class="pc-pos-name">${r}</span><span class="pc-pos-note">learning</span><span class="pc-pos-n">${n[r]} of ${r === 'SP' ? P.gainStarts : P.gainRelief} ${word[r]}s</span></div>`);
+  }
+  const st = stretchOf(player);
+  return `
+    <div class="pc-section">
+      <div class="pc-section-label">Roles</div>
+      ${rows.join('')}
+      ${st < 3 ? `<div class="pc-ask-note">${st === 0 ? 'Not stretched out: as a starter, a few innings at most.' : `Stretched out ${st} of 3: a start runs short.`}</div>` : ''}
     </div>`;
 }
 

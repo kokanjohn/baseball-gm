@@ -276,3 +276,111 @@ export function defenseOf(lineupSlots, players) {
   }
   return { errorMult: Math.round(errorMult * 1000) / 1000, catcher, out };
 }
+
+// ─────────────────────────────────────────────────────────────
+// r167 §122.35 PHASE 5 — PITCHERS' DESIGNATIONS (SP, RP; both = a swingman)
+// ─────────────────────────────────────────────────────────────
+//   positions = { primary: 'SP'|'RP', roles: [...], stretch: 0–3,
+//                 relief: n, starts: n (this regular season), lastRelief, lastStarts }
+
+const PR = () => R.pitch;
+
+/** The short-stint boost for a starter working in relief, by age: { stuff, control }. */
+export function reliefBoost(p, age) {
+  if (!isPitcher(p) || !pitchRoles(p).includes('SP')) return { stuff: 0, control: 0 };
+  const row = PR().boost.find(([upTo]) => (age ?? 28) <= upTo) || [0, 0, 0];
+  return { stuff: row[1], control: row[2] };
+}
+
+/** Days a starter's next start waits after a relief outing (0 for a pitcher who isn't a starter). */
+export function reliefPushDays(p) {
+  const roles = pitchRoles(p);
+  if (!roles.includes('SP')) return 0;
+  return roles.includes('RP') ? PR().pushRP : PR().pushNoRP;
+}
+
+/** A relief outing's workload multiplier: a starter without RP takes it harder. */
+export const reliefLoadMult = (p) => (pitchRoles(p).includes('SP') && !pitchRoles(p).includes('RP') ? PR().extraLoad : 1);
+
+/**
+ * recordOuting(p, { start, bf, kind }) — after an outing: regular-season starts and relief outings
+ * count toward SP / RP; a start, a long outing, or any spring outing stretches him out a step.
+ * @returns {String|null} the designation he just earned
+ */
+export function recordOuting(p, { start = false, bf = 0, kind = 'regular' } = {}) {
+  if (!isPitcher(p)) return null;
+  const s = _ownP(p);
+  if (start || bf >= PR().longBF || kind === 'spring') s.stretch = Math.min(3, (s.stretch ?? 0) + 1);
+  if (kind !== 'regular') return null;
+  if (start) s.starts = (s.starts || 0) + 1; else s.relief = (s.relief || 0) + 1;
+  const want = start ? 'SP' : 'RP', need = start ? PR().gainStarts : PR().gainRelief;
+  if (!s.roles.includes(want) && (start ? s.starts : s.relief) >= need) {
+    s.roles = [...s.roles, want];
+    if (want === 'SP') s.stretch = 3;
+    p.nativePos = posLabel(p);
+    return want;
+  }
+  return null;
+}
+
+/** A sim game (the pitching coach's): one step longer. */
+export function addStretch(p, steps = 1) {
+  if (!isPitcher(p)) return 0;
+  const s = _ownP(p), before = s.stretch ?? 0;
+  s.stretch = Math.min(3, before + steps);
+  return s.stretch - before;
+}
+
+function _ownP(p) {
+  if (!p.positions) p.positions = seedPositions(p);
+  const s = p.positions;
+  s.roles ||= [p.pos === 'SP' ? 'SP' : 'RP'];
+  s.stretch ??= (s.roles.includes('SP') ? 3 : 0);
+  return s;
+}
+
+/**
+ * pitcherSeasonTurn(p) — SP kept with keepStarts starts last season, RP with keepRelief relief
+ * outings; the primary is the one he did more (always kept). A pitcher who never pitched keeps
+ * everything. A starter who loses SP keeps a head start (stretched out to keepHead); a reliever's
+ * stretch goes back to 0.
+ * @returns {{ lost: String[], from, to }|null}
+ */
+export function pitcherSeasonTurn(p) {
+  if (!isPitcher(p)) return null;
+  const s = _ownP(p), P = PR();
+  const st = s.starts || 0, rl = s.relief || 0, from = s.primary, lost = [];
+  if (st + rl > 0) {
+    const to = st > rl ? 'SP' : rl > st ? 'RP' : s.primary;
+    const keep = (r) => r === to || (r === 'SP' ? st >= P.keepStarts : rl >= P.keepRelief);
+    for (const r of s.roles) if (!keep(r)) lost.push(r);
+    s.roles = s.roles.filter(r => !lost.includes(r));
+    if (!s.roles.includes(to)) s.roles = [to, ...s.roles];
+    s.primary = to;
+    if (lost.includes('SP')) s.stretch = from === 'SP' ? P.keepHead : 0;
+    else if (s.roles.includes('SP')) s.stretch = 3;
+    else s.stretch = 0;
+  }
+  s.lastStarts = st; s.lastRelief = rl; s.starts = 0; s.relief = 0;
+  p.pos = s.primary; p.nativePos = posLabel(p);
+  return lost.length || from !== s.primary ? { lost, from, to: s.primary } : null;
+}
+
+/**
+ * r167 §122.35 a new club's swingman: about half of new clubs (by archetype) have a starter on the
+ * pitcher bench who has relieved too — SP/RP. The best-stamina one; stretched out already.
+ */
+const SWING_ODDS = { lab: 0.7, gambler: 0.7, ember: 0.5, contender: 0.5, empire: 0.3, institution: 0.3 };
+export function seedSwingman(draft, archetypeId, rand = Math.random) {
+  const u = draft.userTeam;
+  if (!u || rand() >= (SWING_ODDS[archetypeId] ?? 0.5)) return null;
+  const order = new Set(u.rotation?.order || []);
+  const p = (u.rosterIds || []).map(id => draft.players[id])
+    .filter(x => x && isPitcher(x) && !order.has(x.id) && pitchRoles(x).length === 1 && pitchRoles(x)[0] === 'SP')
+    .sort((a, b) => (b.subRatings?.stamina ?? 0) - (a.subRatings?.stamina ?? 0))[0];
+  if (!p) return null;
+  const rec = (p.positions ||= seedPositions(p));
+  rec.roles = ['SP', 'RP'];
+  p.nativePos = posLabel(p);   // (p.pos stays the primary role: SP)
+  return p.id;
+}

@@ -31,6 +31,7 @@ import {
   SPRING_SP_INNINGS, SPRING_TRAINING_GAME_COUNT, WEAR, ARM_LOAD,
 } from '../data/constants.js';
 import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
+import { recordOuting, reliefLoadMult, reliefPushDays, stretchOf } from './Positions.js';
 import { playingRating } from './Diamonds.js';
 
 const DAY = 86_400_000;
@@ -67,12 +68,14 @@ export function reliefValue(p) {
 export function bullpenRoles(team, players) {
   const pool = (team?.rosterIds || []).map(id => players[id])
     .filter(p => p && isAvailable(p) && (p.group === PLAYER_GROUP.BULLPEN || p.group === PLAYER_GROUP.PITCHER_BENCH));
-  let long = pool.filter(p => p.pos === 'SP').sort((a, b) => stamina(b) - stamina(a));
+  // (r167 §122.35 a starter the GM put in the bullpen is a reliever like the rest; the spare starters
+  //  on the pitcher bench are the long men)
+  let long = pool.filter(p => p.pos === 'SP' && p.group !== PLAYER_GROUP.BULLPEN).sort((a, b) => stamina(b) - stamina(a));
   // §114 the bullpen (the BULLPEN group, five arms) holds the roles; relievers
   // on the pitcher bench are reserves — after the middle men, used when the
   // pen is spent — as bench hitters are behind the nine.
   const byValue = (a, b) => reliefValue(b) - reliefValue(a);
-  const relievers = pool.filter(p => p.pos !== 'SP');
+  const relievers = pool.filter(p => p.pos !== 'SP' || p.group === PLAYER_GROUP.BULLPEN);
   let rest = [...relievers.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort(byValue),
               ...relievers.filter(p => p.group !== PLAYER_GROUP.BULLPEN).sort(byValue)];
   if (!long.length && rest.length > 4) {
@@ -119,7 +122,8 @@ export function outingsFrom(plays) {
 }
 
 /** recordOutings(draft, plays, endMs) — after the final out: the game goes on each arm's record. */
-export function recordOutings(draft, plays, endMs) {
+export function recordOutings(draft, plays, endMs, kind = 'regular') {
+  const events = [];   // r167 §122.35 designations earned (ROLE_GAINED)
   const startMs = (plays || []).find(p => p.type === 'game_start')?._timestamp ?? endMs;
   const day = dayOf(startMs);
   const year = baseballYear(draft);
@@ -129,16 +133,22 @@ export function recordOutings(draft, plays, endMs) {
     // r161 §122.33 the workload: what's left of it now, plus this outing (times the arm's age).
     const yesterday = (p.arm || []).some(x => x.day === day - 1);
     const mult = ageWearMult(computeAge(p.dob, year));
+    // (r167 a starter without RP takes a relief outing harder)
     const add = o.start ? o.bf * ARM_LOAD.perStartBF
-                        : ARM_LOAD.reliefBase + o.bf * ARM_LOAD.reliefPerBF + (yesterday ? ARM_LOAD.backToBack : 0);
+                        : (ARM_LOAD.reliefBase + o.bf * ARM_LOAD.reliefPerBF + (yesterday ? ARM_LOAD.backToBack : 0)) * reliefLoadMult(p);
     if (p.loadAt !== endMs) {
       p.load = Math.round((armLoad(p, endMs) + add * mult) * 10) / 10;
       p.loadAt = endMs;
       p.loadMult = mult;
     }
+    if (!(p.arm || []).some(x => x.at === endMs)) {
+      const gained = recordOuting(p, { start: o.start, bf: o.bf, kind });   // r167 toward SP / RP; stretched out
+      if (gained) events.push({ type: 'ROLE_GAINED', playerId: id, teamId: p.teamId, role: gained, atMs: endMs });
+    }
     p.arm = [...(p.arm || []).filter(x => endMs - x.at < PITCH_ARM_HISTORY_DAYS * DAY && x.at !== endMs),
              { at: endMs, day, bf: o.bf, outs: o.outs, start: o.start }];
   }
+  return events;
 }
 
 /** r161 §122.33 what a start (hitters) or an outing (pitchers) adds, by age (WEAR.age). */
@@ -188,7 +198,11 @@ export function armStatus(player, atMs) {
 
 /** A starter is ready on his fifth day: four days' rest since his last start. */
 export function starterRested(player, atMs) {
-  const starts = (player?.arm || []).filter(o => o.at <= atMs && (o.start || o.bf >= PITCH_RP_LONG_OUTING_BF));
+  const outs = (player?.arm || []).filter(o => o.at <= atMs);
+  // r167 §122.35 a starter's relief outing pushes his next start (two days; one with RP)
+  const push = reliefPushDays(player);
+  if (push && outs.some(o => !o.start && o.bf < PITCH_RP_LONG_OUTING_BF && daysSince(o, atMs) <= push)) return false;
+  const starts = outs.filter(o => o.start || o.bf >= PITCH_RP_LONG_OUTING_BF);
   if (!starts.length) return true;
   return Math.min(...starts.map(o => daysSince(o, atMs))) > PITCH_SP_REST_DAYS;
 }
@@ -196,8 +210,9 @@ export function starterRested(player, atMs) {
 /** Batters he can face in a game before he tires; a reliever still tired from recent days tires sooner. */
 export function tireAfterBF(player, isStarter, carriedTired = false) {
   const s = stamina(player);
-  const bf = isStarter ? PITCH_SP_TIRE_BASE_BF + s * PITCH_SP_TIRE_PER_STAMINA
-                       : PITCH_RP_TIRE_BASE_BF + s * PITCH_RP_TIRE_PER_STAMINA;
+  const rp = PITCH_RP_TIRE_BASE_BF + s * PITCH_RP_TIRE_PER_STAMINA;
+  // r167 §122.35 a starter's length takes being stretched out: 0 lasts like a reliever, 3 like a starter
+  const bf = isStarter ? rp + (PITCH_SP_TIRE_BASE_BF + s * PITCH_SP_TIRE_PER_STAMINA - rp) * Math.min(3, stretchOf(player)) / 3 : rp;
   return Math.max(2, Math.round(bf * (carriedTired ? PITCH_RP_TIRED_ONSET_SHARE : 1)));
 }
 

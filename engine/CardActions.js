@@ -27,7 +27,7 @@ import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { queueTrade } from './TradeEngine.js';
 import { eventRand } from './Dice.js';
-import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeaching, teachablePositions } from './PlayerWork.js';
+import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeaching, teachablePositions, startSimGames, activeSimGames, stretchRead } from './PlayerWork.js';
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
 import { setPitchRole } from './Positions.js';   // r163
 
@@ -109,6 +109,12 @@ const teach = {
     return workable(st, p) && !activeTeaching(st) && teachablePositions(p).includes(raw._teachPos);
   },
   apply: (d, c, atMs) => startTeaching(d, { playerId: c._targetPlayerId, pos: c._raw?._teachPos, odds: c._raw?._teachOdds ?? 0.6 }, atMs),
+};
+
+/** r167 §122.35 the pitching coach's sim games: a reliever stretched out (one at a time). */
+const simGames = {
+  feasible(st, c) { const r = stretchRead(st, c._targetPlayerId); return !!r && r.need > 0 && !activeSimGames(st); },
+  apply: (d, c, atMs) => startSimGames(d, { playerId: c._targetPlayerId }, atMs),
 };
 
 const work = {
@@ -519,6 +525,7 @@ export const CARD_ACTIONS = Object.freeze({
   train_hitter:         train,
   coach_work:           work,      // r159 §122.31
   teach_position:       teach,     // r166 §122.35
+  sim_games:            simGames,  // r167 §122.35
   dev_program:          work,
   day_off:              dayOff,
   arm_rest:             armRest,   // r161

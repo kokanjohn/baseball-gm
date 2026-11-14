@@ -19,6 +19,7 @@ import * as Offseason from '../../engine/OffseasonEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import * as Coach from '../../engine/CoachEngine.js';
 import { eligibleSlotsFor } from '../../engine/RosterEngine.js';
+import { pitchRoles } from '../../engine/Positions.js';   // r167 a starter is anyone with SP (a swingman too)
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { baseballDateIso, springStartIso } from '../../engine/WeatherClimate.js';
 import { writeFileSync } from 'node:fs';
@@ -222,7 +223,8 @@ function checkTurn(prev, os, label) {
          + (s2.transactions || []).filter(t => t.kind === 'arrival' && t.status === 'pending' && t.teamId === 'user').length,
              nine: (u2.lineupSlots || []).filter(sl => s2.players[sl.playerId]).length,
              rot: (u2.rotation?.order || []).filter(id => s2.players[id]).length,
-             sp: (u2.rosterIds || []).map(id => s2.players[id]).filter(p => p && p.pos === 'SP' && !p.isInjured && p.group !== PLAYER_GROUP.IL).length };
+             sp: (u2.rosterIds || []).map(id => s2.players[id]).filter(p => p && pitchRoles(p).includes('SP') && !p.isInjured && p.group !== PLAYER_GROUP.IL).length,
+             offRole: (u2.rotation?.order || []).filter(id => s2.players[id] && !pitchRoles(s2.players[id]).includes('SP')).length };
   }));
   check(`${label}: our roster is legal (${active.length} active at the turn; ${heldAt.held} held by the first spring game)`,
         (u.rosterIds || []).length <= ROSTER_LIMITS.ACTIVE_TOTAL + 8 && heldAt.held === ROSTER_LIMITS.ACTIVE_TOTAL);
@@ -230,7 +232,7 @@ function checkTurn(prev, os, label) {
   // Five turns — or every healthy starter we have, when the GM let it get thinner than five.
   // r153 an open turn waits for the GM until the roster deadline: counted at the first spring game.
   const rotTurn = (u.rotation?.order || []).filter(id => st.players[id]).length;
-  check(`${label}: five in the rotation by the first spring game (or every healthy starter: ${heldAt.rot} of ${heldAt.sp}; ${rotTurn} at the turn)`, heldAt.rot === Math.min(5, heldAt.sp));
+  check(`${label}: five in the rotation by the first spring game (or every healthy starter: ${heldAt.rot} of ${heldAt.sp}; ${rotTurn} at the turn)`, heldAt.rot === Math.min(5, heldAt.sp) && heldAt.offRole === 0, `${heldAt.offRole} without SP in the rotation`);
   const expired = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && (p.contractExpiry ?? 99) <= N);
   check(`${label}: nobody on our roster is playing on an expired deal`, expired.length === 0, expired.map(p => `${p.name} ${p.contractExpiry}`).join(','));
   const staff = u.coachingStaff || {};

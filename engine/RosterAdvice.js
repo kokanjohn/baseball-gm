@@ -7,6 +7,8 @@
  *     'bat'       a better bat on the bench than the starter at a position (hitting coach)
  *     'rotation'  a better starter on the pitcher bench than one in the rotation (pitching coach)
  *     'pen'       a better reliever on the pitcher bench than one in the bullpen (pitching coach)
+ *     'stretch'   r167 a reliever with a starter's stamina, stretched out by sim games (pitching coach)
+ *     'to_pen'    r167 a starter who can't go deep but has the stuff, to the bullpen (pitching coach)
  *     'prospect'  a young bench player who'd grow with regular playing time, and
  *                 isn't far behind the regular (Scouting/Dev)
  *   adviceStamp(state, s) — the situation a "I have a plan" was given in (who's
@@ -17,8 +19,8 @@
  */
 
 import { PLAYER_GROUP, ROSTER_ADVICE, POSITION_RULES } from '../data/constants.js';
-import { canPlay, difficulty, familiarity } from './Positions.js';
-import { activeTeaching, teachablePositions, teachRead, startTeaching } from './PlayerWork.js';
+import { canPlay, difficulty, familiarity, pitchRoles, stretchOf } from './Positions.js';
+import { activeTeaching, teachablePositions, teachRead, startTeaching, activeSimGames, stretchRead, startSimGames } from './PlayerWork.js';
 import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
 import { eligibleSlotsFor, moveOptions, applyMove, tradedAway } from './RosterEngine.js';
 
@@ -89,6 +91,29 @@ export function adviceFor(state, skip = null) {
     out.push({ kind: 'pen', key: `pen:${benchRP[0].id}:${pen[0].id}`, inId: benchRP[0].id, outId: pen[0].id, slot: 'bullpen',
                gap: benchRP[0].ovr - pen[0].ovr, move: { playerId: benchRP[0].id, key: `pen:${pen[0].id}` } });
   }
+  // r167 §122.35 the pitching coach on roles, from what the arms have done.
+  const pitchersAll = all.filter(p => ['SP', 'RP'].includes(p.pos) || p.positions?.roles);
+  if (weakest && !activeSimGames(state)) {
+    // a reliever with a starter's stamina, as good as the weakest starter: stretch out
+    const cand = pitchersAll.filter(p => !order.includes(p.id) && !pitchRoles(p).includes('SP') && stretchOf(p) < 3
+      && (p.subRatings?.stamina ?? 0) >= A.stretchStamina && p.ovr >= weakest.p.ovr)
+      .sort((a, b) => b.ovr - a.ovr)[0];
+    if (cand && stretchRead(state, cand.id)?.need) {
+      out.push({ kind: 'stretch', key: `stretch:${cand.id}`, inId: cand.id, outId: null, slot: 'rotation', gap: cand.ovr - weakest.p.ovr, move: null });
+    }
+  }
+  if (benchSP[0]) {
+    // a starter who can't get through five, with a reliever's stuff: the bullpen (a starter on the bench takes the turn)
+    const short = rot.map(x => x.p).filter(p => {
+      const gs = p.positions?.starts || 0, ip = p.stats?.ip || 0;
+      return typeof gs === 'number' && gs >= A.toPenStarts && ip / gs < A.toPenIpPerStart && (p.subRatings?.stuff ?? 0) >= A.toPenStuff;
+    }).sort((a, b) => (a.stats.ip / a.positions.starts) - (b.stats.ip / b.positions.starts))[0];
+    const penKey = short && (_can(state, short.id, 'pen:new') ? 'pen:new' : pen[0] && _can(state, short.id, `pen:${pen[0].id}`) ? `pen:${pen[0].id}` : null);
+    if (short && penKey) {
+      out.push({ kind: 'to_pen', key: `to_pen:${short.id}`, inId: short.id, outId: null, slot: 'bullpen', gap: 0,
+                 ipPerStart: Math.round(short.stats.ip / short.positions.starts * 10) / 10, move: { playerId: short.id, key: penKey } });
+    }
+  }
   // r166 §122.35 a thin spot: nobody on the bench can play a fielding position, and the Bench Coach is
   // free — the bench player who'd pick it up most easily (then the most familiar, then the best) could
   // be taught it.
@@ -107,7 +132,7 @@ export function adviceFor(state, skip = null) {
     }
   }
   // One suggestion per player: the clearest first (a better player, then a prospect, then a spot to cover; the widest gap first).
-  const rank = { prospect: 1, cover: 2 };
+  const rank = { prospect: 1, stretch: 2, to_pen: 2, cover: 2 };
   out.sort((a, b) => ((rank[a.kind] || 0) - (rank[b.kind] || 0)) || (b.gap - a.gap));
   // (r166 a suggestion the GM has answered, or was just asked, doesn't hold another back: `skip` first)
   const seen = new Set();
@@ -128,6 +153,7 @@ export function applyAdvice(draft, s, atMs = 0) {
     const read = teachRead(draft, s.inId, s.slot);
     return !!read && !read.busy && startTeaching(draft, { playerId: s.inId, pos: s.slot, odds: read.odds }, atMs).length > 0;
   }
+  if (s.kind === 'stretch') return startSimGames(draft, { playerId: s.inId }, atMs).length > 0;   // r167 the sim games
   return applyMove(draft, s.move.playerId, s.move.key);
 }
 

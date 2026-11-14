@@ -31,7 +31,7 @@ import { isAvailable } from './PlayerFactory.js';
 import { reliefValue } from './PitchingEngine.js';
 import { payrollOf } from './FinanceEngine.js';
 import { clockNow } from './Clock.js';
-import { eligibleSlots, canPlay, startsAt, familiarity } from './Positions.js';   // r163 §122.35
+import { eligibleSlots, canPlay, startsAt, familiarity, pitchRoles, stretchOf } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // POSITIONS: who can play where is engine/Positions.js (r163 §122.35)
@@ -628,7 +628,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
   while (!hold && order.length < REQUIRED_SP_COUNT) {
     const pbSP = rosterIds
       .map(id => players[id])
-      .filter(p => p && isHealthy(p.id) && p.pos === 'SP'
+      .filter(p => p && isHealthy(p.id) && pitchRoles(p).includes('SP')   // r167 a starter by designation
                 && groupOf(p.id) === PLAYER_GROUP.PITCHER_BENCH
                 && !inOrder.has(p.id))
       .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
@@ -947,32 +947,43 @@ export function moveOptions(state, playerId) {
     }
     return out;
   }
-  const isSP = me.pos === 'SP';
-  const active = isSP ? PLAYER_GROUP.STARTING_PITCHERS : PLAYER_GROUP.BULLPEN;
-  const where = isSP ? 'the rotation' : 'the bullpen';
-  if (me.group === PLAYER_GROUP.PITCHER_BENCH) {
-    if (isSP) {
-      const order = u.rotation?.order || [];
-      order.forEach((id, k) => {
-        const occ = players[id];
-        if (ok(occ)) out.push({ key: `turn:${k}`, label: 'Rotation', detail: `${occ.name} (${ovr(occ)}) to the pitcher bench` });
-      });
-      if (order.length < REQUIRED_SP_COUNT) out.push({ key: 'turn:new', label: 'Rotation', detail: 'Open' });
-    } else {
-      const pen = ids.map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.BULLPEN);
-      pen.filter(ok).sort((a, b) => reliefValue(b) - reliefValue(a))
-        .forEach(p => out.push({ key: `pen:${p.id}`, label: 'Bullpen', detail: `${p.name} (${ovr(p)}) to the pitcher bench` }));
-      if (pen.length < ROSTER_LIMITS.BULLPEN) out.push({ key: 'pen:new', label: 'Bullpen', detail: 'Open' });
-    }
-    return out;
+  // r167 §122.35 a pitcher can go to the rotation or the bullpen either way: the role he doesn't hold
+  // is out of role (`oop`), listed after the rest.
+  const roles = pitchRoles(me);
+  const order = u.rotation?.order || [];
+  const inRot = order.includes(playerId), inPen = me.group === PLAYER_GROUP.BULLPEN;
+  if (!inRot && !inPen && me.group !== PLAYER_GROUP.PITCHER_BENCH) return [];
+  const tag = (role) => (roles.includes(role) ? {} : { oop: true });
+  const how = (role) => (roles.includes(role) ? '' : role === 'SP' ? `${stretchWords(me)}; ` : 'a starter in relief; ');
+  if (!inRot) {
+    order.forEach((id, k) => {
+      const occ = players[id];
+      if (ok(occ)) out.push({ key: `turn:${k}`, label: 'Rotation', detail: `${how('SP')}${occ.name} (${ovr(occ)}) to the pitcher bench`, ...tag('SP') });
+    });
+    if (order.length < REQUIRED_SP_COUNT) out.push({ key: 'turn:new', label: 'Rotation', detail: `${how('SP')}Open`.replace('; Open', ' — open'), ...tag('SP') });
   }
-  if (me.group !== active) return [];
-  const label = isSP ? 'their spot in the rotation' : 'their bullpen spot';
-  ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.PITCHER_BENCH && p.pos === me.pos)
-    .sort((a, b) => b.ovr - a.ovr)
-    .forEach(p => out.push({ key: `in:${p.id}`, label: 'Pitcher bench', detail: `${p.name} (${ovr(p)}) takes ${label}` }));
-  out.push({ key: 'bench', label: 'Pitcher bench', detail: isSP ? `Leave ${label} open` : `Leave a spot in ${where} open` });
-  return out;
+  if (!inPen) {
+    const pen = ids.map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.BULLPEN);
+    pen.filter(ok).sort((a, b) => reliefValue(b) - reliefValue(a))
+      .forEach(p => out.push({ key: `pen:${p.id}`, label: 'Bullpen', detail: `${how('RP')}${p.name} (${ovr(p)}) to the pitcher bench`, ...tag('RP') }));
+    if (pen.length < ROSTER_LIMITS.BULLPEN) out.push({ key: 'pen:new', label: 'Bullpen', detail: `${how('RP')}Open`.replace('; Open', ' — open'), ...tag('RP') });
+  }
+  if (inRot || inPen) {
+    const label = inRot ? 'their spot in the rotation' : 'their bullpen spot';
+    const want = inRot ? 'SP' : 'RP';
+    ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.PITCHER_BENCH && pitchRoles(p).includes(want))
+      .sort((a, b) => b.ovr - a.ovr)
+      .forEach(p => out.push({ key: `in:${p.id}`, label: 'Pitcher bench', detail: `${p.name} (${ovr(p)}) takes ${label}` }));
+    out.push({ key: 'bench', label: 'Pitcher bench', detail: inRot ? `Leave ${label} open` : 'Leave a spot in the bullpen open' });
+  }
+  // the roles he holds first
+  return [...out.filter(o => !o.oop), ...out.filter(o => o.oop)];
+}
+
+/** r167 a reliever's length, in words, for MOVE. */
+function stretchWords(p) {
+  const n = stretchOf(p);
+  return n >= 3 ? 'stretched out' : n === 0 ? 'not stretched out: a short start' : `stretched out ${n} of 3`;
 }
 
 /**
@@ -1001,29 +1012,42 @@ export function applyMove(draft, playerId, key) {
   const rot = u.rotation || (u.rotation = { order: [], currentIndex: 0 });
   const order = rot.order || (rot.order = []);
   const toBench = (id) => { if (players[id]) players[id].group = PLAYER_GROUP.PITCHER_BENCH; };
-  if (me.pos === 'SP') {
-    // The rotation keeps its place: the next starter up stays the next starter.
-    const nextId = order.length ? order[(rot.currentIndex || 0) % order.length] : null;
-    const reindex = () => { const n = order.indexOf(nextId); if (n >= 0) rot.currentIndex = n; else rot.currentIndex = order.length ? (rot.currentIndex || 0) % order.length : 0; };
-    if (kind === 'turn') {
-      me.group = PLAYER_GROUP.STARTING_PITCHERS;
-      if (arg === 'new') order.push(playerId);
-      else { const k = Number(arg); toBench(order[k]); if (order[k] === nextId) { order[k] = playerId; rot.currentIndex = k; return true; } order[k] = playerId; }
-    } else if (kind === 'in') {
-      const k = order.indexOf(playerId);
-      players[arg].group = PLAYER_GROUP.STARTING_PITCHERS; toBench(playerId);
-      order[k] = arg;
-      if (playerId === nextId) { rot.currentIndex = k; return true; }
-    } else if (kind === 'bench') {
-      toBench(playerId);
-      order.splice(order.indexOf(playerId), 1);
+  // The rotation keeps its place: the next starter up stays the next starter.
+  const nextId = order.length ? order[(rot.currentIndex || 0) % order.length] : null;
+  const reindex = () => { const n = order.indexOf(nextId); rot.currentIndex = n >= 0 ? n : (order.length ? (rot.currentIndex || 0) % order.length : 0); };
+  const leaveRotation = () => { const k = order.indexOf(playerId); if (k >= 0) order.splice(k, 1); };
+  // r167 §122.35 by where he's going, whatever his role
+  if (kind === 'turn') {
+    leaveRotation();
+    me.group = PLAYER_GROUP.STARTING_PITCHERS;
+    if (arg === 'new') order.push(playerId);
+    else {
+      const k = Number(arg), occ = order[k];
+      toBench(occ);
+      order[k] = playerId;
+      if (occ === nextId) { rot.currentIndex = k; return true; }
     }
     reindex();
     return true;
   }
-  if (kind === 'pen') { if (arg !== 'new') toBench(arg); me.group = PLAYER_GROUP.BULLPEN; }
-  else if (kind === 'in') { players[arg].group = PLAYER_GROUP.BULLPEN; toBench(playerId); }
-  else if (kind === 'bench') toBench(playerId);
+  if (kind === 'pen') {
+    leaveRotation();
+    if (arg !== 'new') toBench(arg);
+    me.group = PLAYER_GROUP.BULLPEN;
+    reindex();
+    return true;
+  }
+  if (kind === 'in') {
+    const k = order.indexOf(playerId);
+    if (k >= 0) {
+      players[arg].group = PLAYER_GROUP.STARTING_PITCHERS; toBench(playerId);
+      order[k] = arg;
+      if (playerId === nextId) { rot.currentIndex = k; return true; }
+      reindex();
+    } else { players[arg].group = PLAYER_GROUP.BULLPEN; toBench(playerId); }
+    return true;
+  }
+  if (kind === 'bench') { leaveRotation(); toBench(playerId); reindex(); }
   return true;
 }
 

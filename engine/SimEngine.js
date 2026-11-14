@@ -71,14 +71,14 @@ import {
   SIM_WEATHER_ENV, GAME_WEATHER,
 } from '../data/constants.js';
 
-import { computeOVR, isAvailable } from './PlayerFactory.js';
+import { computeOVR, isAvailable, computeAge } from './PlayerFactory.js';
 import { playingRating, trueRatings } from './Diamonds.js';
 import { injuryChancePerExposure } from './InjuryEngine.js';
 import {
   ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, armLoad, tireAfterBF, reliefInnings, springStarterInnings,
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
-import { canPlay, primaryPos, posLabel, defenseOf } from './Positions.js';
+import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost } from './Positions.js';
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -877,8 +877,10 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       const relief = _pitcherHurt(gs, players, plays, pitcher, pSide, pitcherTired, inning, outs, bases, halfKey);
       if (relief) { pitcher = relief; pitcherTired = false; }
     }
+    // r167 §122.35 a starter working in relief: the short-stint boost (by age)
+    const shortStint = gs[`${pSide}Role`] !== ROLE.STARTER && pitcher ? reliefBoost(pitcher, gs.injuryYear != null ? computeAge(pitcher.dob, gs.injuryYear) : null) : null;
     const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
-      { inning, isSpring, norms: gs.norms, pitcherTired,
+      { inning, isSpring, norms: gs.norms, pitcherTired, relief: shortStint,
         scoutHit: gs.scout ? (isUserBatting ? gs.scout.bat : gs.scout.pitch) : 1,
         hrMod: gs.env?.hrMod, hitEnv: gs.env?.hitMod, walkMod: gs.env?.walkMod });
     // Increment the THROWING pitcher's batters-faced count. When the user is
@@ -1096,8 +1098,8 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   const speed    = _effectiveSR(batter,  'speed',    sr.speed);
   // §112.2 a late-innings bullpen coach: our relievers from the eighth on.
   const late     = _staff?.late && pitcher.teamId === 'user' && pitcher.pos === 'RP' && inning >= 8 ? _staff.late : 0;
-  const stuff    = _effectiveSR(pitcher, 'stuff',    psr.stuff) + late;
-  const control  = _effectiveSR(pitcher, 'control',  psr.control) + late;
+  const stuff    = _effectiveSR(pitcher, 'stuff',    psr.stuff) + late + (context.relief?.stuff || 0);      // r167 short stint
+  const control  = _effectiveSR(pitcher, 'control',  psr.control) + late + (context.relief?.control || 0);
 
   // ── Sacrifice bunt check ──────────────────────────────────────
   // Eligible when: low-power batter, runner(s) on, < 2 outs, late inning

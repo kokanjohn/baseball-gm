@@ -106,7 +106,7 @@ import { starterRested, reliefValue } from './PitchingEngine.js';
 import { clockNow } from './Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
-import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt } from './Positions.js';   // r163 §122.35
+import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt, stretchOf } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -1132,6 +1132,22 @@ function _adviceCard(st, a, at) {
     body = v ? `${X} has better stuff than ${Y} right now (${IN.ovr} to ${OUT.ovr}), yet isn't pitching. I'd put ${X} in ${where} and send ${Y} to the pitcher bench.`
              : `Watching the bullpen sessions, ${X} is the better arm (${IN.ovr} to ${OUT.ovr}). I'd swap ${X} in for ${Y} in ${where}.`;
     yesLabel = a.kind === 'rotation' ? `Put ${X} in the Rotation` : `Put ${X} in the Bullpen`;
+  } else if (a.kind === 'stretch') {   // r167 §122.35 a reliever with a starter's stamina
+    sender = person('pitchingCoach') || person('manager') || 'Front Office'; avatar = '⚾';
+    const need = Math.max(1, 3 - stretchOf(IN));
+    subject = v ? `${X} could start` : `Stretch ${X} out?`;
+    preview = `The stamina is there (${IN.subRatings?.stamina ?? '—'}).`;
+    body = (v ? `${X} has a starter's stamina (${IN.subRatings?.stamina ?? '—'}) and the arm to match: ${X} is as good as anyone in the back of our rotation.`
+              : `I keep looking at ${X} in short stints and thinking there's more there. The stamina (${IN.subRatings?.stamina ?? '—'}) says ${X} can go longer.`)
+         + ` I'd stretch ${X} out: ${need === 1 ? 'one sim game' : `${need} sim games`}, a few days apart, and then three starts makes it official.`;
+    yesLabel = 'Start the Sim Games';
+  } else if (a.kind === 'to_pen') {   // r167 §122.35 a starter who can't go deep
+    sender = person('pitchingCoach') || person('manager') || 'Front Office'; avatar = '⚾';
+    subject = v ? `${X} in the bullpen?` : `${X} isn't going deep`;
+    preview = `${a.ipPerStart} innings a start, with a reliever's stuff.`;
+    body = v ? `${X} is averaging ${a.ipPerStart} innings a start and the bullpen is picking up the rest. The stuff (${IN.subRatings?.stuff ?? '—'}) would play up in short bursts. I'd move ${X} to the bullpen and give the turn to someone who can go deeper.`
+             : `Every fifth day we're asking the bullpen for four innings behind ${X} (${a.ipPerStart} a start). One or two innings at a time, ${X}'s stuff is a weapon. I'd make the move.`;
+    yesLabel = `Move ${X} to the Bullpen`;
   } else if (a.kind === 'cover') {   // r166 §122.35 a thin spot the Bench Coach could cover by teaching
     sender = _benchCoach(st); avatar = '🧢';
     const at = { C: 'catcher', '1B': 'first', '2B': 'second', '3B': 'third', SS: 'short', OF: 'the outfield' }[a.slot] || a.slot;
@@ -1157,7 +1173,8 @@ function _adviceCard(st, a, at) {
     _rosterKey: `advice:${a.key}`, _targetPlayerId: a.inId, _playerIds: a.outId ? [a.outId] : [], _advice: a,
     subject, preview, body,
     yesLabel, noLabel: 'I Have a Plan',
-    yesMsg: a.kind === 'cover' ? `I'll start with ${X} at ${a.slot} tomorrow.` : `Done. ${X} is in, and ${Y} ${a.slot === 'rotation' || a.slot === 'bullpen' ? 'goes to the pitcher bench' : 'comes off the bench'}.`,
+    yesMsg: a.kind === 'cover' ? `I'll start with ${X} at ${a.slot} tomorrow.` : a.kind === 'stretch' ? `${X} throws the first sim game tomorrow.`
+          : a.kind === 'to_pen' ? `Done. ${X} is in the bullpen, and the turn goes to the next starter.` : `Done. ${X} is in, and ${Y} ${a.slot === 'rotation' || a.slot === 'bullpen' ? 'goes to the pitcher bench' : 'comes off the bench'}.`,
     noMsg: `Understood. You have your reasons; I'll leave it unless something changes.`,
     expiresAtMs: at + ROSTER_ADVICE.expireMs,
     _raw: { onYes: 'advice_move', onNo: 'advice_quiet', onAuto: null },
@@ -1642,8 +1659,14 @@ function _rosterEventCards(ev, atMs) {
       // (cannot happen: a user claim always makes the user a claimant)
     } else if (ev.type === 'DEV_DONE' && ev.teamId === 'user') {
       if (_deliverDevelopmentReport(ev, ev.atMs ?? atMs)) delivered++;
+    } else if (ev.type === 'SIM_DONE') {
+      if (_deliverSimReport(ev, ev.atMs ?? atMs)) delivered++;
     } else if (ev.type === 'TEACH_DONE') {
       if (_deliverTeachReport(ev, ev.atMs ?? atMs)) delivered++;
+    } else if (ev.type === 'ROLE_GAINED' && ev.teamId === 'user') {
+      // r167 §122.35 a pitcher earns a designation: the news
+      const p = StateManager.get().players[ev.playerId];
+      if (p) _ourNews(`${p.name} is now ${posLabel(p)}: ${ev.role === 'RP' ? 'five relief outings' : 'three starts'} this season`, ev.atMs ?? atMs);
     } else if (ev.type === 'POS_GAINED' && ev.teamId === 'user') {
       // r164 §122.35 ten starts there: the news (Recent — no answer needed)
       const p = StateManager.get().players[ev.playerId];
@@ -4867,6 +4890,22 @@ function _deliverTeachReport(ev, atMs) {
   }, atMs);
 }
 
+/** r167 §122.35 the pitching coach's sim games are over: how far the pitcher got. */
+function _deliverSimReport(ev, atMs) {
+  const st = StateManager.get(), p = st.players[ev.playerId];
+  if (!p || ev.reason === 'gone') return null;
+  const pc = st.userTeam?.coachingStaff?.pitchingCoach;
+  const sender = pc?.name && !pc.vacant ? pc.name : 'Pitching Coach';
+  const ready = ev.stretch >= 3;
+  return _deliverNotice(`sim:done:${ev.playerId}:${ev.atMs}`, {
+    cardId: 'sim_report', sender, avatar: '⚾', tag: 'DEVELOPMENT', _playerIds: [p.id], _targetPlayerId: p.id,
+    subject: ready ? `${p.name} is stretched out` : `${p.name}'s sim games`,
+    preview: ready ? 'Ready to start.' : `Stretched out ${ev.stretch} of 3.`,
+    body: ready ? `${p.name} got through the sim games and has a starter's length now. ${(st.userTeam?.rotation?.order || []).includes(p.id) ? `${p.name} can go deep the next time through the rotation` : `Put ${p.name} in the rotation when you're ready`}; three starts makes it official.`
+                : `${p.name} missed some of the sim games and is only part of the way there: a start would run short.`,
+  }, atMs);
+}
+
 /** r164 §122.35 the Bench Coach (by name when the chair is filled). */
 function _benchCoach(st) {
   const b = st.userTeam?.coachingStaff?.benchCoach;
@@ -5483,7 +5522,7 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     case 'advice_move': {
       const a = instance._advice;
       if (!a) break;
-      StateManager.mutate(s => { if (applyAdvice(s, a, atMs) && a.kind !== 'cover') applyRosterMutation(s, reconcileRoster(s, 'user', { atMs })); });
+      StateManager.mutate(s => { if (applyAdvice(s, a, atMs) && !['cover', 'stretch'].includes(a.kind)) applyRosterMutation(s, reconcileRoster(s, 'user', { atMs })); });
       break;
     }
     case 'advice_quiet': {   // "I have a plan": quiet for this pairing until something changes

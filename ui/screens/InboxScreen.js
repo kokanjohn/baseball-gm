@@ -89,6 +89,7 @@ const COMPOSE_CHANNELS = [
       { id: 'pc_reliever',   label: 'Bullpen workload',         desc: 'Review reliever usage and recovery' },
       { id: 'pc_prospect',   label: 'Young pitcher check-in',   desc: 'A report on a young arm — and a development plan if you want one' },
       { id: 'pc_work',       label: 'Work with a pitcher on…',  desc: 'Pick a pitcher and a skill: the coach decides how much work it takes', player: 'pitchers', skill: true },
+      { id: 'pc_stretch',    label: 'Stretch a pitcher out',     desc: 'Pick a reliever: sim games to build the length to start', player: 'pitchers' },
     ],
   },
   {
@@ -1011,7 +1012,8 @@ async function _sendCompose(topicId, channelId, state) {
   if (topic?.skill && !_choicesFor(topic, player).some(c => c.key === skill)) { App.showToast(topic.choices === 'positions' ? 'Pick a position.' : 'Pick a skill to work on.', 'neutral', 2500); refresh(); return; }
   const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`,
                        sc_program: (p) => `A development program for ${p.name}`, mgr_rest: (p) => `A day off for ${p.name}`,
-                       doc_health: (p) => `${p.name}'s health`, bc_teach: (p) => `Teach ${p.name} ${skill}` };
+                       doc_health: (p) => `${p.name}'s health`, bc_teach: (p) => `Teach ${p.name} ${skill}`,
+                       pc_stretch: (p) => `Stretch ${p.name} out` };
 
   // Record cooldown immediately
   if (!topic?.deal && !topic?.player) StateManager.mutate(s => {
