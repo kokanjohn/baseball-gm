@@ -11303,3 +11303,26 @@ No engine change: a fresh team is not needed for this release.
 - **Results:** season sim 3829/3829, multi-season 59/59.
 - **test-team-roster-ui** (both themes) depended on the time of day. Run in the late morning, the first spring game was within the manager's hour, so the benched shortstop's spot filled before the test looked. The test now fixes the page clock at 9:30 PM Eastern.
 - **Known intermittent failures:** check-game-sim-weather, check-rest-watch, check-roster-advice and test-fa-screens-ui (light) each failed once and passed on rerun.
+
+### §122.45 r172 The player card's contract at the top; a "?" for each of the Team screen's two bars
+
+**The player card** (`PlayerCard._renderCard`): the Contract section (a free agent's Asking) moves from after the stats to right under the name: identity, Contract, Ratings, Wear, Positions/Roles, Stats, Career, IMP, Relationship.
+
+**The Team screen's bars** (`TeamScreen._calcRopt`):
+- The hitters' and the pitchers' moves are kept apart (`hitterMoves`, `pitcherMoves`, up to three each).
+- Each bar has its own "?" (`#ropt-hint-hitters`, `#ropt-hint-pitchers`); the pitchers' bar used to have an empty spacer.
+- **Hitters:**
+  - "To improve the lineup: Start X (69) over Y (62) at 1B · …";
+  - or "Hitters: the best available bats are already in the lineup."
+- **Pitchers:**
+  - "To improve the staff: Put X (95) in the rotation over Y (56) · Put Z in the bullpen over W";
+  - or "Pitchers: the best available arms are already in the rotation and the bullpen."
+- Both read the state when tapped, not the state when the screen was drawn.
+
+**Check:** test-card-contract-ropt-ui (dark and light): two "?" buttons; the hitters' toast names only lineup moves; the pitchers' toast names only staff moves; the card's first section is Contract.
+
+No engine change: a fresh team is not needed for this release.
+
+**Suite (r172):**
+- **Results:** season sim 3827/3827. check-trade-advice and test-team-roster-ui (light) each failed once and passed on rerun.
+- **Open (watch):** multi-season failed once at "five in the rotation by the first spring game (5 of 4)" and passed 59/59 on rerun. That check was changed in r167 to count anyone holding SP. A rotation of five with only four healthy SP holders at the season turn suggests one pitcher who lost SP over the winter is still in the rotation. That's the engine (since r167), not this release; it needs a look.

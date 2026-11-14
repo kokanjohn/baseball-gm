@@ -107,7 +107,8 @@ function _calcRopt(state) {
   const benchSP    = benchP.filter(p => p.pos === 'SP');
   const benchRP    = benchP.filter(p => p.pos === 'RP');
 
-  const moves = [];
+  // r172 the hitters' moves and the pitchers' moves, apart (each bar has its own "?")
+  const hitterMoves = [], pitcherMoves = [];
   const seen  = new Set();
 
   // ── Hitters — iterate lineupSlots to know each slot label ────
@@ -123,7 +124,7 @@ function _calcRopt(state) {
     if (best && best.ovr > active.ovr && !seen.has(best.id)) {
       seen.add(best.id);
       hBestSum += best.ovr;
-      moves.push(`Start ${best.name} (${best.ovr}) over ${active.name} (${active.ovr}) at ${slotLabel}`);
+      hitterMoves.push(`Start ${best.name} (${best.ovr}) over ${active.name} (${active.ovr}) at ${slotLabel}`);
     } else {
       hBestSum += active.ovr;
     }
@@ -139,7 +140,7 @@ function _calcRopt(state) {
     if (better) {
       seen.add(better.id);
       pBestSum += better.ovr;
-      moves.push(`Move SP ${better.name} (${better.ovr}) into rotation over ${active.name} (${active.ovr})`);
+      pitcherMoves.push(`Put ${better.name} (${better.ovr}) in the rotation over ${active.name} (${active.ovr})`);
     } else { pBestSum += active.ovr; }
   }
   for (const active of [...bullpen].sort((a,b) => a.ovr - b.ovr)) {
@@ -149,7 +150,7 @@ function _calcRopt(state) {
     if (better) {
       seen.add(better.id);
       pBestSum += better.ovr;
-      moves.push(`Move RP ${better.name} (${better.ovr}) into bullpen over ${active.name} (${active.ovr})`);
+      pitcherMoves.push(`Put ${better.name} (${better.ovr}) in the bullpen over ${active.name} (${active.ovr})`);
     } else { pBestSum += active.ovr; }
   }
   const pitcherScore = pBestSum > 0 ? Math.floor(pActiveSum / pBestSum * 100) : 100;
@@ -158,7 +159,7 @@ function _calcRopt(state) {
   const teamOvr   = allActive.length
     ? Math.round(allActive.reduce((s,p) => s + p.ovr, 0) / allActive.length) : 0;
 
-  return { hitterScore, pitcherScore, moves: moves.slice(0, 5), teamOvr };
+  return { hitterScore, pitcherScore, hitterMoves: hitterMoves.slice(0, 3), pitcherMoves: pitcherMoves.slice(0, 3), teamOvr };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -243,7 +244,7 @@ export function refresh() {
           <div class="ropt-bar-fill" style="width:${ropt.hitterScore}%;background:${hColor};"></div>
         </div>
         <span class="ropt-val" style="color:${hColor};">${ropt.hitterScore}%</span>
-        <button class="ropt-hint-btn" id="ropt-hint-btn" title="What needs to change?">?</button>
+        <button class="ropt-hint-btn" id="ropt-hint-hitters" title="What would improve the lineup?">?</button>
       </div>
       <div class="ropt-row" style="margin-top:4px;">
         <span class="ropt-label">Pitchers</span>
@@ -251,7 +252,7 @@ export function refresh() {
           <div class="ropt-bar-fill" style="width:${ropt.pitcherScore}%;background:${pColor};"></div>
         </div>
         <span class="ropt-val" style="color:${pColor};">${ropt.pitcherScore}%</span>
-        <div style="width:22px;flex-shrink:0;"></div>
+        <button class="ropt-hint-btn" id="ropt-hint-pitchers" title="What would improve the staff?">?</button>
       </div>
 
       <!-- Internal tabs -->
@@ -784,21 +785,18 @@ function _attachListeners(state) {
     el.addEventListener('click', () => _openStaffSheet(StateManager.get(), el.dataset.staff));
   });
 
-  // Ropt hint button — toast with up to 3 suggested moves, matching v1 format
-  document.getElementById('ropt-hint-btn')?.addEventListener('click', e => {
+  // r172 the hitters' "?" and the pitchers' "?": each its own moves (up to three), or that it's as good as it gets.
+  document.getElementById('ropt-hint-hitters')?.addEventListener('click', e => {
     e.stopPropagation();
-    const ropt = _calcRopt(state);
-    if (ropt.moves.length === 0) {
-      App.showToast(
-        'Best available players are already active — optimization is maxed out.',
-        'positive', 4000
-      );
-    } else {
-      App.showToast(
-        'To improve: ' + ropt.moves.slice(0, 3).join(' · '),
-        'neutral', 5500
-      );
-    }
+    const moves = _calcRopt(StateManager.get()).hitterMoves;
+    if (!moves.length) App.showToast('Hitters: the best available bats are already in the lineup.', 'positive', 4000);
+    else App.showToast('To improve the lineup: ' + moves.join(' · '), 'neutral', 5500);
+  });
+  document.getElementById('ropt-hint-pitchers')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const moves = _calcRopt(StateManager.get()).pitcherMoves;
+    if (!moves.length) App.showToast('Pitchers: the best available arms are already in the rotation and the bullpen.', 'positive', 4000);
+    else App.showToast('To improve the staff: ' + moves.join(' · '), 'neutral', 5500);
   });
 
   // r153 MOVE: where this player can go (RosterEngine.moveOptions).

@@ -156,6 +156,9 @@ function _renderCard(player, playerId, state) {
       </div>
     </div>
 
+    <!-- r172 Contract, at the top (a free agent: what they're asking) -->
+    ${player.group === 'freeAgent' ? _renderAsk(player, state) : _renderContract(player, state)}
+
     <!-- Sub-ratings -->
     ${_renderSubRatings(player, isPitcher)}
 
@@ -173,9 +176,6 @@ function _renderCard(player, playerId, state) {
 
     <!-- IMP trend -->
     ${_renderImpTrend(impScores, impLabel, impLast)}
-
-    <!-- Contract (a free agent: what they're asking) -->
-    ${player.group === 'freeAgent' ? _renderAsk(player, state) : _renderContract(player, state)}
 
     <!-- GM relationship (own players only) -->
     ${isOwnPlayer ? _renderRelationship(player) : ''}
