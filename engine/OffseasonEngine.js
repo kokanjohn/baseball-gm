@@ -419,9 +419,12 @@ export function beginOffseason(draft, atMs) {
   // r164 §122.35 the season turn for positions: kept with enough starts there, lost without; the
   // primary is where he started most. Ours become the Bench Coach's notice.
   const posTurn = [];
+  // (r173 the role each pitcher holds now: a club's rotation is its starters, its bullpen its relievers)
+  const inRotation = new Set([draft.userTeam, ...(draft.leagueTeams || [])].flatMap(t => t?.rotation?.order || []));
+  const roleNow = (p) => inRotation.has(p.id) ? 'SP' : p.group === PLAYER_GROUP.BULLPEN ? 'RP' : null;
   for (const p of Object.values(draft.players || {})) {
     if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
-    const ch = seasonTurn(p) || pitcherSeasonTurn(p);   // (r167 a pitcher's SP / RP)
+    const ch = seasonTurn(p) || pitcherSeasonTurn(p, { now: roleNow(p) });   // (r167 a pitcher's SP / RP)
     if (ch && p.teamId === 'user') posTurn.push({ playerId: p.id, ...ch });
   }
   draft.ilReturnQueue = [];

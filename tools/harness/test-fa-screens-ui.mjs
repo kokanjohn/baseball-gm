@@ -107,7 +107,7 @@ await page.waitForTimeout(300);
 check('no Sort dropdown (the column headers sort)', (await page.$('#lp-sort-select')) === null);
 // r145 a header sorts by the line the row shows (last season's in spring): HR, best first, then flipped.
 const hrs = async () => page.evaluate(() => {
-  const heads = [...document.querySelectorAll('.lp-th')].map(h => h.dataset.sort);
+  const heads = [...document.querySelectorAll('.lp-header > .lp-th')].map(h => h.dataset.sort);   // (r173 not the OVR beside the name)
   const i = heads.indexOf('hr'), j = heads.indexOf('hab');
   const rows = [...document.querySelectorAll('.lp-row')].map(r => r.querySelectorAll('.lp-td'));
   const n = rows.findIndex(c => c[j]?.textContent === '0/0');   // no record: last, either way

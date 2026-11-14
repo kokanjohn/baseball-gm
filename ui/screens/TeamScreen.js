@@ -361,9 +361,9 @@ function _table(title, cols, rows, season) {
       <div class="tr-title"><span>${title}</span>${season ? `<span class="tr-season">${season}</span>` : ''}</div>
       <div class="tr-scroll">
         <div class="tr-head">
-          <div class="tr-fz"><div class="tr-slot">Slot</div><div class="tr-name">Player</div><div class="tr-act">Action</div></div>
+          <div class="tr-fz"><div class="tr-slot">Slot</div><div class="tr-name">Player</div><div class="tr-ovr">OVR</div><div class="tr-act">Action</div></div>
           ${cols.map(([k, l]) => `<div class="tr-td tr-c-${k}">${l}</div>`).join('')}
-          <div class="tr-td tr-c-imp">IMP</div><div class="tr-td tr-c-ovr">OVR</div>
+          <div class="tr-td tr-c-imp">IMP</div>
         </div>
         ${rows.join('')}
       </div>
@@ -431,8 +431,7 @@ function _statCells(p, imp) {
   const impHtml = v == null ? '<span class="tr-imp">--</span>'
     : `<span class="tr-imp ${v >= 1 ? 'tr-imp-pos' : v <= -1 ? 'tr-imp-neg' : ''}" title="${now == null ? 'Last season' : 'This season'}">${v > 0 ? '+' : ''}${v.toFixed(1)}</span>`;
   return cols.map(([k]) => `<div class="tr-td tr-c-${k}">${k === 'wear' ? _wearCell(p) : _statVal(p, s, k)}</div>`).join('')
-    + `<div class="tr-td tr-c-imp">${impHtml}</div>`
-    + `<div class="tr-td tr-c-ovr"><span class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</span></div>`;
+    + `<div class="tr-td tr-c-imp">${impHtml}</div>`;
 }
 
 /**
@@ -450,7 +449,7 @@ function _wearCell(p) {
     + `<span class="tr-wear-word">${w.level === 'worn' ? 'Worn' : w.word}</span></span>`;
 }
 
-const _blankCells = (cols) => cols.map(([k]) => `<div class="tr-td tr-c-${k}"></div>`).join('') + '<div class="tr-td tr-c-imp"></div><div class="tr-td tr-c-ovr"></div>';
+const _blankCells = (cols) => cols.map(([k]) => `<div class="tr-td tr-c-${k}"></div>`).join('') + '<div class="tr-td tr-c-imp"></div>';
 
 /** One of our players: slot, name (with marks and tags), MOVE, the line. */
 function _row(state, p, slot, imp, { first = false, il = false, coming = null, oop = false, next = false } = {}) {
@@ -500,6 +499,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
           <div class="tr-name-line">${_escape(p.name)}${_dotIndicator(p)}</div>
           <div class="tr-sub">${subBits.join(' · ')}</div>
         </div>
+        <div class="tr-ovr"><span class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</span></div>
         <div class="tr-act"><button class="tr-move" data-move="${p.id}"${canMove ? '' : ' disabled'}>MOVE</button></div>
       </div>
       ${_statCells(p, imp)}
@@ -515,6 +515,7 @@ function _emptyRow(slot, { slotIdx = null, turn = false, pen = false, first = fa
       <div class="tr-fz">
         <div class="tr-slot">${slot}</div>
         <div class="tr-name"><div class="tr-name-line tr-muted">Empty</div><div class="tr-sub">Tap to fill</div></div>
+        <div class="tr-ovr"></div>
         <div class="tr-act"></div>
       </div>
       ${_blankCells(cols)}
@@ -530,6 +531,7 @@ function _needRow(n, needs, { first = false } = {}) {
       <div class="tr-fz">
         <div class="tr-slot">${n.pos || (n.side === 'pitcher' ? 'P' : 'H')}</div>
         <div class="tr-name"><div class="tr-name-line">Open spot</div><div class="tr-sub">${what}${due}</div></div>
+        <div class="tr-ovr"></div>
         <div class="tr-act"><button class="tr-move tr-add" data-need-add="${n.index}">ADD</button></div>
       </div>
       ${_blankCells(n.side === 'pitcher' ? PIT_COLS : HIT_COLS)}
@@ -1110,7 +1112,7 @@ function _injectCSS() {
     .tr-row{cursor:pointer;}
     .tr-row:active .tr-fz,.tr-row:active .tr-td{background:var(--surface2);}
     .tr-row.tr-first{border-top:2px solid var(--border);}
-    .tr-fz{position:sticky;left:0;z-index:2;display:flex;align-items:center;flex-shrink:0;width:206px;
+    .tr-fz{position:sticky;left:0;z-index:2;display:flex;align-items:center;flex-shrink:0;width:240px;
       background:var(--bg);border-right:1px solid var(--border);}
     .tr-head .tr-fz{background:var(--surface2);z-index:3;}
     .tr-head .tr-fz > div,.tr-head .tr-td{font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
@@ -1138,9 +1140,11 @@ function _injectCSS() {
     .tr-wear-tiring .tr-wear-bar i{background:#e0a800;} .tr-wear-tiring .tr-wear-word{color:#d49b00;}
     .tr-wear-tired .tr-wear-bar i{background:#f97316;} .tr-wear-tired .tr-wear-word{color:#f97316;}
     .tr-wear-worn .tr-wear-bar i{background:var(--danger);} .tr-wear-worn .tr-wear-word{color:var(--danger);}
-    .tr-c-imp{width:46px;} .tr-c-ovr{width:40px;padding-right:6px;}
+    .tr-c-imp{width:46px;}
     .tr-c-imp,.tr-head .tr-c-imp{border-left:1px solid var(--border);}
-    .tr-c-ovr .rating-num{font-size:13px;font-weight:800;}
+    /* r173 OVR beside the name, large */
+    .tr-ovr{width:34px;flex-shrink:0;text-align:center;}
+    .tr-ovr .rating-num{font-size:20px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;}
     .tr-imp{font-size:10px;font-weight:800;color:var(--muted);}
     .tr-imp-pos{color:#22C55E;} .tr-imp-neg{color:var(--danger);}
     .tr-pend{color:var(--warning,#f5a524);font-weight:700;}

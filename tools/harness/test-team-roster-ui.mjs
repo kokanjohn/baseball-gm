@@ -63,15 +63,15 @@ const read = () => page.evaluate(() => {
     head: [...b.querySelectorAll('.tr-head .tr-td')].map(x => x.textContent),
     rows: [...b.querySelectorAll('.tr-row')].map(r => ({ slot: r.querySelector('.tr-slot')?.textContent, name: r.querySelector('.tr-name-line')?.textContent,
       sub: r.querySelector('.tr-sub')?.textContent, move: r.querySelector('.tr-move')?.textContent, disabled: !!r.querySelector('.tr-move')?.disabled,
-      player: r.dataset.player || null, empty: r.classList.contains('tr-empty'), ovr: +(r.querySelector('.tr-c-ovr')?.textContent) || 0 })),
+      player: r.dataset.player || null, empty: r.classList.contains('tr-empty'), ovr: +(r.querySelector('.tr-ovr')?.textContent) || 0 })),
   }));
   return { blocks, groups: document.querySelectorAll('[data-group]').length, text: document.getElementById('team-content')?.innerText || '' };
 });
 let v = await read();
 const [H, Pt] = v.blocks;
 check('two tables, Hitters then Pitchers, no collapsible groups', v.blocks.length === 2 && H?.title === 'Hitters' && Pt?.title === 'Pitchers' && v.groups === 0, JSON.stringify(v.blocks.map(b => b.title)));
-check('hitters: Wear (r160), the stat columns, then IMP and OVR', JSON.stringify(H.head) === JSON.stringify(['Wear', 'H/AB', 'R', 'HR', 'RBI', 'BB', 'SB', 'AVG', 'OPS', 'IMP', 'OVR']), H.head.join(','));
-check('pitchers: Wear (r161), the stat columns, then IMP and OVR', JSON.stringify(Pt.head) === JSON.stringify(['Wear', 'IP', 'W', 'L', 'SV', 'ERA', 'WHIP', 'K', 'BB', 'IMP', 'OVR']), Pt.head.join(','));
+check('hitters: Wear (r160), the stat columns, then IMP (r173 OVR is beside the name)', JSON.stringify(H.head) === JSON.stringify(['Wear', 'H/AB', 'R', 'HR', 'RBI', 'BB', 'SB', 'AVG', 'OPS', 'IMP']), H.head.join(','));
+check('pitchers: Wear (r161), the stat columns, then IMP', JSON.stringify(Pt.head) === JSON.stringify(['Wear', 'IP', 'W', 'L', 'SV', 'ERA', 'WHIP', 'K', 'BB', 'IMP']), Pt.head.join(','));
 check('hitters by slot: C 1B 2B 3B SS OF OF OF DH, then the bench',
       H.rows.slice(0, 9).map(r => r.slot).join(' ') === 'C 1B 2B 3B SS OF OF OF DH' && H.rows.slice(9).every(r => ['Bench', 'IL', 'H', 'C', '1B', '2B', '3B', 'SS', 'OF', 'DH'].includes(r.slot)),
       H.rows.map(r => r.slot).join(' '));
@@ -107,12 +107,17 @@ const geo = await page.evaluate(() => {
   const fz0 = b.querySelectorAll('.tr-row .tr-fz')[0].getBoundingClientRect().left;
   sc.scrollLeft = sc.scrollWidth;
   const fz1 = b.querySelectorAll('.tr-row .tr-fz')[0].getBoundingClientRect().left;
-  const ovr = b.querySelector('.tr-row .tr-c-ovr').getBoundingClientRect();
+  const last = [...b.querySelectorAll('.tr-row')[0].querySelectorAll('.tr-td')].pop().getBoundingClientRect();
+  // r173 OVR is in the frozen part, beside the name, and large
+  const ovrEl = b.querySelector('.tr-row .tr-fz .tr-ovr'), nameEl = b.querySelector('.tr-row .tr-fz .tr-name'), actEl = b.querySelector('.tr-row .tr-fz .tr-act');
+  const ovr = { inFz: !!ovrEl, between: ovrEl && nameEl.getBoundingClientRect().right <= ovrEl.getBoundingClientRect().left + 1 && ovrEl.getBoundingClientRect().right <= actEl.getBoundingClientRect().left + 1,
+                size: ovrEl ? parseFloat(getComputedStyle(ovrEl.querySelector('.rating-num')).fontSize) : 0, text: ovrEl?.textContent.trim() };
   const scrolled = sc.scrollLeft;
-  return { headX, rowX, fz0, fz1, scrolled, ovrRight: ovr.right, w: window.innerWidth };
+  return { headX, rowX, fz0, fz1, scrolled, lastRight: last.right, w: window.innerWidth, ovr };
 });
 check('every heading sits over its column', JSON.stringify(geo.headX) === JSON.stringify(geo.rowX), JSON.stringify(geo));
-check('scrolled sideways: slot, name and MOVE stay put, and OVR comes into view', geo.scrolled > 0 && geo.fz0 === geo.fz1 && geo.ovrRight <= geo.w + 1, JSON.stringify(geo));
+check('scrolled sideways: slot, name, OVR and MOVE stay put, and the last column comes into view', geo.scrolled > 0 && geo.fz0 === geo.fz1 && geo.lastRight <= geo.w + 1, JSON.stringify(geo));
+check(`OVR between the name and MOVE, large (${geo.ovr.text}, ${geo.ovr.size}px)`, geo.ovr.inFz && geo.ovr.between && geo.ovr.size >= 18 && /^\d+$/.test(geo.ovr.text), JSON.stringify(geo.ovr));
 await page.screenshot({ path: `${out}/team-roster-scrolled-${theme}.png` });
 await page.evaluate(() => { document.querySelectorAll('.tr-scroll').forEach(s => { s.scrollLeft = 0; }); });
 await page.screenshot({ path: `${out}/team-roster-hitters-${theme}.png` });

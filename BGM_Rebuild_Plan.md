@@ -11326,3 +11326,28 @@ No engine change: a fresh team is not needed for this release.
 **Suite (r172):**
 - **Results:** season sim 3827/3827. check-trade-advice and test-team-roster-ui (light) each failed once and passed on rerun.
 - **Open (watch):** multi-season failed once at "five in the rotation by the first spring game (5 of 4)" and passed 59/59 on rerun. That check was changed in r167 to count anyone holding SP. A rotation of five with only four healthy SP holders at the season turn suggests one pitcher who lost SP over the winter is still in the rotation. That's the engine (since r167), not this release; it needs a look.
+
+### §122.46 r173 A starter loses SP at the season turn while in the rotation (fixed); OVR beside the name on Team and League
+
+**The bug** (found in r172's multi-season run, "five in the rotation… 5 of 4, 1 without SP in the rotation"):
+- **What happened:** a reliever who earned SP late in the year (three starts, more relief outings) finished the season in the rotation. At the turn, `pitcherSeasonTurn` made the role the pitcher did more (RP) primary, and dropped SP because there were fewer than five starts.
+- **The result:** the pitcher stayed in the rotation (the tidy-up keeps the rotation's own order) without SP. The manager then filled the open turn from the bench, so there were five turns but only four SP holders.
+- **The fix:** `pitcherSeasonTurn(p, { now })` takes the role the pitcher holds on the club at the turn: in any club's rotation it's 'SP', in the bullpen it's 'RP' (`OffseasonEngine`, `roleNow`). That role is kept and becomes the primary. Everyone else follows the usual keep rules.
+- **Out-of-role GM placements** (a reliever placed in the rotation without SP) are unchanged: the turn doesn't hand them SP.
+- **Six multi-season runs** didn't reproduce the bug (it's rare). The multi-season check now names any pitcher in the rotation without SP, with the record and history, if it ever happens again.
+- **check-pitcher-roles** (+2): a late SP still in the rotation keeps SP and is listed SP; the same pitcher back in the bullpen loses it.
+
+**OVR beside the name:**
+- **Team screen** (`TeamScreen`): the OVR column moves from the far right into the frozen part of each row, between the name and MOVE (`.tr-ovr`, 20 px, colored by tier). The frozen part is 240 px (it was 206).
+- **League → Players** (`LeagueScreen`): RTG becomes OVR and sits right of the name inside the frozen name column (now 160 px, `.lp-ovr`, 20 px, the same tier colors as the Team screen). The heading OVR in the frozen header still sorts.
+- **Tests:**
+  - test-team-roster-ui: the headings now end with IMP, and a new check confirms OVR sits between the name and MOVE, large;
+  - test-fa-screens-ui: the sort indices read only the scrolling headings;
+  - new test-league-ovr-ui (dark and light).
+
+A fresh team is not needed: the season-turn fix applies from the next turn, and the rest is the screens.
+
+**Suite (r173):**
+- **Results:** season sim 3826/3826, multi-season 59/59.
+- **The test server stopped mid-run.** test-forecast-ui, test-game-injury-ui and test-sheet-close-ui (both themes) all pass on rerun with it back up.
+- **Known intermittent failures:** check-game-injuries, check-roster-advice and check-weather-cards each passed on rerun.

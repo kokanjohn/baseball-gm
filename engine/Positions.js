@@ -371,12 +371,17 @@ function _ownP(p) {
  * stretch goes back to 0.
  * @returns {{ lost: String[], from, to }|null}
  */
-export function pitcherSeasonTurn(p) {
+export function pitcherSeasonTurn(p, { now = null } = {}) {
   if (!isPitcher(p)) return null;
   const s = _ownP(p), P = PR();
   const st = s.starts || 0, rl = s.relief || 0, from = s.primary, lost = [];
+  // r173 the role the pitcher holds on the club right now (`now`: in the rotation 'SP', in the bullpen
+  // 'RP') is kept and is the primary: a reliever who earned SP late in the year and finished it in the
+  // rotation (three or four starts, more relief outings) stays a starter going into the next season.
+  // Without this the turn took SP from a pitcher still in the rotation.
+  const held = now && s.roles.includes(now) ? now : null;
   if (st + rl > 0) {
-    const to = st > rl ? 'SP' : rl > st ? 'RP' : s.primary;
+    const to = held || (st > rl ? 'SP' : rl > st ? 'RP' : s.primary);
     const keep = (r) => r === to || (r === 'SP' ? st >= P.keepStarts : rl >= P.keepRelief);
     for (const r of s.roles) if (!keep(r)) lost.push(r);
     s.roles = s.roles.filter(r => !lost.includes(r));

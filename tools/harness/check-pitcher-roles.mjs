@@ -69,6 +69,12 @@ Pos.pitcherSeasonTurn(b);
 check(`a starter who relieved ${R.keepRelief}+ times keeps both (${Pos.posLabel(b)})`, Pos.posLabel(b) === 'SP/RP');
 const c = mk('RP'); Pos.pitcherSeasonTurn(c);
 check('a pitcher who never pitched keeps everything', Pos.posLabel(c) === 'RP');
+// r173 a reliever who earned SP late (three starts, more relief) and finished the year in the rotation
+const late = () => { const x = mk('RP'); x.positions.roles = ['RP', 'SP']; x.positions.stretch = 3; x.positions.starts = 4; x.positions.relief = 22; return x; };
+const inRot = late(), outRot = late();
+Pos.pitcherSeasonTurn(inRot, { now: 'SP' }); Pos.pitcherSeasonTurn(outRot, { now: 'RP' });
+check(`late SP, still in the rotation at the turn: keeps SP, a starter now (${Pos.posLabel(inRot)}, listed ${inRot.pos})`, Pos.pitchRoles(inRot).includes('SP') && inRot.pos === 'SP' && Pos.stretchOf(inRot) === 3);
+check(`…back in the bullpen at the turn: four starts isn't enough to keep SP (${Pos.posLabel(outRot)})`, !Pos.pitchRoles(outRot).includes('SP') && outRot.pos === 'RP');
 
 // ── In a club ───────────────────────────────────────────────────
 seedRandom(167);

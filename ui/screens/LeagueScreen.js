@@ -522,7 +522,6 @@ function _renderPlayers(state) {
         { key:'era',  label:'ERA'  },
         { key:'svhd', label:'SVHD' },
         { key:'imp',  label:'IMP'  },
-        { key:'ovr',  label:'RTG'  },
       ]
     : [
         { key:'hab',  label:'H/AB' },
@@ -533,8 +532,8 @@ function _renderPlayers(state) {
         { key:'bb',   label:'BB'   },
         { key:'sb',   label:'SB'   },
         { key:'imp',  label:'IMP'  },
-        { key:'ovr',  label:'RTG'  },
       ])];
+  // r173 OVR (was RTG) sits right of the name, in the frozen column, large.
 
   const extra = (k) => k === 'hab' ? ' lp-th-hab' : k === 'imp' ? ' lp-td-imp' : k === 'add' ? ' lp-td-add' : k === 'price' ? ' lp-td-mkt' : '';
   const heads = statCols.map(c => {
@@ -575,8 +574,11 @@ function _renderPlayers(state) {
     return `
       <div class="lp-row ${isUser ? 'user-player-row' : ''}" data-player="${p.id}">
         <div class="lp-td-name">
-          <div class="lp-name-line">${_escape(p.name)}${p.onWaivers ? ` <span class="lp-wv-left" title="Time left on waivers">${_waiverLeft(p)}</span>` : ''}</div>
-          <div class="lp-name-sub">${_escape(teamAbbr)} · ${posLabel(p)}${shown.year ? ` · <span class="lp-lyline">'${String(shown.year).slice(-2)} stats</span>` : ''}${dtd}</div>
+          <div class="lp-name-block">
+            <div class="lp-name-line">${_escape(p.name)}${p.onWaivers ? ` <span class="lp-wv-left" title="Time left on waivers">${_waiverLeft(p)}</span>` : ''}</div>
+            <div class="lp-name-sub">${_escape(teamAbbr)} · ${posLabel(p)}${shown.year ? ` · <span class="lp-lyline">'${String(shown.year).slice(-2)} stats</span>` : ''}${dtd}</div>
+          </div>
+          <div class="lp-ovr"><span class="rating-num ${_lpOvrClass(p.ovr)}">${formatOVR(p.ovr)}</span></div>
         </div>
         ${statVals}
       </div>`;
@@ -593,7 +595,7 @@ function _renderPlayers(state) {
       ${leaders}
       <div class="lp-scroll-wrap">
         <div class="lp-header">
-          <div class="lp-th-name lp-col-sticky">Player</div>
+          <div class="lp-th-name lp-col-sticky"><span>Player</span><span class="lp-th lp-th-ovr ${_playerSort.col === 'ovr' ? 'lp-th-active' : ''}" data-sort="ovr">OVR</span></div>
           ${heads}
         </div>
         <div id="lp-list">${rows || `<div class="lw-empty">${
@@ -605,6 +607,9 @@ function _renderPlayers(state) {
     </div>
   `;
 }
+
+/** r173 the OVR's color, as on the Team screen: 80+ green, 70s blue, 60s yellow, below muted red. */
+const _lpOvrClass = (ovr) => (ovr >= 80 ? 'elite' : ovr >= 70 ? 'good' : ovr >= 60 ? 'avg' : 'poor');
 
 /** The stats a row shows: this season's, or — with none yet — last season's (and its year). */
 function _statsShown(p) {
@@ -1101,9 +1106,18 @@ function _injectCSS() {
        the heading always sits over its column (§93). */
     .lp-col-sticky,.lp-td-name{
       position:sticky;left:0;
-      width:120px;min-width:120px;max-width:120px;flex-shrink:0;
-      padding-left:8px;padding-right:8px;text-align:left;overflow:hidden;
+      width:160px;min-width:160px;max-width:160px;flex-shrink:0;box-sizing:border-box;
+      padding-left:8px;padding-right:6px;text-align:left;overflow:hidden;
+      display:flex;align-items:center;gap:4px;
     }
+    /* r173 OVR right of the name, large */
+    .lp-name-block{flex:1;min-width:0;}
+    .lp-col-sticky > span:first-child{flex:1;}
+    .lp-th-ovr{width:34px;min-width:34px;padding:0;}
+    .lp-ovr{width:34px;flex-shrink:0;text-align:center;}
+    .lp-ovr .rating-num{font-size:20px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;}
+    .lp-ovr .rating-num.elite{color:#34C97A;} .lp-ovr .rating-num.good{color:#4A9EE0;}
+    .lp-ovr .rating-num.avg{color:#F5C842;} .lp-ovr .rating-num.poor{color:#E05050;}
     .lp-col-sticky{z-index:3;background:var(--surface2);padding-top:5px;padding-bottom:5px;}
     .lp-td-name{z-index:2;background:var(--bg);padding-top:7px;padding-bottom:7px;}
     /* our players' tint over a solid fill, so stats scrolling under the frozen name never show through */
