@@ -11492,3 +11492,86 @@ No engine change: a fresh team is not needed.
 - Back upright, nothing is turned. League → Dashboard sideways is held again.
 
 No engine change: a fresh team is not needed.
+
+## §122.51 — Weather on game day: realistic calls, the crew's timeline, decisions and updates (plan; GM decisions, Nov 15; not built)
+
+### What the GM saw
+- **Roanoke, a spring game, our park.** The play-by-play line said "Light Rain" while the radar showed the park under a medium-green band that had been there for two hours. The game later went into a delay, and no message came.
+- **Tideland, the same day.** The schedule said postponed. The region radar showed the band hadn't reached Tideland yet, and it was a thin band that would pass through. The game could have started, gone to the tarp, and resumed.
+- **The GM's standard:** what happens has to be what a GM watching the radar would expect.
+
+### Root causes (audit)
+1. **A game starts by the same rules that stop one under way.** Play stops for lightning, 7.5 mm/h (yellow), or 2.5 mm/h for 20 minutes (the darkest greens). The middle greens (23–28 dBZ) are about 1–2 mm/h. So a game started on time into a band that had been falling all morning. In real life the crew has the tarp on before the game, and first pitch waits until the rain eases and the field is ready.
+2. **Postponing ahead had a far lower bar than the game itself.** §102.6 (r111) added `_steadyRain`: the club postpones at 3 h / 90 min when the forecast run shows 0.5 mm/h (drizzle) through half the game, at a 70% / 60% chance. That reached the MLB rates, but it called off games a passing band would only have delayed.
+   - **Measured** (2 seeds × 4 regions, about 1,960 games each; each forecast postponement replayed with the forecast calls off):
+
+     | Region | Postponed ahead | Would have played | Their typical delay | Called short | Postponed anyway |
+     |---|---|---|---|---|---|
+     | North | 56 | 39 | 90 min | 16 | 1 |
+     | South | 53 | 28 | 0 min | 21 | 4 |
+     | East | 58 | 37 | 0 min | 20 | 1 |
+     | West | 16 | 10 | 105 min | 6 | 0 |
+
+   - About 60% of the games postponed ahead would have been played, and in the South and East most of those without any delay.
+   - About 1% of games start on time with rain of 1 mm/h or more falling (the Roanoke case).
+3. **The live game's weather line is frozen.** `WeatherStatus.weatherLine` reads `game.weather`, the record at first pitch, for the whole game.
+4. **No game-day messages.** By §102.5 only decisions went to the inbox (the 3-hour starter question, the doubleheader starter, field prep 30 h ahead). Delays, starts and postponements reached the GM only on screen and in Recent.
+
+### GM decisions
+1. **Postponing** before first pitch at home is the GM's call. Once play starts, the umpires decide. In the **postseason** the league decides postponements, so the GM has no "call it now or wait" decision there. The field, crowd and pitching decisions still apply.
+2. **Any change to the start time sends an inbox message**, and every revision of the estimated first pitch is its own message. **Clock times are allowed** in these messages (an exception to §94: it's a time, never a real-calendar date).
+3. **Home and away are handled separately.**
+   - **Home:** the grounds crew's updates and most of the decisions.
+   - **Away:** updates only (acknowledge), plus pitching and roster decisions where they arise; nothing about the ballpark. The reason for a change is given **sometimes, not always**: the home GM doesn't always hear what's happening at another club's park.
+4. **Time-limited decisions.** About 10–30 minutes near first pitch, a few hours for the morning ones. Near-game ones get through quiet hours (the existing urgent rule). If nobody answers, the situation is handled automatically, at a cost.
+5. **Costs** use what exists: money, the fans' goodwill (the gate), team morale, pitcher wear and injury risk.
+6. **The owner reacts to a pattern of poor decisions**, about three in a few weeks: a message from the owner, and a hit to patience.
+   - A poor decision is an unanswered one, or a choice against what the GM could see at the time (for example, waiting out a 90% forecast that ended in a late postponement).
+   - Bad luck doesn't count.
+7. **Spring:** updates only (no decisions, pitching included), and games are cancelled sooner than in the regular season.
+8. **Doubleheader makeups** are one ticket for both games by default, applied wherever the schedule allows. There's no GM decision.
+9. **Message volume:**
+   - a home game the weather hits: about 3–6 messages, 1–3 of them decisions, varying;
+   - an away game: about 2–4 updates;
+   - each situation exactly once, never two messages about the same decision or situation (each estimate revision counts as its own situation);
+   - dry days: nothing.
+10. **Conditions vocabulary**, as descriptive as possible in as few words: Drizzle, Light Rain, Showers, Steady Rain, Heavy Rain, Downpour, Thunderstorms, Severe Storms, Hail, Sleet, Rain and Snow, Flurries, Snow Showers, Heavy Snow. Short add-ons: Raw, Muggy, Windy, Hot. **No fog.** The label and the temperature update every half-inning during a game.
+
+### Home decisions (proposed set)
+| When | The question | No answer → |
+|---|---|---|
+| Morning, rain due before the game | Batting practice on the field, or in the cages | It's on the field. If the rain comes early, the infield is softer and the crew needs longer (a later start). |
+| 30 h ahead | Bring in the extra crew (r170, unchanged) | The field takes the rain. |
+| 2–3 h out, rain at first pitch | Call it now, or wait it out | The club waits to the limit. A late postponement costs crew overtime and the fans' goodwill. |
+| Start delayed, a dry gap on the radar | Start in the gap, or wait for the band to pass | The club waits. The crowd thins (the gate), and the 1 AM cutoff becomes a risk. |
+| Crew trouble (tarp, standing water) | Pay for extra hands, or a longer delay | The delay runs longer. |
+| A long delay with a crowd | Free food or rain checks, at a cost, or nothing | The fans' goodwill drops. |
+
+**Pitching decisions (home and away; none in spring):**
+- **Warm the starter up for the estimated first pitch, or hold him until the tarp is off.** Warming early and having the start slip shortens his outing. Holding means first pitch waits on him for a few minutes.
+- **After a 30–60 minute delay, send him back out or go to the bullpen.** Back out risks wear; the default is the bullpen, which taxes it. Past 60 minutes he's done.
+- **Unchanged:** the 3-hour "rain likely, start X?" and "who starts game two?".
+
+**Away updates:** a heads-up about the host park's weather, start delayed (with the estimate), each revision, the tarp out during the game, play resumed, and postponed with the makeup.
+
+### Phases
+1. **Realistic calls** (engine, every club alike; fresh team needed):
+   - starting needs a covered field made ready, while continuing uses the current rules;
+   - postponing ahead uses the same rules as the day itself, seen through the forecast run, and `_steadyRain` goes;
+   - spring cancels sooner;
+   - patience depends on how hard the makeup is (an easy same-series doubleheader versus the last meeting of the season);
+   - seeded crew trouble, which drainage and prep make less likely;
+   - one ticket for doubleheaders;
+   - retune the rates to the §102.6 benchmarks.
+
+   New checks: few games postponed ahead that would have played within an hour's delay; no on-time start into rain after a wet pregame; how far the hour-ahead estimate is off.
+2. **The crew's timeline per game** (pure, deterministic): the morning outlook; updates as it worsens or improves; tarp on and off; the estimated first pitch at each check (from the forecast run at that moment) and its revisions; the delay and resumption in the game; a watch to an hour after the estimated end when rain is near. Because it's deterministic, the look-ahead and push know each message in advance. League games get the same timeline without messages.
+3. **Home decisions:** the set above, with deadlines, defaults, costs, the message budget, and the owner's pattern rule.
+4. **Away updates** (with the varied detail) and the pitching decisions.
+5. **On screen:**
+   - the first-pitch card follows the timeline: on time, watching the weather, tarp on, delayed with an estimated first pitch (revised), starting, postponed with the makeup;
+   - the live conditions label and temperature each half-inning;
+   - the schedule and Scores show delayed games with their estimate.
+6. **Checks and tuning:** rates by region, message counts per game day, screenshots in dark and light, a full season.
+
+Not started. Phase 1 waits for the GM's go-ahead.
