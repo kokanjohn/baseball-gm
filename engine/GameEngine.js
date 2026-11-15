@@ -790,6 +790,9 @@ function _commitAt(gameIndex) {
   if (!game) throw new Error(`GameEngine.commitGame: no game at index ${gameIndex}`);
   // §118 the game's injuries (plays are dropped below): any not applied as they were revealed.
   const hurtPlays = (game.plays || []).filter(p => p._injury);
+  // r174 who started for us (the rotation turns over from that pitcher: see Step 2b)
+  const ourStarterId = (game.plays || []).find(p => p.pitcherId && state.players[p.pitcherId]?.teamId === 'user')?.pitcherId || null;
+  const theirStarterId = (game.plays || []).find(p => p.pitcherId && state.players[p.pitcherId] && state.players[p.pitcherId].teamId !== 'user')?.pitcherId || null;
 
   const result = { phaseChanged: false, newPhase: null, milestone: null };
 
@@ -942,13 +945,14 @@ function _commitAt(gameIndex) {
     // Rotate to next SP so each game uses the correct starter in order.
     // (A rained-out game was never played: nobody's turn passes, nobody's absence counts down.)
     // (§102.5 a bullpen game the GM chose keeps the rotation on schedule.)
+    // (r174 by who started: still in the order, the turn passes to the one after; hurt in the start and
+    //  out of the order already, the next pitcher has moved up into that turn — it stays.)
     if (wasPlayed && !g.keepRotation && s.userTeam.rotation?.order?.length > 0) {
-      s.userTeam.rotation.currentIndex =
-        (s.userTeam.rotation.currentIndex + 1) % s.userTeam.rotation.order.length;
+      _turnOver(s.userTeam.rotation, ourStarterId, s.players);
     }
     // The opponent's rotation turns over too (it used to stand still, so the
     // user always faced the same starter).
-    if (wasPlayed) _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent));
+    if (wasPlayed) _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent), theirStarterId, s.players);
     // §71: players away (rest, illness, training, benched) and playing-hurt
     // conditions count down one game; whoever is back gets his spot back.
     // (r160 §122.32 wear too: ours never sits anyone on the manager's say — the staff's rest
@@ -1678,9 +1682,22 @@ function _creditResult(team, outcome, kind) {
   }
 }
 
-function _advanceRotation(team) {
+function _advanceRotation(team, starterId = null, players = null) {
   const r = team?.rotation;
-  if (r?.order?.length) r.currentIndex = ((r.currentIndex || 0) + 1) % r.order.length;
+  if (r?.order?.length) _turnOver(r, starterId, players);
+}
+
+/**
+ * r174 the rotation turns over from the pitcher who started: still in the order, the turn passes to
+ * the one after; hurt in the start and out of the order already, the next pitcher has moved up into
+ * that turn and it stays; anyone else (a spot starter, or nobody known) passes the turn as before.
+ */
+function _turnOver(r, starterId, players) {
+  const n = r.order.length;
+  const at = starterId ? r.order.indexOf(starterId) : -1;
+  if (at >= 0) r.currentIndex = (at + 1) % n;
+  else if (starterId && players?.[starterId]?.isInjured) r.currentIndex = (r.currentIndex || 0) % n;
+  else r.currentIndex = ((r.currentIndex || 0) + 1) % n;
 }
 
 /** The moment a game with generated plays ends (its last play). */

@@ -1,4 +1,5 @@
-// r160 §122.32 Wear on screen: Team → the Wear column (a meter and the word, first after the name, no
+// r160 §122.32 Wear on screen (r174 Team: a small bar only, between the name and OVR; the card: the full
+// bar and the word near the top). Was: Team → the Wear column (a meter and the word, first after the name, no
 // scrolling), the player card's Wear section ("Caught 7 straight."), and a staff rest message as the GM
 // reads it — the backup named, "Sit … / Keep … In".
 //   node tools/harness/test-wear-ui.mjs outDir [theme]
@@ -49,16 +50,19 @@ const team = await page.evaluate(() => {
   const block = document.querySelector('.tr-block');
   const head = [...block.querySelectorAll('.tr-head .tr-td')].map(e => e.textContent.trim());
   const rows = [...block.querySelectorAll('.tr-row[data-player]')].slice(0, 9).map(r => ({
-    id: r.dataset.player, word: r.querySelector('.tr-c-wear .tr-wear-word')?.textContent.trim(),
-    bar: r.querySelector('.tr-c-wear .tr-wear-bar i')?.style.width,
+    id: r.dataset.player, word: (r.querySelector('.tr-wearc .tr-wear')?.getAttribute('aria-label') || '').replace(/^(Wear|Workload): /, '').replace(/ \(.*\)$/, ''),
+    bar: r.querySelector('.tr-wearc .tr-wear-bar i')?.style.width, text: r.querySelector('.tr-wearc')?.textContent.trim(),
   }));
-  const cell = block.querySelector('.tr-row[data-player] .tr-c-wear')?.getBoundingClientRect();
-  return { head, rows, inView: cell ? cell.right <= window.innerWidth : false };
+  // r174 a bar only, in the frozen part between the name and OVR, narrow
+  const r0 = block.querySelector('.tr-row[data-player]');
+  const name = r0.querySelector('.tr-fz .tr-name').getBoundingClientRect(), wear = r0.querySelector('.tr-fz .tr-wearc').getBoundingClientRect(), ovr = r0.querySelector('.tr-fz .tr-ovr').getBoundingClientRect();
+  const barW = r0.querySelector('.tr-wear-bar').getBoundingClientRect().width;
+  return { head, rows, between: name.right <= wear.left + 1 && wear.right <= ovr.left + 1, barW, inView: wear.right <= window.innerWidth };
 });
-check(`the Hitters table: Wear is the first column after the name (${team.head.slice(0, 3).join(', ')})`, team.head[0] === 'Wear');
-check('…on screen without scrolling', team.inView);
+check(`the Hitters table: the wear bar between the name and OVR, ${team.barW}px wide (no Wear column: ${team.head.slice(0, 2).join(', ')}…)`, team.between && team.barW <= 20 && !team.head.includes('Wear') && team.inView);
+check('…the bar only, no word', team.rows.every(r => r.text === ''));
 const word = (id) => team.rows.find(r => r.id === id)?.word;
-check(`…the catcher "Tiring", the worn regular "Worn", the rest "Fresh" (${team.rows.map(r => r.word).join(' · ')})`,
+check(`…the catcher "Tiring", the worn regular "Worn", the rest "Fresh" (its label: ${team.rows.map(r => r.word).join(' · ')})`,
       word(S.c) === 'Tiring' && word(S.worn) === 'Worn' && team.rows.filter(r => r.word === 'Fresh').length >= 6);
 const fullW = parseInt(team.rows.find(r => r.word === 'Fresh').bar), wornW = parseInt(team.rows.find(r => r.id === S.worn).bar), tiringW = parseInt(team.rows.find(r => r.id === S.c).bar);
 check(`…the bar full when fresh, shrinking toward the left with the wear (fresh ${fullW}%, tiring ${tiringW}%, worn ${wornW}%)`, fullW >= 90 && tiringW < fullW && wornW < tiringW);
@@ -66,11 +70,10 @@ check(`…the bar full when fresh, shrinking toward the left with the wear (fres
 const arms = await page.evaluate((sp) => {
   const block = [...document.querySelectorAll('.tr-block')].find(b => b.querySelector('.tr-row[data-player]') && [...b.querySelectorAll('.tr-head .tr-td')].some(e => e.textContent.trim() === 'ERA'));
   if (!block) return null;
-  const head = [...block.querySelectorAll('.tr-head .tr-td')].map(e => e.textContent.trim());
   const r = block.querySelector(`.tr-row[data-player="${sp}"]`);
-  return { head: head.slice(0, 2), word: r?.querySelector('.tr-c-wear .tr-wear-word')?.textContent.trim(), n: block.querySelectorAll('.tr-c-wear .tr-wear-word').length };
+  return { word: (r?.querySelector('.tr-wearc .tr-wear')?.getAttribute('aria-label') || ''), n: block.querySelectorAll('.tr-wearc .tr-wear').length };
 }, S.sp);
-check(`the Pitchers table: Wear first too (${arms?.head.join(', ')}), the worked starter "${arms?.word}"`, arms?.head[0] === 'Wear' && arms.word === 'Tired' && arms.n >= 8);
+check(`the Pitchers table: the bar too, the worked starter "${arms?.word}"`, /^Workload: Tired/.test(arms?.word || '') && arms.n >= 8);
 await page.screenshot({ path: `${out}/wear-team-${theme}.png` });
 
 // ── The player card ──
@@ -82,6 +85,8 @@ const card = await page.evaluate(() => {
   return sec ? { word: sec.querySelector('.pc-wear-word')?.textContent.trim(), note: sec.querySelector('.pc-ask-note')?.textContent.trim() } : null;
 });
 check(`the player card: a Wear section — "${card?.word}", "${card?.note}"`, card?.word === 'Tiring' && /^Caught 7 straight\./.test(card?.note || ''));
+const order = await page.evaluate(() => [...document.querySelectorAll('#player-card-sheet .pc-section-label')].map(e => e.textContent.trim()));
+check(`…near the top, after the contract (${order.slice(0, 3).join(', ')}…)`, order[0] === 'Contract' && order[1] === 'Wear');
 await page.screenshot({ path: `${out}/wear-card-${theme}.png` });
 await tap('#player-card-close');
 // r161 a pitcher's card: the Wear section, today's arm

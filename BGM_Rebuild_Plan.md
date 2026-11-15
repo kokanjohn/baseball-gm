@@ -11351,3 +11351,37 @@ A fresh team is not needed: the season-turn fix applies from the next turn, and 
 - **Results:** season sim 3826/3826, multi-season 59/59.
 - **The test server stopped mid-run.** test-forecast-ui, test-game-injury-ui and test-sheet-close-ui (both themes) all pass on rerun with it back up.
 - **Known intermittent failures:** check-game-injuries, check-roster-advice and check-weather-cards each passed on rerun.
+
+### §122.47 r174 Wear: a small bar beside the name on the Team screen; the full bar and word near the top of the card
+
+- **Team screen** (`TeamScreen._wearCell`):
+  - The Wear column (a meter and the word) is gone from the scrolling stats.
+  - Each row has a small bar (18×5 px, `.tr-wearc` 22 px) in the frozen part between the name and OVR. It's full and green when fresh and shrinks toward the left, turning yellow, then orange, then red as the wear builds. There's no word.
+  - The word is the bar's `aria-label` and long-press tip ("Wear: Tiring (7 straight starts)", "Workload: Tired").
+  - Rows for a player on the IL show no bar. The frozen part is 262 px.
+- **Player card** (`PlayerCard`): the Wear section (the full bar, the word, the note) moves up to right after Contract: identity, Contract, Wear, Ratings, Positions/Roles, Stats…
+- **Tests:**
+  - test-wear-ui checks the bar between the name and OVR (18 px), no word, the levels in the label, the fill by level, the pitchers' bars, and the card's Wear right after Contract.
+  - test-team-roster-ui: the stat headings no longer start with Wear.
+
+No engine change: a fresh team is not needed for this release.
+
+**Also in r174: the rotation skipped a turn after a starter was hurt in the start (fixed):**
+- **Found by:** check-weather-cards, which failed three runs in a row. The pitcher put in to start for a rested starter was hurt in that start, and the rested starter was skipped for the next game.
+- **Two causes:**
+  1. `reconcileRoster` kept `rotation.currentIndex` as a number while the order lost a pitcher ahead of it, so the index then pointed one pitcher too far.
+  2. The commit advanced the index by one after the hurt starter had already left the order, so the next pitcher, who had moved up into that turn, was skipped.
+- **The fixes:**
+  - reconcile keeps the turn on the pitcher who's next (the first still in the order, in the old order's turn);
+  - the commit turns the rotation over from who actually started (`_turnOver`): still in the order, the turn goes to the next pitcher; hurt and out of the order, the turn stays where it is; anyone else (a spot starter) passes the turn as before.
+  - Both apply to the CPU clubs too (`_advanceRotation` with the opponent's starter). League-only games are unchanged.
+- **Tested:** check-weather-cards' held-starter case passes when the fill-in is hurt (it failed before).
+
+**Suite (r174):**
+- **Results:**
+  - multi-season 59/59;
+  - season sim 3826/3827: "development: outcomes vary" failed because four or more finished plans all drew the same profile. That's chance, not this release.
+- **Flaky under load:**
+  - test-team-roster-ui's bullpen fill gave the re-render 500 ms; under the suite's load it sometimes wasn't enough, and it now waits 1.5 s.
+  - test-wear-ui's rest message is a known intermittent failure.
+  - Both pass on rerun in both themes.

@@ -662,7 +662,18 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     }
   }
   const rotationShort = Math.max(0, REQUIRED_SP_COUNT - order.length);
-  const currentIndex = order.length ? (oldRotation.currentIndex || 0) % order.length : 0;
+  // r174 the turn follows the pitcher who's next, not the number: with someone ahead of that pitcher
+  // gone (hurt in the start just made, traded, sent down), the same index would skip a turn. The next
+  // pitcher still in the order (in the old order's turn) is up; anyone new at the end waits a lap.
+  const oldOrder = oldRotation.order || [];
+  let currentIndex = order.length ? (oldRotation.currentIndex || 0) % order.length : 0;
+  if (oldOrder.length && order.length) {
+    const from = (oldRotation.currentIndex || 0) % oldOrder.length;
+    for (let k = 0; k < oldOrder.length; k++) {
+      const at = order.indexOf(oldOrder[(from + k) % oldOrder.length]);
+      if (at >= 0) { currentIndex = at; break; }
+    }
+  }
 
   // ── §114 The bullpen: five arms, kept like the lineup ─────────────────
   // The BULLPEN group is the club's relief corps (the closer, the setup men,

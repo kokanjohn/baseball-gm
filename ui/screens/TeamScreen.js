@@ -288,8 +288,8 @@ export function refresh() {
  * Everyone who reports lands on the bench; an open lineup slot, rotation turn
  * or bullpen spot waits for the GM until the roster deadline (RosterEngine).
  */
-const HIT_COLS = [['wear', 'Wear'], ['hab', 'H/AB'], ['r', 'R'], ['hr', 'HR'], ['rbi', 'RBI'], ['bb', 'BB'], ['sb', 'SB'], ['avg', 'AVG'], ['ops', 'OPS']];
-const PIT_COLS = [['wear', 'Wear'], ['ip', 'IP'], ['w', 'W'], ['l', 'L'], ['sv', 'SV'], ['era', 'ERA'], ['whip', 'WHIP'], ['k', 'K'], ['bb', 'BB']];
+const HIT_COLS = [['hab', 'H/AB'], ['r', 'R'], ['hr', 'HR'], ['rbi', 'RBI'], ['bb', 'BB'], ['sb', 'SB'], ['avg', 'AVG'], ['ops', 'OPS']];
+const PIT_COLS = [['ip', 'IP'], ['w', 'W'], ['l', 'L'], ['sv', 'SV'], ['era', 'ERA'], ['whip', 'WHIP'], ['k', 'K'], ['bb', 'BB']];
 
 function _renderPlayers(state) {
   const team      = state.userTeam;
@@ -361,7 +361,7 @@ function _table(title, cols, rows, season) {
       <div class="tr-title"><span>${title}</span>${season ? `<span class="tr-season">${season}</span>` : ''}</div>
       <div class="tr-scroll">
         <div class="tr-head">
-          <div class="tr-fz"><div class="tr-slot">Slot</div><div class="tr-name">Player</div><div class="tr-ovr">OVR</div><div class="tr-act">Action</div></div>
+          <div class="tr-fz"><div class="tr-slot">Slot</div><div class="tr-name">Player</div><div class="tr-wearc"></div><div class="tr-ovr">OVR</div><div class="tr-act">Action</div></div>
           ${cols.map(([k, l]) => `<div class="tr-td tr-c-${k}">${l}</div>`).join('')}
           <div class="tr-td tr-c-imp">IMP</div>
         </div>
@@ -430,23 +430,23 @@ function _statCells(p, imp) {
   const v = now ?? lastSeasonIMP(p);
   const impHtml = v == null ? '<span class="tr-imp">--</span>'
     : `<span class="tr-imp ${v >= 1 ? 'tr-imp-pos' : v <= -1 ? 'tr-imp-neg' : ''}" title="${now == null ? 'Last season' : 'This season'}">${v > 0 ? '+' : ''}${v.toFixed(1)}</span>`;
-  return cols.map(([k]) => `<div class="tr-td tr-c-${k}">${k === 'wear' ? _wearCell(p) : _statVal(p, s, k)}</div>`).join('')
+  return cols.map(([k]) => `<div class="tr-td tr-c-${k}">${_statVal(p, s, k)}</div>`).join('')
     + `<div class="tr-td tr-c-imp">${impHtml}</div>`;
 }
 
 /**
- * r160 §122.32 wear: a short meter and the word (Fresh, Fine, Tiring, Tired, Worn
- * down) — the first column, so it shows without scrolling. r161 §122.33 pitchers
- * too (the arm's workload); the bar is full and green when fresh and shrinks
- * toward the left as the wear builds, changing color by level.
+ * r160 §122.32 wear (r161 §122.33 pitchers too: the arm's workload). r174 a small bar only, in the
+ * frozen part of the row between the name and OVR: full and green when fresh, shrinking toward the
+ * left and changing color as the wear builds. The word is on the player card (its Wear section);
+ * here it's the bar's label for screen readers and the long-press tip.
  */
 function _wearCell(p) {
-  if (p.group === PLAYER_GROUP.IL) return '<span class="tr-muted">--</span>';
+  if (p.group === PLAYER_GROUP.IL) return '';
   const w = wearOf(p, Date.now());
-  const tip = w.pitcher ? `Workload: ${w.word}` : w.straight ? `${w.straight} straight start${w.straight === 1 ? '' : 's'}` : 'No recent starts';
-  return `<span class="tr-wear tr-wear-${w.level}" title="${tip}">`
-    + `<span class="tr-wear-bar"><i style="width:${Math.max(6, Math.round(w.left * 100))}%"></i></span>`
-    + `<span class="tr-wear-word">${w.level === 'worn' ? 'Worn' : w.word}</span></span>`;
+  const word = w.level === 'worn' ? 'Worn' : w.word;
+  const tip = `${w.pitcher ? 'Workload' : 'Wear'}: ${word}${!w.pitcher && w.straight ? ` (${w.straight} straight start${w.straight === 1 ? '' : 's'})` : ''}`;
+  return `<span class="tr-wear tr-wear-${w.level}" title="${tip}" role="img" aria-label="${tip}">`
+    + `<span class="tr-wear-bar"><i style="width:${Math.max(8, Math.round(w.left * 100))}%"></i></span></span>`;
 }
 
 const _blankCells = (cols) => cols.map(([k]) => `<div class="tr-td tr-c-${k}"></div>`).join('') + '<div class="tr-td tr-c-imp"></div>';
@@ -499,6 +499,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
           <div class="tr-name-line">${_escape(p.name)}${_dotIndicator(p)}</div>
           <div class="tr-sub">${subBits.join(' · ')}</div>
         </div>
+        <div class="tr-wearc">${_wearCell(p)}</div>
         <div class="tr-ovr"><span class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</span></div>
         <div class="tr-act"><button class="tr-move" data-move="${p.id}"${canMove ? '' : ' disabled'}>MOVE</button></div>
       </div>
@@ -515,6 +516,7 @@ function _emptyRow(slot, { slotIdx = null, turn = false, pen = false, first = fa
       <div class="tr-fz">
         <div class="tr-slot">${slot}</div>
         <div class="tr-name"><div class="tr-name-line tr-muted">Empty</div><div class="tr-sub">Tap to fill</div></div>
+        <div class="tr-wearc"></div>
         <div class="tr-ovr"></div>
         <div class="tr-act"></div>
       </div>
@@ -531,6 +533,7 @@ function _needRow(n, needs, { first = false } = {}) {
       <div class="tr-fz">
         <div class="tr-slot">${n.pos || (n.side === 'pitcher' ? 'P' : 'H')}</div>
         <div class="tr-name"><div class="tr-name-line">Open spot</div><div class="tr-sub">${what}${due}</div></div>
+        <div class="tr-wearc"></div>
         <div class="tr-ovr"></div>
         <div class="tr-act"><button class="tr-move tr-add" data-need-add="${n.index}">ADD</button></div>
       </div>
@@ -1112,7 +1115,7 @@ function _injectCSS() {
     .tr-row{cursor:pointer;}
     .tr-row:active .tr-fz,.tr-row:active .tr-td{background:var(--surface2);}
     .tr-row.tr-first{border-top:2px solid var(--border);}
-    .tr-fz{position:sticky;left:0;z-index:2;display:flex;align-items:center;flex-shrink:0;width:240px;
+    .tr-fz{position:sticky;left:0;z-index:2;display:flex;align-items:center;flex-shrink:0;width:262px;
       background:var(--bg);border-right:1px solid var(--border);}
     .tr-head .tr-fz{background:var(--surface2);z-index:3;}
     .tr-head .tr-fz > div,.tr-head .tr-td{font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
@@ -1132,14 +1135,14 @@ function _injectCSS() {
     .tr-head .tr-td{background:var(--surface2);}
     .tr-c-hab{width:50px;} .tr-c-whip{width:42px;} .tr-c-avg,.tr-c-ops,.tr-c-era{width:42px;}
     .tr-learn{color:#3b82f6;font-weight:700;}
-    .tr-c-wear{width:52px;}
-    .tr-wear{display:flex;flex-direction:column;align-items:center;gap:3px;width:100%;padding:0 6px;}
-    .tr-wear-bar{display:block;width:100%;height:4px;border-radius:2px;background:var(--surface2);overflow:hidden;}
-    .tr-wear-bar i{display:block;height:100%;border-radius:2px;background:#34C97A;}
-    .tr-wear-word{font-size:9px;font-weight:700;letter-spacing:.2px;color:var(--soft);}
-    .tr-wear-tiring .tr-wear-bar i{background:#e0a800;} .tr-wear-tiring .tr-wear-word{color:#d49b00;}
-    .tr-wear-tired .tr-wear-bar i{background:#f97316;} .tr-wear-tired .tr-wear-word{color:#f97316;}
-    .tr-wear-worn .tr-wear-bar i{background:var(--danger);} .tr-wear-worn .tr-wear-word{color:var(--danger);}
+    /* r174 the wear bar: between the name and OVR, a bar only */
+    .tr-wearc{width:22px;flex-shrink:0;display:flex;justify-content:center;}
+    .tr-wear{display:block;width:18px;}
+    .tr-wear-bar{display:block;width:18px;height:5px;border-radius:3px;background:var(--surface2);overflow:hidden;}
+    .tr-wear-bar i{display:block;height:100%;border-radius:3px;background:#34C97A;}
+    .tr-wear-tiring .tr-wear-bar i{background:#e0a800;}
+    .tr-wear-tired .tr-wear-bar i{background:#f97316;}
+    .tr-wear-worn .tr-wear-bar i{background:var(--danger);}
     .tr-c-imp{width:46px;}
     .tr-c-imp,.tr-head .tr-c-imp{border-left:1px solid var(--border);}
     /* r173 OVR beside the name, large */

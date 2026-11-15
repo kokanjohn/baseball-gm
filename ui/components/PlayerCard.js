@@ -159,11 +159,12 @@ function _renderCard(player, playerId, state) {
     <!-- r172 Contract, at the top (a free agent: what they're asking) -->
     ${player.group === 'freeAgent' ? _renderAsk(player, state) : _renderContract(player, state)}
 
+    <!-- r160 §122.32 our players' wear (r161 §122.33 pitchers too: the arm's workload, and today's arm);
+         r174 near the top, the full bar and the word (the Team screen shows the bar only) -->
+    ${isOwnPlayer && player.group !== PLAYER_GROUP.IL ? _renderWear(player, isPitcher, state) : ''}
+
     <!-- Sub-ratings -->
     ${_renderSubRatings(player, isPitcher)}
-
-    <!-- r160 §122.32 our players' wear (r161 §122.33 pitchers too: the arm's workload, and today's arm) -->
-    ${isOwnPlayer && player.group !== PLAYER_GROUP.IL ? _renderWear(player, isPitcher, state) : ''}
 
     <!-- r164 §122.35 where a hitter plays: eligible, working toward, practiced -->
     ${!isPitcher ? _renderPositions(player, state, isOwnPlayer) : _renderRoles(player, state, isOwnPlayer)}

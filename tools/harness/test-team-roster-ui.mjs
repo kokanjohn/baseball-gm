@@ -70,8 +70,8 @@ const read = () => page.evaluate(() => {
 let v = await read();
 const [H, Pt] = v.blocks;
 check('two tables, Hitters then Pitchers, no collapsible groups', v.blocks.length === 2 && H?.title === 'Hitters' && Pt?.title === 'Pitchers' && v.groups === 0, JSON.stringify(v.blocks.map(b => b.title)));
-check('hitters: Wear (r160), the stat columns, then IMP (r173 OVR is beside the name)', JSON.stringify(H.head) === JSON.stringify(['Wear', 'H/AB', 'R', 'HR', 'RBI', 'BB', 'SB', 'AVG', 'OPS', 'IMP']), H.head.join(','));
-check('pitchers: Wear (r161), the stat columns, then IMP', JSON.stringify(Pt.head) === JSON.stringify(['Wear', 'IP', 'W', 'L', 'SV', 'ERA', 'WHIP', 'K', 'BB', 'IMP']), Pt.head.join(','));
+check('hitters: the stat columns, then IMP (r173 OVR and r174 the wear bar are beside the name)', JSON.stringify(H.head) === JSON.stringify(['H/AB', 'R', 'HR', 'RBI', 'BB', 'SB', 'AVG', 'OPS', 'IMP']), H.head.join(','));
+check('pitchers: the stat columns, then IMP', JSON.stringify(Pt.head) === JSON.stringify(['IP', 'W', 'L', 'SV', 'ERA', 'WHIP', 'K', 'BB', 'IMP']), Pt.head.join(','));
 check('hitters by slot: C 1B 2B 3B SS OF OF OF DH, then the bench',
       H.rows.slice(0, 9).map(r => r.slot).join(' ') === 'C 1B 2B 3B SS OF OF OF DH' && H.rows.slice(9).every(r => ['Bench', 'IL', 'H', 'C', '1B', '2B', '3B', 'SS', 'OF', 'DH'].includes(r.slot)),
       H.rows.map(r => r.slot).join(' '));
@@ -150,8 +150,8 @@ const fill = await page.evaluate(async () => {
   const picks = [...document.querySelectorAll('#ts-swap-modal .sm-row[data-pick]')];
   const title = document.querySelector('#ts-swap-modal .modal-title')?.textContent;
   picks[0]?.click();
-  await new Promise(r => setTimeout(r, 500));
-  return { title, n: picks.length, empties: [...document.querySelectorAll('.tr-empty')].length };
+  await new Promise(r => setTimeout(r, 1500));   // (the suite runs many at once: give the re-render time)
+  return { title, n: picks.length, picked: picks[0]?.innerText.replace(/\s+/g, ' '), empties: [...document.querySelectorAll('.tr-empty')].length, which: [...document.querySelectorAll('.tr-empty')].map(r => r.innerText.replace(/\s+/g, ' ')) };
 });
 check('tapping the empty bullpen spot lists the bench arms; one fills it', !fill.none && /Fill the open bullpen spot/.test(fill.title) && fill.n > 0 && fill.empties === 0, JSON.stringify(fill));
 
