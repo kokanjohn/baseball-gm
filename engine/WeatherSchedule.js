@@ -7,8 +7,10 @@
  *       2. on a day both clubs are off within two weeks, else
  *       3. as a doubleheader the next time the two clubs meet, else
  *       4. on a day added after the regular season;
- *   - a doubleheader is day–night (the makeup at 1:05 before a night game),
- *     or, before a day game, that game moves four hours later;
+ *   - a doubleheader is one ticket for both games (§122.51): before a night
+ *     game the makeup is game one, three and a half hours earlier; before a
+ *     day game the makeup takes its time and that game follows (game two
+ *     always waits for game one to end — GameEngine._wxHoldForClubs);
  *   - postponed spring games are cancelled (not made up);
  *   - playoff games (and the All-Star Game) move back a day, and the rest of
  *     the series with them.
@@ -90,7 +92,8 @@ function _nightTime(ref, iso) {
 /**
  * findMakeupSlot(state, game, isUser, atMs) — where a postponed or suspended
  * regular-season game goes:
- * { date, gameTime, venueId, how: 'series-dh'|'off-day'|'meeting-dh'|'after-season', moveOther?: { g, isUser, gameTime } }
+ * { date, gameTime, venueId, how: 'series-dh'|'off-day'|'meeting-dh'|'after-season', ticket?: 'one', moveOther?: { g, isUser, gameTime } }
+ * (ticket 'one': a doubleheader on one ticket — the makeup draws no gate of its own.)
  * (moveOther: the day game that moves later to make room for the makeup).
  */
 export function findMakeupSlot(state, game, isUser, atMs) {
@@ -116,11 +119,11 @@ export function findMakeupSlot(state, game, isUser, atMs) {
     const other = a[0], t = other.g.gameTime;
     const hour = new Date(t).getHours();
     if (hour >= GW.DH_NIGHT_FROM_H) {
-      const gameTime = timeOnDate(other.g, d, GW.DH_DAY_TIME);
-      return gameTime >= soonest ? { date: d, gameTime, venueId: other.venueId, how } : null;
+      const gameTime = t - GW.DH_NIGHT_LEAD_MIN * MIN;
+      return gameTime >= soonest ? { date: d, gameTime, venueId: other.venueId, how, ticket: 'one' } : null;
     }
     if (t < soonest || other.g._committed || other.g.played || other.g.status !== 'scheduled') return null;
-    return { date: d, gameTime: t, venueId: other.venueId, how,
+    return { date: d, gameTime: t, venueId: other.venueId, how, ticket: 'one',
              moveOther: { g: other.g, isUser: other.isUser, gameTime: t + GW.DH_GAP_MIN * MIN } };
   };
   const meets = (d) => { const a = on(pair[0], d); return a.length === 1 && [a[0].homeId, a[0].awayId].includes(pair[1]); };

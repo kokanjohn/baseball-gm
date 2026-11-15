@@ -2505,8 +2505,15 @@ async function main() {
   // §122.15 the scouting director's tips arrive through the season's daily market look.
   {
     const st = SM.get(), d = st.userTeam.coachingStaff?.scoutingDirector;
-    check(`scouting director: on the staff (${d?.name}, rated ${d?.quality}, ${d?.specialty}); tips came through the season`,
-          !!d?.name && gm.cardIdsSeen.has('scout_tip'), [...gm.cardIdsSeen].filter(x => /scout/.test(x)).join(','));
+    // (A tip is a roll per diamond — 20–40% for a mid-rated director — so a season can bring none. What the season
+    //  shows is that the daily look ran and rolled the market's diamonds; a tip must come once a few were expected.
+    //  check-scouting-director covers the tips themselves.)
+    const { tipChance } = await import('../../engine/CoachEngine.js');
+    const rolled = Object.values(st.players).filter(p => p._tipRolled);
+    const expected = rolled.reduce((a, p) => a + tipChance(st.userTeam.coachingStaff, p), 0);
+    const tipped = gm.cardIdsSeen.has('scout_tip');
+    check(`scouting director: on the staff (${d?.name}, rated ${d?.quality}, ${d?.specialty}); the daily look rolled ${rolled.length} diamonds (${expected.toFixed(1)} tips expected)${tipped ? ', and tips came through' : ''}`,
+          !!d?.name && rolled.length > 0 && (tipped || expected < 1.5), [...gm.cardIdsSeen].filter(x => /scout/.test(x)).join(','));
   }
 
   if (process.env.DBG) {

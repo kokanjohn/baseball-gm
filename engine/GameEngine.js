@@ -884,12 +884,12 @@ function _commitAt(gameIndex) {
       g._gateApplied = true;
       if (g.isHome) {
         const crowd = g.attendance ? { attendance: g.attendance, gateK: g.gateK, sellout: !!g.sellout } : null;
-        const gate = Finance.homeGate(s, 'user', { atMs: _gameEndMs(g), dayMs: g.gameTime, playoff: !!g.isPlayoff, crowd, weather: _gateWeather(s, g, true) });
+        const gate = Finance.homeGate(s, 'user', { atMs: _gameEndMs(g), dayMs: g.gameTime, playoff: !!g.isPlayoff, crowd, weather: _gateWeather(s, g, true), noTicket: g.makeup?.ticket === 'one' });
         if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
       } else {
         // §78.5 on the road, the home club's crowd pays the home club.
         const host = (s.leagueTeams || []).find(t => t.name === g.opponent);
-        if (host?.finances) Finance.homeGate(s, host.id, { atMs: _gameEndMs(g), dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true) });
+        if (host?.finances) Finance.homeGate(s, host.id, { atMs: _gameEndMs(g), dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true), noTicket: g.makeup?.ticket === 'one' });
       }
     }
 
@@ -1746,13 +1746,31 @@ function _gateWeather(state, g, isUser) {
   return { chance, wet, tempF };
 }
 
+/**
+ * §122.51 _wxPatienceFor(state, g, vg) — how long a club waits for this game
+ * (GAME_WEATHER.PATIENCE): spring games are let go quickly; the league runs
+ * the postseason and the All-Star Game; otherwise it's how hard the game would
+ * be to make up — a doubleheader later in the same series is easy; an off day
+ * or the next meeting is the usual; no good date (only after the season), or
+ * a game that's already a makeup, and the club waits as long as it can.
+ */
+function _wxPatienceFor(state, g, vg) {
+  if (g.isSpring) return 'spring';
+  if (g.isPlayoff || g.isAllStar) return 'post';
+  if (g.isMakeup || g.postponements?.length) return 'hard';
+  const isUser = (state.schedule || []).includes(g);
+  let how = null;
+  try { how = findMakeupSlot(state, g, isUser, g.gameTime - GAME_WEATHER.PREGAME_CALLS_MIN[0] * 60_000)?.how || null; } catch { how = null; }
+  return how === 'series-dh' ? 'easy' : how === 'off-day' || how === 'meeting-dh' ? 'normal' : 'hard';
+}
+
 /** Where a game is played and when, for its weather (the All-Star Game: the host's park). */
 function _wxVenueGame(state, g, isUser) {
-  if (g.isAllStar) return { gameTime: g.gameTime, homeId: state.allStar?.season?.hostId || 'user' };
+  if (g.isAllStar) return { gameTime: g.gameTime, homeId: state.allStar?.season?.hostId || 'user', patience: 'post' };
   const t = gameTeams(g, isUser);
   // r170 our park's field: its drainage, and the crew's prep for this game
   const field = isUser && !g.isSpring ? fieldFor(state, t.venueId, g.gameTime) : null;
-  return { gameTime: g.gameTime, ...t, ...(field ? { field } : {}) };
+  return { gameTime: g.gameTime, ...t, ...(field ? { field } : {}), ...(g.wxPatience ? { patience: g.wxPatience } : {}), ...(g.isSpring ? { isSpring: true } : {}), ...(g.isPlayoff ? { isPlayoff: true } : {}) };
 }
 
 /**
@@ -1781,6 +1799,8 @@ function _ensureWeatherPlans(clockMs) {
   for (const games of Object.values(st.leagueSchedule?.dayMap || {})) for (const g of games) consider(g, false);
   if (!todo.length) return;
   const ctx = weatherContext(st);
+  // §122.51 how long the club will wait for this one: by how hard it would be to make up (set once, when first planned).
+  for (const t of todo) if (!t.susp) { t.patience = t.g.wxPatience || _wxPatienceFor(st, t.g, t.vg); t.vg = { ...t.vg, patience: t.patience }; }
   const plans = todo.map(t => {
     if (!t.susp) return gameWeatherPlan(ctx, t.vg);
     // (How long the rest will take: about the halves still to come — §109 it's played when it resumes.)
@@ -1790,7 +1810,7 @@ function _ensureWeatherPlans(clockMs) {
     return { ...r.plan, resumption: true, resumeOk: r.ok };
   });
   StateManager.mutate(s => {
-    todo.forEach((t, k) => { const { g } = _wxResolve(s, t.ref); if (g) g.wx = plans[k]; });
+    todo.forEach((t, k) => { const { g } = _wxResolve(s, t.ref); if (g) { g.wx = plans[k]; if (t.patience) g.wxPatience = t.patience; } });
   });
 }
 
@@ -2005,6 +2025,7 @@ function _wxMove(s, g, isUser, { date, gameTime, venueId }) {
   g.gameTime = gameTime;
   if (venueId && venueId !== home) g.venueId = venueId; else delete g.venueId;
   g.wx = null;
+  delete g.wxPatience;   // §122.51 (worked out again where it now sits)
 }
 
 const _wxReasonWord = (r) => (r === 'lightning' ? 'storms' : r === 'snow' ? 'snow' : r === 'wet field' ? 'a wet field' : 'rain');
@@ -2053,7 +2074,7 @@ function _postponeGame(ref, atMs) {
     } else if (slot) {
       if (slot.moveOther) _wxMove(s, slot.moveOther.g, slot.moveOther.isUser, { date: slot.date, gameTime: slot.moveOther.gameTime, venueId: slot.moveOther.g.venueId });
       _wxMove(s, x, isUser, slot);
-      x.makeup = { how: slot.how };
+      x.makeup = { how: slot.how, ...(slot.ticket ? { ticket: slot.ticket } : {}) };
     } else {
       // (No date at all — can't happen inside a season; the game is cancelled rather than lost.)
       x.status = GAME_STATUS.POSTPONED; x.cancelled = true; if (!isUser) x.played = true;
@@ -2303,7 +2324,7 @@ function _finishLeagueGame(date, i) {
     _advanceRotation(away);
     // §78.5 the home club's gate (not in spring).
     if (!g.isSpring && home?.finances) {
-      const gate = Finance.homeGate(s, home.id, { atMs: endMs, dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, false) });
+      const gate = Finance.homeGate(s, home.id, { atMs: endMs, dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, false), noTicket: g.makeup?.ticket === 'one' });
       if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
     }
     const posKind = g.isPlayoff ? 'playoff' : g.isSpring ? 'spring' : 'regular';   // r164

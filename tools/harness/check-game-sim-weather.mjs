@@ -208,7 +208,7 @@ console.log('\nWhat the weather does to the ball');
   const hot = { tempF: 92, windOutMph: 16, kind: null, rateMmH: 0 }, cold = { tempF: 46, windOutMph: -12, kind: null, rateMmH: 0 };
   const env = (c) => Array.from({ length: 14 }, (_, i) => ({ playMin: i * 20, ...c }));
   const runOf = (c) => {
-    let hr = 0, runs = 0, bb = 0, n = 120;
+    let hr = 0, runs = 0, bb = 0, n = 400;   // (§122.51 120 games was too few to see rain's +12% walks over the noise: it failed now and then)
     for (let i = 0; i < n; i++) {
       const r = play({ isHome: true, gameTime: T0 }, { plan: plan({}), conditions: env(c) });
       for (const x of r.plays) { if (x.type === 'hr') hr++; if (x.type === 'walk') bb++; runs += playRuns(x); }

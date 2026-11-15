@@ -419,6 +419,8 @@ export function weatherDemand(w, { playoff = false } = {}) {
 /**
  * homeGate(draft, teamId, opts) — post a home game's gate. `opts.crowd` (from
  * crowdFor at first pitch) is used when given; otherwise the crowd is drawn now.
+ * `opts.noTicket` (§122.51): the makeup half of a one-ticket doubleheader — the
+ * crowd is there, but no tickets were sold for it (nothing is posted).
  * Returns { attendance, gateK, sellout }.
  */
 export function homeGate(draft, teamId, opts) {
@@ -426,6 +428,7 @@ export function homeGate(draft, teamId, opts) {
   // (The crowd is the first pitch's: its day of the week, its weather — §110. The gate posts at the final.)
   const crowd = opts.crowd || crowdFor(draft, teamId, { ...opts, atMs: opts.dayMs ?? opts.atMs });
   if (!crowd || !t?.finances) return null;
+  if (opts.noTicket) return { ...crowd, gateK: 0, noTicket: true };
   post(t.finances, crowd.gateK, 'gate', opts.playoff ? 'Playoff gate' : 'Home gate', opts.atMs);
   if (!opts.playoff && t.finances.promo?.gamesLeft > 0) t.finances.promo.gamesLeft -= 1;
   return crowd;

@@ -568,14 +568,39 @@ export const GAME_WEATHER = Object.freeze({
   PREP_MIN:            15,    // then the grounds crew needs 15 minutes…
   PREP_PER_MM:         1.0,   // …plus a minute a millimetre that fell during the delay
   PREP_MAX_MIN:        40,
-  MAX_START_WAIT_MIN:  180,   // no first pitch within 3 hours of the scheduled time → postponed
-  MAX_DELAY_MIN:       150,   // a delay this long once under way → the game is called
   CURFEW_LOCAL_H:      1,     // play doesn't start or resume after 1 AM local
   CREW_CHECK_MIN:      30,    // during a delay, every 30 minutes the crew reads the forecast and may call it
-  PREGAME_CALLS_MIN:   Object.freeze([180, 90]),   // the club reads the forecast this long before first pitch…
-  PREGAME_CALL_CHANCE: Object.freeze([70, 60]),    // …and postpones only if the chance of rain the GM sees is at least this AND the forecast shows no game —
-  STEADY_RATE_MMH:     0.5,   // …or steady rain (at least this hard)…
-  STEADY_SHARE:        0.5,   // …through this much of the game's three hours (a wet evening; §102.6)
+  PREGAME_CALLS_MIN:   Object.freeze([180, 90]),   // the club reads the forecast this long before first pitch, and postpones
+                                                   // when the forecast shows no game (by the same rules as the day itself) and
+                                                   // the chance the GM sees is at least its patience's callChance (§122.51)
+  // §122.51 the field is covered before the game: the tarp goes on for rain this hard (Light Rain and up) lasting
+  // TARP_ON_MIN (at once for a downpour or snow), from PREGAME_TARP_MIN before first pitch. First pitch waits for the
+  // tarp to come off (the delay rules: a sprinkle for DRY_MIN, 30 minutes past lightning) and the crew's work after it.
+  // Starting is a higher bar than going on: once under way, play continues until STOP / SOAK above.
+  PREGAME_TARP_MIN:    180,
+  TARP_ON_RATE_MMH:    1.0,
+  TARP_ON_MIN:         10,
+  // §122.51 the crew looks at the radar before pulling the tarp: it comes off only when the forecast run of the hour
+  // (the radar's next frames) shows this long clear — before the game, no rain at the tarp's bar or lightning; in a
+  // game, nothing that would stop play again. A lull with more rain right behind it keeps the tarp on.
+  CREW_WINDOW_MIN:     45,
+  // §122.51 how long a club waits, by how hard the game is to make up (GameEngine sets game.wxPatience):
+  //   startWait — no first pitch within this long of the scheduled time → postponed;
+  //   delayMax  — a delay this long once under way → called;
+  //   callLate  — a forecast (ahead, or the crew's checks during a held start) showing first pitch this late or
+  //               later is as good as no game: the club calls it rather than keep everyone waiting;
+  //   callChance — the forecast chance (3 h, 90 min before) a club needs to call it off ahead.
+  PATIENCE: Object.freeze({
+    spring: Object.freeze({ startWait: 60,  delayMax: 60,  callLate: 45,  callChance: Object.freeze([50, 40]) }),   // nothing at stake, no makeup
+    easy:   Object.freeze({ startWait: 150, delayMax: 150, callLate: 90,  callChance: Object.freeze([70, 60]) }),   // a doubleheader later this series
+    normal: Object.freeze({ startWait: 180, delayMax: 150, callLate: 120, callChance: Object.freeze([70, 60]) }),
+    hard:   Object.freeze({ startWait: 210, delayMax: 150, callLate: 165, callChance: Object.freeze([80, 70]) }),   // no good makeup date
+    post:   Object.freeze({ startWait: 210, delayMax: 180, callLate: 165, callChance: Object.freeze([80, 70]) }),   // the league decides (postseason)
+  }),
+  // §122.51 the crew isn't perfect: getting the tarp off and the field ready runs long now and then (more water than
+  // expected, the tarp snagging). Seeded per delay; drainage and field prep (r170) make it less likely. The forecast,
+  // and so the crew's estimate, doesn't know it's coming.
+  TROUBLE: Object.freeze({ chance: 0.12, minMin: 10, maxMin: 30, drainageCut: 0.25, prepCut: 0.5 }),
   SOGGY_IN:            1.5,   // this much rain in the 6 hours before first pitch → field work first
   SOGGY_WORK_MIN:      30,
   WASHOUT_IN:          3.0,   // this much → the field is unplayable: postponed
@@ -583,9 +608,12 @@ export const GAME_WEATHER = Object.freeze({
   // §102.3 (4c) the schedule
   PLAN_AHEAD_MIN:      240,   // a game's plan is worked out this long before first pitch (the club's first look is at 3 hours)
   MAKEUP_OFFDAY_DAYS:  14,    // a common off day this soon is used for a makeup…
-  DH_DAY_TIME:         '1:05 PM',   // …otherwise a doubleheader: the makeup in the afternoon before a night game,
+  // …otherwise a doubleheader, one ticket for both games (§122.51): before a night game the makeup is game one,
+  // DH_NIGHT_LEAD_MIN earlier; before a day game the makeup takes its time and that game follows DH_GAP_MIN later.
+  // Game two never starts sooner than DH_BREAK_MIN after game one ends (GameEngine._wxHoldForClubs).
   DH_NIGHT_FROM_H:     17,
-  DH_GAP_MIN:          240,   // or, before a day game, that game moves this much later
+  DH_NIGHT_LEAD_MIN:   210,
+  DH_GAP_MIN:          210,
   SLOT_MIN_LEAD_MIN:   120,   // a makeup or resumption is never set sooner than this
   DH_BREAK_MIN:        30,    // a doubleheader's second game starts no sooner than this after the first ends
   // §102.5 the weather's decisions for the GM

@@ -11575,3 +11575,94 @@ No engine change: a fresh team is not needed.
 6. **Checks and tuning:** rates by region, message counts per game day, screenshots in dark and light, a full season.
 
 Not started. Phase 1 waits for the GM's go-ahead.
+
+## §122.52 — r178: §122.51 phase 1 — realistic calls (the tarp before the game, the radar before the tarp comes off, patience, the crew's luck, one-ticket doubleheaders)
+
+Every club is handled the same way. **A fresh team is required:** `constants.js` and every game's weather plan changed (`PLAN_VERSION` 2).
+
+**The tarp before the game** (`GameWeather._pregame`):
+- **When it goes on:** from `PREGAME_TARP_MIN` (3 h) before first pitch, the crew covers the field for rain at `TARP_ON_RATE_MMH` (1 mm/h, Light Rain and up) for `TARP_ON_MIN` (10 min). A downpour or snow covers it at once. If it's already raining when the crew starts watching, the field is covered from the start.
+- **When it comes off:** by the delay's rules (a sprinkle for `DRY_MIN`, 30 minutes past the last lightning), then the crew's work.
+- **First pitch waits** while the field is still covered. Starting is a higher bar than going on: a band of light rain that a game under way would play through holds the start (the Roanoke case).
+- **Lightning in the half hour before first pitch** holds the start too. With the field never covered, there is no crew work after it.
+- **In the plan:**
+  - `plan.tarps[{ onT, offT, readyT, mm, trouble? }]`: the field covered and ready again before first pitch;
+  - a delayed start carries `tarpOnT`;
+  - delays now keep `offT` (when the tarp came off) and `trouble`.
+
+  Phase 2's timeline reads these.
+
+**The radar before the tarp comes off** (`_clearAhead`, `_crewLook`):
+- The tarp comes off only when the forecast run of that hour (the radar's next frames) shows `CREW_WINDOW_MIN` (45 min) clear.
+- Before the game, "clear" means no rain at the tarp's bar and no lightning. Under way, it means nothing that would stop play again.
+- A lull with more rain right behind it keeps the tarp on.
+- A forecast run reads itself the same way.
+
+**Postponing ahead uses the day's own rules** (`_forecastSaysNo`):
+- `_steadyRain` (the 0.5 mm/h rule from §102.6) is gone.
+- At 3 h and 90 min the club runs the GM's forecast through the same pregame and game rules. What has already fallen is the truth; what's ahead is the run's.
+- It calls the game only when the forecast shows no game, or a first pitch at least `callLate` minutes late. The GM's chance must also be at least `callChance`.
+- The crew's 30-minute checks during a held start use the same `callLate`.
+
+**Patience** (`GAME_WEATHER.PATIENCE`; `GameWeather.patienceOf`; `GameEngine._wxPatienceFor`; `game.wxPatience`, set when first planned and cleared when the game moves):
+
+| | Wait to start | Delay under way | Call if first pitch this late | Chance needed (3 h / 90 min) |
+|---|---|---|---|---|
+| spring | 60 | 60 | 45 | 50 / 40 |
+| easy (a doubleheader later this series) | 150 | 150 | 90 | 70 / 60 |
+| normal (an off day, or the next meeting) | 180 | 150 | 120 | 70 / 60 |
+| hard (only after the season, or already a makeup) | 210 | 150 | 165 | 80 / 70 |
+| post (postseason, All-Star) | 210 | 180 | 165 | 80 / 70 |
+
+`MAX_START_WAIT_MIN` and `MAX_DELAY_MIN` are replaced by these.
+
+**The crew's luck** (`GameWeather.crewTrouble`, `GAME_WEATHER.TROUBLE`):
+- 12% of times the field is uncovered, the crew's work runs 10–30 minutes long.
+- Drainage takes 25% off that chance per level, and the crew's prep halves it (drainage 3 with prep: about 1%).
+- It is seeded per cover-up, so the same delay always has the same luck. The truth only: no forecast, and so no estimate, sees it coming.
+
+**One-ticket doubleheaders** (`WeatherSchedule.findMakeupSlot`, `slot.ticket = 'one'`, `game.makeup.ticket`):
+- Before a night game, the makeup is game one, `DH_NIGHT_LEAD_MIN` (3½ h) earlier. Before a day game, the makeup takes the slot and that game follows `DH_GAP_MIN` (3½ h) later.
+- Game two still waits for game one to end plus 30 minutes.
+- The makeup draws no gate (`FinanceEngine.homeGate({ noTicket })`): the crowd is there, but no tickets were sold for it. This applies to our park, the host's and CPU gates alike.
+- An off-day makeup or one added after the season is a single game, as before.
+
+**Measured:**
+- **Games postponed ahead that would really have been played within an hour of their start:** 7 of 117 (2 seeds) and 3 of 68 (2 more seeds). Before: 114 of 183 would have been played, and in the South and East most of those without any delay.
+- **On-time starts into rain of 1 mm/h or more:** 15 of about 7,800 games (before: 66). What's left is rain starting right at first pitch.
+- **Delayed starts:** about 3–5% of games (West 1.4%), median 40–45 min.
+- **Postponements by region, 4 seeds, plans with "normal" patience:**
+
+  | Region | Postponed | Target (§102.6) |
+  |---|---|---|
+  | North | 1.9% | about 3% |
+  | South | 2.2% | about 2% |
+  | East | 1.5% | 3–3.5% |
+  | West | 0.9% | 1–2% |
+
+- **Delays:** 3.6–9.9% of games, median 65–75 min.
+- **A full league season (north):** the two seed-142 runs postponed 2.1% and 1.1% of 660 regular games. The first run made up 18 rainouts (11 as a doubleheader later in the same series) and cancelled 4 spring games.
+
+**Open:** North and East run below the MLB benchmarks. The calls are now right, but the model's rain systems pass faster than real all-night rains. Raising them honestly means longer-lasting cool-season systems, a climate change that needs the calibration table rerun. Left for the GM to decide.
+
+**Checks:**
+- **check-weather** (122; 6 new):
+  - games called off ahead rarely would have been played within an hour (0 of 15);
+  - no on-time start into rain that kept the tarp on;
+  - the tarp comes off only with a clear window on the radar, then the crew's work (183 times);
+  - the crew runs long now and then (17 of 183);
+  - spring is let go sooner (never over an hour late);
+  - trouble is about 12%, and about 1% with drainage 3 and prep.
+
+  The forecast-call check reads the game's patience. The park-report check reads a delayed start's report from when the field was covered, and a start held for lightning from the half hour before.
+- **check-game-sim-weather:** "playing through rain: more walks" failed now and then on r177 too. 120 games couldn't show rain's +12% walks over the noise; it now uses 400 games.
+- **sim-season:** "tips came through the season" assumed a tip every season, but a tip is a roll per diamond (20–40% for a mid-rated director). It now requires that the daily look rolled the market's diamonds, and that a tip came once 1.5 or more were expected.
+
+**Suite (r178):**
+- Everything passes, after reruns of:
+  - check-game-sim-weather and the season sim (the two checks fixed above);
+  - check-roster-advice (a known flake);
+  - test-game-injury-ui (dark: a timeout while the season sim ran beside it; it passed on rerun).
+- No screen changed in this release; phase 5 brings the first-pitch card.
+
+**Next:** phase 2, the crew's timeline per game.

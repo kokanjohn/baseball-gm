@@ -666,6 +666,7 @@ console.log('\nGame weather');
   }
   const rates = {}, ms = [];
   let structBad = 0, reportBad = 0, resumeBad = 0, callBad = 0, fieldBad = 0, nForecastCalls = 0, checkedSteps = 0;
+  let calledPlayable = 0, wetStart = 0, tarpBad = 0, nTarpOff = 0, nTrouble = 0;   // §122.51
   const someGames = [];
   for (const region of REGION_KEYS) {
     const c = ctxFor(region, 'wx-a');
@@ -692,8 +693,28 @@ console.log('\nGame weather');
       if (p.outcome === 'postponed' && p.calledBy === 'forecast' && p.decidedAt < g.gameTime) {
         nForecastCalls++;
         const i = GW.PREGAME_CALLS_MIN.indexOf((g.gameTime - p.decidedAt) / 60_000);
-        if (WF.chanceOfPrecip(c, p.decidedAt, pk.x, pk.y, g.gameTime, g.gameTime + GW.PLAY_MIN * 60_000).chance < GW.PREGAME_CALL_CHANCE[i]) callBad++;
+        if (WF.chanceOfPrecip(c, p.decidedAt, pk.x, pk.y, g.gameTime, g.gameTime + GW.PLAY_MIN * 60_000).chance < GWm.patienceOf(g).callChance[i]) callBad++;
+        // §122.51 what it would really have done, with no call ahead
+        const cf = GWm.gameWeatherPlan(c, g, { aheadCalls: false });
+        const lost = cf.outcome === 'played' ? (cf.startAt - g.gameTime) + cf.delays.filter(x => x.atPlayMin > 0).reduce((a, x) => a + x.endT - x.startT, 0) : Infinity;
+        if (lost <= 60 * 60_000) calledPlayable++;
       }
+      // §122.51 the field is covered before the game: no on-time start into rain that kept the tarp on…
+      if (p.startAt === g.gameTime && [10, 5].every(m => venueSample(c, pk.x, pk.y, g.gameTime - m * 60_000, 16).rateMmH >= GW.TARP_ON_RATE_MMH)) wetStart++;
+      // …and the tarp comes off only when the radar (the run of that hour) shows a clear window, then the crew's work.
+      const offs = [...(p.tarps || []).map(x => ({ offT: x.offT, readyT: x.readyT })),
+                    ...p.delays.filter(x => x.offT != null && x.endT !== p.endT).map(x => ({ offT: x.offT, readyT: x.endT, inGame: x.atPlayMin > 0 }))];
+      for (const o of offs) {
+        nTarpOff++;
+        if (!(o.readyT >= o.offT)) tarpBad++;
+        const run = forecastContext(c, o.offT);
+        for (let t = o.offT + 5 * 60_000; t <= o.offT + GW.CREW_WINDOW_MIN * 60_000; t += 5 * 60_000) {
+          const v = venueSample(run, pk.x, pk.y, t, 16);
+          if (v.stormDbz >= 43 || v.rateMmH >= (o.inGame ? GW.STOP_RATE_MMH : GW.TARP_ON_RATE_MMH)) { tarpBad++; break; }
+        }
+      }
+      for (const dl of p.delays) if (dl.trouble) nTrouble++;
+      for (const x of p.tarps || []) if (x.trouble) nTrouble++;
       // A field call is for rain or snow that already fell.
       if (p.outcome === 'postponed' && p.calledBy === 'field') {
         const fell = rainTotal(c, pk.x, pk.y, g.gameTime - 12 * MS_HOUR, g.gameTime, 20);
@@ -715,8 +736,11 @@ console.log('\nGame weather');
     const pk = c.map.parks[p.venueId];
     if (p.outcome === 'postponed') continue;
     for (const dl of p.delays) {
-      const rep = conditionsAt(c, pk.x, pk.y, dl.startT);
-      const ok = dl.reason === 'lightning' ? rep.lightning : dl.reason === 'wet field' ? true : rep.precip.kind !== null;
+      // (§122.51 a delayed start began when the field was covered: it may have eased by first pitch, the crew at work)
+      const rep = conditionsAt(c, pk.x, pk.y, dl.tarpOnT ?? dl.startT);
+      // (a start held for lightning: lightning in the half hour up to first pitch)
+      const recentLightning = () => { for (let t = dl.startT - GW.LIGHTNING_CLEAR_MIN * 60_000; t <= dl.startT; t += 5 * 60_000) if (conditionsAt(c, pk.x, pk.y, t).lightning) return true; return false; };
+      const ok = dl.reason === 'lightning' ? rep.lightning || recentLightning() : dl.reason === 'wet field' ? true : rep.precip.kind !== null;
       if (!ok) reportBad++;
     }
     for (let t = p.startAt; t < p.endT; t += 5 * 60_000) {
@@ -730,6 +754,31 @@ console.log('\nGame weather');
   check('play never resumes within 30 minutes of lightning in the area', resumeBad === 0, `${resumeBad}`);
   check(`clubs postpone ahead only when the GM's forecast shows a high chance (${nForecastCalls} calls)`, callBad === 0 && nForecastCalls > 0, `${callBad} low`);
   check('field postponements follow rain or snow that already fell', fieldBad === 0, `${fieldBad}`);
+  // §122.51 what a GM watching the radar would expect
+  check(`games called off ahead would rarely have been played within an hour (${calledPlayable} of ${nForecastCalls})`, calledPlayable <= Math.max(2, 0.15 * nForecastCalls), `${calledPlayable}`);
+  check('no game starts on time into rain that kept the tarp on', wetStart === 0, `${wetStart}`);
+  check(`the tarp comes off only with a clear window on the radar, then the crew's work (${nTarpOff} times)`, tarpBad === 0 && nTarpOff > 20, `${tarpBad} bad`);
+  check(`the crew runs long now and then (${nTrouble} of ${nTarpOff})`, nTrouble > 0 && nTrouble < 0.3 * nTarpOff);
+  {
+    // Spring: let go quickly — never more than an hour late, and called ahead more readily.
+    const c = ctxFor('east', 'wx-a'), parks = Object.keys(c.map.parks);
+    let late = 0, n = 0, ppdS = 0, ppdR = 0;
+    for (let d = 0; d < 186; d += 1) {
+      const g = { homeId: parks[d % parks.length], gameTime: START + d * MS_DAY + Math.round(13.08 * MS_HOUR) };
+      const ps = GWm.gameWeatherPlan(c, { ...g, isSpring: true }), pr = GWm.gameWeatherPlan(c, g);
+      n++; if (ps.outcome === 'postponed') ppdS++; if (pr.outcome === 'postponed') ppdR++;
+      if (ps.startAt != null && ps.startAt - g.gameTime > 60 * 60_000) late++;
+    }
+    check(`spring games are let go sooner (postponed ${ppdS} vs ${ppdR} of ${n}; none starts over an hour late)`, late === 0 && ppdS > ppdR, `${late} late`);
+  }
+  {
+    // Drainage and the crew's prep make trouble rarer.
+    const c = ctxFor('south', 'wx-a');
+    const tr = GWm.crewTrouble(c, 'user'), trBest = GWm.crewTrouble(c, 'user', { drainage: 3, prep: true });
+    let a = 0, b = 0;
+    for (let i = 0; i < 4000; i++) { const k = START + i * 37 * 60_000; if (tr(k)) a++; if (trBest(k)) b++; }
+    check(`crew trouble: ${(a / 40).toFixed(1)}% of cover-ups, ${(b / 40).toFixed(1)}% with drainage 3 and prep`, a > 250 && a < 700 && b < a * 0.25);
+  }
   const pct = (a, n) => (100 * a / n);
   for (const region of REGION_KEYS) {
     const r = rates[region];
