@@ -34,7 +34,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r174';
+export const APP_VERSION = 'tfo-v2-r175';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -115,6 +115,9 @@ export function switchTab(tab) {
 
   // Update active tab
   _activeTab = tab;
+  // r175 §122.48 the page knows which tab is up: Team and League spread to the
+  // full width when the phone is sideways (index.html, "Sideways").
+  document.body.dataset.tab = tab;
 
   // Run screen-specific reset if registered
   if (_tabResetFns[tab]) {

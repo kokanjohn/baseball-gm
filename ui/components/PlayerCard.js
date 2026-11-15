@@ -29,7 +29,7 @@ import { getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { PHASE, PLAYER_GROUP, POSITION_RULES } from '../../data/constants.js';
 import { bullpenRoles, armStatus } from '../../engine/PitchingEngine.js';
 import * as StateManager from '../../store/StateManager.js';
-import { baseballYear, computeAge } from '../../engine/PlayerFactory.js';
+import { baseballYear } from '../../engine/PlayerFactory.js';
 import { wearOf } from '../../engine/DevelopmentEngine.js';
 import { primaryPos, eligibleAt, keepNeed, familiarity, pitchRoles, stretchOf } from '../../engine/Positions.js';   // r164
 
@@ -346,14 +346,11 @@ function _armToday(player, now) {
 function _renderWear(player, isPitcher, state) {
   const now = Date.now();
   const w = wearOf(player, now);
-  const age = computeAge(player.dob, baseballYear(state));
-  const ageLine = age >= 31 ? ` At ${age}, it builds faster${isPitcher ? ' and comes off slower' : ''}.`
-                : age <= 25 ? ` At ${age}, it builds slower${isPitcher ? ' and comes off quicker' : ''}.` : '';
   let note;
-  if (isPitcher) note = `${_armToday(player, now)} ${ARM_LINES[w.level]}${ageLine}`;
+  if (isPitcher) note = `${_armToday(player, now)} ${ARM_LINES[w.level]}`;
   else {
     const caught = (state.userTeam?.lineupSlots || []).some(s => s.slot === 'C' && s.playerId === player.id);
-    note = `${w.straight ? `${caught ? 'Caught' : 'Started'} ${w.straight} straight. ` : ''}${WEAR_LINES[w.level]}${ageLine}`;
+    note = `${w.straight ? `${caught ? 'Caught' : 'Started'} ${w.straight} straight. ` : ''}${WEAR_LINES[w.level]}`;
   }
   return `
     <div class="pc-section">

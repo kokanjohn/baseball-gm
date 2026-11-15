@@ -166,6 +166,29 @@ button.budget-pill{cursor:pointer;-webkit-tap-highlight-color:transparent;}
   justify-content:center;padding:0 4px;line-height:1;border:2px solid var(--surface);}
 .nav-badge.visible{display:flex;}
 
+/* r175 §122.48 Sideways. A phone turned on its side gets a slim header and nav on
+   every screen; Team and League spread to the full width (wide tables), the rest
+   stay in the phone-width column. */
+@media (orientation:landscape) and (max-height:540px){
+  .app-header{padding:5px 16px;box-shadow:none;}
+  .badge-diamond{width:28px;height:28px;font-size:17px;}
+  .team-name-head{font-size:17px;}
+  .gear-btn{width:30px;height:30px;}
+  .budget-pill{padding:3px 10px;}
+  .bottom-nav{padding:2px 0 max(2px,env(safe-area-inset-bottom));}
+  .nav-item{padding:9px 2px;}
+  .nav-icon{display:none;}
+  .nav-badge{position:static;order:2;}
+  .nav-label{letter-spacing:.4px;}
+  body[data-tab="roster"] .nav-label,body[data-tab="league"] .nav-label{letter-spacing:1px;}
+  .nav-item{flex-direction:row;justify-content:center;gap:5px;}
+  body[data-tab="roster"] .nav-icon,body[data-tab="league"] .nav-icon{display:flex;}
+  body[data-tab="roster"] .nav-icon svg,body[data-tab="league"] .nav-icon svg{width:18px;height:18px;}
+  body[data-tab="roster"] .nav-item,body[data-tab="league"] .nav-item{gap:7px;padding:5px 4px;}
+  body[data-tab="roster"],body[data-tab="league"]{max-width:none;
+    padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
+}
+
 /* ═══════════════════════════════════════════════════════════════
    SECTION 7 — TAB CONTAINERS
 ═══════════════════════════════════════════════════════════════ */

@@ -1115,14 +1115,14 @@ function _injectCSS() {
     .tr-row{cursor:pointer;}
     .tr-row:active .tr-fz,.tr-row:active .tr-td{background:var(--surface2);}
     .tr-row.tr-first{border-top:2px solid var(--border);}
-    .tr-fz{position:sticky;left:0;z-index:2;display:flex;align-items:center;flex-shrink:0;width:262px;
+    .tr-fz{position:sticky;left:0;z-index:2;display:flex;align-items:center;flex-shrink:0;width:240px;
       background:var(--bg);border-right:1px solid var(--border);}
     .tr-head .tr-fz{background:var(--surface2);z-index:3;}
     .tr-head .tr-fz > div,.tr-head .tr-td{font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
       color:var(--muted);white-space:nowrap;padding-top:6px;padding-bottom:6px;}
     .tr-slot{width:46px;flex-shrink:0;padding-left:10px;box-sizing:border-box;font-size:11px;font-weight:600;color:var(--soft);white-space:nowrap;}
     .tr-slot.tr-oop{color:var(--danger);}
-    .tr-name{width:98px;flex-shrink:0;min-width:0;padding:7px 4px 7px 2px;}
+    .tr-name{width:76px;flex-shrink:0;min-width:0;padding:7px 4px 7px 2px;}
     .tr-name-line{font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .tr-sub{font-size:10px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .tr-act{width:62px;flex-shrink:0;display:flex;justify-content:center;padding-right:6px;}

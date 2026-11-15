@@ -5,7 +5,7 @@
   "start_url": "/baseball-gm/",
   "scope": "/baseball-gm/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#1a1a2e",
   "theme_color": "#1a1a2e",
   "lang": "en-US",

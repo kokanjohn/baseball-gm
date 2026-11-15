@@ -11385,3 +11385,34 @@ No engine change: a fresh team is not needed for this release.
   - test-team-roster-ui's bullpen fill gave the re-render 500 ms; under the suite's load it sometimes wasn't enough, and it now waits 1.5 s.
   - test-wear-ui's rest message is a known intermittent failure.
   - Both pass on rerun in both themes.
+
+---
+
+## §122.48 — r175: a narrower name column, Team and League sideways, and the Wear note states the status
+
+**Team screen name column:**
+- `.tr-name` goes from 98 px to 76 px, and the frozen part from 262 px to 240 px.
+- The wear bar now sits right after a typical last name. A long name ends in "…", and the full name is on the card.
+
+**Sideways (landscape):**
+- `manifest.json` changes `orientation` from `"portrait"` to `"any"`.
+- `App.switchTab` sets `body[data-tab]` to the active tab.
+- index.html has one media block, `(orientation: landscape) and (max-height: 540px)`, which matches a phone on its side but not a tablet or desktop.
+  - **Every screen:** a slim header (5 px padding, a smaller badge and title) and a slim nav with labels only. The Messages count sits beside the label.
+  - **Team and League:** the body drops its 430 px limit and fills the width, padded by the safe-area insets. The tables use the full width, so at 844 px the Team hitters table and League → Players need no sideways scroll. The nav shows icon and label side by side.
+  - **Every other screen** (Dashboard, Messages, Schedule, setup) keeps the phone-width column, centered. Nothing blocks or asks the user to turn the phone.
+- Turning upright again restores the usual layout. The layout is pure CSS from the media query and `data-tab`, so it has no listeners.
+
+**Player card Wear note:**
+- The age line is gone ("At 24, it builds slower…", "At 33, it builds faster and comes off slower"). The note now states the status only:
+  - pitchers: "Today: …" plus the arm line;
+  - hitters: "Started N straight." plus the wear line.
+- Age still drives the wear model; the note just doesn't explain it.
+
+**Tests:**
+- New: test-landscape-ui, which checks:
+  - upright: the name column is 76 px and the frozen part 240 px; few names are cut short; the card's Wear note has no age line;
+  - at 844×390: the Dashboard stays in a 430 px column with a slim header and nav; Team and League → Players fill 844 px with no sideways scroll;
+  - back upright, the column returns.
+
+No engine change: a fresh team is not needed.
