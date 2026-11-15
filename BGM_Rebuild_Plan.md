@@ -11629,7 +11629,7 @@ Every club is handled the same way. **A fresh team is required:** `constants.js`
 
 **Measured:**
 - **Games postponed ahead that would really have been played within an hour of their start:** 7 of 117 (2 seeds) and 3 of 68 (2 more seeds). Before: 114 of 183 would have been played, and in the South and East most of those without any delay.
-- **On-time starts into rain of 1 mm/h or more:** 15 of about 7,800 games (before: 66). What's left is rain starting right at first pitch.
+- **On-time starts into rain of 1 mm/h or more:** 12 of about 7,800 games on the same two seeds (before: 66). What's left is rain starting right at first pitch.
 - **Delayed starts:** about 3–5% of games (West 1.4%), median 40–45 min.
 - **Postponements by region, 4 seeds, plans with "normal" patience:**
 
