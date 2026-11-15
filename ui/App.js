@@ -34,10 +34,11 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r175';
+export const APP_VERSION = 'tfo-v2-r176';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
+let _screenId = null;   // 'setup' | 'app' (r176 sideways)
 let _tickInterval    = null;   // Section 8.4 — App.js owns the tick interval
 
 // DEV-ONLY live speed multiplier. Always 1 for shipping players (live-only at
@@ -115,9 +116,7 @@ export function switchTab(tab) {
 
   // Update active tab
   _activeTab = tab;
-  // r175 §122.48 the page knows which tab is up: Team and League spread to the
-  // full width when the phone is sideways (index.html, "Sideways").
-  document.body.dataset.tab = tab;
+  _applyOrientation();
 
   // Run screen-specific reset if registered
   if (_tabResetFns[tab]) {
@@ -155,6 +154,7 @@ export function getActiveTab() {
  */
 export function showMilestone(milestoneId) {
   _milestoneActive = true;
+  _applyOrientation();
   const overlay = document.getElementById('milestone-overlay');
   if (overlay) overlay.classList.add('active');
   EventBus.emit('nav:milestone', { milestoneId });
@@ -167,6 +167,7 @@ export function showMilestone(milestoneId) {
  */
 export function clearMilestone() {
   _milestoneActive = false;
+  _applyOrientation();
   const overlay = document.getElementById('milestone-overlay');
   if (overlay) overlay.classList.remove('active');
   EventBus.emit('nav:milestoneCleared');
@@ -536,6 +537,24 @@ function _showScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const target = document.getElementById(`screen-${screenId}`);
   if (target) target.classList.add('active');
+  _screenId = screenId;
+  _applyOrientation();
+}
+
+// r176 §122.49 Sideways is for Team and League only. Everywhere else (the other tabs,
+// setup, a milestone) is upright: the phone is locked to portrait where the browser
+// allows it (an installed app on Android), and where it doesn't (iOS) a sideways
+// phone sees a cover asking for it upright (index.html, "Sideways").
+const SIDEWAYS_TABS = new Set(['roster', 'league']);
+function _applyOrientation() {
+  const wide = _screenId === 'app' && !_milestoneActive && SIDEWAYS_TABS.has(_activeTab);
+  if (wide) document.body.dataset.wide = '1';
+  else delete document.body.dataset.wide;
+  const o = screen.orientation;
+  try {
+    if (wide) o?.unlock?.();
+    else o?.lock?.('portrait')?.catch?.(() => {});
+  } catch { /* not supported here: the cover does it */ }
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -11416,3 +11416,29 @@ No engine change: a fresh team is not needed for this release.
   - back upright, the column returns.
 
 No engine change: a fresh team is not needed.
+
+---
+
+## §122.49 — r176: only Team and League go sideways
+
+Feedback on r175: the other screens didn't look right sideways, so they're upright only now.
+
+**How it works:**
+- **`App._applyOrientation()`:**
+  - Called from `switchTab`, `_showScreen` (setup or app), `showMilestone` and `clearMilestone`.
+  - It sets `body[data-wide]` only when the app screen is up, no milestone is showing, and the tab is `roster` or `league`.
+  - Everywhere else it calls `screen.orientation.lock('portrait')`; on Team and League it calls `unlock()`. An installed app on Android honors this. iOS has no lock, and the call is caught.
+- **index.html, inside the phone-sideways media query:**
+  - `body[data-wide]` gets the full width, the slim header and the slim nav, as in r175. Only Team and League ever look different sideways.
+  - `body:not([data-wide])` shows `#upright-cover`, a full-screen cover reading "Turn your phone upright". It hides the screen until the phone is upright and covers setup and milestones too. On Android the lock usually keeps it from showing.
+  - r175's `body[data-tab]` is gone.
+- **The manifest stays `"orientation": "any"`.** The installed app has to allow sideways at all for Team and League, so a reinstall isn't needed again.
+- **Reaching Team sideways from another tab:** the cover blocks the nav, so you turn upright, pick the tab, then turn sideways.
+
+**Tests:** test-landscape-ui checks, sideways, that:
+- Dashboard, Messages and Schedule are covered;
+- Team and League → Players fill the width with no cover and a slim header;
+- back upright, there's no cover;
+- League → Dashboard sideways is covered again.
+
+No engine change: a fresh team is not needed.
