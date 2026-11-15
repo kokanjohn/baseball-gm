@@ -601,6 +601,7 @@ export const GAME_WEATHER = Object.freeze({
   // expected, the tarp snagging). Seeded per delay; drainage and field prep (r170) make it less likely. The forecast,
   // and so the crew's estimate, doesn't know it's coming.
   TROUBLE: Object.freeze({ chance: 0.12, minMin: 10, maxMin: 30, drainageCut: 0.25, prepCut: 0.5 }),
+  TROUBLE_SEEN_MIN:    10,    // …found out this long after the tarp comes off (the crew's estimate moves then)
   SOGGY_IN:            1.5,   // this much rain in the 6 hours before first pitch → field work first
   SOGGY_WORK_MIN:      30,
   WASHOUT_IN:          3.0,   // this much → the field is unplayable: postponed
@@ -1908,6 +1909,27 @@ export const PROMOTIONS = Object.freeze({
  *   The offer comes `leadH` before first pitch when the forecast shows `minChance`% or more (or the
  *   park already took `wetIn` of rain), and must be answered by `closeH` before (the plan is made at 4).
  */
+/**
+ * §122.51 (phase 2) A game's weather story (engine/GameWeatherStory.js): what the grounds crew knows,
+ * moment by moment, and when it would tell anyone.
+ *   outlookHour / outlookJitterMin — the morning look on game day (local), no later than outlookLeadMin
+ *     before first pitch; then hourly until crewFromMin out, when the crew watches every crewEveryMin.
+ *   watchBeforeMin / watchAfterMin — the window the morning look reads (rain at the tarp's bar, lightning).
+ *   chanceStep — an hourly look reports a change of chance this big (or a change in what it means for the start).
+ *   estLeadMin — the start's estimate is given from this long before first pitch; estStepMin — a revision is this
+ *     big or more; delayedMin — a start this late counts as delayed.
+ *   headsUpMin — under way, how far ahead the crew warns of rain that will stop play; lateWatchMin — near the
+ *     end, how far past it the crew looks (extra innings, a long game).
+ */
+export const WEATHER_STORY = Object.freeze({
+  outlookHour: 9, outlookJitterMin: 60, outlookLeadMin: 240,
+  watchBeforeMin: 180, watchAfterMin: 240,
+  crewFromMin: 120, crewEveryMin: 15,
+  chanceStep: 25,
+  estLeadMin: 90, estStepMin: 10, delayedMin: 5,
+  headsUpMin: 20, lateWatchMin: 60,
+});
+
 export const FIELD_CARE = Object.freeze({
   drainage: Object.freeze({ soakPerLevel: 6, soggyPerLevel: 0.4, washoutPerLevel: 0.6, prepPerMmCut: 0.2, softPerLevel: 0.35, max: 3,
                             dryRatePerLevel: 0.5, dryMinPerLevel: 3,

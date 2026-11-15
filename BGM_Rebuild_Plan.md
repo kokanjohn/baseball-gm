@@ -11666,3 +11666,64 @@ Every club is handled the same way. **A fresh team is required:** `constants.js`
 - No screen changed in this release; phase 5 brings the first-pitch card.
 
 **Next:** phase 2, the crew's timeline per game.
+
+## §122.53 — r179: §122.51 phase 2 — the crew's timeline (a game's weather story)
+
+**What it is.** `engine/GameWeatherStory.js` (pure, new, precached), `gameStory(ctx, game, plan, { result?, until? })`. It gives what the grounds crew knows about the weather at the ballpark, from the morning of game day to an hour past the end. The messages (phases 3–4) and the first-pitch card (phase 5) are built on it. Ours and the league's are made the same way; who hears about it is the caller's business.
+
+**Two kinds of moment:**
+- **What happens** (from the plan): the tarp on and off, crew trouble once it's found out (`TROUBLE_SEEN_MIN`, 10 min after the tarp comes off), first pitch after a held start, a postponement, each delay under way and play resuming, a game called.
+- **What the crew expects** (`GameWeather.projectGame`): what has happened so far, then the forecast run of that hour, by the plan's own rules, with no calls made. This gives:
+  - the morning look;
+  - hourly changes;
+  - the start's estimate and every revision;
+  - the resume estimate during a delay;
+  - a heads-up before rain stops play;
+  - a late watch near the end.
+
+**The moments** (events `{ id, at, kind, … }`, in time order, each id once):
+- **`outlook`:** the morning look, local 9:00 plus up to an hour (seeded), and no later than 4 hours before first pitch. It's given when the radar's run shows rain at the tarp's bar or lightning at the park from 3 h before first pitch to 4 h after, or the field is already soaked or snow-covered (`GameWeather.fieldOutlook`: what has fallen, then the run). It carries the chance during the game, the kind, when the rain is due (`rainAt`), and what it means for the start (`proj`: ontime / delayed + `estStart` / doubt).
+- **`update` / `clearing`:** the hourly looks after the morning one, until 2 hours out. They're told only when what it means for the start changes, or the chance moves by 25 points or more.
+- **`tarp_on`, `tarp_off`** (with the estimate then) and **`crew_trouble`** (with the later estimate).
+- **`start_delayed`, `start_estimate`** (a revision of 10 min or more), **`start_on_time`, `start_doubt`.**
+  - **From when:** 90 min before first pitch, and only once it's close — the tarp on, or rain on the radar within the run's first hour (what it tracks; past that, a run places storms of its own). A first try announced late starts off a forecast alone, which the next hour's run took back 15 minutes later. That noise is gone.
+  - **Delayed means** 5 min or more late, since the GM wants any change to the start told.
+- **`first_pitch`** (a held start under way), **`postponed`.**
+- **Under way:**
+  - `heads_up` (20 min before a stoppage, when the radar shows it);
+  - `delay` (with `estResume`);
+  - `resume_estimate`, `tarp_off`, `crew_trouble`;
+  - `resumed`, `called`.
+
+  Once played, the delays are the sim's (`opts.result` = `game.wxResult`), so a plan's delay past the last out is never told.
+- **`late_watch`:** an hour before the expected end, rain on the radar due around the last outs.
+
+**Numbers** (`WEATHER_STORY` in constants): `outlookHour` 9, `outlookJitterMin` 60, `outlookLeadMin` 240, `watchBeforeMin` 180, `watchAfterMin` 240, `crewFromMin` 120, `crewEveryMin` 15, `chanceStep` 25, `estLeadMin` 90, `estStepMin` 10, `delayedMin` 5, `headsUpMin` 20, `lateWatchMin` 60.
+
+**`GameWeather` additions:**
+- `projectGame(ctx, game, plan, atT, { until, cache })`;
+- `runShows(ctx, game, atT, t0, t1, minRate, cache)`: the first moment the radar's run shows rain at a rate, lightning or snow at the park;
+- `fieldOutlook(ctx, game, atT)`;
+- `_before` takes a precipitation source. Plans are unchanged (check-weather 122/122).
+
+**check-weather-story** (new, 14 checks). A season of games in each region (784 games, 206 with a story):
+- every story is in time order, each moment once;
+- what happens is told when it happens (107 moments);
+- a start the tarp holds up is announced before first pitch (17 of 17);
+- no postponement without earlier word (17 of 17; snow-covered fields now get a morning look);
+- estimates are on or after the scheduled time, and each revision really moves;
+- first pitch against the estimate 30 and 75 min ahead: median 0 min, 90th 5;
+- crew trouble moves the estimate later when found out;
+- a day the weather leaves alone has nothing from the field (673 untouched games, none with field news; 578 of 784 games have no story at all);
+- a heads-up before most stoppages (30 of 41);
+- once played, only real delays are told;
+- the story so far is the start of the whole story;
+- the same story every time, from a separate copy of the code;
+- length: median 2 moments, 90th 6, most 12;
+- speed: 32 ms median, 125 ms 90th.
+
+**Note for phase 3.** The crew's estimates are nearly exact within the run's first hour, because the radar's nowcast is nearly the truth (§100.7). Revisions mostly come from the forecast further out and from crew trouble.
+
+**No fresh team needed.** The plans are unchanged, and nothing in the app reads the story yet.
+
+**Suite (r179):** everything passes: season sim 3812/3812, multi-season 59/59, check-weather-story 14/14. test-wear-ui (dark, a known flake) passed on rerun.

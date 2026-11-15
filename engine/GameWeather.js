@@ -335,16 +335,32 @@ function _forecastSaysNo(ctx, venue, gameTime, state, issueT, F = NO_FIELD, P = 
   return null;
 }
 
-/** Rain (inches) over the 6 hours and snow (mm, melted) over the 12 hours before first pitch. */
-function _before(ctx, venue, gameTime) {
+/**
+ * Rain (inches) over the 6 hours and snow (mm, melted) over the 12 hours before first pitch.
+ * `precip(t)` → { rateMmH, kind } (default: the truth; a projection: the truth so far, then a forecast run).
+ */
+function _before(ctx, venue, gameTime, precip = (t) => precipAt(ctx, venue.x, venue.y, t)) {
   let rainMm = 0, snowMm = 0;
   for (let t = gameTime - 12 * 60 * MIN + 10 * MIN; t < gameTime; t += 20 * MIN) {
-    const s = precipAt(ctx, venue.x, venue.y, t);
+    const s = precip(t);
     const mm = s.rateMmH / 3;
     if (s.kind === PRECIP_RAIN) { if (t >= gameTime - 6 * 60 * MIN) rainMm += mm; }
     else snowMm += mm;
   }
   return { rainIn: rainMm / 25.4, snowMm };
+}
+
+/**
+ * §122.51 fieldOutlook(ctx, game, atT) — the field before the game as the crew
+ * sees it at `atT`: what has fallen, then the forecast run of that hour.
+ * → { rainIn, snowMm, soggy, washout, snowCover }
+ */
+export function fieldOutlook(ctx, game, atT) {
+  const venue = venueOf(ctx.map, game);
+  const fctx = forecastContext(ctx, atT);
+  const F = fieldParams(game.field);
+  const pre = _before(ctx, venue, game.gameTime, (t) => precipAt(t <= atT ? ctx : fctx, venue.x, venue.y, t));
+  return { ...pre, soggy: pre.rainIn >= F.soggyIn, washout: pre.rainIn >= F.washoutIn, snowCover: pre.snowMm >= GW.SNOW_COVER_MM };
 }
 
 /**
@@ -424,6 +440,69 @@ export function gameWeatherPlan(ctx, game, opts = {}) {
 }
 
 const _cleanDelay = (d) => _closeDelay(d, d.endT);
+
+/**
+ * §122.51 runShows(ctx, game, atT, t0, t1, minRate, cache) — the first moment
+ * in [t0, t1] (5-minute steps) the forecast run of `atT`'s hour (the radar's
+ * frames) shows at the ballpark: lightning, snow or sleet, or rain of
+ * `minRate` mm/h or more. null when it shows none. (What a crew watching the
+ * radar sees coming.)
+ */
+export function runShows(ctx, game, atT, t0, t1, minRate, cache = null) {
+  const venue = venueOf(ctx.map, game);
+  const key = `run${Math.floor(atT / 3_600_000)}`;
+  let s = cache?.get(key);
+  if (!s) { s = _sampler(forecastContext(ctx, atT), venue.x, venue.y); cache?.set(key, s); }
+  const truth = cache ? (cache.get('truth') || (cache.set('truth', _sampler(ctx, venue.x, venue.y)), cache.get('truth'))) : _sampler(ctx, venue.x, venue.y);
+  for (let t = Math.ceil(t0 / STEP) * STEP; t <= t1; t += STEP) {
+    const x = t <= atT ? truth(t) : s(t);
+    if (x.lightning || (x.kind !== PRECIP_RAIN && x.dbz >= GW.SNOW_DBZ) || x.rate >= minRate) return t;
+  }
+  return null;
+}
+
+/**
+ * §122.51 projectGame(ctx, game, plan, atT, opts) — the game as the crew sees
+ * it at `atT`: what has already happened (the truth, with any crew trouble
+ * found out by then — `TROUBLE_SEEN_MIN` after the tarp came off), and from
+ * there the forecast run of that hour (the radar's next frames). The same
+ * pregame and game rules as the plan, no calls made. What the crew's
+ * estimates and the dashboard show come from this; it firms up as the moment
+ * nears, and runs late now and then when the crew hits trouble.
+ *   plan  — the game's plan (its tarps and delays: the trouble already found out)
+ *   opts.until — playing minutes to run to (default: just past first pitch)
+ *   opts.cache — a Map shared across projections of one game (samplers by hour)
+ * → { outcome: 'played'|'postponed'|'called', startAt, delays, played, late: bool (a first pitch past callLate) }
+ */
+export function projectGame(ctx, game, plan, atT, opts = {}) {
+  const venue = venueOf(ctx.map, game);
+  const gameTime = game.gameTime;
+  const F = fieldParams(game.field), P = patienceOf(game);
+  const cache = opts.cache || new Map();
+  const samplerAt = (key, c) => { let s = cache.get(key); if (!s) { s = _sampler(c, venue.x, venue.y); cache.set(key, s); } return s; };
+  const truth = samplerAt('truth', ctx);
+  const hour = Math.floor(atT / 3_600_000);
+  const ahead = samplerAt(`run${hour}`, forecastContext(ctx, atT));
+  const sample = (t) => (t <= atT ? truth(t) : ahead(t));
+  // The crew's look before pulling the tarp: in the past, the run they read then; ahead, this run.
+  const look = (t) => (t <= atT ? samplerAt(`run${Math.floor(t / 3_600_000)}`, forecastContext(ctx, t)) : sample);
+  const seen = new Map();
+  const seenBy = (offT) => offT != null && offT + GW.TROUBLE_SEEN_MIN * MIN <= atT;
+  for (const x of plan?.tarps || []) if (x.trouble && seenBy(x.offT)) seen.set(x.onT, x.trouble);
+  for (const d of plan?.delays || []) if (d.trouble && seenBy(d.offT)) seen.set(d.tarpOnT ?? d.startT, d.trouble);
+  const trouble = (key) => seen.get(key) || 0;
+  const fo = fieldOutlook(ctx, game, atT);
+  if (fo.snowCover || fo.washout) return { outcome: PLAN_OUTCOME.POSTPONED, startAt: null, delays: [], played: 0, late: false, reason: fo.snowCover ? STOP_REASON.SNOW : STOP_REASON.FIELD, field: true };
+  const pre = fo;
+  const pg = _pregame(sample, gameTime, F, { trouble, look });
+  const start = pre.rainIn >= F.soggyIn && pg.state.phase === 'play'
+    ? { t: gameTime, phase: 'delay', played: 0, startAt: null,
+        delay: { startT: gameTime, atPlayMin: 0, reason: STOP_REASON.FIELD, mm: 0, lastLightning: -Infinity, dryFrom: gameTime, resumeAt: null, fieldOnly: true } }
+    : pg.state;
+  const r = _run(ctx, sample, gameTime, start, { field: F, patience: P, trouble, look, until: opts.until ?? GW.STEP_MIN });
+  const late = r.startAt != null && r.startAt - gameTime >= P.callLate * MIN;
+  return { outcome: r.outcome, startAt: r.startAt, delays: r.delays.map(_cleanDelay), played: r.played, late, reason: r.reason ?? r.delays[0]?.reason ?? null };
+}
 
 /**
  * When a playing minute happens on the clock under a plan: first pitch plus
