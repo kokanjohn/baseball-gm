@@ -224,7 +224,7 @@ function _injectCSS() {
   _css = true;
   const st = document.createElement('style');
   st.textContent = `
-    .tc-sheet{max-height:90dvh;overflow-y:auto;padding:0 16px max(16px,env(safe-area-inset-bottom));}
+    .tc-sheet{max-height:calc(90 * var(--vh));overflow-y:auto;padding:0 16px max(16px,env(safe-area-inset-bottom));}
     .tc-head{display:flex;align-items:flex-start;gap:10px;padding:10px 0 12px;border-bottom:1px solid var(--border);margin-bottom:6px;}
     .tc-titles{flex:1;min-width:0;}
     .tc-title{font-size:17px;font-weight:700;color:var(--text);}

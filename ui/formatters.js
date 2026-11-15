@@ -244,25 +244,26 @@ export function formatAVG(h, ab) {
 }
 
 /**
- * formatOPS(h, doubles, hr, bb, ab)
- * Calculates and formats OPS (OBP + SLG).
+ * opsOf(stats) / formatOPS(stats)
+ * OPS (OBP + SLG) from a stats line — the one place it's worked out (r177: Team and
+ * League both show it). A hit-by-pitch counts in bb as well as hbp (SimEngine), and a
+ * sacrifice fly counts toward the OBP denominator. Total bases come from the tb the
+ * engine keeps, or from the hit types. opsOf is null with no at-bats.
  *
- * @param {Number} h
- * @param {Number} doubles
- * @param {Number} hr
- * @param {Number} bb
- * @param {Number} ab
- * @returns {String}
+ * @param {Object} s  a player's stats line
+ * @returns {Number|null} / {String} ('--' with no at-bats)
  */
-export function formatOPS(h, doubles, hr, bb, ab) {
-  if (!ab) return '.000';
-  const pa  = ab + bb;
-  const obp = (h + bb) / pa;
-  // Total bases: singles=1, doubles=2, triples=3 (approx: total h - doubles - hr = singles+triples)
-  const singles = h - doubles - hr;
-  const tb  = singles + (doubles * 2) + hr * 4;
-  const slg = tb / ab;
-  return (obp + slg).toFixed(3).replace(/^0/, '');
+export function opsOf(s = {}) {
+  const ab = s.ab || 0;
+  if (!ab) return null;
+  const pa  = ab + (s.bb || 0) + (s.sf || 0);
+  const obp = ((s.h || 0) + (s.bb || 0)) / pa;
+  const tb  = s.tb ?? ((s.h || 0) + (s.doubles || 0) + 2 * (s.triples || 0) + 3 * (s.hr || 0));
+  return obp + tb / ab;
+}
+export function formatOPS(s = {}) {
+  const v = opsOf(s);
+  return v == null ? '--' : v.toFixed(3).replace(/^0(?=\.)/, '');
 }
 
 /**

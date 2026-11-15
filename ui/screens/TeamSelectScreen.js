@@ -290,7 +290,7 @@ function _injectCSS() {
   style.textContent = `
     .ts-wrap {
       padding: 0 0 max(32px, env(safe-area-inset-bottom));
-      min-height: 100dvh;
+      min-height: calc(100 * var(--vh));
       display: flex;
       flex-direction: column;
     }

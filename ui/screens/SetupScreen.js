@@ -646,8 +646,8 @@ function _injectCSS() {
     .step-layout {
       display: flex;
       flex-direction: column;
-      height: 100dvh;
-      max-height: 100dvh;
+      height: calc(100 * var(--vh));
+      max-height: calc(100 * var(--vh));
       overflow: hidden;
       padding: 0;
       box-sizing: border-box;
@@ -884,7 +884,7 @@ function _injectCSS() {
       letter-spacing: 4px; text-transform: uppercase; opacity: .85;
     }
     .nc-nick {
-      font-family: 'Bebas Neue', sans-serif; font-size: clamp(40px, 13vw, 58px);
+      font-family: 'Bebas Neue', sans-serif; font-size: clamp(40px, calc(13 * var(--vw)), 58px);
       letter-spacing: 2px; line-height: 1; margin-top: 2px;
       overflow-wrap: anywhere;
     }

@@ -29,7 +29,7 @@ import { developmentStatus, wearOf } from '../../engine/DevelopmentEngine.js';
 import { lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
-import { formatMoney, formatOVR, formatAge, formatSalary } from '../formatters.js';
+import { formatMoney, formatOVR, formatAge, formatSalary, formatOPS } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, POSITION_RULES } from '../../data/constants.js';
 import { eligibleSlotsFor, moveOptions, tradedAway, managerFillAt }
   from '../../engine/RosterEngine.js';
@@ -413,13 +413,7 @@ function _statVal(p, s, key) {
   if (key === 'hab') return ab ? `${s.h || 0}/${ab}` : '--/--';
   if (!ab) return '--';
   if (key === 'avg') return _f3((s.h || 0) / ab);
-  if (key === 'ops') {
-    // (a hit-by-pitch counts in bb as well as hbp — SimEngine)
-    const pa = ab + (s.bb || 0) + (s.sf || 0);
-    const obp = pa ? ((s.h || 0) + (s.bb || 0)) / pa : 0;
-    const tb = s.tb ?? ((s.h || 0) + (s.doubles || 0) + 2 * (s.triples || 0) + 3 * (s.hr || 0));
-    return _f3(obp + tb / ab);
-  }
+  if (key === 'ops') return formatOPS(s);
   return String(s[key] || 0);
 }
 
@@ -943,7 +937,7 @@ function _showSwapSheet(title, subtitle, rowsHtml, wireRows) {
   overlay.id = 'ts-swap-modal';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:80dvh;">
+    <div class="modal-sheet" style="max-height:calc(80 * var(--vh));">
       <div class="modal-handle"></div>
       <div class="modal-header">
         <div>

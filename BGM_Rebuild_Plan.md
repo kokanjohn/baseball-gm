@@ -11442,3 +11442,53 @@ Feedback on r175: the other screens didn't look right sideways, so they're uprig
 - League → Dashboard sideways is covered again.
 
 No engine change: a fresh team is not needed.
+
+---
+
+## §122.50 — r177: the other screens hold portrait (no message), and League shows OPS
+
+**Feedback on r176:** no "turn your phone" message. Every screen except Team and League should be locked in portrait.
+
+**Locking portrait:**
+- A web app can lock rotation outright only where the browser allows it (`screen.orientation.lock`, an installed app on Android). iOS Safari and iOS home-screen apps have no lock.
+- So r177 does both:
+  1. **Lock:** `App._applyOrientation()` still calls `lock('portrait')` off Team and League and `unlock()` on them. Where that works, the phone never rotates the other screens.
+  2. **Hold (iOS, or anywhere the lock fails):** when the phone is sideways (`(orientation: landscape) and (max-height: 540px)`) and the screen isn't Team or League, `body[data-turn]` is set to `ccw` or `cw`. The direction comes from `window.orientation`, or else `screen.orientation.angle`: 90 means the phone's top went left, so `ccw`; -90 or 270 means `cw`.
+     - The body takes the phone's upright size (width `100dvh`, height `100vw`), fixed at the center, and is turned a quarter back against the rotation.
+     - The upright layout therefore stays exactly where it was on the phone, as a lock would leave it. Taps land where they show.
+- `_applyOrientation` runs on tab changes, screen changes and milestones, as before, and now also on the media query's change, `orientationchange` and `screen.orientation` change.
+- The r176 cover (`#upright-cover`) is gone.
+- What iOS still turns: its own status bar and home indicator follow the phone. The page can't hold those.
+
+**One viewport unit for layouts:**
+- `--vh` / `--vw` (on `:root`: `1dvh` / `1vw`) swap while the layout is held (`body[data-turn]`: `1vw` / `1dvh`).
+- Every `dvh`/`vh`/`vw` in the layouts and sheets now goes through them:
+  - index.html: body, `.screen.active`, the intro and modal sheets, the toast and the tip;
+  - App's tip;
+  - Setup, TeamSelect and History;
+  - the sheets in League, Team, Dashboard, Schedule and Playoffs;
+  - Forecast, Rating history, Live game, Sign and Trade composer.
+- A held layout's sheets are sized to the phone's long side, as upright.
+
+**Gestures read points through the new `ui/Upright.js`:**
+- `uprightPoint(x, y)` and `uprightRect(el)` map screen points and boxes into the upright layout's terms. They're plain values when nothing is turned.
+- SwipeClose (a sheet pulled down) and the Rating-history crosshair use them, so a pull "down the sheet" is along the phone when held. These were the only clientX/clientY readers in ui/.
+- Upright.js is in the sw.js precache.
+
+**OPS on League → Players:**
+- **Batters:** an OPS column right after AVG, 44 px wide, sortable. It needs at-bats; best first.
+- **One shared helper:** the OPS math moved into `formatters.opsOf(stats)` (a number, or null with no at-bats) and `formatOPS(stats)`.
+  - It uses the engine's `tb` when kept (else it counts hit types). A sacrifice fly counts in the OBP denominator, and a hit-by-pitch is already in `bb`.
+  - Team uses the same helper.
+  - The old `formatOPS(h, doubles, hr, bb, ab)` was unused and miscounted triples, and is replaced.
+
+**Tests:** test-landscape-ui, sideways checks:
+- Dashboard, Messages and Schedule are held: the body is 390×844 turned to fill 844×390, with the header running down the side.
+- A tap on the turned nav opens the tab.
+- The other turn direction gives `cw`.
+- `uprightRect` of a nav item matches its layout box for both turns.
+- Team and League → Players fill the width.
+- League shows OPS right after AVG, with values that read like ".742".
+- Back upright, nothing is turned. League → Dashboard sideways is held again.
+
+No engine change: a fresh team is not needed.

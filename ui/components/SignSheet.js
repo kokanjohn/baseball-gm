@@ -130,7 +130,7 @@ function _css() {
   const st = document.createElement('style');
   st.id = 'sign-sheet-css';
   st.textContent = `
-    .ss-sheet{max-height:88dvh;overflow:hidden;padding:4px 0 0;}
+    .ss-sheet{max-height:calc(88 * var(--vh));overflow:hidden;padding:4px 0 0;}
     #ss-body{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 18px max(18px,env(safe-area-inset-bottom));}
     .ss-title{font-size:18px;font-weight:800;color:var(--text);margin:8px 0 8px;padding-right:40px;}
     .ss-text{font-size:14px;line-height:1.55;color:var(--soft);margin-bottom:10px;}

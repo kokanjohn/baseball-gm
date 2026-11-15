@@ -53,8 +53,12 @@
 
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;}
+/* r177 §122.50 viewport units for every layout: --vh is 1dvh (--vw 1vw) normally, and they swap
+   while a sideways phone holds the upright layout (body[data-turn], below). */
+:root{--vh:1dvh;--vw:1vw;}
+html{background:var(--bg);}
 body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;
-  height:100dvh;max-width:430px;margin:0 auto;overflow:hidden;
+  height:calc(100 * var(--vh));max-width:430px;margin:0 auto;overflow:hidden;
   transition:background .28s,color .28s;}
 
 /* ═══════════════════════════════════════════════════════════════
@@ -62,7 +66,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;
 ═══════════════════════════════════════════════════════════════ */
 
 .screen{display:none;}
-.screen.active{display:flex;flex-direction:column;height:100dvh;overflow:hidden;}
+.screen.active{display:flex;flex-direction:column;height:calc(100 * var(--vh));overflow:hidden;}
 
 /* ═══════════════════════════════════════════════════════════════
    SECTION 4 — SETUP / INTRO SCREEN
@@ -79,30 +83,30 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;
   border:1px solid rgba(245,210,83,.08);top:-150px;right:-200px;pointer-events:none;}
 #screen-setup::after{content:'';position:absolute;width:300px;height:300px;border-radius:50%;
   border:1px solid rgba(245,210,83,.05);bottom:-80px;left:-80px;pointer-events:none;}
-.intro-logo{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.5dvh,14px);}
-.diamond{width:clamp(44px,8dvh,72px);height:clamp(44px,8dvh,72px);
+.intro-logo{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,calc(1.5 * var(--vh)),14px);}
+.diamond{width:clamp(44px,calc(8 * var(--vh)),72px);height:clamp(44px,calc(8 * var(--vh)),72px);
   background:var(--accent);transform:rotate(45deg);
   display:flex;align-items:center;justify-content:center;border-radius:6px;
   animation:pulse 3s ease-in-out infinite;}
-.diamond span{transform:rotate(-45deg);font-size:clamp(16px,3.5dvh,26px);}
+.diamond span{transform:rotate(-45deg);font-size:clamp(16px,calc(3.5 * var(--vh)),26px);}
 @keyframes pulse{0%,100%{box-shadow:0 0 40px rgba(245,210,83,.25)}50%{box-shadow:0 0 90px rgba(245,210,83,.45)}}
-.game-title{font-family:'Bebas Neue',sans-serif;font-size:clamp(34px,8dvh,52px);letter-spacing:4px;line-height:1;color:var(--text);}
+.game-title{font-family:'Bebas Neue',sans-serif;font-size:clamp(34px,calc(8 * var(--vh)),52px);letter-spacing:4px;line-height:1;color:var(--text);}
 .game-sub{font-size:11px;letter-spacing:5px;text-transform:uppercase;color:var(--accent);font-weight:600;}
 .intro-tagline{font-size:12px;color:var(--muted);line-height:1.5;margin:0;}
-.intro-form{width:100%;display:flex;flex-direction:column;gap:clamp(8px,1.8dvh,14px);
-  padding:clamp(40px,8dvh,64px) clamp(16px,5vw,28px) clamp(16px,4dvh,32px);
+.intro-form{width:100%;display:flex;flex-direction:column;gap:clamp(8px,calc(1.8 * var(--vh)),14px);
+  padding:clamp(40px,calc(8 * var(--vh)),64px) clamp(16px,calc(5 * var(--vw)),28px) clamp(16px,calc(4 * var(--vh)),32px);
   box-sizing:border-box;}
 .input-group{width:100%;text-align:left;}
 .input-group label{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--soft);
   font-weight:600;display:block;margin-bottom:5px;}
 .input-group input{width:100%;background:var(--surface);border:2px solid var(--border);
   color:var(--text);font-family:'DM Sans',sans-serif;font-size:16px;
-  padding:clamp(9px,2dvh,13px) 14px;border-radius:10px;outline:none;transition:border-color .2s;}
+  padding:clamp(9px,calc(2 * var(--vh)),13px) 14px;border-radius:10px;outline:none;transition:border-color .2s;}
 .input-group input:focus{border-color:var(--accent);}
 .input-group input::placeholder{color:var(--muted);}
 .btn-primary{width:100%;background:var(--accent);color:var(--accent-txt);
   font-family:'DM Sans',sans-serif;font-size:15px;font-weight:700;
-  padding:clamp(11px,2.5dvh,15px);border:none;border-radius:10px;cursor:pointer;
+  padding:clamp(11px,calc(2.5 * var(--vh)),15px);border:none;border-radius:10px;cursor:pointer;
   letter-spacing:1px;text-transform:uppercase;transition:transform .1s,opacity .1s;}
 .btn-primary:active{transform:scale(.97);opacity:.88;}
 .mode-selector{display:flex;flex-direction:column;gap:6px;}
@@ -166,10 +170,12 @@ button.budget-pill{cursor:pointer;-webkit-tap-highlight-color:transparent;}
   justify-content:center;padding:0 4px;line-height:1;border:2px solid var(--surface);}
 .nav-badge.visible{display:flex;}
 
-/* r175 §122.48 / r176 §122.49 Sideways is for Team and League only (App._applyOrientation
-   sets body[data-wide]). There the body fills the width with a slim header and nav; on
-   every other screen a sideways phone is covered and asked to turn upright. */
-#upright-cover{display:none;}
+/* r175–r177 §122.48–50 Sideways is for Team and League only (App._applyOrientation).
+   body[data-wide] (Team, League): the body fills the width with a slim header and nav.
+   body[data-turn] (every other screen, setup, milestones): the upright layout stays
+   put on the phone, as if locked — the body is the phone's upright size, turned back
+   against the rotation (ccw: the phone's top is on the left; cw: on the right). An
+   installed app on Android is locked upright outright, so it never gets here. */
 @media (orientation:landscape) and (max-height:540px){
   body[data-wide]{max-width:none;
     padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
@@ -182,10 +188,11 @@ button.budget-pill{cursor:pointer;-webkit-tap-highlight-color:transparent;}
   body[data-wide] .nav-item{flex-direction:row;justify-content:center;gap:7px;padding:5px 4px;}
   body[data-wide] .nav-icon svg{width:18px;height:18px;}
   body[data-wide] .nav-badge{position:static;order:2;}
-  body:not([data-wide]) #upright-cover{display:flex;position:fixed;inset:0;z-index:10000;
-    background:var(--bg);color:var(--text);align-items:center;justify-content:center;
-    font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:3px;text-align:center;padding:24px;}
 }
+body[data-turn]{--vh:1vw;--vw:1dvh;position:fixed;top:50%;left:50%;margin:0;
+  width:100dvh;max-width:none;transform-origin:50% 50%;}
+body[data-turn="ccw"]{transform:translate(-50%,-50%) rotate(-90deg);}
+body[data-turn="cw"]{transform:translate(-50%,-50%) rotate(90deg);}
 
 /* ═══════════════════════════════════════════════════════════════
    SECTION 7 — TAB CONTAINERS
@@ -874,7 +881,7 @@ button.staff-card:active{background:var(--surface2);}
 .modal-sheet{background:var(--surface);border-radius:24px 24px 0 0;
   width:100%;max-width:430px;margin:0 auto;
   transform:translateY(100%);transition:transform .35s cubic-bezier(.32,.72,0,1);
-  border-top:1px solid var(--border);max-height:90dvh;display:flex;flex-direction:column;overflow-x:hidden;}
+  border-top:1px solid var(--border);max-height:calc(90 * var(--vh));display:flex;flex-direction:column;overflow-x:hidden;}
 .modal-overlay.open .modal-sheet{transform:translateY(0);}
 .modal-handle{width:40px;height:4px;background:var(--border);border-radius:2px;margin:14px auto 0;}
 .modal-header{display:flex;align-items:center;justify-content:space-between;padding:20px 20px 16px;}
@@ -981,7 +988,7 @@ button.staff-card:active{background:var(--surface2);}
   background:var(--surface);border:2px solid var(--border);
   padding:13px 24px;border-radius:14px;font-size:14px;font-weight:600;line-height:1.45;
   opacity:0;transition:all .28s;pointer-events:none;z-index:999;cursor:pointer;
-  width:min(88vw,360px);text-align:center;box-shadow:0 8px 28px var(--shadow);word-break:break-word;}
+  width:min(calc(88 * var(--vw)),360px);text-align:center;box-shadow:0 8px 28px var(--shadow);word-break:break-word;}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto;}
 #toast.positive{border-color:var(--accent2);color:var(--text);}
 #toast.negative{border-color:var(--danger);color:var(--danger);}
@@ -1144,7 +1151,7 @@ button.staff-card:active{background:var(--surface2);}
      SETTINGS MODAL
 ═══════════════════════════════════════════════════════════════ -->
 <div class="modal-overlay" id="settings-modal">
-  <div class="modal-sheet" style="position:relative;overflow:hidden;max-height:92dvh;">
+  <div class="modal-sheet" style="position:relative;overflow:hidden;max-height:calc(92 * var(--vh));">
 
     <!-- ── View 1: Main settings ─────────────────────────── -->
     <div id="settings-view-main" class="tdm-view">
@@ -1463,7 +1470,6 @@ button.staff-card:active{background:var(--surface2);}
      TOAST
 ═══════════════════════════════════════════════════════════════ -->
 <div id="toast" role="status" aria-live="polite"></div>
-<div id="upright-cover">Turn your phone upright</div>
 
 <!-- ═══════════════════════════════════════════════════════════
      MODULE ENTRY POINT

@@ -1400,7 +1400,7 @@ function _openGameLogModal(state, filter) {
   overlay.id = 'dash-game-log-overlay';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:80dvh;">
+    <div class="modal-sheet" style="max-height:calc(80 * var(--vh));">
       <div class="modal-handle"></div>
       <div class="modal-header">
         <div style="font-size:18px;font-weight:800;color:var(--text);">${title}</div>

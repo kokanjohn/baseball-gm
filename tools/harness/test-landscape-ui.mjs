@@ -1,5 +1,6 @@
-// r175/r176 Sideways: with the phone on its side, Team and League spread to the full width and the
-// header and nav slim down; every other screen is covered, asking for the phone upright. Upright, the Team
+// r175–r177 Sideways: with the phone on its side, Team and League spread to the full width and the
+// header and nav slim down; every other screen keeps its upright layout, held in place on the
+// phone as if locked (r177). League → Players shows OPS (r177). Upright, the Team
 // screen's name column is narrower (the wear bar sits right after the name), and the card's
 // Wear note states the status only (no age line).
 //   node tools/harness/test-landscape-ui.mjs outDir [theme]
@@ -62,50 +63,84 @@ await page.waitForTimeout(300);
 // ── Sideways ──
 await page.setViewportSize({ width: 844, height: 390 });
 await page.waitForTimeout(400);
-const chrome = () => page.evaluate(() => ({
-  body: Math.round(document.body.getBoundingClientRect().width),
-  head: Math.round(document.querySelector('.app-header').getBoundingClientRect().height),
-  nav: Math.round(document.querySelector('.bottom-nav').getBoundingClientRect().height),
-  cover: getComputedStyle(document.getElementById('upright-cover')).display !== 'none',
-}));
+// The upright layout held on a sideways phone: body[data-turn], the body the phone's upright
+// size (390 × 844) turned a quarter, so on screen the header runs down one side.
+const chrome = () => page.evaluate(() => {
+  const b = document.body, r = b.getBoundingClientRect(), h = document.querySelector('.app-header').getBoundingClientRect();
+  return { turn: b.dataset.turn || '', wide: !!b.dataset.wide, w: Math.round(r.width), h: Math.round(r.height),
+           box: [b.offsetWidth, b.offsetHeight], headW: Math.round(h.width), headH: Math.round(h.height),
+           tab: document.querySelector('.nav-item.active')?.dataset.tab };
+});
+const held = (c) => c.turn && c.box[0] === 390 && c.box[1] === 844 && c.w === 844 && c.h === 390 && c.headW < 90 && c.headH >= 380;
 const dash = await chrome();
-check(`sideways, Dashboard: covered, asked to turn upright`, dash.cover);
-for (const t of ['decisions', 'schedule']) {
-  await page.evaluate(async (t) => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab(t); }, t);
-  await page.waitForTimeout(300);
-  check(`sideways, ${t}: covered`, (await chrome()).cover);
-}
+check(`sideways, Dashboard: held upright on the phone (turn ${dash.turn}, body ${dash.box.join('×')} turned to fill ${dash.w}×${dash.h}, header down the side ${dash.headW}×${dash.headH})`, held(dash), JSON.stringify(dash));
 await page.screenshot({ path: `${out}/landscape-dashboard-${theme}.png` });
+// Gestures read points in upright terms: a turned element's screen box maps back to its upright box.
+for (const turn of ['ccw', 'cw']) {
+  const m = await page.evaluate(async (turn) => {
+    const U = await import('/baseball-gm/ui/Upright.js');
+    document.body.dataset.turn = turn;
+    const el = document.querySelector('.bottom-nav .nav-item:nth-child(2)');
+    const r = U.uprightRect(el);
+    // the element's upright box from the layout itself (offset chain inside the body)
+    let x = 0, y = 0, n = el; while (n && n !== document.body) { x += n.offsetLeft; y += n.offsetTop; n = n.offsetParent; }
+    return { got: [r.left, r.top, r.width, r.height].map(Math.round), want: [x, y, el.offsetWidth, el.offsetHeight] };
+  }, turn);
+  check(`upright terms (${turn}): the nav's 2nd item ${m.got.join(',')} = ${m.want.join(',')}`, m.got.every((v, i) => Math.abs(v - m.want[i]) <= 1));
+}
+await page.evaluate(() => { document.body.dataset.turn = 'ccw'; });
+// A tap on the turned nav lands where it shows.
+await page.tap('.nav-item[data-tab="decisions"]'); await page.waitForTimeout(400);
+let c = await chrome();
+check(`sideways, a tap on Messages in the turned nav opens it, still held (${c.tab})`, c.tab === 'decisions' && held(c), JSON.stringify(c));
+await page.tap('.nav-item[data-tab="schedule"]'); await page.waitForTimeout(400);
+c = await chrome();
+check(`sideways, Schedule: held (${c.tab})`, c.tab === 'schedule' && held(c), JSON.stringify(c));
+// The phone turned the other way: the layout turns the other way.
+await page.evaluate(() => { Object.defineProperty(window, 'orientation', { value: -90, configurable: true }); window.dispatchEvent(new Event('orientationchange')); });
+await page.waitForTimeout(200);
+c = await chrome();
+check(`sideways the other way: turn ${c.turn}`, c.turn === 'cw' && held(c), JSON.stringify(c));
+await page.evaluate(() => { Object.defineProperty(window, 'orientation', { value: 90, configurable: true }); window.dispatchEvent(new Event('orientationchange')); });
+await page.waitForTimeout(200);
 
-await page.evaluate(async () => (await import('/baseball-gm/ui/App.js')).switchTab('roster')); await page.waitForTimeout(600);
+// Into Team from the turned nav: Team goes wide.
+await page.tap('.nav-item[data-tab="roster"]'); await page.waitForTimeout(600);
 const team = await page.evaluate(() => {
   const sc = document.querySelector('.tr-scroll');
-  return { cover: getComputedStyle(document.getElementById('upright-cover')).display !== 'none', body: Math.round(document.body.getBoundingClientRect().width), sc: Math.round(sc.getBoundingClientRect().width),
+  return { turn: document.body.dataset.turn || '', body: Math.round(document.body.getBoundingClientRect().width), sc: Math.round(sc.getBoundingClientRect().width),
            hidden: sc.scrollWidth - sc.clientWidth };
 });
-check(`sideways, Team: full width (${team.body}px), the table ${team.sc}px wide, ${team.hidden}px left to scroll`, team.body >= 840 && team.sc >= 800 && !team.cover);
+check(`sideways, Team: full width (${team.body}px), the table ${team.sc}px wide, ${team.hidden}px left to scroll`, team.body >= 840 && team.sc >= 800 && !team.turn);
 await page.screenshot({ path: `${out}/landscape-team-${theme}.png` });
 
 await page.tap('.nav-item[data-tab="league"]'); await page.waitForTimeout(400);
 const tab = await page.$('#ltab-players'); if (tab) { await tab.tap(); await page.waitForTimeout(500); }
 const league = await page.evaluate(() => {
   const sc = document.querySelector('.lp-scroll-wrap');
-  return { cover: getComputedStyle(document.getElementById('upright-cover')).display !== 'none',
+  const heads = [...document.querySelectorAll('.lp-header > .lp-th')].map(h => h.textContent.trim());
+  const opsAt = heads.indexOf('OPS');
+  const ops = opsAt < 0 ? [] : [...document.querySelectorAll('.lp-row')].slice(0, 30)
+    .map(r => r.querySelectorAll('.lp-td:not(.lp-td-name)')[opsAt]?.textContent.trim());
+  return { turn: document.body.dataset.turn || '', heads, ops,
            head: Math.round(document.querySelector('.app-header').getBoundingClientRect().height), body: Math.round(document.body.getBoundingClientRect().width), sc: Math.round(sc.getBoundingClientRect().width),
            hidden: sc.scrollWidth - sc.clientWidth };
 });
-check(`sideways, League players: full width (${league.body}px), the table ${league.sc}px wide, ${league.hidden}px left to scroll`, league.body >= 840 && league.sc >= 800 && !league.cover && league.head <= 46);
+check(`sideways, League players: full width (${league.body}px), the table ${league.sc}px wide, ${league.hidden}px left to scroll`, league.body >= 840 && league.sc >= 800 && !league.turn && league.head <= 46);
+check(`League players: OPS after AVG (${league.heads.join(' ')})`, league.heads.indexOf('OPS') === league.heads.indexOf('AVG') + 1);
+const good = league.ops.filter(v => /^(\d)?\.\d{3}$/.test(v) || v === '.---');
+check(`League players: OPS values read like ".742" (${league.ops.slice(0, 6).join(' ')})`, league.ops.length > 5 && good.length === league.ops.length, league.ops.join(' '));
 await page.screenshot({ path: `${out}/landscape-league-${theme}.png` });
 
-// Back upright: the column comes back.
+// Back upright: the column comes back, nothing turned.
 await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
 const back = await chrome();
-check(`upright again: ${back.body}px wide, header ${back.head}px, no cover`, back.body <= 390 && back.head >= 50 && !back.cover);
-// Sideways from League back to the Dashboard: covered again.
-await page.setViewportSize({ width: 844, height: 390 });
-await page.tap('.nav-item[data-tab="dashboard"]').catch(async () => page.evaluate(async () => (await import('/baseball-gm/ui/App.js')).switchTab('dashboard')));
-await page.waitForTimeout(300);
-check('sideways, League → Dashboard: covered again', (await chrome()).cover);
+check(`upright again: ${back.w}px wide, header ${back.headH}px, nothing turned`, back.w <= 390 && back.headH >= 50 && !back.turn);
+// Sideways on League, then the Dashboard: held upright again.
+await page.setViewportSize({ width: 844, height: 390 }); await page.waitForTimeout(300);
+await page.tap('.nav-item[data-tab="dashboard"]'); await page.waitForTimeout(400);
+c = await chrome();
+check('sideways, League → Dashboard: held upright again', c.tab === 'dashboard' && held(c), JSON.stringify(c));
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 process.exit(ok ? 0 : 1);

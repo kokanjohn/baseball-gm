@@ -269,7 +269,7 @@ function _injectCSS() {
     .lg-mini-row.lg-lead,.lg-mini-row.lg-lead b{color:var(--text);}
     .lg-mini-foot{display:flex;justify-content:space-between;align-items:center;}
     .lg-mini-inn{font-size:10px;font-weight:700;color:var(--text);}
-    .lg-sheet{max-height:88dvh;overflow-y:auto;padding-bottom:max(16px,env(safe-area-inset-bottom));}
+    .lg-sheet{max-height:calc(88 * var(--vh));overflow-y:auto;padding-bottom:max(16px,env(safe-area-inset-bottom));}
     .lg-head{display:flex;align-items:flex-start;gap:10px;padding:6px 16px 12px;border-bottom:1px solid var(--border);}
     .lg-teams{flex:1;min-width:0;}
     .lg-team{display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:600;color:var(--muted);padding:2px 0;}

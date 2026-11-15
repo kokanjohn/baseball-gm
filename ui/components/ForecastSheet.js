@@ -134,7 +134,7 @@ function _injectCSS() {
   _injected = true;
   const st = document.createElement('style');
   st.textContent = `
-    .fc-sheet{max-height:88vh;overflow-y:auto;padding-bottom:24px;}
+    .fc-sheet{max-height:calc(88 * var(--vh));overflow-y:auto;padding-bottom:24px;}
     .fc-head{display:flex;justify-content:space-between;align-items:flex-start;padding:4px 16px 8px;}
     .fc-kicker{font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);}
     .fc-city{font-size:20px;font-weight:800;color:var(--text);}

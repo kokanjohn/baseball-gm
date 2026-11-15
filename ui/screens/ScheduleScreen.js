@@ -581,7 +581,7 @@ function _openResultSheet(game, idx, state) {
   overlay.id = 'sched-result-sheet';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:80dvh;">
+    <div class="modal-sheet" style="max-height:calc(80 * var(--vh));">
       <div class="modal-handle"></div>
       <button class="modal-close sheet-x" id="sched-result-close" type="button" aria-label="Close">×</button>
       <div style="padding:14px 56px 12px;text-align:center;border-bottom:1px solid var(--border);">
@@ -637,7 +637,7 @@ function _openTeamModal(teamName, state) {
   overlay.id = 'sched-team-modal';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:80dvh;">
+    <div class="modal-sheet" style="max-height:calc(80 * var(--vh));">
       <div class="modal-handle"></div>
       <div class="modal-header">
         <div>
@@ -689,7 +689,7 @@ function _openScoresModal(state) {
   overlay.id = 'sched-scores-overlay';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:88dvh;display:flex;flex-direction:column;">
+    <div class="modal-sheet" style="max-height:calc(88 * var(--vh));display:flex;flex-direction:column;">
       <div class="modal-handle" style="flex-shrink:0;"></div>
       <div class="modal-header" style="flex-shrink:0;">
         <div class="modal-title">Scores</div>

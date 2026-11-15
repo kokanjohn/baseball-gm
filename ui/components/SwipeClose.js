@@ -13,6 +13,8 @@
  * alone. The full-screen radar is a map, not a sheet: it is not included.
  */
 
+import { uprightPoint } from '../Upright.js';   // r177
+
 const SHEETS = [
   { overlay: '.modal-overlay',   sheet: '.modal-sheet' },
   { overlay: '.history-overlay', sheet: '.history-sheet' },
@@ -44,6 +46,10 @@ function _scrolledAbove(target, sheet) {
   return false;
 }
 
+// r177 §122.50 a touch in the upright layout's terms (the same on an upright phone; on a
+// sideways phone holding the upright layout, "down the sheet" is along the phone).
+const _up = (t) => { const q = uprightPoint(t.clientX, t.clientY); return { clientX: q.x, clientY: q.y }; };
+
 function _onStart(e) {
   _t = null;
   if (e.touches.length !== 1) return;
@@ -52,13 +58,13 @@ function _onStart(e) {
   if (!sheet || target.closest(SKIP)) return;
   const overlay = _overlayOf(sheet);
   if (!overlay) return;
-  const p = e.touches[0];
+  const p = _up(e.touches[0]);
   _t = { sheet, overlay, target, x0: p.clientX, y0: p.clientY, yStart: p.clientY, t0: performance.now(), dy: 0, state: 'wait', lastY: p.clientY, lastT: performance.now(), v: 0 };
 }
 
 function _onMove(e) {
   if (!_t) return;
-  const p = e.touches[0];
+  const p = _up(e.touches[0]);
   const dx = p.clientX - _t.x0, dy = p.clientY - _t.y0;
   if (_t.state === 'wait') {
     if (Math.abs(dx) < START_PX && Math.abs(dy) < START_PX) return;

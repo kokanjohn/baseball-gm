@@ -343,7 +343,7 @@ function _openSeriesLog(series, state) {
   overlay.id = 'series-log-overlay';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:70dvh;">
+    <div class="modal-sheet" style="max-height:calc(70 * var(--vh));">
       <div class="modal-handle"></div>
       <div class="modal-header">
         <div>

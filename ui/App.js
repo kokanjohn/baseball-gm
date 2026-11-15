@@ -34,7 +34,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r176';
+export const APP_VERSION = 'tfo-v2-r177';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -541,21 +541,32 @@ function _showScreen(screenId) {
   _applyOrientation();
 }
 
-// r176 §122.49 Sideways is for Team and League only. Everywhere else (the other tabs,
-// setup, a milestone) is upright: the phone is locked to portrait where the browser
-// allows it (an installed app on Android), and where it doesn't (iOS) a sideways
-// phone sees a cover asking for it upright (index.html, "Sideways").
+// r176–r177 §122.49–50 Sideways is for Team and League only. Everywhere else (the
+// other tabs, setup, a milestone) stays upright on the phone:
+//   - locked to portrait where the browser allows it (an installed app on Android);
+//   - where it doesn't (iOS), body[data-turn] turns the upright layout back against
+//     the rotation, so it stays put on the phone as if locked (index.html, "Sideways").
+// Team and League (body[data-wide]) unlock and fill the width.
 const SIDEWAYS_TABS = new Set(['roster', 'league']);
+const PHONE_SIDEWAYS = window.matchMedia?.('(orientation: landscape) and (max-height: 540px)');
 function _applyOrientation() {
   const wide = _screenId === 'app' && !_milestoneActive && SIDEWAYS_TABS.has(_activeTab);
-  if (wide) document.body.dataset.wide = '1';
-  else delete document.body.dataset.wide;
+  const b = document.body;
+  if (wide) b.dataset.wide = '1';
+  else delete b.dataset.wide;
+  // Which way the phone turned: 90 = its top went left (counterclockwise), -90/270 = right.
+  const angle = typeof window.orientation === 'number' ? window.orientation : (screen.orientation?.angle ?? 90);
+  if (!wide && PHONE_SIDEWAYS?.matches) b.dataset.turn = (angle === -90 || angle === 270) ? 'cw' : 'ccw';
+  else delete b.dataset.turn;
   const o = screen.orientation;
   try {
     if (wide) o?.unlock?.();
     else o?.lock?.('portrait')?.catch?.(() => {});
-  } catch { /* not supported here: the cover does it */ }
+  } catch { /* no lock here: data-turn holds it */ }
 }
+PHONE_SIDEWAYS?.addEventListener?.('change', () => _applyOrientation());
+window.addEventListener('orientationchange', () => _applyOrientation());
+screen.orientation?.addEventListener?.('change', () => _applyOrientation());
 
 // ─────────────────────────────────────────────────────────────
 // GAME EVENT HANDLERS
@@ -725,7 +736,7 @@ function _injectEffectsCSS() {
   st.textContent = `
     #effects-panel{position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(20px);
       background:var(--surface);border:2px solid var(--border);padding:14px 18px;border-radius:16px;
-      width:min(92vw,380px);box-shadow:0 8px 28px var(--shadow, rgba(0,0,0,.35));z-index:1001;
+      width:min(calc(92 * var(--vw)),380px);box-shadow:0 8px 28px var(--shadow, rgba(0,0,0,.35));z-index:1001;
       display:flex;flex-direction:column;gap:9px;opacity:0;pointer-events:none;transition:all .3s;}
     #effects-panel.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto;cursor:pointer;}
     #effects-panel .ep-title{font-size:13px;font-weight:700;color:var(--text);text-align:center;line-height:1.4;margin-bottom:2px;}

@@ -321,7 +321,7 @@ function _injectCSS() {
       border-radius: 24px 24px 0 0;
       width: 100%;
       max-width: 540px;
-      max-height: 92dvh;
+      max-height: calc(92 * var(--vh));
       display: flex;
       flex-direction: column;
       overflow: hidden;

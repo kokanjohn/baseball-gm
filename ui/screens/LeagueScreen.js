@@ -27,7 +27,7 @@ import { getImpLeaderboard, lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { openSignSheet } from '../components/SignSheet.js';
 import {
   formatRecord, formatGB, formatOVR,
-  formatERA, formatAVG, formatStreak,
+  formatERA, formatAVG, formatStreak, formatOPS, opsOf,
 } from '../formatters.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as FreeAgency from '../../engine/FreeAgency.js';
@@ -526,6 +526,7 @@ function _renderPlayers(state) {
     : [
         { key:'hab',  label:'H/AB' },
         { key:'avg',  label:'AVG'  },
+        { key:'ops',  label:'OPS'  },
         { key:'r',    label:'R'    },
         { key:'hr',   label:'HR'   },
         { key:'rbi',  label:'RBI'  },
@@ -535,7 +536,7 @@ function _renderPlayers(state) {
       ])];
   // r173 OVR (was RTG) sits right of the name, in the frozen column, large.
 
-  const extra = (k) => k === 'hab' ? ' lp-th-hab' : k === 'imp' ? ' lp-td-imp' : k === 'add' ? ' lp-td-add' : k === 'price' ? ' lp-td-mkt' : '';
+  const extra = (k) => k === 'hab' ? ' lp-th-hab' : k === 'ops' ? ' lp-th-ops' : k === 'imp' ? ' lp-td-imp' : k === 'add' ? ' lp-td-add' : k === 'price' ? ' lp-td-mkt' : '';
   const heads = statCols.map(c => {
     const isActive = c.key === _playerSort.col;
     return `<div class="lp-th${extra(c.key)} ${isActive ? 'lp-th-active' : ''}" ${c.key === 'add' ? '' : `data-sort="${c.key}"`}>${c.label}</div>`;
@@ -568,7 +569,7 @@ function _renderPlayers(state) {
             : `<span class="lp-imp lp-imp-neu">—</span>`
         }</div>`;
       }
-      return `<div class="lp-td${c.key === 'hab' ? ' lp-td-hab' : ''}">${_playerStatVal(shown.p, c.key)}</div>`;
+      return `<div class="lp-td${c.key === 'hab' ? ' lp-td-hab' : c.key === 'ops' ? ' lp-td-ops' : ''}">${_playerStatVal(shown.p, c.key)}</div>`;
     }).join('');
 
     return `
@@ -677,6 +678,7 @@ function _playerStatVal(player, key) {
     case 'ovr':  return formatOVR(player.ovr);
     case 'hab':  return s.ab ? `${s.h||0}/${s.ab}` : '0/0';
     case 'avg':  return s.ab ? formatAVG(s.h||0, s.ab||0) : '.---';
+    case 'ops':  return s.ab ? formatOPS(s) : '.---';
     case 'hr':   return String(s.hr  || 0);
     case 'rbi':  return String(s.rbi || 0);
     case 'r':    return String(s.r   || 0);
@@ -728,13 +730,14 @@ function _sortPlayers(players, { col, dir }, impScores = {}, state = null) {
 function _sortVal(player, col, impScores = {}, state = null) {
   const s = player.stats || {};
   const ab = s.ab || 0, ip = s.outs ? s.outs / 3 : (s.ip || 0);
-  if (['hab', 'avg', 'r', 'hr', 'rbi', 'sb'].includes(col) && !ab) return null;
+  if (['hab', 'avg', 'ops', 'r', 'hr', 'rbi', 'sb'].includes(col) && !ab) return null;
   if (['ip', 'h_allowed', 'er', 'era', 'k', 'w', 'svhd', 'sv'].includes(col) && !ip) return null;
   if (col === 'bb' && !ab && !ip) return null;
   switch (col) {
     case 'ovr':  return player.ovr || 0;
     case 'hab':  return s.ab ? (s.h||0) / s.ab : 0; // sort by avg for H/AB
     case 'avg':  return s.ab ? (s.h||0) / s.ab : 0;
+    case 'ops':  return opsOf(s) ?? 0;
     case 'hr':   return s.hr  || 0;
     case 'rbi':  return s.rbi || 0;
     case 'r':    return s.r   || 0;
@@ -963,7 +966,7 @@ function _openLeagueTeamModal(team, state) {
   overlay.id = 'league-team-modal';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:88dvh;display:flex;flex-direction:column;">
+    <div class="modal-sheet" style="max-height:calc(88 * var(--vh));display:flex;flex-direction:column;">
       <div class="modal-handle" style="flex-shrink:0;"></div>
       <div class="modal-header" style="flex-shrink:0;">
         <div style="min-width:0;">
@@ -1143,6 +1146,7 @@ function _injectCSS() {
 
     /* H/AB needs extra width for two numbers */
     .lp-td-hab,.lp-th-hab{width:46px;min-width:46px;}
+    .lp-td-ops,.lp-th-ops{width:44px;min-width:44px;}
 
     /* IMP badge column */
     .lp-td-imp{width:44px;min-width:44px;}

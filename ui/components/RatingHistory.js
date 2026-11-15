@@ -16,6 +16,7 @@ const W = 340, H = 190;                       // viewBox; scales to the sheet wi
 const PAD = { l: 30, r: 12, t: 22, b: 26 };
 
 import * as When from '../../engine/When.js';
+import { uprightPoint, uprightRect } from '../Upright.js';   // r177
 
 const _esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // r149 relative, never a calendar date ("3 weeks ago"; the axis's start, "2 months ago").
@@ -137,7 +138,7 @@ export function openRatingHistory(state) {
   overlay.id = 'rating-history-overlay';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-sheet" style="max-height:86dvh;display:flex;flex-direction:column;">
+    <div class="modal-sheet" style="max-height:calc(86 * var(--vh));display:flex;flex-direction:column;">
       <div class="modal-handle"></div>
       <div class="modal-header">
         <div style="font-size:18px;font-weight:800;color:var(--text);">Rating</div>
@@ -161,8 +162,8 @@ function _wireCrosshair(pts, c) {
   const tip = document.getElementById('rh-tip');
   if (!svg || !hit) return;
   const show = (ev) => {
-    const box = svg.getBoundingClientRect();
-    const sx = ((ev.clientX - box.left) / box.width) * W;
+    const box = uprightRect(svg);                       // r177 (a sideways phone held upright)
+    const sx = ((uprightPoint(ev.clientX, ev.clientY).x - box.left) / box.width) * W;
     const t = c.t0 + Math.max(0, Math.min(1, (sx - PAD.l) / (W - PAD.l - PAD.r))) * (c.t1 - c.t0);
     const p = _at(pts, t);
     const cx = c.x(t), cy = c.y(p.r);
