@@ -43,7 +43,9 @@ for (let n = 0; n < N; n++) {
   const from = Math.max(clock.get(), T0 - 10 * 3600_000);
   clock.set(from); tick(); releaseDueCards();
   const L = lookAhead(clock.get());
-  const items = getPushSchedule(SM.get(), clock.get(), L).filter(i => GAME_KINDS.has(i.kind));
+  const all0 = getPushSchedule(SM.get(), clock.get(), L);
+  // (the game's own pushes — the weather's messages push under the same alerts, §122.58, and are checked below)
+  const items = all0.filter(i => GAME_KINDS.has(i.kind) && String(i.id).startsWith('g:'));
   // The toggles, once: all off → no game pushes; final off → no final.
   if (!toggled && items.length) {
     const off = structuredClone(SM.get()); off.push.alerts = { weather: false, calledOff: false, injury: false, final: false };
@@ -52,7 +54,7 @@ for (let n = 0; n < N; n++) {
     toggled = {
       allOff: getPushSchedule(off, clock.get(), L).filter(i => GAME_KINDS.has(i.kind)).length,
       noFinal: getPushSchedule(noFinal, clock.get(), L).filter(i => i.kind === 'final').length,
-      othersKept: getPushSchedule(noFinal, clock.get(), L).filter(i => GAME_KINDS.has(i.kind)).length === items.filter(i => i.kind !== 'final').length,
+      othersKept: getPushSchedule(noFinal, clock.get(), L).filter(i => GAME_KINDS.has(i.kind)).length === all0.filter(i => GAME_KINDS.has(i.kind) && i.kind !== 'final').length,
       msgs: getPushSchedule(msgOff, clock.get(), L).filter(i => i.kind === 'messages').length,
     };
   }
@@ -89,10 +91,10 @@ for (let n = 0; n < N; n++) {
     if (p.type === 'game_end') real.push({ kind: 'final', at: p._timestamp, what: `final ${p.cumOurScore}-${p.cumTheirScore}` });
   }
   const future0 = real.filter(r => r.at > from);
-  // §122.51 at home the grounds crew's messages carry the weather: each delay, restart, held start and call is a crew
-  // message at its moment (pushed as a message), and there's no game push for it.
-  const home = !!g0.isHome;
-  if (home) {
+  // §122.51 at home the grounds crew's messages carry the weather, §122.58 on the road the traveling party's: each
+  // delay, restart, held start and call is a message at its moment (pushed under Weather / Called Off), and there's no
+  // game push for it.
+  {
     const st1 = SM.get();
     const crew = [...(st1.inbox || []), ...(st1.scheduledCards || [])].filter(c => c._wxCrew && (c._wxGameTime === T0 || String(c._rosterKey).includes(`:${T0}:`)));
     const at = (c) => c.arrivedAtMs ?? c.deliverAtMs;
@@ -103,9 +105,12 @@ for (let n = 0; n < N; n++) {
       if (!want) { if (r.what !== 'weather_resume (pre)' && !crew.some(c => /:(start_delayed|start_estimate|tarp_on|start_doubt):/.test(c._rosterKey) && at(c) <= r.at + 60_000)) bad.push(`game ${g0.index}: no crew word before the held start`); continue; }
       if (!crew.some(c => want.some(w => c._rosterKey.includes(w)) && Math.abs(at(c) - r.at) <= 60_000)) bad.push(`game ${g0.index}: no crew message for the real ${r.what} at ${new Date(r.at).toISOString()}`);
     }
-    if (items.some(i => i.kind === 'weather' || i.kind === 'calledOff')) bad.push(`game ${g0.index}: a weather game push at home (the crew carries it)`);
+    if (items.some(i => i.kind === 'weather' || i.kind === 'calledOff')) bad.push(`game ${g0.index}: a weather game push (its messages carry it)`);
+    // (the message's own push, under the weather's alerts)
+    const ids = new Set(crew.map(c => c.instanceId));
+    tally.wxPushes = (tally.wxPushes || 0) + all0.filter(i => ids.has(i.id) && (i.kind === 'weather' || i.kind === 'calledOff')).length;
   }
-  const future = home ? future0.filter(x => x.kind !== 'weather' && x.kind !== 'calledOff') : future0;
+  const future = future0.filter(x => x.kind !== 'weather' && x.kind !== 'calledOff');
   for (const r of future) {
     tally[r.what.split(' ')[0]] = (tally[r.what.split(' ')[0]] || 0) + 1;
     const it = items.find(i => i.kind === r.kind && i.deliverAt === r.at);
@@ -131,7 +136,7 @@ for (let n = 0; n < N; n++) {
 
 console.log(`\n${games} of our games; real events foreseen: ${JSON.stringify(tally)}`);
 for (const [k, v] of Object.entries(samples)) console.log(`    ${k}: ${v}`);
-check('every game push is a real event at its exact moment, and every real event had its push (at home, the weather as the crew\'s messages)', bad.length === 0, bad.slice(0, 5).join(' | '));
+check('every game push is a real event at its exact moment, and every real event had its push (the weather as its messages, home and road)', bad.length === 0, bad.slice(0, 5).join(' | '));
 check('the look-ahead foresaw finals, our injuries and weather', (tally.final || 0) > 20 && (tally.hurt || 0) > 0 && ((tally.weather_delay || 0) + (tally.start || 0) + (tally.postponed || 0) + (tally.crew_weather_delay || 0) + (tally.crew_postponed || 0)) > 0, JSON.stringify(tally));
 check('Settings: all game kinds off → no game pushes; Final Score off → no final, the rest kept; Messages off → no inbox pushes',
       !!toggled && toggled.allOff === 0 && toggled.noFinal === 0 && toggled.othersKept && toggled.msgs === 0, JSON.stringify(toggled));
@@ -144,7 +149,7 @@ else console.log('    (no game postponed before its reminder in this run)');
   const opp = st.leagueTeams[0].name;
   const P = (o) => ({ inning: 1, half: 'TOP', cumOurScore: 0, cumTheirScore: 0, ...o });
   const wx = (startT, endT, pre, reason = 'lightning') => ({ startT, endT, minutes: Math.round((endT - startT) / 60000), reason, pre });
-  const L = { gameTime: T, opponent: opp, isHome: false, postponed: null, boxScore: null,   // (on the road: at home the crew's messages carry these)
+  const L = { gameTime: T, opponent: opp, isHome: false, postponed: null, boxScore: null,
               suspended: { atMs: T + 4 * 3600_000, resumeDate: '2031-06-11', resumeTime: T + 86_400_000 - 6 * 3600_000 },
               plays: [
                 P({ type: 'weather_delay', _timestamp: T, description: 'The start is delayed — lightning in the area.', _wx: wx(T, T + 45 * 60_000, true) }),
@@ -170,25 +175,22 @@ else console.log('    (no game postponed before its reminder in this run)');
     check('quiet hours: the crew\'s word near game time is sent as it happens; other messages wait for the morning',
           near?.deliverAt === T2.getTime() && new Date(morning?.deliverAt).getHours() === 8, JSON.stringify(ps.map(i => [i.id, new Date(i.deliverAt).toString().slice(16, 21)])));
   }
-  check('at home the same game has no weather pushes: the grounds crew\'s messages carry them', !gamePushes(st, { ...L, isHome: true }, T - 3600_000).some(i => i.kind === 'weather' || i.kind === 'calledOff'));
-  check('a held start, the first pitch after it, a delay and a suspension each get their push, in order', JSON.stringify(titles) === JSON.stringify(['Start delayed', 'Under way', 'Rain delay', 'Suspended']), JSON.stringify(titles));
-  check('…the suspension names the score and when it resumes', /Testers lead 3–1/.test(all[3]?.body || '') && /resumes/.test(all[3]?.body || ''), all[3]?.body);
-  // Quiet hours over the evening: the delays are dropped; the suspension waits for the morning.
-  st.push.quietStart = '21:00'; st.push.quietEnd = '08:00';
-  const q = gamePushes(st, L, T - 3600_000);
-  const susp = q.find(i => i.title.startsWith('Suspended'));
-  check('quiet hours: a delay inside them is not sent; the suspension waits until they end',
-        !q.some(i => i.title.startsWith('Rain delay')) && !!susp && susp.deliverAt > T + 4 * 3600_000 && new Date(susp.deliverAt).getHours() === 8,
-        JSON.stringify(q.map(i => [i.title, new Date(i.deliverAt).toString().slice(16, 21)])));
-  // A held start, then called off.
+  check('a held start, a delay and a suspension: no game pushes, home or road (their messages carry them)',
+        ![false, true].some(h => gamePushes(st, { ...L, isHome: h }, T - 3600_000).some(i => i.kind === 'weather' || i.kind === 'calledOff')), JSON.stringify(titles));
   const L2 = { gameTime: T, opponent: opp, isHome: false, plays: [], boxScore: null, suspended: null,
-               postponed: { decidedAt: T + 2 * 3600_000, reason: 'rain', calledBy: 'limit', startHeld: true, cancelled: false,
-                            makeupTime: T + 2 * 86_400_000, doubleheader: true } };
-  st.push.quietStart = '03:00'; st.push.quietEnd = '03:01';
-  const p2 = gamePushes(st, L2, T - 3600_000);
-  p2.forEach(i => console.log(`    ${new Date(i.deliverAt).toISOString().slice(11, 16)}  ${i.title} — ${i.body}`));
-  check('a start held then called off: "Start delayed" at first pitch, then "Postponed" with the makeup doubleheader',
-        p2.length === 2 && p2[0].deliverAt === T && p2[1].deliverAt === T + 2 * 3600_000 && /doubleheader/.test(p2[1].body), JSON.stringify(p2.map(i => i.title)));
+               postponed: { decidedAt: T + 2 * 3600_000, reason: 'rain', calledBy: 'limit', startHeld: true, cancelled: false, makeupTime: T + 2 * 86_400_000, doubleheader: true } };
+  check('a game called off: no game pushes (its message carries it)', gamePushes(st, L2, T - 3600_000).length === 0);
+  // §122.58 the weather's messages push under the weather's alerts, and those toggles turn them off.
+  {
+    const s3 = structuredClone(st);
+    const card = (id, extra) => ({ instanceId: id, sender: 'Travel Coordinator', subject: 'x', deliverAtMs: T, expiresAtMs: T + 86_400_000, _wxCrew: true, _urgent: true, ...extra });
+    s3.scheduledCards = [card('wx-delay', {}), card('wx-ppd', { _wxCalledOff: true }), { instanceId: 'plain', sender: 'PR Dept.', subject: 'y', deliverAtMs: T, expiresAtMs: T + 86_400_000 }];
+    const kinds = (alerts) => { s3.push.alerts = alerts; return Object.fromEntries(getPushSchedule(s3, T - 3600_000).filter(i => ['wx-delay', 'wx-ppd', 'plain'].includes(i.id)).map(i => [i.id, i.kind])); };
+    const on = kinds({}), wxOff = kinds({ weather: false }), coOff = kinds({ calledOff: false }), msgOff = kinds({ messages: false });
+    check('the weather\'s messages push as Weather, a postponement as Called Off, the rest as Messages — and each toggle turns off its own',
+          on['wx-delay'] === 'weather' && on['wx-ppd'] === 'calledOff' && on.plain === 'messages' && !wxOff['wx-delay'] && wxOff['wx-ppd'] && !coOff['wx-ppd'] && coOff['wx-delay'] && !msgOff.plain && msgOff['wx-delay'],
+          JSON.stringify({ on, wxOff, coOff, msgOff }));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

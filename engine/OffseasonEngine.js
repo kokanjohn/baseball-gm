@@ -93,6 +93,7 @@ import { fillsNeed } from './LeagueTrades.js';
 import { clockNow } from './Clock.js';
 import { fillShortRosters } from './TransactionEngine.js';
 import { primaryPos, posLabel, seasonTurn, pitcherSeasonTurn } from './Positions.js';   // r163 §122.35
+import { endWinterAbsences } from './DevelopmentEngine.js';   // §122.58
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
 
@@ -1111,6 +1112,8 @@ export function openNewSeason(draft, atMs) {
   _settleStaff(draft);
   // §113 a new season, a new lineup: nobody is owed last year's spot.
   for (const p of Object.values(draft.players || {})) if (p?._lostSlot) p._lostSlot = null;
+  // §122.58 a rest (or any absence counted in games) from the last week doesn't outlast the winter.
+  events.push(...endWinterAbsences(draft, atMs));
 
   // Anyone who joined a club after contract day (a waiver claim) with his
   // deal up signs on for a year at market — the club brought him in; nobody

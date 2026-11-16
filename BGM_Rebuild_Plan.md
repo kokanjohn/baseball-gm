@@ -12094,3 +12094,85 @@ Fewer messages, almost none repeated. The decision cards never dealt are:
 - a few spring cards, now weighted up.
 
 **Fresh team:** not required. An existing save starts with an empty card log, so this season's earlier cards don't count toward the limits. Cards already in the inbox stay until answered.
+
+## §122.58 — r183: §122.51 phase 4 — the weather on the road (the traveling party's updates)
+User go-ahead (Nov 16). Phase 4 as it stands after §122.56: the pitching decisions planned in §122.51 were dropped (the manager's call, and our game is simulated at first pitch). The two that remain on the road — the 3-hour "rain likely: start X?" and "who starts game two?" — already existed (§102.5) and are unchanged. What this phase builds is the away updates.
+
+### Who tells it
+Our **Travel Coordinator**, a sender already in the card pools, with the club on the road. It relays what the host club announces: updates only ("Understood"), nothing to decide, because the host club makes every call.
+
+### What gets told (`WeatherMessages.pickToldAway`)
+The host park's own weather story (`GameWeatherStory.gameStory` on that park's plan, as for every club), read from our side:
+
+| Moment | On the road |
+|---|---|
+| start delayed, every new estimate, back on schedule, start in doubt | always |
+| a delay, every new estimate in it, play resuming, the game called or suspended | always |
+| first pitch | after a held start (or 5+ minutes late) |
+| their crew's trouble | as the new estimate it brings |
+| the morning outlook, a forecast turning | only when it puts the start in question (delayed or in doubt) |
+| "the weather is missing them" | only after such a heads-up |
+| postponed (`awayPostponedMessage`) | always, with the makeup ("…, at our park" when it moved there) |
+| their tarp on or off, a heads-up during play, a late watch, anything to decide | never |
+
+**Varied detail:** about half of the messages say why, seeded per moment, so the same game reads the same every time:
+- "There's rain at the park, so they're holding the start." / "The home club is holding the start.";
+- "Lightning delay in X" / "Play stopped in X";
+- "The home club called it for rain." / "The home club called it off.".
+
+Every subject names the host city. Times are clock times (§122.51).
+
+**Volume** (a season in every region): a road game the weather touches has 2 messages at the median, 3 at the 90th percentile and 6 at most. A dry day has nothing.
+
+### Delivery
+The same clock as at home:
+- `_wxStoryOf` builds the story for any of our games and picks home or road by the park (`venueId`);
+- `_wxStoryNext` / `_wxStoryTell` run before first pitch;
+- `_wxStoryPark` runs at a held start and at first pitch, now for road games too;
+- `_wxTellOne` sends a road moment as `awayMessage`, and `_wxTellPostponed` sends the road postponement.
+
+Keys `wx:story:{season}:{gameTime}:{id}` as at home, each moment once.
+
+### Pushes: the messages carry the weather, home and road
+- `GamePushes` no longer pushes the weather or a game called off, for any game. It keeps our injuries and the final. Before, road games had their own "Start delayed / Rain delay / Postponed" pushes, which would have doubled the new messages.
+- The weather's messages push under Settings' own alerts (`CardEngine._pushKind`): the crew's and the traveling party's word as **Weather Delays**, a postponement or a game called or suspended as **Postponed & Suspended**, and everything else as Messages. Each toggle turns off its own.
+- Near game time they get past quiet hours (the urgent rule).
+- Settings' wording: "Forecasts, a start held, delays, new estimates, play resuming"; "A game called off or suspended, with the makeup date".
+
+### Checks
+- **check-weather-story** (+8, on the road, a season in every region):
+  - every change to the start, delay, restart and call is told;
+  - nothing about their field or tarp, and nothing to decide;
+  - a dry day is quiet;
+  - a heads-up only when the start is in question, and "missing them" only after one;
+  - the host city named, no blanks, from the Travel Coordinator;
+  - the why given 31 of 60 times;
+  - the volume;
+  - a postponement's words.
+- **check-game-pushes:**
+  - every real delay, restart, held start and postponement, home or road, is its message at its moment, with no game push for it;
+  - the weather's messages push as Weather and Called Off, and the toggles turn them off.
+- **sim-season:**
+  - the crew at home and the Travel Coordinator on the road, each from its sender;
+  - every held start and every postponement told, home and road.
+- **test-away-weather-ui** (new, dark and light): six road updates from the Travel Coordinator, nothing to decide; the new estimate and a postponement opened; "Understood" clears them.
+
+### Found and fixed on the way
+- **Open item 3 (multi-season, "rotation of five"), root cause.** A rest counted in games (a starter skipping his next turn, a day off) given in the season's last games was still in force the next spring. The countdown only runs when games are played, and the winter has none. The suite's runs are deterministic since r181; this release's new messages changed the run, and the failure came back in the same place: a starter "resting, 1 game left" since the season before, outside the rotation.
+  - Fix: `DevelopmentEngine.endWinterAbsences`, called from `OffseasonEngine.openNewSeason`, ends every game-counted absence and temporary dip, for every club, with the lineup spot and rotation turn given back. Absences counted in days come back on the clock as before.
+  - Multi-season is 59/59 again.
+- **The look-ahead's foreseen messages** (`LookAhead.lookAheadMessages`, used for pushes with the app closed) dropped a message's weather flags. A foreseen crew message would have pushed as a plain message and waited out quiet hours. They now carry `_wxCrew`, `_wxCalledOff` and `_urgent`.
+- **test-game-pushes-ui** waits for the registration that carries the look-ahead's foresight (up to 20 s), instead of a fixed 2.5 s.
+  - Foresight now also builds the road games' stories. It's measured about 35% slower: about 340 ms warm vs 250 ms, 930 ms vs 660 ms cold, in node. It runs in the page's worker.
+
+**Suite (r183):**
+- The season sim passes 3817/3817:
+  - the crew's word at home, 53 messages over 21 game days (median 2, most 5);
+  - the Travel Coordinator's on the road, 12 over 6 game days (median 2, most 2);
+  - every held start and postponement told (home 4 and 3; road 0 and 1).
+- Multi-season passes 59/59, and so does every check-*.mjs.
+- Screen tests that failed once and passed on rerun: test-sheet-close-ui and test-wear-ui (dark), both known flakes. test-away-weather-ui had hard-coded an evening start (the browser tests run on the real date); fixed.
+
+**Fresh team:** not required. No plan changed. An existing season starts hearing about its road games from the next one, and the winter fix applies at the next season's turn.
+
+**Next (§122.51 phase 5):** on screen — the first-pitch card follows the timeline, the live conditions label and temperature each half-inning, and the schedule and Scores show delayed games with their estimate.

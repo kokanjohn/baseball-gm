@@ -151,7 +151,9 @@ export function lookAheadMessages(nowMs = clockNow(), untilMs = nowMs + 24 * 360
     const messages = (StateManager.get().inbox || [])
       .filter(c => !before.has(c.instanceId) && !c._seed && c.arrivedAtMs > nowMs && c.arrivedAtMs <= untilMs)
       .map(c => ({ instanceId: c.instanceId, cardId: c.cardId, sender: c.sender || null, subject: c.subject || null,
-                   arrivedAtMs: c.arrivedAtMs, expiresAtMs: c.expiresAtMs ?? null, targetId: c._targetPlayerId ?? null }))
+                   arrivedAtMs: c.arrivedAtMs, expiresAtMs: c.expiresAtMs ?? null, targetId: c._targetPlayerId ?? null,
+                   // §122.58 the weather's word: pushed under its own alerts, past quiet hours near game time
+                   ...(c._wxCrew ? { _wxCrew: true } : {}), ...(c._wxCalledOff ? { _wxCalledOff: true } : {}), ...(c._urgent ? { _urgent: true } : {}) }))
       .sort((a, b) => a.arrivedAtMs - b.arrivedAtMs);
     return { untilMs, messages };
   }));

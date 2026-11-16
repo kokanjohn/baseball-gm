@@ -5,6 +5,7 @@ import { regionMap } from '../../engine/WeatherMap.js';
 import { localDayStart, MS_DAY, MS_HOUR } from '../../engine/WeatherClimate.js';
 import { gameWeatherPlan } from '../../engine/GameWeather.js';
 import { gameStory, outlookAt } from '../../engine/GameWeatherStory.js';
+import { pickToldAway, awayMessage, awayPostponedMessage, AWAY_SENDER } from '../../engine/WeatherMessages.js';
 import { GAME_WEATHER as GW, WEATHER_STORY as WS } from '../../data/constants.js';
 
 let pass = 0, fail = 0;
@@ -149,6 +150,44 @@ console.log(`A season of games in each region: ${all.length} games, ${told.lengt
   const M2 = await import('../../engine/GameWeatherStory.js?fresh=1');
   const same = told.slice(0, 12).every(y => JSON.stringify(M2.gameStory(y.ctx, y.game, y.plan)) === JSON.stringify(y.ev));
   check('a game\'s story is the same every time it\'s worked out', same);
+}
+
+// §122.58 (phase 4) On the road: the traveling party's word — updates only, the start's every change told, the
+// why some of the time, quiet on a dry day.
+{
+  console.log('On the road');
+  const MUST = ['start_delayed', 'start_estimate', 'start_on_time', 'start_doubt', 'delay', 'resume_estimate', 'resumed', 'called'];
+  const NEVER = ['tarp_on', 'tarp_off', 'heads_up', 'late_watch', 'gap', 'calloff_ask', 'postponed'];
+  let missed = 0, extra = 0, dryNoisy = 0, clearingAlone = 0, badWords = [], per = [], withWhy = 0, whyable = 0, warnNoDoubt = 0;
+  for (const x of all) {
+    const told = pickToldAway(x.ev, x.ctx.seed);
+    for (const k of MUST) if (x.ev.filter(e => e.kind === k).length !== told.filter(e => e.kind === k).length) missed++;
+    if (told.some(e => NEVER.includes(e.kind))) extra++;
+    const touched = x.plan.outcome !== 'played' || x.plan.delays.length || (x.plan.tarps || []).length;
+    if (!touched && told.some(e => e.kind !== 'outlook' && e.kind !== 'update' && e.kind !== 'clearing')) dryNoisy++;
+    if (told.some(e => (e.kind === 'outlook' || e.kind === 'update') && e.proj !== 'delayed' && e.proj !== 'doubt')) warnNoDoubt++;
+    const c = told.findIndex(e => e.kind === 'clearing');
+    if (c >= 0 && !told.slice(0, c).some(e => e.kind === 'outlook' || e.kind === 'update')) clearingAlone++;
+    const city = x.ctx.map.parks[x.game.homeId]?.city || 'Somewhere';
+    for (const e of told) {
+      const m = awayMessage(e, { gameTime: x.game.gameTime, city, seed: x.ctx.seed, ruling: x.plan.outcome === 'called' ? { outcome: 'final', innings: 6 } : null });
+      if (!m || /undefined|NaN|null|\{/.test(m.subject + m.body) || m.sender !== AWAY_SENDER || !m.subject.includes(city)) badWords.push(`${e.kind}: ${m?.subject} / ${m?.body}`);
+      if (e.kind === 'start_delayed' || e.kind === 'delay') { whyable++; if (/rain|lightning|snow/i.test(m.body) || /^(Rain|Lightning|Snow) delay/.test(m.subject)) withWhy++; }
+    }
+    const ppdCount = x.plan.outcome === 'postponed' ? 1 : 0;
+    if (touched && told.length + ppdCount) per.push(told.length + ppdCount);
+  }
+  check(`every change to the start, every delay, restart and call is told on the road (${MUST.join(', ')})`, missed === 0, `${missed} missing`);
+  check('nothing about their field or tarp, no heads-up during play, nothing to decide', extra === 0, `${extra}`);
+  check(`a dry day on the road is quiet (a forecast heads-up at most)`, dryNoisy === 0, `${dryNoisy}`);
+  check('a heads-up only when the start is in question; "the weather is missing them" only after one', warnNoDoubt === 0 && clearingAlone === 0, `${warnNoDoubt} / ${clearingAlone}`);
+  check(`the words: the host city named, no blanks, from our ${AWAY_SENDER} (${badWords.length} bad)`, badWords.length === 0, badWords.slice(0, 3).join(' | '));
+  const share = withWhy / Math.max(1, whyable);
+  check(`the why is given some of the time, not always (${withWhy} of ${whyable} delays and held starts say why)`, whyable > 20 && share > 0.3 && share < 0.8);
+  check(`a road game the weather touches: median ${q(per, 0.5)}, 90th ${q(per, 0.9)}, most ${q(per, 1)} messages (${per.length} games)`, per.length > 20 && q(per, 0.5) >= 1 && q(per, 0.5) <= 4 && q(per, 0.9) <= 9);
+  const pp = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => awayPostponedMessage({ city: 'Tideland', reason: 'rain', makeup: 'tomorrow at 1:05 PM, as part of a doubleheader', seed: 's', id: i }));
+  check(`a postponement on the road: the city, the makeup; the why some of the time (${pp.filter(m => /for rain/.test(m.body)).length} of 10)`,
+        pp.every(m => /Tideland/.test(m.subject) && /made up tomorrow/.test(m.body)) && pp.some(m => /for rain/.test(m.body)) && pp.some(m => !/for rain/.test(m.body)));
 }
 
 // Volume and speed.

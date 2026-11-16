@@ -446,6 +446,27 @@ function _back(draft, t, p, teamId, events) {
   }
 }
 
+/**
+ * §122.58 a new season: an absence counted in games (a rest, a day off, an illness) or a temporary dip ran out over
+ * the winter — months, not games — so every club's players are back, each with his lineup spot and rotation turn.
+ * (A stretch counted in days, `untilMs`, comes back on the clock as always.)
+ * @returns {Object[]} AVAILABLE events
+ */
+export function endWinterAbsences(draft, atMs) {
+  const events = [];
+  const teams = [draft.userTeam, ...(draft.leagueTeams || [])].filter(Boolean);
+  for (const t of teams) {
+    const teamId = t === draft.userTeam ? 'user' : t.id;
+    for (const id of t.rosterIds || []) {
+      const p = draft.players?.[id];
+      if (!p) continue;
+      if (p.condition) p.condition = null;
+      if (p.unavailable && !p.unavailable.untilMs) _back(draft, t, p, teamId, events);
+    }
+  }
+  return events.map(e => ({ ...e, atMs }));
+}
+
 /** r159 is anyone away for a stretch of days due back by `atMs`? (cheap — every clock step) */
 export function availabilityDue(state, atMs) {
   for (const id of state.userTeam?.rosterIds || []) {

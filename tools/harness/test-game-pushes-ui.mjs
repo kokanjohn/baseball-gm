@@ -66,7 +66,9 @@ const T0 = await page.evaluate(async (theme) => {
 now = T0 - 10 * 3600_000;
 await page.clock.setFixedTime(now);
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); await App.init(); });
-await page.waitForTimeout(2500);
+// (the app registers at once, then again when the look-ahead's foresight is in: wait for that one, up to 20 s)
+for (let w = 0; w < 80 && !(regs.at(-1)?.schedule || []).length; w++) await page.waitForTimeout(250);
+await page.waitForTimeout(500);
 
 const gameItems = (reg) => (reg?.schedule || []).filter(i => i.id.startsWith('g:')).map(({ id, deliverAt, title, body, tag }) => ({ id, deliverAt, title, body, tag }));
 const expected = () => page.evaluate(async () => {

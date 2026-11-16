@@ -257,3 +257,131 @@ export function decisionWords(kind, e, game) {
       return null;
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// §122.58 (phase 4) ON THE ROAD — the traveling party's word about the host park's weather
+// ─────────────────────────────────────────────────────────────
+//
+// Updates only, nothing to decide (the host club makes every call), from our Travel Coordinator. The start's
+// every change is told, and so are a delay, play resuming and a game called or suspended. A heads-up comes when
+// the host park's forecast puts the start in question. The reason is given sometimes, not always: we hear what
+// the home club tells us (§122.51 — "the home GM doesn't always hear what's happening at another club's park").
+
+export const AWAY_SENDER = 'Travel Coordinator';
+
+const AWAY_MUST = new Set(['start_delayed', 'start_estimate', 'start_on_time', 'start_doubt', 'delay', 'resume_estimate', 'resumed', 'called']);
+const AWAY_DETAIL = 0.55;   // a message carries the why this often
+
+/**
+ * pickToldAway(events, seed) — the story's moments we hear about on the road. The postponement is its own
+ * message (awayPostponedMessage). A heads-up (the morning outlook, a forecast turning) only when the start is in
+ * question; "the rain is missing them" only after a heads-up; first pitch after a held start; a field problem
+ * as the new estimate it brings.
+ */
+export function pickToldAway(events, seed) {
+  let warned = false, held = false;
+  const out = [];
+  for (const e of events) {
+    let tell = AWAY_MUST.has(e.kind);
+    if (e.kind === 'outlook' || e.kind === 'update') {
+      tell = (e.proj === 'delayed' || e.proj === 'doubt') && !(e.kind === 'update' && e.proj === e.prevProj);
+      if (tell) warned = true;
+    }
+    if (e.kind === 'clearing') tell = warned;
+    if (e.kind === 'crew_trouble') tell = (e.estStart ?? e.estResume) != null;
+    if (e.kind === 'start_delayed') held = true;
+    if (e.kind === 'first_pitch') tell = held || (e.lateMin ?? 0) >= 5;
+    if (tell) out.push(e);
+  }
+  return out;
+}
+
+/**
+ * awayMessage(e, game) → { subject, preview, body, urgent } — the words for one moment on the road.
+ * game: { gameTime, city (the host's), seed, delays?, ruling? }
+ */
+export function awayMessage(e, game) {
+  const g = game, at = _t, city = g.city || 'their park';
+  const urgent = e.at >= g.gameTime - URGENT_BEFORE_MIN * 60_000;
+  const pick = (opts) => _pick(g.seed, `away:${e.id}`, opts);
+  const why = hash01(g.seed, 7511, _h(e.id)) < AWAY_DETAIL;   // (this one says why)
+  const reason = e.reason === 'lightning' ? 'lightning in the area' : e.reason === 'snow' ? 'snow' : 'rain';
+  const inning = () => {
+    const d = (g.delays || []).find(x => x.startT === e.at);
+    return d?.inning ? `${d.half === 'TOP' ? 'the top of ' : d.half === 'BOT' ? 'the bottom of ' : ''}the ${_ord(d.inning)}` : null;
+  };
+  let subject, body;
+  switch (e.kind) {
+    case 'outlook':
+    case 'update':
+      subject = pick([`Weather in ${city} today`, `Watching the weather in ${city}`]);
+      body = e.proj === 'doubt'
+        ? `${why && e.rainAt ? `Their forecast has ${_what(e.wx)} from about ${at(e.rainAt)}, and the` : 'The'} home club isn't sure they'll get today's game in.`
+        : `${why && e.rainAt ? `Their forecast has ${_what(e.wx)} reaching the park around ${at(e.rainAt)}. ` : ''}The home club expects first pitch to slip${e.estStart ? `, maybe to about ${at(e.estStart)}` : ''}.`;
+      break;
+    case 'clearing':
+      subject = `The weather is missing ${city}`;
+      body = 'The home club expects to start on time after all.';
+      break;
+    case 'start_delayed':
+      subject = `First pitch delayed in ${city}: about ${at(e.estStart)}`;
+      body = why ? `There's ${reason} at the park, so they're holding the start. Their estimate is ${at(e.estStart)}.`
+                 : `The home club is holding the start. Their estimate is ${at(e.estStart)}.`;
+      break;
+    case 'start_estimate':
+    case 'crew_trouble': {
+      const est = e.estStart ?? e.estResume, prev = e.prevEst ?? null;
+      const inGame = e.kind === 'crew_trouble' && e.inGame;
+      subject = `New estimate in ${city}: ${inGame ? 'play' : 'first pitch'} ${at(est)}`;
+      const cause = e.kind === 'crew_trouble' ? (why ? 'Their grounds crew is having trouble getting the field ready. ' : '')
+        : why ? (prev != null && est > prev ? 'The weather is hanging on longer than they figured. ' : 'The weather is clearing sooner than they figured. ') : '';
+      body = `${cause}They now have ${inGame ? 'play resuming' : 'first pitch'} at about ${at(est)}${prev != null ? ` (was ${at(prev)})` : ''}.`;
+      break;
+    }
+    case 'start_on_time':
+      subject = `Back on schedule in ${city}`;
+      body = 'The home club says we start on time after all.';
+      break;
+    case 'start_doubt':
+      subject = `Today's game in ${city} is in doubt`;
+      body = why ? 'There\'s no window on their radar. The home club may not get this one in.' : 'The home club may not get this one in.';
+      break;
+    case 'first_pitch':
+      subject = `Under way in ${city}`;
+      body = `First pitch went at ${at(e.at)}${e.lateMin ? `, ${_mins(e.lateMin)} late` : ''}.`;
+      break;
+    case 'delay': {
+      const inn = inning();
+      subject = why ? `${e.reason === 'lightning' ? 'Lightning' : e.reason === 'snow' ? 'Snow' : 'Rain'} delay in ${city}` : `Play stopped in ${city}`;
+      body = `Play is stopped${inn ? ` in ${inn}` : ''}${why ? ` (${reason})` : ''}.${e.estResume ? ` Their estimate for play to resume: ${at(e.estResume)}.` : ' No estimate from the home club yet.'}`;
+      break;
+    }
+    case 'resume_estimate':
+      subject = `Delay update in ${city}: about ${at(e.estResume)}`;
+      body = `They now have play resuming at about ${at(e.estResume)}${e.prevEst ? ` (was ${at(e.prevEst)})` : ''}.`;
+      break;
+    case 'resumed':
+      subject = `Play resumes in ${city}`;
+      body = `Back on the field after ${_mins(e.mins)}.`;
+      break;
+    case 'called': {
+      const r = g.ruling;
+      subject = r?.outcome === 'suspended' ? `Suspended in ${city}` : `Called in ${city}`;
+      body = r?.outcome === 'suspended' ? 'There\'s no window to finish tonight. It will be completed later.'
+           : `There's no window to finish.${r?.innings ? ` It goes in the books after ${r.innings} innings.` : ''}`;
+      break;
+    }
+    default:
+      return null;
+  }
+  return { subject, preview: body.length > 140 ? `${body.slice(0, 137)}…` : body, body, urgent, sender: AWAY_SENDER };
+}
+
+/** The postponement on the road: the home club's call, sometimes why, and where the game went. */
+export function awayPostponedMessage({ city, reason, makeup, spring, cancelled, seed = '', id = '' }) {
+  const why = hash01(seed, 7512, _h(String(id))) < AWAY_DETAIL;
+  const w = reason === 'lightning' ? 'storms' : reason === 'snow' ? 'snow' : reason === 'wet field' ? 'a soaked field' : 'rain';
+  const then = spring || cancelled ? 'It won\'t be made up.' : makeup ? `It's made up ${makeup}.` : '';
+  return { subject: `Today's game in ${city || 'their park'} is postponed`,
+           body: `${why ? `The home club called it for ${w}.` : 'The home club called it off.'} ${then}`.trim(), urgent: true, sender: AWAY_SENDER };
+}

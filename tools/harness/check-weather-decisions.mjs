@@ -229,13 +229,14 @@ console.log('\nOnly at home, never in spring');
   let springDec = 0, awayDec = 0, homeDec = 0, homeGames = 0;
   for (const g of st.schedule.slice(0, 120)) {
     const ev = weatherStoryOf(g);
-    if (!g.isHome) { if (ev.length) awayDec++; continue; }
+    // §122.58 on the road the traveling party tells the host club's word — never a question for the GM.
+    if (!g.isHome) { if (ev.some(e => e.kind === 'calloff_ask' || e.kind === 'gap') || weatherGameOf(st, g).gmCalls) awayDec++; continue; }
     homeGames++;
     const vg = weatherGameOf(st, g);
     if (g.isSpring && (vg.gmCalls || ev.some(e => e.kind === 'calloff_ask'))) springDec++;
     if (!g.isSpring && ev.some(e => e.kind === 'calloff_ask' || e.kind === 'gap')) homeDec++;
   }
-  check(`no call-off question in spring (${springDec}); no story told for road games yet (${awayDec}); ${homeDec} of ${homeGames} home games had a call-off or light-rain question`, springDec === 0 && awayDec === 0);
+  check(`no call-off question in spring (${springDec}) or on the road (${awayDec}); ${homeDec} of ${homeGames} home games had a call-off or light-rain question`, springDec === 0 && awayDec === 0);
 }
 
 console.log(`\n${pass}/${pass + fail} checks passed`);

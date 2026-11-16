@@ -2465,15 +2465,22 @@ export function onRelease(fn) { _releaseHooks.push(fn); }
  * the world would withdraw first isn't pushed.) Beyond the horizon, the cards
  * already planned. Without it, the planned cards (seed cards never).
  */
+/** §122.58 which of Settings' alerts a message falls under: the weather's word (ours at home, the traveling party's on
+ *  the road) is Weather, a game postponed or stopped for good is Called Off; everything else is Messages. */
+function _pushKind(c) {
+  if (!c?._wxCrew) return PUSH_ALERTS.messages;
+  return c._wxCalledOff ? PUSH_ALERTS.calledOff : PUSH_ALERTS.weather;
+}
+
 export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foreseen = null) {
   const qs = state?.push?.quietStart, qe = state?.push?.quietEnd;
   const horizon = foreseen && Number.isFinite(foreseen.untilMs) ? foreseen.untilMs : -Infinity;
   const planned = (state?.scheduledCards || [])
     .filter(c => !c._seed && c.deliverAtMs > horizon)
-    .map(c => ({ instanceId: c.instanceId, sender: c.sender, subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent }));
+    .map(c => ({ instanceId: c.instanceId, sender: c.sender, subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent, kind: _pushKind(c) }));
   const coming = (foreseen?.messages || [])
-    .map(m => ({ instanceId: m.instanceId, sender: m.sender, subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent }));
-  const cards = !alertOn(state, PUSH_ALERTS.messages) ? [] : [...coming, ...planned]
+    .map(m => ({ instanceId: m.instanceId, sender: m.sender, subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent, kind: _pushKind(m) }));
+  const cards = [...coming, ...planned].filter(c => alertOn(state, c.kind))
     // Pool cards are already planned outside quiet hours; real-time roster
     // cards reach the inbox when they happen and only the alert waits (§65).
     // §122.51 the grounds crew near game time is urgent: it gets past quiet hours (§8.8).
@@ -2486,7 +2493,7 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
       title:     c.sender  || 'The Front Office',
       body:      c.subject || 'New message in your inbox',
       tag:       c.instanceId,
-      kind:      PUSH_ALERTS.messages,
+      kind:      c.kind,
     }));
   return [...cards, ...gameReminders(state, nowMs, ahead), ...gamePushes(state, ahead, nowMs)]
     .sort((a, b) => a.deliverAt - b.deliverAt);
@@ -3922,7 +3929,7 @@ export function deliverCrewMessage(info, atMs) {
   if (_cardsWithKey(state, info.key).length) return null;
   return _deliverAt(_rosterCard(state, {
     tag: 'WEATHER', sender: info.sender || 'Head Groundskeeper', avatar: '🌧', type: info.urgent ? 'urgent' : 'normal',
-    _rosterKey: info.key, _wxGameTime: info.gameTime, _wxCrew: true, ...(info.urgent ? { _urgent: true } : {}),
+    _rosterKey: info.key, _wxGameTime: info.gameTime, _wxCrew: true, ...(info.urgent ? { _urgent: true } : {}), ...(info.calledOff ? { _wxCalledOff: true } : {}),
     subject: info.subject, preview: info.preview || info.body, body: info.body,
     yesLabel: 'Understood', noLabel: null, autoResolve: 'skip', expiresAtMs: info.expiresAtMs ?? info.gameTime + 18 * 3_600_000,
     _raw: {},
