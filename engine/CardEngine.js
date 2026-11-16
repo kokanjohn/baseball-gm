@@ -85,6 +85,7 @@ import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecent
 import * as Offseason from './OffseasonEngine.js';
 import * as Coach from './CoachEngine.js';
 import * as Managers from './ManagerEngine.js';   // §122.64
+import { clampWinTarget } from './PrestigeEngine.js';   // §122.67
 import { isDiamond, worthOf } from './Diamonds.js';
 import * as FrontOffice from './FrontOffice.js';
 import * as Development from './DevelopmentEngine.js';
@@ -3514,7 +3515,7 @@ function _applySoftEffects(state, effects, choice, instance) {
   if (effects.morale     !== undefined) state.userTeam.morale           = clamp((state.userTeam.morale     || 50) + effects.morale,     0, 100);
   if (effects.atmo       !== undefined) state.userTeam.atmosphere       = clamp((state.userTeam.atmosphere || 50) + effects.atmo,       0, 100);
   // r147 what ownership expects this season: the win target the season-end review holds us to.
-  if (effects.winTarget  !== undefined) state.userTeam._ownerWinTarget  = clamp((state.userTeam._ownerWinTarget || 75) + effects.winTarget, 50, 110);
+  if (effects.winTarget  !== undefined) state.userTeam._ownerWinTarget  = clampWinTarget((state.userTeam._ownerWinTarget || 75) + effects.winTarget, state.archetype);   // §122.67
   if (effects.atmosphere !== undefined) state.userTeam.atmosphere       = clamp((state.userTeam.atmosphere || 50) + effects.atmosphere, 0, 100);
   if (effects.ownerTrust !== undefined) state.userTeam.ownerTrust       = clamp((state.userTeam.ownerTrust || 60) + effects.ownerTrust, 0, 100);
   // Manager confidence: cards were written with both spellings (§78.8 audit —

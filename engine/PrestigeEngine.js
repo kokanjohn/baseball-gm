@@ -32,7 +32,18 @@ import {
   PRESTIGE_TIER_NAMES,
   PRESTIGE_TIER_WIN_TARGET_BUMP,
   WIN_TARGET_MET_WITHIN,
+  WIN_TARGET_FLOOR,
+  WIN_TARGET_CEILING,
 } from '../data/constants.js';
+
+/**
+ * §25.3 / §122.67 the owner's win target held between the archetype's floor and ceiling
+ * (every change to it: the yearly adjustment, a tier bump, an owner's card).
+ */
+export function clampWinTarget(target, archetype) {
+  const lo = WIN_TARGET_FLOOR[archetype] ?? 50, hi = WIN_TARGET_CEILING[archetype] ?? 110;
+  return Math.max(lo, Math.min(hi, Math.round(target)));
+}
 
 // ─────────────────────────────────────────────────────────────
 // MAIN ENTRY — SEASON SUMMARY PRESTIGE CALCULATION
@@ -171,7 +182,7 @@ export function computeSeasonPrestige(state, seasonResult) {
     const bump = PRESTIGE_TIER_WIN_TARGET_BUMP[newTier] || 0;
     if (bump > 0) {
       mutations.userTeam = {
-        _ownerWinTarget: (state.userTeam._ownerWinTarget || 75) + bump,
+        _ownerWinTarget: clampWinTarget((state.userTeam._ownerWinTarget || 75) + bump, state.archetype),
       };
     }
   }

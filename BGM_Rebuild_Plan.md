@@ -12502,3 +12502,26 @@ The card keeps the `claim_lost` id and "Claim lost: X" subject. The lost player 
 **Fresh team:** not required.
 
 **Suite:** all pass. test-swipe-close-ui (dark) failed in this run and in r190's at the first spring game, "not committed yet", and passed on rerun. It runs on the real clock (open item 9).
+
+## §122.67 — r192: open item 5, OQ-18 and OQ-22
+**OQ-18, the owner's win target season to season** (§25, locked long ago). The GM chose to apply the floors and ceilings.
+- **What was built:**
+  - the yearly steps (`nextWinTarget`, §25.1);
+  - the prestige tier bumps (`PrestigeEngine`, §25.2).
+- **What wasn't:** §25.3, each archetype's floor and ceiling. `WIN_TARGET_FLOOR` and `WIN_TARGET_CEILING` were in constants but unused. A run of big seasons and a tier bump could carry the target past anything a 132-game season allows.
+- **Now:** `PrestigeEngine.clampWinTarget(target, archetype)` holds every change to the target between the floor and the ceiling:
+  - the yearly adjustment;
+  - a tier bump;
+  - an owner card's `winTarget` effect, which used a flat 50–110 before.
+- Note: "within 2 wins" counts as met, so a miss of 1–2 is +1 and a miss of 3–4 is −1.
+- **check-win-target** (new):
+  - the steps;
+  - every archetype climbs to its ceiling and falls to its floor, and no further;
+  - each season-1 target is inside its band;
+  - a tier bump at 96 for Empire stops at 98.
+
+**OQ-22, premium pricing** (one-time or subscription): deferred to launch at the GM's choice. The app has no premium features or payments, and a GitHub Pages app would need an outside payment service. (The open-questions table's row stays as it is; this section records the decision.)
+
+**Fresh team:** not required. An existing target outside the band is pulled in at the next change.
+
+**Checks:** every check passes, including the multi-season run. The UI is untouched, so the UI tests weren't rerun.

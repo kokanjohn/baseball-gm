@@ -95,6 +95,7 @@ import { clockNow } from './Clock.js';
 import { fillShortRosters } from './TransactionEngine.js';
 import { primaryPos, posLabel, seasonTurn, pitcherSeasonTurn } from './Positions.js';   // r163 §122.35
 import { endWinterAbsences } from './DevelopmentEngine.js';   // §122.58
+import { clampWinTarget } from './PrestigeEngine.js';   // §122.67
 
 export const OFFSEASON_STEPS = Object.freeze([...Array.from({ length: OFFSEASON_DAYS }, (_, i) => `day${i + 1}`), 'spring']);
 
@@ -609,7 +610,7 @@ export function nextWinTarget(draft) {
     : diff >= -4 ? WIN_TARGET_ADJ_MISS_1_TO_4
     : diff >= -9 ? WIN_TARGET_ADJ_MISS_5_TO_9
     : WIN_TARGET_ADJ_MISS_10_PLUS;
-  return target + adj;
+  return clampWinTarget(target + adj, draft.archetype);   // §122.67 the archetype's floor and ceiling
 }
 
 // ─────────────────────────────────────────────────────────────
