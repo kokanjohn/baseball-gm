@@ -12525,3 +12525,6 @@ The card keeps the `claim_lost` id and "Claim lost: X" subject. The lost player 
 **Fresh team:** not required. An existing target outside the band is pulled in at the next change.
 
 **Checks:** every check passes, including the multi-season run. The UI is untouched, so the UI tests weren't rerun.
+
+## §122.68 — open item 6 (save-slot limit), parked with premium
+The GM's call (Nov 16 2026): the save-slot limit comes off the active list, like OQ-22 (§122.67). Revisit it only if and when premium features are built, since the slot count is one of the things premium would decide. No change to the app.
