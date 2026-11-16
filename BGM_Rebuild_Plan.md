@@ -12320,3 +12320,23 @@ Raising it is a climate recalibration: more or longer stalled cool-season system
 **Keep the rates as they are.** Most games get played, even with a delay. A postponement is occasional, and the GM can watch the system move across the map toward it. A day completely washed out will be rare, and that's accepted.
 
 North (1.9%) and East (1.5%) stay below the MLB benchmarks of §102.6 by choice. The benchmarks are no longer a target for tuning. §122.51 is complete.
+
+## §122.61 — r186: open item 1, sideways checks with the layout held (scrolling, pulling a sheet, the name sheet)
+The GM has no iPhone (a Samsung), so the held layout (§122.50, the path where the app can't lock rotation) is checked in Chromium with real touch events through the turned layout: test-held-gestures-ui, both turns, dark and light.
+
+**Found: no touch scrolling at all while held.**
+- A finger along the phone didn't scroll Messages or Schedule, in any direction. A mouse wheel did.
+- **The cause:** a scroller with `overflow-x: hidden` doesn't take a touch pan while it's turned. A minimal page shows it: the same turned list scrolls with `overflow-x: auto`, and doesn't with `hidden` or `clip`. The app's tab containers (`.tab-content`), sheets (`.modal-sheet`) and League's tabs all set it.
+- **Fix (index.html):** `body[data-turn]` gives them `overflow-x: auto` with `overscroll-behavior-x: none`. Upright and wide layouts are unchanged.
+- Nothing on the held screens is wider than the phone, so there's no sideways pan. The test checks that.
+
+**The checks** (17 each, test-held-gestures-ui; the browser can't run a phone's own keyboard):
+- **Scrolling:** Messages and Schedule scroll the way the finger moves (492 px and 365 px each way).
+- **A sheet** (the forecast) opens from a tap held. Pulled the wrong way, it scrolls its content, as upright. A short tap leaves it open. Pulled toward the layout's bottom, it follows and closes.
+- **The new club's name sheet, held:** the field takes focus and the typing, the sheet sits at the layout's bottom, and nothing behind it moves. Enter moves on and closes it.
+
+test-landscape-ui, test-swipe-close-ui and test-sheet-close-ui pass in both themes.
+
+**On a real phone:** the GM's Samsung reaches the held layout in Chrome (a browser tab, not the installed app: Android locks rotation only for an installed app).
+
+**Fresh team:** not required.

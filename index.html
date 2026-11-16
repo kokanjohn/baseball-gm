@@ -193,6 +193,10 @@ body[data-turn]{--vh:1vw;--vw:1dvh;position:fixed;top:50%;left:50%;margin:0;
   width:100dvh;max-width:none;transform-origin:50% 50%;}
 body[data-turn="ccw"]{transform:translate(-50%,-50%) rotate(-90deg);}
 body[data-turn="cw"]{transform:translate(-50%,-50%) rotate(90deg);}
+/* §122.61 a scroller with overflow-x:hidden doesn't take a touch scroll while the layout is turned (the browser won't
+   pan it: found in Chromium, the stand-in for the iPhone's path); across it's auto while held — nothing in the
+   upright layouts is wider than the phone, so there's nothing to pan sideways. */
+body[data-turn] .tab-content,body[data-turn] .modal-sheet,body[data-turn] .league-tab-content{overflow-x:auto;overscroll-behavior-x:none;}
 
 /* ═══════════════════════════════════════════════════════════════
    SECTION 7 — TAB CONTAINERS
