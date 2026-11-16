@@ -12340,3 +12340,26 @@ test-landscape-ui, test-swipe-close-ui and test-sheet-close-ui pass in both them
 **On a real phone:** the GM's Samsung reaches the held layout in Chrome (a browser tab, not the installed app: Android locks rotation only for an installed app).
 
 **Fresh team:** not required.
+
+## §122.62 — r187: typing on a sideways phone (the name sheet)
+**The GM's report** (Samsung, Chrome, r186): scrolling and closing a sheet sideways are fine, but the new club's name sheet is covered by the keyboard. The keyboard rises from the phone's real bottom edge, which is a side of the held (turned) layout. Turning the phone upright was the only way to see the typing.
+
+**Fix: while a text sheet is open on a sideways phone, the hold is let go.**
+- `App.setTyping(on)` marks a text sheet as open. `_applyOrientation` then sets `body[data-typing]` instead of `data-turn`, so the page lies the way the phone does.
+- The setup name sheet (`SetupScreen._openSheet` / `_closeSheet`) calls `setTyping(true)` and `setTyping(false)`. A new screen clears it.
+- The sheet goes across the phone on the keyboard, one compact row: City, Nickname, Done, about 55 px tall. The name shows in the fields; the big preview row is hidden.
+- `_placeSheet` already keeps the sheet on the keyboard's top (the visual viewport).
+- When it closes, the layout is held again.
+
+**test-held-gestures-ui:**
+- the hold is let go while typing;
+- the field takes the focus and the typing;
+- the sheet spans the phone (844 of 844 px), 55 px tall;
+- with a 200 px keyboard (the visual viewport shrunk), it sits on the keyboard's top;
+- Enter moves on and closes it, and the layout is held again.
+
+test-setup-name-ui (upright) and test-landscape-ui pass in both themes.
+
+**Open item 1 is closed:** scrolling, sheets and typing sideways have been checked on the GM's phone (r186 and this fix).
+
+**Fresh team:** not required.

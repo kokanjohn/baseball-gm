@@ -34,7 +34,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r186';
+export const APP_VERSION = 'tfo-v2-r187';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -533,11 +533,14 @@ export async function init() {
 // SCREEN MANAGEMENT
 // ─────────────────────────────────────────────────────────────
 
+let _typing = false;   // §122.62 a text sheet is open (setTyping)
+
 function _showScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const target = document.getElementById(`screen-${screenId}`);
   if (target) target.classList.add('active');
   _screenId = screenId;
+  _typing = false;   // §122.62 (a new screen: no text sheet open)
   _applyOrientation();
 }
 
@@ -549,6 +552,16 @@ function _showScreen(screenId) {
 // Team and League (body[data-wide]) unlock and fill the width.
 const SIDEWAYS_TABS = new Set(['roster', 'league']);
 const PHONE_SIDEWAYS = window.matchMedia?.('(orientation: landscape) and (max-height: 540px)');
+/**
+ * §122.62 typing on a sideways phone: the keyboard rises from the phone's real bottom edge, so a field in the held
+ * (turned) layout ends up under it. While a text sheet is open (the new club's name), the hold is let go: the sheet
+ * sits across the phone, on the keyboard, and the layout is held again when it closes.
+ */
+export function setTyping(on) {
+  _typing = !!on;
+  _applyOrientation();
+}
+
 function _applyOrientation() {
   const wide = _screenId === 'app' && !_milestoneActive && SIDEWAYS_TABS.has(_activeTab);
   const b = document.body;
@@ -556,7 +569,10 @@ function _applyOrientation() {
   else delete b.dataset.wide;
   // Which way the phone turned: 90 = its top went left (counterclockwise), -90/270 = right.
   const angle = typeof window.orientation === 'number' ? window.orientation : (screen.orientation?.angle ?? 90);
-  if (!wide && PHONE_SIDEWAYS?.matches) b.dataset.turn = (angle === -90 || angle === 270) ? 'cw' : 'ccw';
+  const sideways = !!PHONE_SIDEWAYS?.matches;
+  if (_typing && sideways && !wide) b.dataset.typing = '1';
+  else delete b.dataset.typing;
+  if (!wide && sideways && !_typing) b.dataset.turn = (angle === -90 || angle === 270) ? 'cw' : 'ccw';
   else delete b.dataset.turn;
   const o = screen.orientation;
   try {

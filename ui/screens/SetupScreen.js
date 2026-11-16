@@ -465,6 +465,7 @@ function _openSheet(focusEl) {
   const sheet = document.getElementById('nc-sheet'), scrim = document.getElementById('nc-scrim');
   if (!sheet) return;
   sheet.hidden = false; scrim.hidden = false;
+  App.setTyping(true);   // §122.62 sideways: the sheet across the phone, on the keyboard (not under it)
   requestAnimationFrame(() => { sheet.classList.add('open'); scrim.classList.add('open'); });
   if (window.visualViewport && !_vvHandler) {
     _vvHandler = () => _placeSheet();
@@ -482,6 +483,7 @@ function _closeSheet() {
     window.visualViewport.removeEventListener('scroll', _vvHandler);
     _vvHandler = null;
   }
+  App.setTyping(false);
   if (!sheet || sheet.hidden) return;
   document.activeElement?.blur?.();
   sheet.classList.remove('open'); scrim.classList.remove('open');
@@ -921,6 +923,13 @@ function _injectCSS() {
       transform: translateY(12px); opacity: 0; transition: transform .15s, opacity .15s;
     }
     .nc-sheet.open { transform: none; opacity: 1; }
+    /* §122.62 typing on a sideways phone (body[data-typing]: the hold let go): one compact row across the phone,
+       on the keyboard — the city, the nickname, Done; the name shows in the fields themselves */
+    body[data-typing] .nc-sheet { flex-direction: row; align-items: center; gap: 12px; padding: 8px max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left)); border-radius: 12px 12px 0 0; }
+    body[data-typing] .nc-sheet-preview { display: none; }
+    body[data-typing] .nc-sheet-row { flex: 1; min-width: 0; }
+    body[data-typing] .nc-sheet-row label { width: auto; }
+    body[data-typing] .nc-sheet-row input { padding: 8px 10px; }
     .nc-sheet[hidden], .nc-scrim[hidden] { display: none; }
     .nc-sheet-row { display: flex; align-items: center; gap: 10px; }
     .nc-sheet-preview {

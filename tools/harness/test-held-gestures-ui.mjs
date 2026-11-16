@@ -59,20 +59,29 @@ await page.tap('.region-card[data-region="south"]'); await page.tap('#region-nex
 await page.setViewportSize({ width: 844, height: 390 }); await turnTo(90);
 const held0 = await page.evaluate(() => ({ turn: document.body.dataset.turn || '', box: [document.body.offsetWidth, document.body.offsetHeight] }));
 check(`setup, sideways: the upright layout is held (${held0.turn}, ${held0.box.join('×')})`, !!held0.turn && held0.box[0] === 390);
-const pre = await page.evaluate(() => { const r = document.getElementById('nc-preview').getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top)]; });
-await page.tap('#start-btn'); await page.waitForTimeout(300);
+await page.tap('#start-btn'); await page.waitForTimeout(400);
 await page.keyboard.type('Harbor City');
-const nm = await page.evaluate(async () => {
-  const U = await import('/baseball-gm/ui/Upright.js');
-  const s = document.getElementById('nc-sheet'), r = U.uprightRect(s), p = document.getElementById('nc-preview').getBoundingClientRect();
-  return { focus: document.activeElement?.id, val: document.getElementById('team-city').value, open: !s.hidden,
-           bottom: Math.round(r.top + r.height), H: document.body.offsetHeight, pre: [Math.round(p.left), Math.round(p.top)] };
+// §122.62 typing sideways: the hold is let go while the sheet is open — the keyboard rises from the phone's real
+// bottom edge, so the sheet lies across the phone on top of it, one compact row.
+const nm = await page.evaluate(() => {
+  const s = document.getElementById('nc-sheet'), r = s.getBoundingClientRect();
+  return { turn: document.body.dataset.turn || '', typing: !!document.body.dataset.typing, focus: document.activeElement?.id,
+           val: document.getElementById('team-city').value, open: !s.hidden, w: Math.round(r.width), h: Math.round(r.height),
+           bottom: Math.round(r.bottom), H: innerHeight, W: innerWidth };
 });
-check(`the name sheet, held: the city field has the focus and the typing ("${nm.val}")`, nm.open && nm.focus === 'team-city' && nm.val === 'Harbor City');
-check(`…the sheet sits at the layout's bottom (${nm.bottom} of ${nm.H}), and the layout behind it didn't move`, Math.abs(nm.bottom - nm.H) <= 2 && nm.pre[0] === pre[0] && nm.pre[1] === pre[1], JSON.stringify(nm));
+check(`the name sheet, sideways: the hold let go while typing (turn "${nm.turn}", typing ${nm.typing})`, nm.open && !nm.turn && nm.typing);
+check(`…the field has the focus and the typing ("${nm.val}")`, nm.focus === 'team-city' && nm.val === 'Harbor City');
+check(`…the sheet lies across the phone (${nm.w} of ${nm.W}px) on its bottom edge, one compact row (${nm.h}px tall) that fits above a sideways keyboard`, nm.w >= nm.W - 2 && Math.abs(nm.bottom - nm.H) <= 2 && nm.h <= 110, JSON.stringify(nm));
+// The keyboard, as the browser reports it: the visual viewport shrinks; the sheet rides on its top.
+await page.evaluate(() => { const vv = window.visualViewport; Object.defineProperty(vv, 'height', { value: innerHeight - 200, configurable: true }); vv.dispatchEvent(new Event('resize')); });
+await page.waitForTimeout(150);
+const kb = await page.evaluate(() => Math.round(document.getElementById('nc-sheet').getBoundingClientRect().bottom));
+check(`…with a 200px keyboard up, the sheet sits on its top (bottom at ${kb} of ${nm.H - 200})`, Math.abs(kb - (nm.H - 200)) <= 2);
 await page.screenshot({ path: `${out}/held-name-sheet-${theme}.png` });
+await page.evaluate(() => { delete window.visualViewport.height; });
 await page.keyboard.press('Enter'); await page.keyboard.type('Nighthawks'); await page.keyboard.press('Enter'); await page.waitForTimeout(250);
-check('…Enter moves on and closes it, as upright', await page.evaluate(() => document.getElementById('nc-sheet').hidden && /Nighthawks/.test(document.getElementById('nc-names').innerText)));
+const after = await page.evaluate(() => ({ closed: document.getElementById('nc-sheet').hidden, names: document.getElementById('nc-names').innerText, turn: document.body.dataset.turn || '', typing: !!document.body.dataset.typing }));
+check(`…Enter moves on and closes it, and the layout is held again (${after.turn})`, after.closed && /Nighthawks/.test(after.names) && !!after.turn && !after.typing, JSON.stringify(after));
 
 // ── A club, for 1 and 2 ──
 await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(250);
