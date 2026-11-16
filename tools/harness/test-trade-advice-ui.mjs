@@ -5,6 +5,7 @@
 //   node tools/harness/test-trade-advice-ui.mjs outDir [theme]
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const [out = '.', theme = 'dark'] = process.argv.slice(2);
@@ -13,6 +14,7 @@ const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond 
 const GEN = /\b(he|him|his|she|her|hers|himself|herself)\b/i;
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, serviceWorkers: 'block', timezoneId: 'America/New_York' });
+await pinEnv(ctx);
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));

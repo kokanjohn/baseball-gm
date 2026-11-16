@@ -4,6 +4,7 @@
 // Needs a static server on :8765 serving the repo's parent (…/baseball-gm/).
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const [out = '.', theme = 'dark'] = process.argv.slice(2);
@@ -12,6 +13,7 @@ const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond 
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true, serviceWorkers: 'block' });
+await pinEnv(ctx);
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
@@ -63,7 +65,7 @@ const closeInfo = (overlaySel) => page.evaluate((overlaySel) => {
   // The same corner on every sheet: its top right, near the handle.
   const sh = b.closest('.modal-sheet, .history-sheet, .ts-confirm-sheet')?.getBoundingClientRect();
   const corner = sh ? { top: Math.round(r.top - sh.top), right: Math.round(sh.right - r.right) } : null;
-  return { x: cx, y: cy, w: r.width, h: r.height, text: b.textContent.trim(), onTop: hit === b || b.contains(hit),
+  return { x: cx, y: cy, w: r.width, h: r.height, text: b.textContent.trim(), onTop: hit === b || b.contains(hit), hitWas: hit ? `${hit.tagName}#${hit.id}.${hit.className}`.slice(0, 80) : null,
            onScreen: !!corner && r.top >= 0 && r.right <= innerWidth && corner.top <= 64 && corner.right <= 28, corner, crowded };
 }, overlaySel);
 const isOpen = (sel) => page.evaluate((sel) => { const el = document.querySelector(sel); return !!el && el.classList.contains('open') && getComputedStyle(el).display !== 'none'; }, sel);
@@ -74,6 +76,15 @@ async function sheet(name, open, overlaySel, shot = null) {
   await page.waitForTimeout(700);
   const ovSel = overlaySel || await page.evaluate(() => { const ov = [...document.querySelectorAll('.modal-overlay.open')].pop(); return ov?.id ? `#${ov.id}` : null; });
   if (!ovSel || !(await isOpen(ovSel))) { check(`${name}: opens`, false, String(ovSel)); return; }
+  // §122.69 a sheet that fills in after it opens (the forecast's outlook comes from a worker) grows, and its ×
+  // moves up with it: wait until it has settled, as a finger would, before measuring and tapping.
+  await page.waitForFunction((sel) => {
+    const sh = document.querySelector(`${sel} .modal-sheet, ${sel} .history-sheet, ${sel} .ts-confirm-sheet, ${sel}`);
+    const h = Math.round(sh?.getBoundingClientRect().height || 0), w = window.__sheetH || (window.__sheetH = { h: -1, n: 0 });
+    if (h === w.h && !document.querySelector(`${sel} .fc-loading`)) w.n++; else { w.h = h; w.n = 0; }
+    if (w.n >= 3) { window.__sheetH = null; return true; }
+    return false;
+  }, ovSel, { polling: 100, timeout: 5000 }).catch(() => {});
   if (shot) await page.screenshot({ path: `${out}/${shot}-${theme}.png` });
   const c = await closeInfo(ovSel);
   check(`${name}: one × in the corner, on top, clear of the text`, !c.err && c.text === '×' && c.onTop && c.onScreen && c.crowded.length === 0 && c.w >= 28 && c.h >= 28, JSON.stringify(c));

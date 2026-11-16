@@ -6,6 +6,7 @@
 // Needs a static server on :8765 serving the repo's parent (…/baseball-gm/).
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const [out = '.', theme = 'dark'] = process.argv.slice(2);
@@ -14,6 +15,7 @@ const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond 
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true, serviceWorkers: 'block' });
+await pinEnv(ctx);
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
@@ -106,8 +108,16 @@ await tap('#player-card-close');
 const msg = await page.evaluate(async () => {
   const SM = await import('/baseball-gm/store/StateManager.js');
   const CE = await import('/baseball-gm/engine/CardEngine.js');
-  // (between games, well before the next first pitch)
-  const g = SM.get().schedule[SM.get().currentGameIndex];   // (our next game)
+  const GE = await import('/baseball-gm/engine/GameEngine.js');
+  // (between games, well before the next first pitch) §122.69 a game the weather leaves alone: a rest message is about
+  // a game that's played (the ones before it out of the way, as if already played).
+  const st = SM.get(), from = st.currentGameIndex;
+  // (the staff writes in the season: the first regular-season game, spring out of the way — a spring game left on the
+  // schedule with the phase moved on is called off by the clock)
+  let k = st.schedule.findIndex((g, i) => i >= from && !g.isSpring);
+  while (k < st.schedule.length - 1 && GE.weatherStoryOf(st.schedule[k]).some(e => ['ppd', 'calloff', 'calloff_ask', 'start_doubt', 'start_delayed', 'suspend'].includes(e.kind))) k++;
+  SM.mutate(s => { for (let i = from; i < k; i++) Object.assign(s.schedule[i], { _committed: true, cancelled: true, result: 'postponed', status: 'postponed' }); s.currentGameIndex = k; });
+  const g = SM.get().schedule[k];   // (our next game)
   return { g: g?.gameTime };
 });
 const t = msg.g - 3 * 3600_000 - 60 * 60_000;
@@ -128,8 +138,14 @@ if (rest) {
   await page.clock.setFixedTime(rest.at + 60_000);
   await page.evaluate(async () => { (await import('/baseball-gm/engine/CardEngine.js')).releaseDueCards(); });
   await tap('.nav-item[data-tab="decisions"]');
-  await tap(`[data-open="${rest.id}"]`);
+  // §122.69 opened by its id, not by where its row sits: the list can redraw (a tick, a new message on top)
+  // between finding the row and the finger landing, and a tap by position then opens the row now under it.
+  await page.waitForSelector(`[data-open="${rest.id}"]`);
+  await page.evaluate((id) => document.querySelector(`[data-open="${id}"]`)?.click(), rest.id);
   await page.waitForTimeout(2600);
+  if (process.env.DBG) console.log('dbg', JSON.stringify(await page.evaluate(async (id) => { const SM = await import('/baseball-gm/store/StateManager.js'); const s = SM.get();
+    return { inInbox: (s.inbox || []).filter(c => c.instanceId === id).map(c => ({ r: c.resolved, ch: c.choice, auto: c._autoLabel })), sched: (s.scheduledCards || []).some(c => c.instanceId === id),
+             open: !!document.querySelector(`[data-open="${id}"]`), mr: !!document.querySelector('.mr-body'), now: Date.now() }; }, rest.id)));
   const read = await page.evaluate(() => ({ body: document.querySelector('.mr-body')?.innerText || '', btn: [...document.querySelectorAll('[data-resolve]')].map(b => b.textContent.trim()),
                                             links: document.querySelectorAll('.mr-body .msg-player').length }));
   check(`…in the inbox: ${read.btn.join(' / ')}`, read.btn.some(x => /^Sit /.test(x)) && read.btn.some(x => /^Keep .+ In$/.test(x)));

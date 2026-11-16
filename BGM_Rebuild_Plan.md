@@ -12528,3 +12528,26 @@ The card keeps the `claim_lost` id and "Claim lost: X" subject. The lost player 
 
 ## §122.68 — open item 6 (save-slot limit), parked with premium
 The GM's call (Nov 16 2026): the save-slot limit comes off the active list, like OQ-22 (§122.67). Revisit it only if and when premium features are built, since the slot count is one of the things premium would decide. No change to the app.
+
+## §122.69 — open items 9, 7 and 8: the UI tests' world pinned, and the flaky tests
+**Item 9: the UI tests ran on the real clock and the page's real randomness.** Every run founded a different league with different weather (the weather seed hashes the moment the club is founded, `GameEngine.startNewGame`) and ran at a different time of day. A test could pass at one hour and fail at the next.
+
+**Now** `tools/harness/ui-env.mjs` `pinEnv(ctx)` is called by all 36 UI tests right after `browser.newContext`. It pins:
+- **The page's clock:** stands at `PIN` (Mon Nov 16 2026, 10:00 AM Eastern) through Playwright's context `setFixedTime`. Date stays put and timers run, until the test moves it with its own `page.clock` calls.
+- **The test's own `Date.now` (Node):** stands at the same PIN, so a test's `now` and the page's agree. Tests that time something (test-forecast-ui, test-game-pushes-ui) use `performance.now`.
+- **The page's `Math.random`:** a seeded generator (mulberry32).
+- **The page's `crypto.randomUUID`:** seeded on its own stream, as shims.js does for the checks. Ids order things, the schedule's club order among them.
+- `TFO_PIN` (ISO time or ms) and `TFO_SEED` override both, to look at the world at another moment.
+
+**What pinning showed:** with one world every run, the intermittent failures became steady ones, and each turned out to be a test assuming fair weather or a still screen.
+- **test-sheet-close-ui (open item 7):** the forecast sheet fills in its outlook from a worker after it opens. It grows, and its × moves up with it. The test measured and tapped before it settled, so the tap missed, the forecast stayed open over Settings, and four checks failed. It now waits for a sheet to settle (no loading line, the same height three looks running), as a finger would.
+- **test-wear-ui (open item 7):**
+  - It opened the rest message by tapping its row's position, so a list redraw between finding the row and the tap opened the row now under it. It now opens it by id.
+  - Its game was the first spring game, with the phase moved on to the regular season, and the clock calls off a spring game left behind like that. It now uses the first regular-season game the weather leaves alone (the ones before it set aside as played).
+- **test-swipe-close-ui:** the pinned world's first spring game is rained out. The test now takes the first spring game actually played (a rainout closes too) and opens that game's stats.
+- **test-forecast-ui:** the pinned world's first game is "in doubt" at 10 AM, and the line under a held game is the park's weather now, not a forecast. The test now takes the first game nothing is holding (the ones before set aside) and opens three hours before it.
+- **test-game-pushes-ui:** a postponement on the road is the Travel Coordinator's message (§122.59). The check accepted only the grounds crew's, at home.
+
+**Open item 8, check-field-care's drainage pitch:** closed. The checks have run on a fully virtual clock and seeded ids since r181 (§122.56). Three runs here are byte-identical and pass.
+
+**Result:** every UI test passes in both themes, two full runs in a row. The harness changed; the app didn't (no version bump).

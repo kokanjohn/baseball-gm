@@ -9,6 +9,7 @@
 // Needs a static server on :8765 serving the repo's parent (…/baseball-gm/).
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const [out = '.', theme = 'dark'] = process.argv.slice(2);
@@ -18,6 +19,7 @@ const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond 
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, serviceWorkers: 'block' });
+await pinEnv(ctx);
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
@@ -84,11 +86,12 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const first = gameItems(regs.at(-1));
 const exp1 = await expected();
 console.log(`    ${first.length} game pushes registered: ${first.map(i => i.title).join(' | ')}`);
-// (the run's real date sets the weather: a foreseen postponement is the game's push instead of the final)
+// (the weather can call the game off: a foreseen postponement is the game's push instead of the final)
 check('opened 10 hours ahead, the app registers our next game\'s pushes, the final among them (or its postponement)',
       first.some(i => i.id === `g:${T0}:final`) || first.some(i => /^Postponed/.test(i.title))
       // (§122.51 at home the postponement is the grounds crew's message, pushed as a message)
-      || (regs.at(-1)?.schedule || []).some(i => i.title === 'Head Groundskeeper' && /postponed/i.test(i.body || '')),
+      // (§122.59 on the road it's the Travel Coordinator's)
+      || (regs.at(-1)?.schedule || []).some(i => ['Head Groundskeeper', 'Travel Coordinator'].includes(i.title) && /postponed/i.test(i.body || '')),
       JSON.stringify((regs.at(-1)?.schedule || []).map(i => [i.id.slice(0, 12), i.title, (i.body || '').slice(0, 40)])).slice(0, 400));
 check('…exactly the look-ahead\'s', same(first, exp1), JSON.stringify(first).slice(0, 200));
 
@@ -107,13 +110,13 @@ const swapped = await page.evaluate(async () => {
 console.log('    the change:', JSON.stringify(swapped));
 // r139 worked out again in the look-ahead's worker a moment after the change (up to 10 s here).
 const exp2 = await expected();
-const t2 = Date.now();
+const t2 = performance.now();
 for (let k = 0; k < 40 && !same(gameItems(regs.at(-1)), exp2); k++) await page.waitForTimeout(250);
 const after = gameItems(regs.at(-1));
-console.log(`    re-sent ${((Date.now() - t2) / 1000).toFixed(1)} s after the change`);
+console.log(`    re-sent ${((performance.now() - t2) / 1000).toFixed(1)} s after the change`);
 console.log(`    after the change: ${after.map(i => i.title).join(' | ')} (expected: ${exp2.map(i => i.title).join(' | ')})${same(after, first) ? ' (the game goes the same way)' : ''}`);
 check('after a GM change the registered pushes match the game as it now will go', same(after, exp2), JSON.stringify(after).slice(0, 200));
-check('…within seconds (the worker, not a one-minute wait)', (regs.length > n0 || same(exp2, first)) && Date.now() - t2 < 10_000);
+check('…within seconds (the worker, not a one-minute wait)', (regs.length > n0 || same(exp2, first)) && performance.now() - t2 < 10_000);
 
 // 3. Settings.
 await page.click('#settings-btn');

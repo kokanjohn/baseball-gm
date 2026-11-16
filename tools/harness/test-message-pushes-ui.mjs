@@ -11,6 +11,7 @@
 // Needs a static server on :8765 serving the repo's parent (…/baseball-gm/).
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const HOURS_IN = parseFloat(process.argv[2] || '40');
@@ -20,6 +21,7 @@ const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond 
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+await pinEnv(ctx);
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));

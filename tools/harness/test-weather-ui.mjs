@@ -6,6 +6,7 @@
 //   node tools/harness/test-weather-ui.mjs outDir [theme]
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const [out = '.', theme = 'dark'] = process.argv.slice(2);
@@ -16,6 +17,7 @@ const MIN = 60_000;
 
 async function fresh() {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, serviceWorkers: 'block' });
+  await pinEnv(ctx);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));

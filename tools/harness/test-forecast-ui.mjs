@@ -4,6 +4,7 @@
 //   node tools/harness/test-forecast-ui.mjs outDir [theme] [throttle]
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const [out = '.', theme = 'dark', throttle = '1'] = process.argv.slice(2);
@@ -11,6 +12,7 @@ let ok = true;
 const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${!cond && info ? ' — ' + info : ''}`); };
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, serviceWorkers: 'block' });
+await pinEnv(ctx);
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
@@ -22,12 +24,24 @@ await page.evaluate(async (theme) => {
   await GE.startNewGame({ archetypeId: 'lab', gmName: 'GM', city: 'Riverton', nickname: 'Rails', icon: '⚾', primaryColor: '#1B2A4A', secondaryColor: '#3A1F1F', region: 'east', gameMode: 'live' });
   const SM = await import('/baseball-gm/store/StateManager.js');
   SM.mutate(s => { s.settings.theme = theme; });
-  const App = await import('/baseball-gm/ui/App.js'); await App.init();
 }, theme);
+// §122.69 the next game's line is a forecast only while nothing is holding the start: a game the weather leaves alone
+// (the ones before it out of the way, as if played), three hours before it.
+const nextAt = await page.evaluate(async () => {
+  const SM = await import('/baseball-gm/store/StateManager.js'); const GE = await import('/baseball-gm/engine/GameEngine.js');
+  const st = SM.get(), from = st.currentGameIndex;
+  let k = from;
+  while (k < from + 20 && GE.weatherStoryOf(st.schedule[k]).some(e => ['outlook', 'ppd', 'calloff', 'calloff_ask', 'start_doubt', 'start_delayed', 'delay', 'suspend', 'tarp_on'].includes(e.kind))) k++;
+  SM.mutate(s => { for (let i = from; i < k; i++) Object.assign(s.schedule[i], { _committed: true, cancelled: true, result: 'postponed', status: 'postponed' }); s.currentGameIndex = k; });
+  return SM.get().schedule[k].gameTime;
+});
+await page.clock.setFixedTime(nextAt - 3 * 3600_000);
+Date.now = () => nextAt - 3 * 3600_000;   // (the test's own "now" with the page's)
+await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); await App.init(); });
 await page.waitForSelector('#ngc-fc', { state: 'attached', timeout: 20000 });
-const t0 = Date.now();
+const t0 = performance.now();
 await page.waitForFunction(() => document.getElementById('ngc-fc')?.textContent !== 'Forecast…', null, { timeout: 30000 });
-const ms = Date.now() - t0;
+const ms = Math.round(performance.now() - t0);
 const line = (await page.textContent('#ngc-fc')).trim();
 check(`the next game's forecast line fills in (${ms} ms): “${line}”`, /^\d+° · .+/.test(line));
 // The same numbers as the engine, worked out directly here.
@@ -59,9 +73,9 @@ check(`the forecast sheet shows the same game forecast (${direct.f.tempF}°, ${d
 check(`…hour by hour through the game (${direct.f.hours.length} hours), the first at first pitch with the headline's temperature`,
       (await page.$$('#fc-sheet .fc-hour')).length === direct.f.hours.length && direct.f.hours[0]?.tempF === direct.f.tempF);
 // 3b: the 10-day outlook — every day filled in, the engine's numbers, our game under its day with the same line.
-const t1 = Date.now();
+const t1 = performance.now();
 await page.waitForFunction(() => document.querySelectorAll('#fc-sheet .fc-d-main').length === 10, null, { timeout: 60000 });
-const outlookMs = Date.now() - t1;
+const outlookMs = Math.round(performance.now() - t1);
 const shown = await page.$$eval('#fc-sheet .fc-day', rows => rows.map(r => ({ label: r.querySelector('.fc-d-label')?.textContent, temp: r.querySelector('.fc-d-temp')?.textContent.replace(/\s+/g, ''), pct: r.querySelector('.fc-d-pct')?.textContent })));
 const eng = await page.evaluate(async () => {
   const SM = await import('/baseball-gm/store/StateManager.js');
@@ -100,9 +114,9 @@ if (await page.$('#fc-sheet .fc-park:not(.on)')) {
 await page.click('#fc-close');
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('schedule'); });
 await page.waitForSelector('#schedule-content .game-fc', { timeout: 20000 });
-const t2 = Date.now();
+const t2 = performance.now();
 await page.waitForFunction(() => [...document.querySelectorAll('#schedule-content .game-fc')].every(b => b.textContent !== 'Forecast…'), null, { timeout: 60000 });
-const schedMs = Date.now() - t2;
+const schedMs = Math.round(performance.now() - t2);
 const rows = await page.$$eval('#schedule-content .game-fc', bs => bs.map(b => ({ idx: +b.dataset.fcIdx, text: b.textContent })));
 const want = await page.evaluate(async (idxs) => {
   const SM = await import('/baseball-gm/store/StateManager.js');

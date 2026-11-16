@@ -4,6 +4,7 @@
 // Needs a static server on :8765 serving the repo's parent (…/baseball-gm/).
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const [out = '.', theme = 'dark'] = process.argv.slice(2);
@@ -12,6 +13,7 @@ const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond 
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true, serviceWorkers: 'block' });
+await pinEnv(ctx);
 const page = await ctx.newPage();
 const cdp = await ctx.newCDPSession(page);
 const errors = [];
@@ -28,22 +30,29 @@ const first = await page.evaluate(async (theme) => {
   SM.mutate(s => { s.settings.theme = theme; });
   return { gameTime: SM.get().schedule[0].gameTime };
 }, theme);
-// The first spring game, played out (the app closed through it).
-now = first.gameTime + 15 * 3600_000;
-await page.clock.setFixedTime(now);
-const g0 = await page.evaluate(async () => {
-  const GE = await import('/baseball-gm/engine/GameEngine.js');
-  const CE = await import('/baseball-gm/engine/CardEngine.js');
-  const SM = await import('/baseball-gm/store/StateManager.js');
-  GE.tick(); CE.releaseDueCards();
-  const g = SM.get().schedule[0];
-  if (g && !g._committed && g.status === 'final') await GE.commitGame(0);
-  const box = SM.get().schedule[0].boxScore;
-  const sp = (side) => box?.[side]?.pitchers?.[0];
-  return { committed: !!SM.get().schedule[0]._committed, spring: !!g.isSpring,
-           starters: ['away', 'home'].map(s => ({ name: sp(s)?.name, outs: sp(s)?.ipOuts })) };
-});
-check('the first spring game is played and on the schedule', g0.committed && g0.spring, JSON.stringify(g0));
+// The first spring game played, played out (the app closed through it). (§122.69 the weather can call the first
+// one off: then the next one.)
+let g0 = null, gi = 0;
+for (let k = 0; k < 4 && !g0?.committed; k++) {
+  const gt = await page.evaluate(async (k) => (await import('/baseball-gm/store/StateManager.js')).get().schedule[k]?.gameTime, k);
+  now = gt + 15 * 3600_000;
+  await page.clock.setFixedTime(now);
+  g0 = await page.evaluate(async (k) => {
+    const GE = await import('/baseball-gm/engine/GameEngine.js');
+    const CE = await import('/baseball-gm/engine/CardEngine.js');
+    const SM = await import('/baseball-gm/store/StateManager.js');
+    GE.tick(); CE.releaseDueCards();
+    const g = SM.get().schedule[k];
+    if (g && !g._committed && ['final', 'postponed'].includes(g.status)) await GE.commitGame(k);   // (a rainout closes too)
+    const done = SM.get().schedule[k];
+    const box = done.boxScore;
+    const sp = (side) => box?.[side]?.pitchers?.[0];
+    return { committed: !!done._committed && done.status !== 'postponed' && !!box, spring: !!g.isSpring, status: done.status, k,
+             starters: ['away', 'home'].map(s => ({ name: sp(s)?.name, outs: sp(s)?.ipOuts })) };
+  }, k);
+  gi = k;
+}
+check(`the first spring game played (game ${gi + 1}) is on the schedule`, g0.committed && g0.spring, JSON.stringify(g0));
 check(`first spring game: each starter goes two innings, no more (${g0.starters.map(s => `${s.name} ${Math.floor((s.outs || 0) / 3)}.${(s.outs || 0) % 3}`).join(', ')})`,
       g0.starters.every(s => s.outs > 0 && s.outs <= 6), JSON.stringify(g0.starters));
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); await App.init(); });
@@ -65,7 +74,7 @@ const isOpen = (sel) => page.evaluate((sel) => !!document.querySelector(sel)?.cl
 // ── The game's stats sheet (Schedule → the finished game) ──
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('schedule'); });
 await page.waitForTimeout(500);
-await page.evaluate(() => document.querySelector('[data-game-idx="0"]')?.click());
+await page.evaluate((gi) => document.querySelector(`[data-game-idx="${gi}"]`)?.click(), gi);
 await page.waitForTimeout(600);
 check('tapping the finished game opens its stats sheet', await isOpen('#sched-result-sheet'));
 await page.screenshot({ path: `${out}/swipe-stats-sheet-${theme}.png` });
@@ -85,7 +94,7 @@ t = await top('#sched-result-sheet .modal-sheet');
 await swipe(t.x, t.y, 320);
 check('a swipe down closes the stats sheet', !(await page.$('#sched-result-sheet')));
 // A quick flick closes it too.
-await page.evaluate(() => document.querySelector('[data-game-idx="0"]')?.click());
+await page.evaluate((gi) => document.querySelector(`[data-game-idx="${gi}"]`)?.click(), gi);
 await page.waitForTimeout(600);
 t = await top('#sched-result-sheet .modal-sheet');
 await swipe(t.x, t.y, 120, { steps: 3, ms: 0 });
