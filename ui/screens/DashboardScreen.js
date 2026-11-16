@@ -41,7 +41,8 @@ import {
 } from '../formatters.js';
 import { createRadarCard, MAP_H as RADAR_MAP_H } from '../components/RadarCard.js';
 import { openRadarSheet, venueOf } from '../components/RadarSheet.js';
-import { wxState, weatherLine, gameNotes, elapsedLabel } from '../components/WeatherStatus.js';
+import { wxState, weatherLine, liveWeatherLine, gameNotes, elapsedLabel, startStatus, postponedToday, timeLabel, dayLabel, parkNowLine } from '../components/WeatherStatus.js';
+import { weatherToldOf } from '../../engine/GameEngine.js';
 import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
 import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
 
@@ -171,9 +172,10 @@ function _startCountdown(gameTime) {
     fpTime.textContent = timeStr;
 
     // Update warmth class
+    const wxCls = fpCard.dataset.wx ? ` ${fpCard.dataset.wx}` : '';   // §122.58 (the weather's hold on the start stays shown)
     const cls = diffMs < 60000 ? 'fp-card fp-hot'
-      : diffMs < 300000 ? 'fp-card fp-warm'
-      : 'fp-card';
+      : diffMs < 300000 ? `fp-card fp-warm${wxCls}`
+      : `fp-card${wxCls}`;
     if (fpCard.className !== cls) fpCard.className = cls;
 
     // Haptic in final 60 seconds
@@ -382,6 +384,10 @@ function _patchLiveCard(game, ds, view) {
     const el = document.getElementById('lgv-wx');
     el.innerHTML = _wxBanner(game, ds);
     _attachRadar(StateManager.get());
+  } else if (!ds.wx?.kind) {
+    // §122.58 the conditions as the game goes, half-inning by half-inning.
+    const span = document.querySelector('#lgv-wx .lgv-wx-line span');
+    if (span) span.textContent = _liveLine(game, ds);
   }
 
   // Box score — only rebuild if tab is active
@@ -522,6 +528,7 @@ function _deriveGameState(game) {
     awayRunsByInn, homeRunsByInn, maxInning,
     completedHalves, runsByHalf,
     pbpPlays,
+    revealed: revealedPlays,   // §122.58 (the live conditions line reads the half-inning)
     revealedCount: revealedPlays.length,
     isHome,
     awayHits:   isHome ? totalAwayHits   : totalHomeHits,
@@ -662,10 +669,10 @@ function _renderGameArea(game, state) {
     const nextIdx  = state.currentGameIndex || 0;
     const nextGame = state.schedule?.[nextIdx] || null;
     if (!nextGame) return _renderSeasonDoneCard(state);
-    return _renderNextGameCard(nextGame, state) + _renderFirstPitchCountdown(nextGame) + _radarSlot(nextGame);
+    return _renderPostponedToday(state) + _renderNextGameCard(nextGame, state) + _renderFirstPitchCountdown(nextGame) + _radarSlot(nextGame);
   }
 
-  return _renderNextGameCard(game, state) + _renderFirstPitchCountdown(game) + _radarSlot(game);
+  return _renderPostponedToday(state) + _renderNextGameCard(game, state) + _renderFirstPitchCountdown(game) + _radarSlot(game);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -812,12 +819,18 @@ function _userView(state, game) {
  * happening and for how long, with the radar on the ballpark; once it's
  * over and it was called short, why. Otherwise the weather it's played in.
  */
+/** §122.58 the conditions at the park now (read at the half-inning), the weather at first pitch before play. */
+function _liveLine(game, ds) {
+  if (game.isAllStar || ds.isFinal) return weatherLine(game);
+  return liveWeatherLine(StateManager.get(), game, ds.revealed, venueOf(game));
+}
+
 function _wxBanner(game, ds) {
   const w = ds.wx || { kind: null };
   _wxKindShown = w.kind;
   if (!w.kind) {
     // §105 the radar is a tap away during the game too: the weather it's played in, and a Radar button.
-    const line = weatherLine(game);
+    const line = _liveLine(game, ds);
     return `<div class="lgv-wx-line"><span>${_escape(line)}</span>
       <button type="button" class="lgv-radar-btn" data-radar-focus="${_escape(venueOf(game))}">Radar</button></div>`;
   }
@@ -1160,7 +1173,14 @@ function _renderNextGameCard(game, state) {
  * the forecast sheet. Only for a game that hasn't started.
  */
 function _ngcForecast(game, state) {
-  if (!game || game._committed || game.status !== GAME_STATUS.SCHEDULED || !(game.gameTime > Date.now())) return '';
+  if (!game || game._committed) return '';
+  // §122.58 the weather holding up the start: the park as it is now, not a forecast for a start that's moved.
+  const hold = startStatus(game.isAllStar ? [] : weatherToldOf(game, Date.now()), game, Date.now());
+  if (game.status === GAME_STATUS.DELAYED || ['tarp', 'delayed', 'doubt', 'starting'].includes(hold.kind)) {
+    const now = parkNowLine(state, venueOf(game), Date.now());
+    return now ? `<div class="ngc-now">${_escape(now)}</div>` : '';
+  }
+  if (game.status !== GAME_STATUS.SCHEDULED || !(game.gameTime > Date.now())) return '';
   const f = peekGameForecast(state, game);
   return `<button type="button" class="ngc-fc" id="ngc-fc">${f ? _escape(forecastLine(f)) : 'Forecast…'}</button>`;
 }
@@ -1196,14 +1216,19 @@ function _renderFirstPitchCountdown(game) {
   const now      = Date.now();
   const gameTime = game.gameTime;
   if (!gameTime) return '';
+  // §122.58 (§122.51 phase 5) the card follows what's been told about the weather (the same moments as the messages).
+  const st = startStatus(game.isAllStar ? [] : weatherToldOf(game, now), game, now);
 
   // §102.4 the weather is holding up first pitch.
   if (game.status === GAME_STATUS.DELAYED) {
     const w = wxState(game, []);
+    const sub = st.kind === 'doubt' ? 'No window on the radar yet'
+      : st.estStart && st.estStart > now ? `Estimated first pitch ${timeLabel(st.estStart)}${st.revised && st.wasStart ? ` (was ${timeLabel(st.wasStart)})` : ''}`
+      : w.sub || '';
     return `<div class="fp-card fp-delay" id="fp-card">
-      <div class="fp-label">${_escape(w.title || 'Start delayed')}</div>
+      <div class="fp-label">${_escape(st.kind === 'doubt' ? 'Start delayed · in doubt' : w.title || 'Start delayed')}</div>
       <div class="fp-time"><span data-wx-since="${gameTime}">${elapsedLabel(now - gameTime)}</span></div>
-      <div class="fp-sub">${_escape(w.sub || '')}</div>
+      <div class="fp-sub">${_escape(sub)}</div>
     </div>`;
   }
 
@@ -1212,6 +1237,15 @@ function _renderFirstPitchCountdown(game) {
       <div class="fp-label">GAME IS LIVE</div>
       <div class="fp-time" id="fp-time">LIVE</div>
       <div class="fp-sub">Updates every 5 seconds</div>
+    </div>`;
+  }
+
+  // Delayed before first pitch (an estimate), or the tarp coming off for a late start: the time, not a countdown.
+  if (st.kind === 'delayed' || st.kind === 'starting') {
+    return `<div class="fp-card fp-delay" id="fp-card">
+      <div class="fp-label">${_escape(st.label)}</div>
+      <div class="fp-time fp-clock">${_escape(timeLabel(st.estStart))}</div>
+      <div class="fp-sub">${_escape(st.kind === 'starting' ? `Tarp coming off · scheduled ${timeLabel(gameTime)}` : st.sub)}</div>
     </div>`;
   }
 
@@ -1225,12 +1259,28 @@ function _renderFirstPitchCountdown(game) {
     : hours > 0 ? `${hours}h ${mins > 0 ? mins + 'm' : ''}`
     : `${diffMins}m`;
 
-  const fpCls = diffMs < 60000 ? 'fp-hot' : diffMs < 300000 ? 'fp-warm' : '';
-
-  return `<div class="fp-card ${fpCls}" id="fp-card">
-    <div class="fp-label">First Pitch</div>
+  // Watching the weather, the tarp on, in doubt: the countdown to the scheduled time, and what's happening.
+  const wx = st.kind === 'tarp' || st.kind === 'doubt' ? 'fp-delay' : st.kind === 'watch' ? 'fp-watch' : '';
+  const fpCls = diffMs < 60000 ? 'fp-hot' : diffMs < 300000 ? `fp-warm ${wx}` : wx;
+  const label = st.kind === 'tarp' ? 'Tarp on' : st.kind === 'doubt' ? 'In doubt' : 'First Pitch';
+  const sub = st.kind === 'ontime' ? `${game.isHome ? 'vs' : '@'} ${game.opponent || ''}` : st.sub;
+  return `<div class="fp-card ${fpCls.trim()}" id="fp-card"${wx ? ` data-wx="${wx}"` : ''}>
+    <div class="fp-label">${_escape(label)}</div>
     <div class="fp-time" id="fp-time">${timeStr}</div>
-    <div class="fp-sub">${game.isHome ? 'vs' : '@'} ${_escape(game.opponent || '')}</div>
+    <div class="fp-sub">${_escape(sub)}</div>
+  </div>`;
+}
+
+/** §122.58 our game postponed today: the card says so, and when it's made up (above the next game). */
+function _renderPostponedToday(state) {
+  const p = postponedToday(state.schedule, Date.now());
+  if (!p) return '';
+  const why = p.reason === 'lightning' ? 'storms' : p.reason === 'snow' ? 'snow' : p.reason === 'wet field' ? 'a soaked field' : 'rain';
+  const then = p.cancelled ? 'Not made up' : `Made up ${dayLabel(p.makeupDate)}, ${timeLabel(p.makeupMs)}${p.dh ? ' · doubleheader' : ''}`;
+  return `<div class="fp-card fp-ppd" id="fp-ppd">
+    <div class="fp-label">Postponed (${_escape(why)})</div>
+    <div class="fp-sub fp-ppd-sub">${_escape(`${p.isHome ? 'vs' : '@'} ${p.opp} · ${timeLabel(p.gameTime)}`)}</div>
+    <div class="fp-sub">${_escape(then)}</div>
   </div>`;
 }
 
@@ -1564,6 +1614,13 @@ function _injectCSS() {
     .ngc-fc{display:block;margin-top:3px;padding:0;border:0;background:none;font:inherit;font-size:11px;font-weight:700;color:#3b82f6;text-align:left;cursor:pointer;}
     .ngc-notes{font-size:10px;font-weight:600;color:#f97316;margin-top:2px;}
     .fp-card.fp-delay .fp-label{color:#f97316;}
+    .ngc-now{font-size:12px;font-weight:600;color:var(--soft);margin-top:2px;}
+    .fp-card.fp-delay{border-color:rgba(249,115,22,.35);}
+    .fp-card.fp-watch .fp-sub{color:var(--soft);}
+    .fp-card .fp-clock{font-size:34px;}
+    .fp-card.fp-ppd{margin-top:0;margin-bottom:8px;border-color:rgba(249,115,22,.35);}
+    .fp-card.fp-ppd .fp-label{color:#f97316;}
+    .fp-card.fp-ppd .fp-ppd-sub{color:var(--text);font-size:12px;font-weight:600;}
     .lgv-linescore-wrap{overflow-x:auto;padding:8px 16px;border-bottom:1px solid var(--border);}
     .lgv-crowd{font-size:11px;color:var(--muted);padding:6px 16px;border-bottom:1px solid var(--border);}
     .linescore-live table{width:100%;border-collapse:collapse;}

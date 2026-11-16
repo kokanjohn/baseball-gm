@@ -18,7 +18,7 @@ import { GAME_STATUS } from '../../data/constants.js';
 import { accumulateBox, liveSituation, playRuns } from '../../engine/SimEngine.js';
 import { renderBoxScore } from './BoxScore.js';
 import { clubFor } from '../../engine/AllStarEngine.js';
-import { wxState, elapsedLabel, weatherLine, gameNotes } from './WeatherStatus.js';
+import { wxState, elapsedLabel, weatherLine, liveWeatherLine, gameNotes } from './WeatherStatus.js';
 
 // ─────────────────────────────────────────────────────────────
 // DERIVED LIVE STATE
@@ -173,7 +173,7 @@ function _viewerHtml(state, g, now = Date.now()) {
   // §102.4 under the header: the weather's hold on the game, or what it was played in; the schedule's notes.
   const wxText = ls.wx.kind
     ? `${ls.wx.sub}${ls.wx.kind === 'delay' || ls.wx.kind === 'start-delay' ? ` (${elapsedLabel(now - ls.wx.sinceMs)} so far)` : ''}`
-    : weatherLine(g);
+    : ls.final || !ls.revealed ? weatherLine(g) : liveWeatherLine(state, g, ls.revealed, g.venueId || g.homeId);   // §122.58
   const notes = gameNotes(g);
   // §105 the radar on this game's ballpark, a tap away.
   const park = g.venueId || g.homeId;

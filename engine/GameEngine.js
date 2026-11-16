@@ -1386,11 +1386,13 @@ function _checkSeriesMilestone(state) {
   for (let j = idx; j >= 0; j--) {
     const gj = schedule[j];
     if (!gj || !gj._committed || gj.opponent !== opp || !!gj.isSpring !== !!g.isSpring) break;
+    // §122.58 only games played count: a series rained out (spring cancellations) isn't a "0–0 split".
+    if (gj.cancelled || !['win', 'loss', 'tie'].includes(gj.result)) continue;
     count++;
     if (gj.result === 'win')  wins++;
     else if (gj.result === 'loss') losses++;
   }
-  if (count < 2) return null; // a single game isn't a series
+  if (count < 2) return null; // a single game played isn't a series
 
   const id = wins > losses ? 'SERIES_WON'
            : wins < losses ? 'SERIES_LOST'
@@ -2083,13 +2085,13 @@ const _wxStories = new Map();
 const _WX_TELL_AHEAD_MS = 16 * 3_600_000;   // (the morning look comes 4–10 hours before first pitch)
 
 /** Our home game's story, as messages to tell: { events, ctx } (cached by what it depends on). */
-function _wxStoryOf(st, g) {
+function _wxStoryOf(st, g, { persist = true } = {}) {
   if (!g || g.isAllStar || !Number.isFinite(g.gameTime) || g.wx?.resumption || g.status === GAME_STATUS.SUSPENDED) return null;
   const ctx = weatherContext(st);
   let vg = _wxVenueGame(st, g, true);
   if (!vg.patience) {
     const p = _wxPatienceFor(st, g, vg);
-    StateManager.mutate(s => { const x = s.schedule[g.index]; if (x && x.gameTime === g.gameTime) x.wxPatience = p; });
+    if (persist) StateManager.mutate(s => { const x = s.schedule[g.index]; if (x && x.gameTime === g.gameTime) x.wxPatience = p; });
     vg = { ...vg, patience: p };
   }
   const res = g.wxResult && g.plays?.length ? g.wxResult : null;
@@ -2292,6 +2294,33 @@ function _wxStoryPark(i) {
 /** §122.51 for the checks: our game's weather terms (the park, the field, the GM's calls), and its story as the crew will tell it. */
 export function weatherGameOf(state, g) { return _wxVenueGame(state, g, true); }
 export function weatherStoryOf(g) { return _wxStoryOf(StateManager.get(), g)?.events || []; }
+/**
+ * §122.58 (phase 5) for Scores: a league game's weather story so far (its park's crew, as announced), for a game whose
+ * start the weather holds up — the estimate a fan would see. Read only; [] for a game the weather leaves alone.
+ */
+const _lgStories = new Map();
+export function leagueWeatherToldOf(cg, nowMs) {
+  try {
+    if (!cg?.wx || cg.wx.resumption || cg.isAllStar || !Number.isFinite(cg.gameTime)) return [];
+    const held = cg.wx.outcome === PLAN_OUTCOME.POSTPONED || (cg.wx.startAt ?? cg.gameTime) > cg.gameTime;
+    if (!held) return [];
+    const st = StateManager.get();
+    const ctx = weatherContext(st);
+    const vg = { ..._wxVenueGame(st, cg, false), ...(cg.wxPatience ? { patience: cg.wxPatience } : {}) };
+    const key = `${ctx.seed}|${cg.id}|${cg.gameTime}|${cg.wx.decidedAt ?? ''}|${cg.wx.startAt ?? ''}`;
+    if (!_lgStories.has(key)) {
+      _lgStories.set(key, gameStory(ctx, vg, cg.wx));
+      if (_lgStories.size > 30) _lgStories.delete(_lgStories.keys().next().value);
+    }
+    return _lgStories.get(key).filter(e => e.at <= nowMs);
+  } catch { return []; }
+}
+
+/** §122.58 (phase 5) for the screens: what's been told about our game's weather by `nowMs` (the crew's or the traveling
+ *  party's word — the same moments as the messages), read only. */
+export function weatherToldOf(g, nowMs) {
+  try { return (_wxStoryOf(StateManager.get(), g, { persist: false })?.events || []).filter(e => e.at <= nowMs); } catch { return []; }
+}
 
 /** Our game postponed: the crew says so (§122.58 on the road, the traveling party, `hostCity`), and where it went. */
 function _wxTellPostponed(ref, entry, atMs, hostCity = null) {

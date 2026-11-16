@@ -168,7 +168,7 @@ export function conditionsAt(ctx, x, y, t) {
   const dl = daylight(ctx, t);
   const isDay = hour >= dl.sunrise && hour < dl.sunset;
   const kind = wet ? (p.kind === PRECIP_SNOW ? 'snow' : p.kind === PRECIP_MIX ? 'mix' : 'rain') : null;
-  const { label, icon } = _label({ wet, kind, dbz: p.dbz, convective: p.convective || (wet && lightning), lightning, sky, isDay, tempF, wind });
+  const { label, icon } = _label({ wet, kind, dbz: p.dbz, convective: p.convective || (wet && lightning), lightning, sky, isDay, tempF, dewF, wind });
   return {
     tempF: _r1(tempF), dewF: _r1(dewF), humidity, feelsLikeF: _r1(_feelsLike(tempF, humidity, wind.mph)),
     wind: { mph: Math.round(wind.mph), gustMph: Math.round(wind.gustMph), fromDeg: wind.fromDeg },
@@ -199,21 +199,40 @@ export function rainTotal(ctx, x, y, t0, t1, stepMin = 10) {
   return Math.round((mm / 25.4) * 100) / 100;
 }
 
-function _label({ wet, kind, dbz, convective, lightning, sky, isDay, tempF, wind }) {
-  if (wet && kind === 'snow') return dbz >= 30 ? { label: 'Heavy Snow', icon: 'snow-heavy' } : dbz >= 20 ? { label: 'Snow', icon: 'snow' } : { label: 'Light Snow', icon: 'snow-light' };
-  if (wet && kind === 'mix') return { label: dbz >= 25 ? 'Sleet' : 'Rain and Snow', icon: 'mix' };
+/**
+ * §122.58 (§122.51 item 10) the conditions in a few words, as descriptive as the radar allows. Wet: Drizzle, Light
+ * Rain, Showers, Steady Rain, Heavy Rain, Downpour, Thunderstorms, Severe Storms, Hail, Sleet, Rain and Snow,
+ * Flurries, Snow Showers, Snow, Heavy Snow. Dry: the sky (Sunny … Cloudy, Clear at night), or Storms Nearby. One
+ * short add-on where it matters: Windy, Raw (cold and damp), Muggy (warm and humid), Hot. No fog.
+ */
+function _label({ wet, kind, dbz, convective, lightning, sky, isDay, tempF, dewF, wind }) {
+  const night = !isDay;
+  const raw = tempF <= 45 && (wet || sky === 'Cloudy' || sky === 'Mostly Cloudy');
+  const muggy = !wet && tempF >= 75 && dewF >= 68;
+  const add = (base) => (wind.mph >= 20 ? `${base}, Windy` : raw && kind !== 'snow' && kind !== 'mix' ? `${base}, Raw` : base);   // (snow is raw by itself)
+  if (wet && kind === 'snow') {
+    if (dbz >= 30) return { label: add('Heavy Snow'), icon: 'snow-heavy' };
+    if (convective) return { label: add('Snow Showers'), icon: 'snow' };
+    return dbz >= 18 ? { label: add('Snow'), icon: 'snow' } : { label: add('Flurries'), icon: 'snow-light' };
+  }
+  if (wet && kind === 'mix') return { label: add(dbz >= 25 ? 'Sleet' : 'Rain and Snow'), icon: 'mix' };
   if (wet) {
-    if (convective && dbz >= 40) return { label: dbz >= 52 ? 'Severe Thunderstorm' : 'Thunderstorm', icon: 'storm' };
-    if (dbz >= 40) return { label: 'Heavy Rain', icon: 'rain-heavy' };
-    if (dbz >= 28) return { label: 'Rain', icon: 'rain' };
-    return { label: dbz >= 20 ? 'Light Rain' : 'Drizzle', icon: 'rain-light' };
+    if (convective && dbz >= 58) return { label: 'Hail', icon: 'storm' };
+    if (convective && dbz >= 52) return { label: 'Severe Storms', icon: 'storm' };
+    if (convective && dbz >= 40) return { label: 'Thunderstorms', icon: 'storm' };
+    if (dbz >= 47) return { label: add('Downpour'), icon: 'rain-heavy' };
+    if (dbz >= 40) return { label: add('Heavy Rain'), icon: 'rain-heavy' };
+    if (convective) return { label: add('Showers'), icon: 'rain' };
+    if (dbz >= 28) return { label: add('Steady Rain'), icon: 'rain' };
+    return { label: add(dbz >= 20 ? 'Light Rain' : 'Drizzle'), icon: 'rain-light' };
   }
   if (lightning) return { label: 'Storms Nearby', icon: 'storm-near' };
-  const night = !isDay;
   const sk = night && sky === 'Clear' ? 'Clear' : night && sky === 'Mostly Clear' ? 'Mostly Clear' : !night && sky === 'Clear' ? 'Sunny' : !night && sky === 'Mostly Clear' ? 'Mostly Sunny' : sky;
   const icon = { Clear: 'moon', 'Mostly Clear': 'moon-cloud', Sunny: 'sun', 'Mostly Sunny': 'sun-cloud', 'Partly Cloudy': night ? 'moon-cloud' : 'sun-cloud', 'Mostly Cloudy': 'cloud', Cloudy: 'cloud' }[sk];
   if (wind.mph >= 20) return { label: `${sk}, Windy`, icon: 'wind' };
   if (tempF >= 95 && !night) return { label: `${sk}, Hot`, icon: 'hot' };
+  if (muggy) return { label: `${sk}, Muggy`, icon };
+  if (raw) return { label: `${sk}, Raw`, icon };
   return { label: sk, icon };
 }
 

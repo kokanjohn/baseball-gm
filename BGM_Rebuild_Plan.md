@@ -12176,3 +12176,73 @@ Keys `wx:story:{season}:{gameTime}:{id}` as at home, each moment once.
 **Fresh team:** not required. No plan changed. An existing season starts hearing about its road games from the next one, and the winter fix applies at the next season's turn.
 
 **Next (§122.51 phase 5):** on screen — the first-pitch card follows the timeline, the live conditions label and temperature each half-inning, and the schedule and Scores show delayed games with their estimate.
+
+## §122.59 — r184: §122.51 phase 5 — the weather on screen
+User go-ahead (Nov 16, "Continue"). What the screens show now follows the same weather story as the messages (§122.51 phase 2; home and road since §122.58), read only.
+
+### The first-pitch card (Dashboard)
+`WeatherStatus.startStatus(told, game, now)` reads what's been told by now (`GameEngine.weatherToldOf`, the same moments as the messages: the crew's at home, the Travel Coordinator's on the road; read only, `persist: false`).
+
+| State | Label | Big line | Under it |
+|---|---|---|---|
+| nothing told | First Pitch | the countdown | the opponent |
+| the morning look or a forecast with rain | First Pitch | the countdown | "Watching the weather: rain around 6:05 PM (70%)" |
+| the tarp on, the start not moved | Tarp on | the countdown | "Rain at the park · first pitch still on time" |
+| a delay announced | First pitch delayed | the estimate ("7:40 PM") | "Scheduled 7:05 PM" |
+| a revision | New estimate | the new estimate | "Was 7:40 PM · scheduled 7:05 PM" |
+| the tarp off for a late start | Tarp coming off | the estimate | "Tarp coming off · scheduled 7:05 PM" |
+| in doubt | In doubt | the countdown | "No window on the radar yet" |
+| held at first pitch (DELAYED) | Start delayed | time held so far | "Estimated first pitch 7:40 PM (was …)" or "No window on the radar yet" |
+
+- "Back on schedule" and "the rain sliding past" return it to the countdown. Moments during play (an in-game tarp, a delay) aren't the start's business.
+- **The next-game card** shows "Now: 63° Showers · Wind 13 mph left to right" (the park as it is) in place of the forecast while the weather holds the start. A forecast for a start time that has moved read as a contradiction ("Slight chance of showers 10%" under "First pitch delayed").
+- **Postponed today** (`postponedToday`): a card above the next game — "Postponed (rain) · vs Gulls · 7:05 PM · Made up Apr 22, 7:05 PM · doubleheader" (or "Not made up") — until four hours past the game's time.
+
+### The live conditions line
+`WeatherStatus.liveWeatherLine(state, game, revealed, venueId)` replaces the frozen first-pitch line during play (§122.51 root cause 3), on our live card and in the league game viewer.
+- It reads the park (`parkConditions`) at the start of the half-inning being played, so the label and the temperature move half-inning by half-inning.
+- It's cached per park and moment. A final game keeps the weather at first pitch.
+
+### The conditions words (§122.51 item 10) — `WeatherConditions._label`
+- **Wet:** Drizzle, Light Rain, Showers (convective, under 40 dBZ), Steady Rain (28+), Heavy Rain (40+), Downpour (47+), Thunderstorms (convective 40+), Severe Storms (52+), Hail (58+), Sleet, Rain and Snow, Flurries, Snow Showers, Snow, Heavy Snow.
+- **Dry:** the sky (Sunny … Cloudy, Clear at night), or Storms Nearby.
+- **One add-on at most:**
+  - Windy (20+ mph);
+  - Hot (95°+, day);
+  - Muggy (75°+ with a 68°+ dew point, dry);
+  - Raw (45° or colder, wet or overcast; not on snow, which is raw by itself).
+- No fog.
+- **Measured** (four regions, a season): "Muggy" on about 8% of readings and "Raw" on 2%. Every wet word in use except the rarest (Downpour, Severe Storms, Hail).
+
+### The schedule and Scores
+- **Our next game's row** adds the start's state in a few words (`startNote`): "Delayed · est. first pitch 7:55 PM", "In doubt · no window on the radar yet", "Tarp on", "Tarp coming off · first pitch about …".
+- **Scores:**
+  - a held-up start shows its estimate ("est. 7:40 PM") in place of the scheduled time, with DELAY (or DOUBT);
+  - ours from what's been told;
+  - a league game's from its own park's story (`GameEngine.leagueWeatherToldOf`), computed only for a game whose plan holds its start, and showing only what's been announced by now (never the plan's real start).
+
+### Found and fixed on the way
+**A series the rain wiped out.** A series in which no game was played (spring cancellations) showed a "Series Split, 0–0 — Even this time" screen, and on the schedule a "LOST" badge.
+- Both now count only games played (`_checkSeriesMilestone`, `_seriesContext`); one game played isn't a series.
+- The schedule badge gets "SPLIT" for an even series (it said "LOST").
+
+### Checks
+- **check-weather-screens** (new, 26):
+  - the card step by step (on time, watching, the tarp, delayed, a revision, the tarp off, back on schedule, clearing, in doubt, in-game moments ignored, a schedule note);
+  - in a real league, the card's estimate is always the latest one told, never one not yet told;
+  - reading changes nothing;
+  - the live line before play, steady within a half-inning, reading the park at the half's start, and moving over a game;
+  - Scores' league estimates (13 of 13 held starts; nothing for a dry game);
+  - postponed today (shown, gone the morning after, not before the call);
+  - the conditions words.
+- **test-weather-screens-ui** (new, dark and light): a real held start found in a new league (the browser picks the region until one has one early), the card ("First pitch delayed 7:40 PM, scheduled 7:05 PM"), the schedule's row, and the postponed-today card.
+
+**Suite (r184):**
+- The season sim passes 3817/3817, multi-season 59/59, and every check-*.mjs.
+- test-sheet-close-ui (dark) failed once and passed on rerun (open item 4).
+
+**Fresh team:** not required. No plan or schedule logic changed. The new conditions words apply to readings from now on; games already played keep the words they were recorded with.
+
+**§122.51 status:** phases 1–5 are built.
+- Phase 6 (checks and tuning) has largely ridden along with each release: region rates, messages per game day, screenshots, full seasons.
+- What remains of it is the open climate question: North and East postponement rates are below the §102.6 benchmark, and that's the GM's call.

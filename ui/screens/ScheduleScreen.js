@@ -29,7 +29,8 @@ import { renderBoxScore } from '../components/BoxScore.js';
 import { accumulateBox } from '../../engine/SimEngine.js';
 import { leagueGameState, wireLeagueGameTaps } from '../components/LiveGame.js';
 import { clubFor } from '../../engine/AllStarEngine.js';
-import { wxState, weatherLine, gameNotes, calledInnings, postponedOn, dayLabel } from '../components/WeatherStatus.js';
+import { wxState, weatherLine, gameNotes, calledInnings, postponedOn, dayLabel, startStatus, startNote, timeLabel } from '../components/WeatherStatus.js';
+import { weatherToldOf, leagueWeatherToldOf } from '../../engine/GameEngine.js';
 import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
 import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
 import {
@@ -268,6 +269,11 @@ function _renderGroup(group, gameIdx, state) {
 // GAME ROW RENDERING
 // ─────────────────────────────────────────────────────────────
 
+/** §122.58 a held-up start's estimate for a Scores row ("est. 7:40 PM"), '' when there's none. */
+function _estTime(st) {
+  return (st.kind === 'delayed' || st.kind === 'starting') && st.estStart ? `<span class="sg-time sg-est">est. ${timeLabel(st.estStart)}</span>` : '';
+}
+
 function _renderGameRow(game, idx, currentIdx, state, isPlayoff) {
   if (!game) return '';
 
@@ -290,6 +296,11 @@ function _renderGameRow(game, idx, currentIdx, state, isPlayoff) {
   const wxPlayed = isCommitted && game.weather ? weatherLine(game).split(' · ')[0] : '';
   const siblings = (state.schedule || []).filter(g => g !== game && g.date === game.date && !g.cancelled);
   const notes    = gameNotes(game, siblings);
+  // §122.58 the next game's start as it stands (the weather's word so far): delayed with its estimate, in doubt, the tarp.
+  if (isCurrentGame && !isCommitted && !(game.plays?.length && game.status !== GAME_STATUS.DELAYED)) {
+    const note = startNote(startStatus(weatherToldOf(game, Date.now()), game, Date.now()), game);
+    if (note) notes.unshift(note);
+  }
   const badges      = _renderBadges(game, idx, currentIdx, state);
 
   return `
@@ -426,10 +437,13 @@ function _seriesContext(game, idx, state) {
   // Retroactive badge on last game of a fully completed series
   if (committed.length !== seriesGames.length || idx !== seriesEnd) return null;
 
-  const total = seriesGames.length;
+  // §122.58 only the games played: a series the rain wiped out has no result; one game played isn't a series.
+  const total = committed.filter(g => !g.cancelled && ['win', 'loss', 'tie'].includes(g.result)).length;
+  if (total < 2) return null;
   if (wins === total)   return { text: 'SWEEP', cls: 'sweep' };
   if (losses === total) return { text: 'SWEPT', cls: 'avoid' };
   if (wins > losses)    return { text: 'WON',   cls: 'sweep' };
+  if (wins === losses)  return { text: 'SPLIT', cls: 'rubber' };
   return { text: 'LOST', cls: 'avoid' };
 }
 
@@ -842,8 +856,11 @@ function _renderScoresModal(state) {
       scorePart = `<span class="${won && !userGame.isHome || !won && userGame.isHome ? 'sg-score-winner':''}">${aw}</span><span class="sg-dash">–</span><span class="${won && userGame.isHome || !won && !userGame.isHome ? 'sg-score-winner':''}">${ho}</span>`;
       metaPart  = `<span class="sg-final-pill">F${calledInnings(userGame) ? `/${calledInnings(userGame)}` : ''}</span>`;
     } else {
-      scorePart = `<span class="sg-time">${_scheduledTime(userGame)}</span>`;
-      metaPart  = userGame.status === GAME_STATUS.DELAYED ? '<span class="sg-wx-pill">DELAY</span>' : '';
+      // §122.58 a start the weather holds up: its estimate in place of the scheduled time.
+      const st  = startStatus(weatherToldOf(userGame, Date.now()), userGame, Date.now());
+      scorePart = _estTime(st) || `<span class="sg-time">${_scheduledTime(userGame)}</span>`;
+      metaPart  = userGame.status === GAME_STATUS.DELAYED || st.kind === 'delayed' || st.kind === 'starting' ? '<span class="sg-wx-pill">DELAY</span>'
+                : st.kind === 'doubt' ? '<span class="sg-wx-pill">DOUBT</span>' : '';
     }
 
     rows += `<div class="sg-row sg-row-user">
@@ -876,8 +893,10 @@ function _renderScoresModal(state) {
       const t = Number.isFinite(g.gameTime)
         ? new Date(g.gameTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
         : '';
-      scorePart = `<span class="sg-time">${t}</span>`;
-      metaPart  = g.status === GAME_STATUS.DELAYED ? '<span class="sg-wx-pill">DELAY</span>' : '';
+      const st  = startStatus(leagueWeatherToldOf(g, Date.now()), g, Date.now());   // §122.58
+      scorePart = _estTime(st) || `<span class="sg-time">${t}</span>`;
+      metaPart  = g.status === GAME_STATUS.DELAYED || st.kind === 'delayed' || st.kind === 'starting' ? '<span class="sg-wx-pill">DELAY</span>'
+                : st.kind === 'doubt' ? '<span class="sg-wx-pill">DOUBT</span>' : '';
     }
     if (g.played && g.wxResult?.ruling?.outcome === 'final') metaPart = `<span class="sg-final-pill">F/${g.wxResult.ruling.innings}</span>`;
 
@@ -977,6 +996,7 @@ function _injectCSS() {
     .sg-status { text-align:right; }
     .sg-live-pill { font-size:9px;font-weight:800;letter-spacing:.5px;color:var(--danger);white-space:nowrap; }
     .sg-wx-pill { font-size:9px;font-weight:800;letter-spacing:.5px;color:#f97316;white-space:nowrap; }
+    .sg-est { color:#f97316; }
     .sg-ppd-note { font-size:10px;color:var(--muted);white-space:nowrap; }
     .sg-row-ppd { opacity:.8; }
     .game-weather { font-weight:500;color:var(--muted); }

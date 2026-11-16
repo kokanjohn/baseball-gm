@@ -300,9 +300,9 @@ const { conditionsAt, parkConditions, rainTotal, daylight, windAtPark } = WC;
         if (r.precip.kind !== kind) bad.push(`${region} ${id} d${d.toFixed(1)}`);
         if (r.precip.kind === 'snow' && r.tempF > 33) snowWarm++;
         if (r.precip.kind === 'rain' && r.tempF < 33.4) rainCold++;
-        const precipWord = /Rain|Drizzle|Snow|Sleet|Thunderstorm/.test(r.label);
+        const precipWord = /Rain|Drizzle|Snow|Sleet|Thunderstorm|Showers|Downpour|Severe Storms|Hail|Flurries/.test(r.label);
         if (precipWord !== isWet && !(r.label === 'Storms Nearby' && !isWet)) labelBad.push(`${r.label} wet=${isWet}`);
-        if (/Thunderstorm/.test(r.label)) { storms++; if (!(r.lightning || r.precip.convective)) stormBad++; }
+        if (/Thunderstorms|Severe Storms|Hail/.test(r.label)) { storms++; if (!(r.lightning || r.precip.convective)) stormBad++; }
         if (isWet && r.cloud < 0.85) labelBad.push(`raining under ${r.cloud} cloud`);
       }
     }
