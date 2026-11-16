@@ -6,16 +6,17 @@
  * store layer (StateManager + DB) and the REAL GameEngine run unmodified in Node:
  *   - in-memory IndexedDB (covers exactly the surface DB.js uses)
  *   - in-memory localStorage
- *   - crypto.randomUUID (polyfilled if the Node build lacks it)
+ *   - crypto.randomUUID (seeded: the same ids every run)
  *   - a seeded Math.random for reproducible runs
- *   - a controllable virtual clock (overrides Date.now)
+ *   - a controllable virtual clock (overrides Date.now and new Date())
  *
  * Import this module FIRST, before any app module, for its side effects.
  */
 
 // ── Seeded RNG (mulberry32) — reproducible seasons ───────────────
 let _seed = 0x9e3779b9;
-export function seedRandom(seed) { _seed = seed >>> 0; }
+let _uuidBase = 0x9e3779b9, _uuidN = 0;
+export function seedRandom(seed) { _seed = seed >>> 0; _uuidBase = seed >>> 0; _uuidN = 0; }
 (function installSeededRandom() {
   Math.random = function () {
     _seed |= 0; _seed = (_seed + 0x6D2B79F5) | 0;
@@ -25,10 +26,18 @@ export function seedRandom(seed) { _seed = seed >>> 0; }
   };
 })();
 
-// ── Virtual clock — overrides Date.now() ─────────────────────────
+// ── Virtual clock — overrides Date.now() and new Date() ──────────
 let _vnow = Date.UTC(2400, 0, 1); // far-future anchor so nothing is "in the past" by accident
 const _realNow = Date.now.bind(Date);
-Date.now = () => _vnow;
+// §122.56 r181 `new Date()` (no arguments) reads the virtual clock too. Before, only Date.now() did, so code that
+// asks `new Date()` for "now" (startNewGame anchors the schedule to the next 1:05 PM that way) read the real
+// wall clock: every check's schedule depended on the day and time it ran.
+const _RealDate = Date;
+class _VirtualDate extends _RealDate {
+  constructor(...args) { if (args.length === 0) super(_vnow); else super(...args); }
+  static now() { return _vnow; }
+}
+globalThis.Date = _VirtualDate;
 export const clock = {
   set(ms)     { _vnow = ms; },
   advance(ms) { _vnow += ms; },
@@ -36,14 +45,23 @@ export const clock = {
   real:        _realNow,
 };
 
-// ── crypto.randomUUID ────────────────────────────────────────────
-if (typeof globalThis.crypto === 'undefined' || typeof globalThis.crypto.randomUUID !== 'function') {
-  const nodeCrypto = await import('node:crypto');
-  globalThis.crypto = globalThis.crypto || {};
-  if (typeof globalThis.crypto.randomUUID !== 'function') {
-    globalThis.crypto.randomUUID = () => nodeCrypto.randomUUID();
-  }
+// ── crypto.randomUUID — seeded ───────────────────────────────────
+// §122.56 r181 ids come from their own seeded stream (reset by seedRandom), so a run is the same every time:
+// before, they were truly random, and anything ordered or hashed by an id (the schedule's club order, for one)
+// changed from run to run. Their own stream, so Math.random's sequence is as it was.
+function _seededUuid() {
+  const word = (k) => {
+    let t = (_uuidBase ^ Math.imul(_uuidN + 1, 0x9E3779B1) ^ Math.imul(k + 1, 0x85EBCA77)) | 0;
+    t = Math.imul(t ^ (t >>> 15), 1 | t); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0).toString(16).padStart(8, '0');
+  };
+  const h = word(0) + word(1) + word(2) + word(3);
+  _uuidN++;
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
+if (typeof globalThis.crypto === 'undefined') globalThis.crypto = {};
+try { Object.defineProperty(globalThis.crypto, 'randomUUID', { value: _seededUuid, configurable: true, writable: true }); }
+catch { globalThis.crypto.randomUUID = _seededUuid; }
 
 // ── in-memory localStorage ───────────────────────────────────────
 if (typeof globalThis.localStorage === 'undefined') {

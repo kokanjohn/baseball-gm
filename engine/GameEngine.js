@@ -539,7 +539,15 @@ export function tick() {
     const ref = { user: true, i: game.index };
     // A start the weather is holding up — then calls off.
     if (_WX_OPEN.has(game.status) && game.wx?.outcome === PLAN_OUTCOME.POSTPONED && !game.wx.resumption) {
-      if (now >= game.wx.decidedAt) { _postponeGame(ref, game.wx.decidedAt); return null; }
+      if (now >= game.wx.decidedAt) {
+        const at = game.wx.decidedAt;   // (the game object moves with the makeup, and its plan is cleared)
+        _postponeGame(ref, at);
+        // §122.56 the game that's next now has its day planned at the call's own moment — not whenever the app next
+        // looks (an open app planned it at its next 5-minute look, a closed one at the reopen: open item 5, the
+        // look-ahead's pool card on camp's first game day).
+        runAt(at, () => planCardsForNextGame());
+        return null;
+      }
       if (now >= game.gameTime && game.status !== GAME_STATUS.DELAYED) {
         StateManager.mutate(s => { const g = s.schedule[game.index]; if (g) g.status = GAME_STATUS.DELAYED; });
         if (game.isHome) _wxStoryPark(game.index);   // §122.51 the crew's word while the start is held
@@ -2126,7 +2134,12 @@ function _wxStoryNext(st, uptoMs) {
 }
 
 const WX_DECIDE = Object.freeze({ bpDeadlineLeadMin: 180, bpMinTimeMin: 30, calloffMin: 45, calloffLastMin: 10, compsMin: 20, compsWaitMin: 45,
-                                   compsPerFanK: 0.00035, compsMinK: 4, handsMin: 10, handsK: 5, rainMin: 15, overtimeK: 8, lateAtmo: -2 });
+                                   compsPerFanK: 0.00035, compsMinK: 4, handsMin: 10, handsK: 5, rainMin: 15, overtimeK: 8, lateAtmo: -2,
+                                   // §122.56 the crowd during a delay
+                                   crowdWaitMin: 30, crowdPerDelay: 2, sellPerFanK: 0.00015, sthChance: 0.35, sthPerPoor: 0.2, sthK: 2,
+                                   boothChance: 0.5, boothK: 2, anticsChance: 0.4, raincheckShare: 0.4, raincheckMinK: 5 });
+/** A seeded draw in [0, 1) for one of a moment's questions. */
+function _wxHash(seed, id, k) { let h = 2166136261; for (const ch of `${seed}|${id}|${k}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return (h >>> 0) / 4294967296; }
 
 function _wxTellOne(st, g, s, e) {
   const info = { gameTime: g.gameTime, opp: g.opponent || '', seed: s.seed, delays: g.wxResult?.delays, ruling: g.wxResult?.ruling };
@@ -2151,12 +2164,44 @@ function _wxTellOne(st, g, s, e) {
       if (decide('hands', e, e.at + WX_DECIDE.handsMin * M, { costK: WX_DECIDE.handsK })) return;
     }
     if (e.kind === 'gap') { decide('rain', e, Math.min(e.at + WX_DECIDE.rainMin * M, e.gapStart - 10 * M)); return; }
-    // A long wait for the crowd (its own question, from Stadium Ops, once a game).
+    // §122.56 a long wait for the crowd: one or two of the crowd's questions a delay (each once a game) — the crowd
+    // (food and drink), an upset season-ticket holder, the TV booth, the players wanting to entertain the crowd. None
+    // when a like question from the game day's other messages is already coming (one about season-ticket holders,
+    // the broadcast).
     const wait = e.kind === 'start_delayed' ? (e.estStart - T) / M : e.kind === 'delay' ? (e.estResume ? (e.estResume - e.at) / M : 60) : 0;
-    if (!g.isPlayoff && wait >= WX_DECIDE.compsWaitMin) {
+    if (wait >= WX_DECIDE.crowdWaitMin) {
       const fans = g.attendance || 25_000;
-      const costK = Math.max(WX_DECIDE.compsMinK, Math.round(fans * WX_DECIDE.compsPerFanK));
-      decide('comps', { ...e, at: e.at + 5 * M, waitMin: Math.round(wait / 5) * 5, inGame: e.kind === 'delay' }, e.at + (5 + WX_DECIDE.compsMin) * M, { costK });
+      const day = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => { const t = c.deliverAtMs ?? c.arrivedAtMs; return t >= T - 6 * 3_600_000 && t <= T + 6 * 3_600_000; });
+      const coming = (ids) => day.some(c => ids.includes(c.cardId));
+      const roll = (k) => _wxHash(s.seed, e.id, k);
+      const poor = CardEngine.recentPoorCalls(st, e.at);
+      const cands = [];
+      if (wait >= WX_DECIDE.compsWaitMin) cands.push('comps');
+      if (!coming(['pg_sth_complaint', 'ig_suite_complaint']) && roll('sth') < WX_DECIDE.sthChance + WX_DECIDE.sthPerPoor * poor) cands.push('sth');
+      if (!coming(['ig_broadcast_feed']) && roll('booth') < WX_DECIDE.boothChance) cands.push('booth');
+      if (wait >= WX_DECIDE.compsWaitMin && roll('antics') < WX_DECIDE.anticsChance) cands.push('antics');
+      const order = [...cands.filter(k => k === 'comps'), ...cands.filter(k => k !== 'comps').sort((a, b) => roll(a) - roll(b))];
+      let asked = 0;
+      for (const kind of order) {
+        if (asked >= WX_DECIDE.crowdPerDelay) break;
+        const at = e.at + (5 + asked * 12) * M;
+        const base = { ...e, at, waitMin: Math.round(wait / 5) * 5, inGame: e.kind === 'delay' };
+        let card = null;
+        if (kind === 'comps') card = decide('comps', base, at + WX_DECIDE.compsMin * M, { costK: Math.max(WX_DECIDE.compsMinK, Math.round(fans * WX_DECIDE.compsPerFanK)), revenueK: Math.max(2, Math.round(fans * WX_DECIDE.sellPerFanK)) });
+        if (kind === 'sth') card = decide('sth', base, at + WX_DECIDE.compsMin * M, { costK: WX_DECIDE.sthK });
+        if (kind === 'booth') {
+          const ids = (st.userTeam.lineupSlots || []).map(x => x?.playerId).filter(id => st.players[id]);
+          const pid = ids.length ? ids[Math.floor(roll('booth-who') * ids.length)] : null;
+          if (pid) card = decide('booth', { ...base, player: st.players[pid].name }, at + WX_DECIDE.compsMin * M, { revenueK: WX_DECIDE.boothK, playerId: pid });
+        }
+        if (kind === 'antics') card = decide('antics', base, at + WX_DECIDE.compsMin * M);
+        if (card) asked++;
+      }
+    }
+    // §122.56 a game called official before nine: rain checks for the crowd?
+    const ruling = g.wxResult?.ruling;
+    if (e.kind === 'called' && ruling?.outcome === 'final' && ruling.innings < 9) {
+      decide('raincheck', { ...e, at: e.at + 5 * M, innings: ruling.innings }, e.at + 35 * M, { costK: Math.max(WX_DECIDE.raincheckMinK, Math.round((g.gateK || 0) * WX_DECIDE.raincheckShare)) });
     }
   }
   if (e.kind === 'gap' || e.kind === 'calloff_ask') return;   // (decisions only)
@@ -2222,6 +2267,8 @@ function _wxStoryPark(i) {
   if (!s) return;
   const told = _wxToldAt(g);
   const rest = s.events.filter(x => x.at > told);
+  // §122.56 "drag the infield?" has no place in a game the weather holds up (the crew has its hands full).
+  if (s.events.some(x => x.kind === 'delay' || x.kind === 'start_delayed' || x.kind === 'tarp_on')) CardEngine.withdrawNoWeatherHold(g.gameTime);
   for (const e of rest) _wxTellOne(st, g, s, e);
   if (rest.length) StateManager.mutate(x => { const y = x.schedule[i]; if (y) y.wxTold = { gameTime: y.gameTime, at: rest[rest.length - 1].at }; });
 }
@@ -3744,6 +3791,10 @@ export function debugInjure(playerId, nowMs = clockNow()) {
 function _gameEndMs(game) {
   const last = game?.plays?.[game.plays.length - 1];
   if (last && Number.isFinite(last._timestamp)) return last._timestamp;
+  // §122.56 a game called off before it started ends when it was called off (not first pitch plus a game's length:
+  // a reopen committed it hours later than an open app did, and planned the next game day differently — open item 5).
+  const ppd = (game?.postponements || []).filter(p => Number.isFinite(p.decidedAt)).at(-1);
+  if (game?.cancelled && ppd) return ppd.decidedAt;
   return (game?.gameTime || clockNow()) + GAME_DURATION_FALLBACK_MS;
 }
 

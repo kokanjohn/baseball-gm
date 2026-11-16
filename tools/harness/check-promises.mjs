@@ -155,15 +155,7 @@ const pid = m?._playerIds?.[0] || Object.values(S().players).find(p => p._scoute
 console.log(`    “${m?.subject}” — ${m?.body}`);
 check('the scouting director names a real rookie in the class, marked as scouted', !!m && !!pid && S().players[pid]?._classOf === (S().seasonNum || 1) + 1 && Number.isFinite(S().players[pid]?._scoutedAt));
 
-console.log('A catcher kept playing: the workload catches up, or the luck holds');
-inst = deal('hr1');
-const catcher = inst._tokenPlayers?.active_hitter;
-answer(inst, 'no');
-releaseAt(clock.get() + 7 * DAY);
-const hurt = S().players[catcher]?.isInjured;
-const act2 = [...CE.getInbox(), ...(S().scheduledCards || [])].some(c => c.cardId === 'injury_act2' && c._targetPlayerId === catcher);
-check(`six days on, ${S().players[catcher]?.name} ${hurt ? 'is hurt, with the diagnosis card' : 'held up (it does 40% of the time)'}`, hurt ? act2 : true);
-check('either way, nothing is left scheduled for it', !(S().scheduledCards || []).some(c => c._promiseRec?.kind === 'worn_down'));
+// (§122.56 r181: hr1, the random catcher-rest card, is retired; the wear-based rest messages do this for real.)
 
 console.log('Riding the good feeling at camp: the manager judges the first three weeks');
 inst = deal('mo_camp_win_hangover');

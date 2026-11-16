@@ -11842,3 +11842,89 @@ r180 ships 3a (§122.54) and 3b together. **Fresh team required:** our home game
 - test-game-pushes-ui (light);
 - test-team-roster-ui (light);
 - check-field-care (the seed fix above).
+
+## §122.56 — r181: the GM and the manager; the crowd during a delay; the checks run the same every time
+
+### The line (GM decision, Nov 15)
+**The GM decides who and how much; the manager decides what happens on the field.**
+- **The GM:** who's on the roster, the lineup card, the rotation order, bullpen roles, rest days, IL moves, trades and signings, staff, discipline, money, the ballpark and the fans, and the weather calls at home.
+- **The manager:** everything once the game is going (pitching changes, pinch-hitters, how relievers are used, warm-ups, when to pull a starter), and any gap the GM leaves open, as before.
+
+This matches real clubs. Field managers write the daily lineup and make the in-game moves; the GM has final say on the roster and the staff (MLB glossary). The game gives the lineup card to the GM, as decided in §122.x ("the lineup is the GM's").
+
+**Why there are no decisions inside a game:** our game is simulated in full at first pitch, so a decision during it can't change its plays. It can change anything off the field, and anything about later games. The in-game pitching decisions planned in §122.51 ("send the starter back out", the warm-up timing in a held start) are dropped.
+
+### Cards retired (`_retired: true`, kept in the pool for reference)
+- **The manager's calls asked of the GM:**
+  - `pg_lineup_tip` — pass a scouting tip to the hitters now;
+  - `pg_bullpen_check` — is a reliever available today.
+
+  Both are in-game tactics, and their effects (a random development plan) never touched the game.
+- **Random weather:** `pg_weather_prep` — "radar shows a cell that could hit between the 5th and 7th", unconnected to the real weather; it could contradict the radar and the crew.
+- **Random players:**
+  - `r6`, `hr1`, `hr3`, `hr4` (rest a hitter or catcher) and `b3` (rest a reliever) picked a random player, who might be Fresh on the wear meter. The wear-based rest messages (§122.x rest watch) do this for real.
+  - `r3` (a reliever into the rotation) and `r5` (an audition) overlapped the roster advice.
+  - `hr1`'s follow-up (a catcher kept playing gets hurt) goes with it; check-promises drops that block.
+
+**Fixed:**
+- `ig_grounds_crew` ("drag the infield?") moves fan goodwill only (it had started a random development plan or a dip). It is withdrawn from a game the weather holds up (`_noWeatherHold`, `CardEngine.withdrawNoWeatherHold`, from `_wxStoryPark`).
+- `pg_locker_room` (the manager asks the GM to come down before the game) moves morale only.
+
+### The crowd during a delay (home, not spring)
+One or two of these questions per delay of 30+ minutes (a held start or under way), each once a game, the crowd first (`_wxTellOne`; `WX_DECIDE`):
+
+| Question | From | When | Yes | No | Unanswered |
+|---|---|---|---|---|---|
+| **The crowd** (`comps`), one card, three answers: Free Food and Drink ($XK) / Keep the Stands Open / Close the Stands | Stadium Ops | a wait of 45+ min | free: about $0.35 a fan, goodwill +1; open: the sales, about $0.15 a fan | closed: goodwill −1 | closed, and goodwill −1 more |
+| **A season-ticket holder wants a credit** (`sth`) | Guest Services | 35% of delays, +20 points per poor weather call in the last two weeks; never on a day with `pg_sth_complaint` or `ig_suite_complaint` | $2K, goodwill +1 | goodwill −2 | goodwill −3 |
+| **The TV booth wants a guest** (`booth`): a regular from our lineup | Media Relations | 50%; never on a day with `ig_broadcast_feed` | the sponsor pays $2K, goodwill +1, team morale −1 | — | goodwill −1 |
+| **The players want to entertain the crowd** (`antics`), the manager asking the GM's blessing | the manager | a wait of 45+ min, 40% | goodwill +2, morale +1; 10% a regular is out of sorts for 3 games | morale −1 | morale −1, goodwill −1 |
+| **Rain checks?** (`raincheck`) | Ticket Office | a game called official before nine innings | 40% of the gate (at least $5K), goodwill +2 | goodwill −3 | goodwill −4 |
+
+- The crowd question replaces r180's free-food card (no separate "keep the stands open" question).
+- Choices are shown without a "Recommended" tag (`_noRec`).
+- Unanswered, any of these counts as a poor call for the owner (r180).
+
+### Season-ticket holders
+- **A base level:** they complain regardless — `pg_sth_complaint`, `ig_suite_complaint`, `sth_upgrade` and `sth_group_conflict` (now `_sth`), and the delay question above.
+- **More after poor weather calls:** each poor call at home in the last two weeks (up to three, `CardEngine.recentPoorCalls`) adds 100% to those cards' chance of being dealt (`STH_BOOST`), and 20 points to the delay question's.
+
+### The checks run the same every time
+`tools/harness/shims.js` replaced `Date.now()` with a virtual clock, but:
+- **`new Date()` with no arguments read the real clock.** `startNewGame` anchors the season to "the next 1:05 PM" that way, so every check's schedule depended on the day and time it ran.
+- **IDs came from the real `crypto.randomUUID`,** so anything ordered or hashed by an ID (the clubs' order in the schedule, for one) changed every run.
+
+Both now read the shims: `new Date()` is the virtual clock, and IDs come from a seeded stream of their own (reset by `seedRandom`; `Math.random`'s sequence is unchanged). The same check now makes the same league every run.
+
+This is the root cause behind several "passes on rerun" failures — the season sims differing run to run, check-field-care's thin seasons, the scattered check-weather-decisions failures — and very likely open item 5 (check-message-lookahead depending on the time of day it runs).
+
+### Checks
+**check-weather-decisions** (23; 9 new):
+- the crowd card's three answers, with the stands open bringing in the sales;
+- a season-ticket holder's credit, yes and no;
+- rain checks;
+- the TV booth (paid, morale);
+- the players, asked by the manager;
+- poor calls counted for the complaints;
+- "drag the infield?" withdrawn in a weather hold;
+- the ten cards retired.
+
+The late-postponement scenario now catches the day up before injecting its plan; a batting-practice question it brings replans the game. Its hand-made plan carries no `planKey`, so it's taken as given.
+
+### Found with the checks running the same every time
+Each failure now came back every run, so each could be traced to its cause.
+
+- **Open item 5 fixed: check-message-lookahead's pool card on camp's first game day.** A spring game called off before it started (no plays) "ended" at first pitch plus a game's length (`_gameEndMs`). It was committed at the earlier of now and that end. An open app committed it at its next 5-minute look; a reopen committed it hours later, after the clock had already planned the next game day from a later event. So the next game day's cards got different times depending on whether the app was open. Fixes:
+  - a game called off ends when it was called off (its last postponement's `decidedAt`);
+  - when a held start ends in a postponement in `tick()`, the next game day is planned at the call's own moment (`runAt(decidedAt, planCardsForNextGame)`).
+
+  check-message-lookahead passes, open and closed.
+- **Open item 3: the rotation of five at the first spring game.** It failed on the first run with the checks fixed in place ("3 of 4"), then passed after the cancelled-game fix above, in the same league (multi-season 59/59). It most likely rode on the same timing: the open turn waits for the GM until the roster deadline, and the next game day was being planned at a different moment. The check now names any starter left out of the rotation (group, availability, the open-spot messages), so a recurrence explains itself.
+- **check-rest-watch:** a step's swap left roster advice coming ("Bennett should be playing"), which holds the rest watch off for 12 hours, as designed. The check's clean slate now clears pending roster advice and lineup-return messages too.
+- **sim-season, the crew's word:** a home game suspended mid-game moves to its resume date. The check now counts its suspension date (`g.suspension.gameTime`) as one of the game's times, alongside the postponements.
+- **check-player-work** failed once inside the suite and passes alone, repeatedly; it is timing under load, not the league.
+- **test-game-pushes-ui** (in the browser, on the real date, so the weather changes day to day) accepts the postponement as the crew's message at home, the way check-game-pushes does since r180. The browser tests still run on the real clock and the real random source; worth the same treatment some day (Playwright's `page.clock` is already set; the weather seed and ids are not).
+
+**Suite (r181):** the season sim (3818/3818) and multi-season (59/59) pass, as does every check-*.mjs. The season: the crew's word, 44 messages over 18 game days (median 2, most 5); the GM's decisions, 8 (4 batting practice left to the default, 1 answered; a call-off, a season-ticket holder, the booth); 15 weather calls, 9 poor (the harness GM leaves most questions), owner trust 49. Screen tests that failed once and passed on rerun: test-positions-ui (dark), test-wear-ui (dark and light, a known flake). test-game-pushes-ui (light) was fixed as above.
+
+**Fresh team:** not required. No plan or schedule logic changed for a game that's already set up, and the retired cards simply stop being dealt. (A save keeps any retired card already in its inbox until it's answered or expires.)

@@ -13,7 +13,7 @@ import * as SM from '../../store/StateManager.js';
 import { startNewGame, tick, commitGame, advanceClock, weatherGameOf, weatherStoryOf } from '../../engine/GameEngine.js';
 import * as CardEngine from '../../engine/CardEngine.js';
 import { weatherContext } from '../../engine/WeatherClimate.js';
-import { gameWeatherPlan, planKey } from '../../engine/GameWeather.js';
+import { gameWeatherPlan, fieldKey } from '../../engine/GameWeather.js';
 import { GAME_STATUS } from '../../data/constants.js';
 
 let pass = 0, fail = 0;
@@ -65,10 +65,12 @@ console.log('\nWait it out, and lose it late');
   const { g: g0, i } = homeRegular()[0];
   const g = { gameTime: g0.gameTime };   // (the game object moves with the makeup)
   skipTo(i);
+  // (the day caught up first: a question it brings — batting practice — would plan the game again over the hand-made plan)
+  clock.set(g.gameTime - 35 * MIN); advanceClock(clock.get()); tick();
   const atmo0 = SM.get().userTeam.atmosphere ?? 50, ot0 = ledger('Grounds crew overtime').length;
   // (its weather by hand: the start held, then called off 90 minutes past first pitch)
   SM.mutate(s => { const x = s.schedule[i]; x.wxWaited = { atMs: x.gameTime - 3 * HOUR, chance: 90, auto: false };
-    x.wx = { v: 1, venueId: 'user', gameTime: x.gameTime, playMin: 180, planKey: planKey(weatherGameOf(s, x)), outcome: 'postponed', decidedAt: x.gameTime + 90 * MIN, calledBy: 'limit', reason: 'rain', startAt: null, tarps: [], delays: [], endT: null, stopAtPlayMin: null }; });
+    x.wx = { v: 1, venueId: 'user', gameTime: x.gameTime, playMin: 180, fieldKey: fieldKey(weatherGameOf(s, x).field || null), /* (no planKey: taken as given) */ outcome: 'postponed', decidedAt: x.gameTime + 90 * MIN, calledBy: 'limit', reason: 'rain', startAt: null, tarps: [], delays: [], endT: null, stopAtPlayMin: null }; });
   for (let t = g.gameTime - 30 * MIN; t <= g.gameTime + 100 * MIN; t += 5 * MIN) { clock.set(t); advanceClock(t); tick(); }
   const x = SM.get().schedule.find(y => (y.postponements || []).some(p => p.gameTime === g.gameTime));
   check(`postponed late (${x ? 'yes' : 'no'}): overtime charged, the crowd's goodwill down (${atmo0} → ${SM.get().userTeam.atmosphere})`,
@@ -80,7 +82,7 @@ console.log('\nBatting practice');
 {
   const st = SM.get(), ctx = weatherContext(st);
   let n = 0, later = 0, worse = 0, softer = 0;
-  for (const { g } of homeRegular().slice(0, 70)) {
+  for (const { g } of homeRegular()) {
     const vg = weatherGameOf(st, g);
     const cg = gameWeatherPlan(ctx, { ...vg, bp: 'cages' }), fg = gameWeatherPlan(ctx, { ...vg, bp: 'field' });
     if (!(cg.tarps?.length || fg.tarps?.length || cg.startAt !== g.gameTime)) continue;
@@ -147,6 +149,66 @@ console.log('\nLeft unanswered in a held start');
   check(`it times out on the game's clock: the default (no giveaway), and the crowd's goodwill down twice (${atmo0} → ${SM.get().userTeam.atmosphere})`,
         c?.resolved && c.choice === 'auto' && (SM.get().userTeam.atmosphere ?? 50) === Math.max(0, atmo0 - 2));
   check('…and it counts as a poor call', (SM.get().userTeam.wxCalls || []).some(x => x.kind === 'comps' && x.choice === 'auto' && x.poor));
+}
+
+console.log('\nThe crowd during a delay (§122.56)');
+{
+  const st = SM.get(), T = st.schedule[st.currentGameIndex].gameTime, now = clock.get();
+  const u = () => SM.get().userTeam;
+  const funds = () => u().finances?.funds ?? 0;
+  const ask = (kind, extra = {}) => {
+    const c = CardEngine.deliverWeatherDecision({ key: `wx:dec:1:${T}:${kind}-crowd`, kind, gameTime: T, subject: kind, body: 'x', yesLabel: 'Yes', noLabel: 'No', expiresAtMs: now + 20 * MIN, ...extra }, now);
+    CardEngine.releaseDueCards(now);
+    return c;
+  };
+  // The crowd: three answers on one card.
+  const c1 = ask('comps', { costK: 9, revenueK: 4, choices: [{ key: 'free', label: 'Free Food and Drink ($9K)' }, { key: 'sell', label: 'Keep the Stands Open' }] });
+  const card1 = SM.get().inbox.find(c => c.instanceId === c1.instanceId);
+  const f0 = funds(), a0 = u().atmosphere;
+  CardEngine.resolve(c1.instanceId, 'yes', { pick: 'sell' });
+  check(`the crowd: one card, three answers (${card1._choices.map(c => c.label).join(' / ')} / ${card1.noLabel}); "keep the stands open" brings in the sales`,
+        card1._choices.length === 2 && !!card1.noLabel && Math.round(funds() - f0) === 4 && u().atmosphere === a0);
+  // An upset season-ticket holder.
+  const c2 = ask('sth', { costK: 2 });
+  const f1 = funds(), a1 = u().atmosphere;
+  CardEngine.resolve(c2.instanceId, 'yes');
+  check('a season-ticket holder\'s credit: paid, the goodwill kept', Math.round(f1 - funds()) === 2 && u().atmosphere === a1 + 1);
+  const c3 = ask('sth', { key: `wx:dec:1:${T}:sth-check2`, costK: 2 });
+  const a2 = u().atmosphere;
+  CardEngine.resolve(c3.instanceId, 'no');
+  check('…declined: the goodwill drops', u().atmosphere === a2 - 2);
+  // Rain checks after a game called official early.
+  const c4 = ask('raincheck', { costK: 40 });
+  const f2 = funds(), a3 = u().atmosphere;
+  CardEngine.resolve(c4.instanceId, 'yes');
+  check('rain checks honored: the gate given back, the crowd pleased', Math.round(f2 - funds()) === 40 && u().atmosphere === a3 + 2);
+  // The TV booth.
+  const c5 = ask('booth', { revenueK: 2 });
+  const f3 = funds(), m0 = u().morale ?? 50;
+  CardEngine.resolve(c5.instanceId, 'yes');
+  check('the TV booth: the sponsor pays, the clubhouse grumbles', Math.round(funds() - f3) === 2 && (u().morale ?? 50) === m0 - 1);
+  // The players and the crowd: the manager asks the GM's blessing.
+  const c6 = ask('antics');
+  const card6 = SM.get().inbox.find(c => c.instanceId === c6.instanceId);
+  const a4 = u().atmosphere;
+  CardEngine.resolve(c6.instanceId, 'yes');
+  check(`the players and the crowd: asked by the manager (${card6.sender}), the crowd loves it`, card6.sender !== 'Head Groundskeeper' && u().atmosphere === a4 + 2);
+  // Poor calls make season-ticket holders complain more.
+  check(`poor weather calls in the last two weeks raise the season-ticket complaints (${CardEngine.recentPoorCalls(SM.get(), clock.get())} counted)`, CardEngine.recentPoorCalls(SM.get(), clock.get()) >= 1);
+  // "Drag the infield?" never comes in a weather hold.
+  SM.mutate(s => { s.scheduledCards = [...(s.scheduledCards || []), { instanceId: 'ig-test', cardId: 'ig_grounds_crew', deliverAtMs: T + 90 * MIN, subject: 'x' }]; });
+  CardEngine.withdrawNoWeatherHold(T);
+  check('"drag the infield?" is withdrawn from a game the weather holds up', !(SM.get().scheduledCards || []).some(c => c.instanceId === 'ig-test'));
+}
+
+console.log('\nRetired cards (§122.56)');
+{
+  const retired = ['pg_lineup_tip', 'pg_bullpen_check', 'pg_weather_prep', 'r6', 'hr1', 'hr3', 'hr4', 'b3', 'r3', 'r5'];
+  // (the pools' selection never deals a retired card — CardEngine._filterEligible; deliverCardById is the debug injector)
+  const Pools = await import('../../data/cards-pool.js');
+  const defs = Object.values(Pools).flatMap(v => (Array.isArray(v) ? v : [])).map(e => e?.card || e).filter(d => d && retired.includes(d.id));
+  const live = retired.filter(id => !defs.some(d => d.id === id && d._retired));
+  check(`the manager's calls, the random weather and the random rest cards are retired (${defs.length} of ${retired.length})`, live.length === 0 && defs.length === retired.length, live.join(','));
 }
 
 console.log('\nThe owner');

@@ -187,7 +187,11 @@ export function postponedMessage({ reason, calledBy, makeup, spring, cancelled }
  * §122.51 (phase 3b) decisionWords(kind, e, game) — the words for a decision that stands in for a moment:
  *   bp      — the morning look, with rain due during batting practice (e: the outlook)
  *   calloff — the forecast shows no game (e: { chance })
- *   comps   — a long wait for the crowd (e: { waitMin, inGame }, game.costK)
+ *   comps   — the crowd during a long wait: free food and drink, the stands open, or closed (e: { waitMin, inGame }, game.costK)
+ *   sth     — a season-ticket holder wants a credit after the delay (game.costK)
+ *   raincheck — a game called official before nine: rain checks for the crowd? (e: { innings }, game.costK)
+ *   booth   — the TV booth wants a player during a delay (e: { player }, game.revenueK)
+ *   antics  — the manager asks the GM's blessing: players entertaining the crowd (game.manager)
  *   hands   — the field running long (e: the crew_trouble moment, game.costK)
  *   rain    — a held start that could go ahead in light rain (e: the gap moment)
  * → { subject, body, yesLabel, noLabel, yesMsg, noMsg, sender? }
@@ -208,11 +212,35 @@ export function decisionWords(kind, e, game) {
         body: `The radar shows no window for this one${e.chance != null ? `: a ${e.chance}% chance of rain during the game` : ''}. Call it now and it's made up later. Wait it out and the fans come in; if we still lose it, that's crew overtime and an unhappy crowd.`,
         yesLabel: 'Call It Off', noLabel: 'Wait It Out',
         yesMsg: 'The game is called off.', noMsg: 'We wait it out.' };
-    case 'comps':
-      return { sender: 'Stadium Ops', subject: 'A long wait for the crowd',
-        body: `We're looking at about ${e.waitMin} minutes before ${e.inGame ? 'play resumes' : 'first pitch'}. Free food and drink would cost about ${k(g.costK)} and keep the crowd on our side.`,
-        yesLabel: `Feed the Crowd (${k(g.costK)})`, noLabel: 'No',
-        yesMsg: 'Food and drink are on us tonight.', noMsg: 'No giveaway.' };
+    case 'comps': {
+      // §122.56 one card for the crowd: free food and drink, the stands open and selling, or closed.
+      const what = e.inGame ? 'play resumes' : 'first pitch';
+      return { sender: 'Stadium Ops', subject: 'The crowd during the delay',
+        body: `We're looking at about ${e.waitMin} minutes before ${what}. We can put out free food and drink (about ${k(g.costK)}), keep the stands open and selling (staff overtime, but the sales cover it), or close the stands until ${what}.`,
+        choices: [{ key: 'free', label: `Free Food and Drink (${k(g.costK)})` }, { key: 'sell', label: 'Keep the Stands Open' }],
+        yesLabel: `Free Food and Drink (${k(g.costK)})`, noLabel: 'Close the Stands',
+        yesMsg: 'Done.', noMsg: 'The stands close until play starts.' };
+    }
+    case 'sth':
+      return { sender: 'Guest Services', subject: 'A season-ticket holder wants a credit',
+        body: `A season-ticket holder is at guest services after sitting through the delay${g.opp ? ` against the ${g.opp}` : ''} and wants a credit toward a future game. A credit is about ${k(g.costK)}. If we say no, they won't keep quiet about it.`,
+        yesLabel: `Give the Credit (${k(g.costK)})`, noLabel: 'Decline',
+        yesMsg: 'The credit is on their account.', noMsg: 'Guest Services will let them know.' };
+    case 'raincheck':
+      return { sender: 'Ticket Office', subject: 'Rain checks for today\'s crowd?',
+        body: `The game went in the books after ${e.innings} innings. We don't owe rain checks for an official game, but the crowd only saw part of it. Honoring today's tickets at a future game would cost about ${k(g.costK)}.`,
+        yesLabel: `Honor the Tickets (${k(g.costK)})`, noLabel: 'No Rain Checks',
+        yesMsg: 'Today\'s tickets are good for a future game.', noMsg: 'No rain checks.' };
+    case 'booth':
+      return { sender: 'Media Relations', subject: 'The TV booth wants a guest',
+        body: `The broadcast has a long delay to fill and wants ${e.player} in the booth for a few minutes. The sponsor pays ${k(g.revenueK)} for the segment. Players don't always love it in the middle of a game.`,
+        yesLabel: `Send ${e.player} Up`, noLabel: 'Not Today',
+        yesMsg: `${e.player} is headed up.`, noMsg: 'The booth will manage.' };
+    case 'antics':
+      return { sender: g.manager || 'The Manager', subject: 'The players want to entertain the crowd',
+        body: 'A few of the players want to go out during the delay: a slide on the tarp, signing along the rail. The crowd would love it. There\'s a small risk somebody tweaks something. Your call.',
+        yesLabel: 'Let Them Go Out', noLabel: 'Keep Them Inside',
+        yesMsg: 'They\'re heading out.', noMsg: 'They stay inside.' };
     case 'hands': {
       const o = crewMessage(e, game);
       return { subject: 'The field is taking longer: extra hands?',

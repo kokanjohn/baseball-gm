@@ -1512,7 +1512,9 @@ function checkWeatherSeason(st) {
     const keys = crew.map(c => c._rosterKey);
     const dupes = keys.filter((k, i) => keys.indexOf(k) !== i);
     const gt = (c) => +String(c._rosterKey).split(':')[3];
-    const homeTimes = new Set(st.schedule.filter(g => g.isHome).flatMap(g => [g.gameTime, ...(g.postponements || []).map(p => p.gameTime)]));
+    // (a game's times: as played, every date it was postponed from, and the date it was suspended on)
+    const timesOf = (g) => [g.gameTime, ...(g.postponements || []).map(p => p.gameTime), ...(g.suspension?.gameTime ? [g.suspension.gameTime] : [])];
+    const homeTimes = new Set(st.schedule.filter(g => g.isHome).flatMap(timesOf));
     const away = crew.filter(c => !homeTimes.has(gt(c)));
     const held = st.schedule.filter(g => g.isHome && g._committed && g.result !== 'postponed' && Number.isFinite(g.wxResult?.startAt) && g.wxResult.startAt - g.gameTime >= 5 * 60_000);
     const heldBad = held.filter(g => !crew.some(c => gt(c) === g.gameTime && /:(start_delayed|start_estimate|first_pitch):/.test(c._rosterKey)));
@@ -1522,12 +1524,12 @@ function checkWeatherSeason(st) {
     for (const c of crew) per[gt(c)] = (per[gt(c)] || 0) + 1;
     const counts = Object.values(per).sort((a, b) => a - b);
     check(`weather: the grounds crew's word about our home games — ${crew.length} messages over ${counts.length} game days (median ${counts[counts.length >> 1] ?? 0}, most ${counts[counts.length - 1] ?? 0}); each moment once; none about road games`,
-          dupes.length === 0 && away.length === 0 && (counts[counts.length - 1] ?? 0) <= 15, `dupes ${dupes.length}, road ${away.length}`);
+          dupes.length === 0 && away.length === 0 && (counts[counts.length - 1] ?? 0) <= 15, `dupes ${dupes.length}, road ${away.length}: ${away.map(c => { const t = gt(c); const g = st.schedule.find(x => Math.abs(x.gameTime - t) < 6 * 3_600_000 && x.date); return `${c._rosterKey.split(':').slice(4).join(':')} @${new Date(t).toISOString().slice(5, 16)} near ${g ? `${g.date} ${new Date(g.gameTime).toISOString().slice(11, 16)} home=${g.isHome} venue=${g.venueId || '-'} mk=${g.makeup?.how || '-'} pp=${(g.postponements || []).length}` : 'none'}`; }).join(' | ')}`);
     check(`weather: every held start at home was told (${held.length}), and every home postponement (${ppdHome.length})`,
           heldBad.length === 0 && ppdBad.length === 0, `held untold ${heldBad.map(g => g.date).join(',')}; ppd untold ${ppdBad.length}`);
     // §122.51 (phase 3b) the GM's weather decisions: only at home, never in spring, each once a game, none left open.
     const dec = [...mailSeen.values()].filter(c => c._wxDecision);
-    const byGame = (c) => st.schedule.find(g => g.gameTime === c._wxGameTime || (g.postponements || []).some(p => p.gameTime === c._wxGameTime));
+    const byGame = (c) => st.schedule.find(g => timesOf(g).includes(c._wxGameTime));
     const decBad = dec.filter(c => { const g = byGame(c); return !g || !g.isHome || g.isSpring; });
     const dk = dec.map(c => c._rosterKey), decDup = dk.filter((k, i) => dk.indexOf(k) !== i);
     const now = [...(st.inbox || [])];

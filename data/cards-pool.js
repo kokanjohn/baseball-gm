@@ -978,7 +978,8 @@ export const DECISIONS_POOL = [
    yesMsg:"New bullpen catcher on board. The relievers are responding well.",noMsg:"The current catcher stays. I'm frustrated.",
    _budgetCost:'misc_cost_sm',_oncePerSeason:true},
   
-  {id:'r3',autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
+  {id:'r3',_retired:true,   // §122.56 r181 retired: a random player; the wear-based rest messages and roster advice do this for real
+   autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
    subject:"Move {active_bp_name} into the rotation?",
    preview:"I think {active_bp_name} would be more effective as a starter…",
    body:"I think {active_bp_name} ({active_bp_pos}) would be more effective as a starter. Moving them into the rotation frees up a bullpen spot and could give the starting five a real boost.",
@@ -993,7 +994,8 @@ export const DECISIONS_POOL = [
    yesLabel:'Approve the Move',noLabel:'Keep Current Role',
    yesEffect:{morale:3,ovr:2},noEffect:{morale:-2},
    yesMsg:"DH role locked in. The offense is more efficient.",noMsg:"Staying put. The defense remains a liability.",onYes:'move_to_dh',_requiresDHSwap:true,_rosterContract:'roster:position:hitter'},
-  {id:'r5',autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
+  {id:'r5',_retired:true,   // §122.56 r181 retired: a random player; the wear-based rest messages and roster advice do this for real
+   autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
    subject:"An audition for {audition_hitter_name}",
    preview:"I want to give {audition_hitter_desc} a real starting look…",
    body:"I want to give {audition_hitter_desc} an extended starting run. {audition_hitter_name} would take {active_hitter_name}'s spot ({active_hitter_pos}) for the next several games to earn the role. Benching a current starter carries risk — but real depth could come out of it.",
@@ -1167,7 +1169,7 @@ export const DECISIONS_POOL = [
    autoResolveTax:{atmo:-2}},
 
   // sth_upgrade: Long-tenured STH requesting section relocation
-  {id:'sth_upgrade',autoResolve:'no',_weight:0.75,type:'normal',tag:'MARKETING',
+  {id:'sth_upgrade',_sth:true,autoResolve:'no',_weight:0.75,type:'normal',tag:'MARKETING',
    sender:'Fan Relations',avatar:'📣',_requiresRegular:true,_oncePerSeason:true,
    _minGames:15,
    subject:"A 20-year season-ticket holder asks for an upgrade",
@@ -1180,7 +1182,7 @@ export const DECISIONS_POOL = [
    autoResolveTax:{atmo:-1}},
 
   // sth_group_conflict: Corporate group booking conflicts with STH block
-  {id:'sth_group_conflict',autoResolve:'no',_weight:0.75,type:'urgent',tag:'MARKETING',
+  {id:'sth_group_conflict',_sth:true,autoResolve:'no',_weight:0.75,type:'urgent',tag:'MARKETING',
    sender:'Fan Relations',avatar:'📣',_requiresRegular:true,_oncePerSeason:true,
    _minGames:20,
    subject:"A corporate block overlaps a season-ticket section",
@@ -1216,7 +1218,8 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:2},noEffect:{atmo:1},
    yesMsg:"Done. Expect developer clients on Fridays now.",noMsg:"The suite stays private. {rev_amount} left on the table.",
    _revenueToken:'rev_amount'},
-  {id:'r6',autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
+  {id:'r6',_retired:true,   // §122.56 r181 retired: a random player; the wear-based rest messages and roster advice do this for real
+   autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
    subject:"{active_hitter_name} needs a rest day",
    preview:"{active_hitter_name} has been grinding — one game off could help…",
    body:"{active_hitter_name} ({active_hitter_pos}) has played every game in a long stretch and is showing fatigue at the plate. I'm recommending a mandatory rest day. One game off could help them down the stretch.",
@@ -1225,7 +1228,8 @@ export const DECISIONS_POOL = [
    yesMsg:"{active_hitter_name} gets the day. Fresh tomorrow.",noMsg:"{active_hitter_name} stays in. I've noted the fatigue.",
    _relYes:{'act_hi':1},_relNo:{'act_hi':-1},
    onYes:'rest_active_hitter',_requiresTargetCoverage:true,_restGames:1,_minGames:7,_rosterContract:'roster:rest:hitter'},
-  {id:'hr1', _promise:{no:{kind:'worn_down',afterDays:6,player:'active_hitter'}},autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
+  {id:'hr1',_retired:true,   // §122.56 r181 retired: a random player; the wear-based rest messages and roster advice do this for real
+    _promise:{no:{kind:'worn_down',afterDays:6,player:'active_hitter'}},autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
    subject:"Catcher fatigue — {active_hitter_name} needs a breather",
    preview:"{active_hitter_name} has caught every game this week…",
    body:"{active_hitter_name} ({active_hitter_pos}) has caught every game this week. It's the most physically demanding position on the field, and the fatigue is starting to show. A rest day now keeps {active_hitter_name} fresh and the clubhouse happy. Playing through keeps the bat in the lineup, but off form — and there's a real chance the workload turns into an injury within the week.",
@@ -1241,7 +1245,8 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:3,ovr:1},noEffect:{morale:-2,ovr:-2},
    yesMsg:"{active_catcher_name} is resting. The hand will be fine.",noMsg:"Taped up and going. I've noted the risk.",
    onYes:'rest_active_hitter',_requiresCatcherCoverage:true,_restGames:1,_weight:0.35,_catcherOnly:true,_minGames:3,_rosterContract:'roster:rest:hitter'},
-  {id:'hr3', _promise:{no:{kind:'worn_down',afterDays:5,player:'active_catcher'}},autoResolve:'no',autoResolveTax:{morale:-1},_requiresAway:true,type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
+  {id:'hr3',_retired:true,   // §122.56 r181 retired: a random player; the wear-based rest messages and roster advice do this for real
+    _promise:{no:{kind:'worn_down',afterDays:5,player:'active_catcher'}},autoResolve:'no',autoResolveTax:{morale:-1},_requiresAway:true,type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
    subject:"{active_catcher_name} is running on fumes",
    preview:"{active_catcher_name} has caught both ends of every doubleheader on this trip…",
    body:"{active_catcher_name} ({active_catcher_pos}) has caught both ends of every doubleheader on this road trip, with no days off. I want to give them one game of rest before it gets into the arm strength and the bat speed. A day off lifts the clubhouse. No days off keeps {active_catcher_name} behind the plate, off form, with a real chance the workload turns into an injury within the week.",
@@ -1249,7 +1254,8 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:4},noEffect:{morale:-3,ovr:-1},
    yesMsg:"Day off granted. {active_catcher_name} appreciates it.",noMsg:"Kept in. I'm flagging this for later.",
    onYes:'rest_active_hitter',_requiresCatcherCoverage:true,_restGames:1,_weight:0.35,_catcherOnly:true,_minGames:3,_rosterContract:'roster:rest:hitter'},
-  {id:'hr4',autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
+  {id:'hr4',_retired:true,   // §122.56 r181 retired: a random player; the wear-based rest messages and roster advice do this for real
+   autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'normal',tag:'ROSTER',sender:"{manager_name} (Manager)",avatar:'📋',
    subject:"{active_hitter_name} — a slump, and a day off",
    preview:"1-for-15, and {active_hitter_name} looks mentally fatigued…",
    body:"{active_hitter_name} ({active_hitter_pos}) is 1-for-15 and looks mentally fatigued at the plate. I think a full day off — no cage work, no film — could clear their head and reset the approach.",
@@ -1265,7 +1271,8 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:3,ovr:1},noEffect:{morale:-2,ovr:-2},
    yesMsg:"Precautionary rest. The back should be fine.",noMsg:"Playing through it. I'm monitoring closely.",
    onYes:'rest_active_hitter',_requiresTargetCoverage:true,_restGames:1,_weight:0.3,_minGames:5,_rosterContract:'roster:rest:hitter'},
-  {id:'b3',autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'urgent',tag:'BULLPEN',sender:"{manager_name} (Manager)",avatar:'⚾',
+  {id:'b3',_retired:true,   // §122.56 r181 retired: a random player; the wear-based rest messages and roster advice do this for real
+   autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},type:'urgent',tag:'BULLPEN',sender:"{manager_name} (Manager)",avatar:'⚾',
    subject:"{active_bp_name} needs a day",
    preview:"{active_bp_name} has pitched 4 times in 5 days…",
    body:"{active_bp_name} ({active_bp_pos}) has pitched 4 times in the last 5 days. I'm seeing arm fatigue and want a mandatory rest day. Pushing through risks a minor injury that could cost us more games.",
@@ -1971,7 +1978,8 @@ export const FOLLOWUP_POOL = [
 ];
 
 export const PREGAME_POOL = [
-  {id:'pg_lineup_tip',_requiresLiveMode:true,autoResolve:'skip',_ttl:1,type:'good',tag:'COACHING',sender:"{manager_name} (Manager)",avatar:'📋',
+  {id:'pg_lineup_tip',_retired:true,   // §122.56 r181 retired: the manager's call, asked of the GM
+   _requiresLiveMode:true,autoResolve:'skip',_ttl:1,type:'good',tag:'COACHING',sender:"{manager_name} (Manager)",avatar:'📋',
    subject:"A quick tip on today's starter",
    preview:"Got a note from the advance scout…",
    body:"Got a note from the advance scout: their starter is living on the changeup early in counts. If we sit on the fastball in the first two innings, we can attack early. Do I tell the hitters now, or let them adjust mid-game? Telling them now gives the lineup a real edge in the first.",
@@ -1981,7 +1989,8 @@ export const PREGAME_POOL = [
    noMsg:"They'll read it in-game. The natural approach.",
    _isPreGame:true},
 
-  {id:'pg_bullpen_check',_requiresLiveMode:true,autoResolve:'skip',_ttl:1,type:'normal',tag:'COACHING',sender:"{manager_name} (Manager)",avatar:'📋',
+  {id:'pg_bullpen_check',_retired:true,   // §122.56 r181 retired: the manager's call, asked of the GM
+   _requiresLiveMode:true,autoResolve:'skip',_ttl:1,type:'normal',tag:'COACHING',sender:"{manager_name} (Manager)",avatar:'📋',
    subject:"A quick bullpen check before first pitch",
    preview:"I need to know if {active_bp_name} is fully available today…",
    body:"Before we go: I need to know if {active_bp_name} is fully available today — 25 pitches two days ago. The trainer says fine, but I want your read. Do I treat {active_bp_name} as available for a high-leverage spot, or hold back? Clearing gives us the full bullpen today.",
@@ -2011,7 +2020,8 @@ export const PREGAME_POOL = [
    noMsg:"We worked through channels. The reporter made it for the 2nd inning. Minor friction.",
    _isPreGame:true},
 
-  {id:'pg_weather_prep',_requiresLiveMode:true,autoResolve:'skip',_ttl:1,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'⛅',
+  {id:'pg_weather_prep',_retired:true,   // §122.56 r181 retired: random weather, unconnected to the radar
+   _requiresLiveMode:true,autoResolve:'skip',_ttl:1,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'⛅',
    subject:"Weather developing — a pregame call",
    preview:"Radar shows a cell that could hit between the 5th and 7th…",
    body:"Radar shows a cell that could hit between the 5th and 7th innings. The grounds crew is asking whether to pre-stage the tarp crew and have rain protocols ready from first pitch. It takes four people off concession support, but it protects the field. Your call, and we need it now.",
@@ -2026,7 +2036,7 @@ export const PREGAME_POOL = [
    preview:"Something is different in there today. I can't explain it…",
    body:"Something is different in there today. I can't explain it — the music is a little louder, nobody's on their phone. I've seen this before. Do you want to come down and say something to the group before we go? It doesn't have to be long. Two minutes. But if you feel what I'm feeling, it could be the right call.",
    yesLabel:'Go down and say something',noLabel:'Let it build on its own',
-   yesEffect:{morale:6,ovr:1},noEffect:{morale:3},
+   yesEffect:{morale:6},noEffect:{morale:3},
    yesMsg:"You came down. Two minutes, then out. They felt it.",
    noMsg:"We left it alone. They took the field with it.",
    _isPreGame:true},
@@ -2045,7 +2055,7 @@ export const PREGAME_POOL = [
    autoResolveTax:{atmo:-1}},
 
   // pg_sth_complaint: STH group at guest services before gates open
-  {id:'pg_sth_complaint',_requiresHome:true,_requiresRegular:true,
+  {id:'pg_sth_complaint',_sth:true,_requiresHome:true,_requiresRegular:true,
    _isPreGame:true,autoResolve:'skip',_ttl:1,
    type:'urgent',tag:'MARKETING',sender:'Guest Services',avatar:'🎟️',
    subject:"Season-ticket holders at guest services — their section was renamed",
@@ -2302,7 +2312,7 @@ const PREGAME30_POOL = [
 
 export const INGAME_POOL = [
 
-  {id:'ig_suite_complaint', _promise:{no:{kind:'suite_sponsor',when:'winter'}},_requiresHome:true,_requiresLiveMode:true,
+  {id:'ig_suite_complaint',_sth:true, _promise:{no:{kind:'suite_sponsor',when:'winter'}},_requiresHome:true,_requiresLiveMode:true,
    _isInGame:true,autoResolve:'skip',_ttl:1,
    type:'urgent',tag:'OPERATIONS',sender:'Guest Services',avatar:'🏢',
    subject:"A suite complaint — wrong catering, missing amenities",
@@ -2359,14 +2369,14 @@ export const INGAME_POOL = [
    yesMsg:"Cut short. The crowd is back on the game; the sponsor gets a credit.",
    noMsg:"We let it run. The crowd booed the delay. The sponsor got the full slot."},
 
-  {id:'ig_grounds_crew',_requiresHome:true,_requiresLiveMode:true,
+  {id:'ig_grounds_crew',_noWeatherHold:true,_requiresHome:true,_requiresLiveMode:true,
    _isInGame:true,autoResolve:'skip',_ttl:1,
    type:'normal',tag:'FACILITIES',sender:'Stadium Ops.',avatar:'🌱',
    subject:"Drag the infield without being called?",
    preview:"The infield is getting choppy — the crew wants to drag it…",
    body:"The infield is getting choppy and inconsistent. The umpires haven't called for a drag between innings, and it's not standard. The crew wants to know: do we go out and drag it anyway (it slows the game briefly, and the umpires may object), or wait to be called?",
    yesLabel:'Send Them Out — Drag It',noLabel:'Wait for the Umpires to Call It',
-   yesEffect:{ovr:1,atmo:1},noEffect:{ovr:-1},
+   yesEffect:{atmo:1},noEffect:{atmo:-1},
    yesMsg:"The crew went out, and the umpires allowed it. The field played better late.",
    noMsg:"We waited. The infield stayed rough — one bad hop in the 7th cost us."},
 

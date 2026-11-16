@@ -84,7 +84,10 @@ const exp1 = await expected();
 console.log(`    ${first.length} game pushes registered: ${first.map(i => i.title).join(' | ')}`);
 // (the run's real date sets the weather: a foreseen postponement is the game's push instead of the final)
 check('opened 10 hours ahead, the app registers our next game\'s pushes, the final among them (or its postponement)',
-      first.some(i => i.id === `g:${T0}:final`) || first.some(i => /^Postponed/.test(i.title)));
+      first.some(i => i.id === `g:${T0}:final`) || first.some(i => /^Postponed/.test(i.title))
+      // (§122.51 at home the postponement is the grounds crew's message, pushed as a message)
+      || (regs.at(-1)?.schedule || []).some(i => i.title === 'Head Groundskeeper' && /postponed/i.test(i.body || '')),
+      JSON.stringify((regs.at(-1)?.schedule || []).map(i => [i.id.slice(0, 12), i.title, (i.body || '').slice(0, 40)])).slice(0, 400));
 check('…exactly the look-ahead\'s', same(first, exp1), JSON.stringify(first).slice(0, 200));
 
 // 2. A GM change: a bench hitter takes over at DH. The app re-sends at once.

@@ -90,6 +90,10 @@ SM.mutate(s => { s.phase = 'REGULAR_SEASON'; s.userTeam._lastGameAt = game.gameT
 /** A clean slate: no rest message open, the spacing reset; the staff looks now; the message about `id`. */
 const fresh = () => {
   for (const c of restCards().filter(c => !c.resolved)) CE.resolve(c.instanceId, 'no');
+  // (a step before may have left roster advice coming — "X should be playing" after a swap — which holds the rest
+  //  watch off for 12 hours, as it should: the slate is cleared of it too)
+  SM.mutate(s => { s.scheduledCards = (s.scheduledCards || []).filter(c => !['roster_advice', 'lineup_return'].includes(c.cardId));
+                   for (const c of s.inbox || []) if (['roster_advice', 'lineup_return'].includes(c.cardId)) { c.resolved = true; c.choice = 'skip'; } });
   SM.mutate(s => { s.restWatch = {}; for (const id of s.userTeam.rosterIds) if (s.players[id]) { s.players[id].wear = 0; s.players[id].straight = 0; s.players[id].load = 0; } });
 };
 const ask = (id, wear, straight) => {

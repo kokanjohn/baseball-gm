@@ -225,6 +225,10 @@ function checkTurn(prev, os, label) {
              rot: (u2.rotation?.order || []).filter(id => s2.players[id]).length,
              sp: (u2.rosterIds || []).map(id => s2.players[id]).filter(p => p && pitchRoles(p).includes('SP') && !p.isInjured && p.group !== PLAYER_GROUP.IL).length,
              offRole: (u2.rotation?.order || []).filter(id => s2.players[id] && !pitchRoles(s2.players[id]).includes('SP')).length,
+             outSP: (u2.rosterIds || []).map(id => s2.players[id]).filter(p => p && pitchRoles(p).includes('SP') && !p.isInjured && p.group !== PLAYER_GROUP.IL && !(u2.rotation?.order || []).includes(p.id))
+               .map(p => `${p.name} pos=${p.pos} group=${p.group} unav=${JSON.stringify(p.unavailable || null)} leave=${!!p.onPersonalLeave} susp=${!!p.isSuspended} roles=${pitchRoles(p).join('/')}`).join(' | '),
+             cards: [...(s2.inbox || []), ...(s2.scheduledCards || [])].filter(c => /open_spots|manager_fill|roster_need|advice/.test(c.cardId || '')).map(c => `${c.cardId}:${c.resolved ? 'r' : 'o'}:${c.choice || ''}:${c.expiresAtMs ? new Date(c.expiresAtMs).toISOString().slice(5, 16) : ''}`).join(','),
+             first: new Date(firstPitch).toISOString().slice(5, 16),
              // (who, when there is one: the record, and the transactions about them)
              offWho: (u2.rotation?.order || []).map(id => s2.players[id]).filter(p => p && !pitchRoles(p).includes('SP'))
                .map(p => `${p.name} pos=${p.pos} group=${p.group} rec=${JSON.stringify(p.positions)} lostSlot=${JSON.stringify(p._lostSlot || null)} `
@@ -237,7 +241,7 @@ function checkTurn(prev, os, label) {
   // Five turns — or every healthy starter we have, when the GM let it get thinner than five.
   // r153 an open turn waits for the GM until the roster deadline: counted at the first spring game.
   const rotTurn = (u.rotation?.order || []).filter(id => st.players[id]).length;
-  check(`${label}: five in the rotation by the first spring game (or every healthy starter: ${heldAt.rot} of ${heldAt.sp}; ${rotTurn} at the turn)`, heldAt.rot === Math.min(5, heldAt.sp) && heldAt.offRole === 0, `${heldAt.offRole} without SP in the rotation: ${heldAt.offWho}`);
+  check(`${label}: five in the rotation by the first spring game (or every healthy starter: ${heldAt.rot} of ${heldAt.sp}; ${rotTurn} at the turn)`, heldAt.rot === Math.min(5, heldAt.sp) && heldAt.offRole === 0, `${heldAt.offRole} without SP in the rotation: ${heldAt.offWho}; SP outside it: ${heldAt.outSP}; cards ${heldAt.cards}; first pitch ${heldAt.first}`);
   const expired = (u.rosterIds || []).map(id => st.players[id]).filter(p => p && (p.contractExpiry ?? 99) <= N);
   check(`${label}: nobody on our roster is playing on an expired deal`, expired.length === 0, expired.map(p => `${p.name} ${p.contractExpiry}`).join(','));
   const staff = u.coachingStaff || {};
