@@ -211,7 +211,9 @@ function _generatePlays(game, userTeam, opponentTeam, players, context) {
   // §76: the starter in turn, if he's had his rest (else the next who has).
   const atMs    = game.gameTime || 0;
   // §102.5 the GM can name this game's starter (a bullpen game in a doubleheader).
-  const named   = game.userStarterId && players[game.userStarterId] && isAvailable(players[game.userStarterId]) ? { id: game.userStarterId } : null;
+  // (§122.70 only a pitcher on our club: a name left on a game is never a reason to start someone who's gone)
+  const named   = game.userStarterId && players[game.userStarterId] && isAvailable(players[game.userStarterId])
+                  && (userTeam.rosterIds || []).includes(game.userStarterId) ? { id: game.userStarterId } : null;
   const userSP  = named || _getRotationSP(userTeam, players, atMs);
   const oppSP   = _getRotationSP(effectiveOppTeam, players, atMs) || _findHealthySP(effectiveOppTeam.rosterIds || [], players);
 
@@ -2650,6 +2652,8 @@ function _buildCPULineup(team, players) {
 
 function _getRotationSP(team, players, atMs = null) {
   if (team.simStarter && players[team.simStarter] && isAvailable(players[team.simStarter])) return { id: team.simStarter };
+  // §122.70 the rotation's starters are the club's own: one no longer on it (traded, released) is never in turn.
+  const onClub = (id) => !team.rosterIds || team.rosterIds.includes(id);
   const rotation = team.rotation;
   if (!rotation || !rotation.order || rotation.order.length === 0) {
     // Fallback: find any healthy SP
@@ -2658,7 +2662,7 @@ function _getRotationSP(team, players, atMs = null) {
   // The starter in turn — unless he hasn't had his four days (a doubleheader,
   // a makeup game): then the next man in the rotation who has (§76).
   const n = rotation.order.length;
-  const ready = (id) => players[id] && isAvailable(players[id]) && (atMs == null || starterRested(players[id], atMs));
+  const ready = (id) => players[id] && isAvailable(players[id]) && onClub(id) && (atMs == null || starterRested(players[id], atMs));
   for (let k = 0; k < n; k++) {
     const id = rotation.order[(rotation.currentIndex + k) % n];
     if (ready(id)) return { id };
@@ -2675,7 +2679,7 @@ function _getRotationSP(team, players, atMs = null) {
     if (spot) return { id: spot.id };
   }
   const spId = rotation.order[rotation.currentIndex % n];
-  if (players[spId] && isAvailable(players[spId])) return { id: spId };
+  if (players[spId] && isAvailable(players[spId]) && onClub(spId)) return { id: spId };
   return _findHealthySP(team.rosterIds || [], players);
 }
 

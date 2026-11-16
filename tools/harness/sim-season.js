@@ -530,6 +530,11 @@ async function runOffseasonChecks() {
           return `${fas.length} in pool; ${notIn.length} free agents not in the pool (${notIn.slice(0, 3).map(p => `${p.name} ${p.teamId}/${p._faSince ?? ''}/${p.origin}`).join(', ')}); `
             + `${wrong.length} in the pool not free agents (${wrong.slice(0, 3).map(id => `${st.players[id]?.name} ${st.players[id]?.group}/${st.players[id]?.teamId}`).join(', ')}); `
             + `${fas.filter(p => !(p._faSince >= os.springAt)).length} from before spring`; })());
+  if (process.env.TX_DUMP) for (const id of [...poolSet].filter(id => st.players[id]?.group !== PLAYER_GROUP.FREE_AGENT)) { const pl = st.players[id];
+    console.log('POOLD', pl.name, JSON.stringify({ g: pl.group, t: pl.teamId, tier: pl.tier, ret: pl.retiredSeason, dep: pl._departed, faSince: pl._faSince, exp: pl.contractExpiry }),
+      JSON.stringify((st.transactions || []).filter(t => t.playerId === id).map(t => [t.kind, t.teamId, t.fromTeamId, t.reason, t.status])),
+      JSON.stringify((st.leagueWire || []).filter(w => w.text.includes(pl.name)).map(w => w.text).slice(-6)),
+      JSON.stringify((st.activityFeed || []).filter(e => (e.text || '').includes(pl.name)).map(e => e.text).slice(-6))); }
   const klass = fas.concat(Object.values(st.players).filter(p => p._classOf === 2 && p.teamId)).filter(p => p._classOf === 2);
   check(`offseason: a new free-agent class arrives (${klass.length} players; ${klass.filter(p => p.teamId).length} signed by spring)`, klass.length >= 20);
   check(`offseason: one re-sign card per expiring user player (${resignCards.size}/${expiringUser.filter(id => SM.get().players[id]?.group !== PLAYER_GROUP.RETIRED).length})`,
@@ -2068,7 +2073,17 @@ async function main() {
       ];
       check(`game ${idx}: nobody plays before reporting / after leaving`, wrong.length === 0,
             wrong.map(x => x.name).join(', '));
-      if (wrong.length && process.env.TX_DUMP) for (const x of wrong) console.log(`game ${idx}`, x.name, "first", (firstAt[x.id] ?? 0) - g.gameTime, "last", (lastAt[x.id] ?? 0) - g.gameTime, JSON.stringify([...txSeen.values()].filter(t => t.playerId === x.id).map(t => [t.kind, t.teamId, t.fromTeamId, t.reason, t.status, t.createdAt - g.gameTime, t.effectiveAt - g.gameTime])), post.players[x.id]?.teamId, post.players[x.id]?.group);
+      if (wrong.length && process.env.TX_DUMP) for (const x of wrong) console.log(`game ${idx}`, x.name, "first", (firstAt[x.id] ?? 0) - g.gameTime, "last", (lastAt[x.id] ?? 0) - g.gameTime, JSON.stringify([...txSeen.values()].filter(t => t.playerId === x.id).map(t => [t.kind, t.teamId, t.fromTeamId, t.reason, t.status, t.createdAt - g.gameTime, t.effectiveAt - g.gameTime])), post.players[x.id]?.teamId, post.players[x.id]?.group,
+        JSON.stringify((pre?.plays || []).filter(pl => pl.batterId === x.id || pl.pitcherId === x.id || JSON.stringify(pl).includes(x.id)).slice(0, 4).map(pl => ({ t: pl.type, ts: pl._timestamp, inn: pl.inning, h: pl.half, d: (pl.description || '').slice(0, 80), b: pl.batterId === x.id, p: pl.pitcherId === x.id }))),
+        'side', userSide.hitters.concat(userSide.pitchers).some(y => y.id === x.id) ? 'user' : 'opp', g.opponent, g.status, (g.postponements || []).length, g.makeup?.how);
+      if (wrong.length && process.env.TX_DUMP) console.log('TXG', JSON.stringify({ preIdx: pre?.index, preT: pre?.gameTime, preOpp: pre?.opponent, gIdx: g.index, gT: g.gameTime, gOpp: g.opponent, gDate: g.date, preDate: pre?.date,
+        boxPit: [...(box.home.pitchers || []), ...(box.away.pitchers || [])].map(x => x.name), prePit: [...new Set((pre?.plays || []).map(p => p.pitcherId).filter(Boolean))].map(id => post.players[id]?.name) }));
+      if (wrong.length && process.env.TX_DUMP) for (const x of wrong) { const pl = post.players[x.id];
+        console.log('TXD', x.name, 'inSlots', (post.userTeam.lineupSlots || []).some(sl => sl.playerId === x.id), 'inRoster', (post.userTeam.rosterIds || []).includes(x.id),
+          'order', JSON.stringify(g.liveLineups || null)?.includes(x.id), 'p', JSON.stringify({ g: pl.group, t: pl.teamId, tier: pl.tier, rel: pl._releasedAt, w: pl.onWaivers, wb: pl._waivedBy, faSince: pl._faSince && pl._faSince - g.gameTime }),
+          'tx', JSON.stringify((post.transactions || []).filter(t => t.playerId === x.id).map(t => [t.kind, t.teamId, t.fromTeamId, t.reason, t.status, t.createdAt - g.gameTime])),
+          'feed', JSON.stringify((post.activityFeed || []).filter(e => (e.text || '').includes(x.name)).map(e => [e.text, (e.atMs || e.timestamp || 0) - g.gameTime]).slice(-6)),
+          'wire', JSON.stringify((post.leagueWire || []).filter(w => w.text.includes(x.name)).map(w => [w.text, w.atMs - g.gameTime]).slice(-6))); }
     }
     assertNoGhosts(`after game ${idx}`);
     for (const pl of Object.values(post.players)) {

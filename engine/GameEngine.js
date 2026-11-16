@@ -2383,6 +2383,9 @@ function _postponeGame(ref, atMs) {
     x.postponements = [...(x.postponements || []), entry];
     x.status = GAME_STATUS.SCHEDULED;
     x.isMakeup = true;
+    // §122.70 a starter named for that day's game (a bullpen game in a doubleheader) was for that day: the makeup
+    // starts whoever is in turn then. (Left on, a makeup months later started a pitcher long gone from the club.)
+    delete x.userStarterId; delete x.keepRotation;
     if (moves) {
       for (const m of moves) _wxMove(s, m.g, m.isUser, { date: m.date, gameTime: m.gameTime, venueId: m.g.venueId });
     } else if (slot) {

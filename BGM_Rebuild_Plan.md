@@ -12551,3 +12551,23 @@ The GM's call (Nov 16 2026): the save-slot limit comes off the active list, like
 **Open item 8, check-field-care's drainage pitch:** closed. The checks have run on a fully virtual clock and seeded ids since r181 (§122.56). Three runs here are byte-identical and pass.
 
 **Result:** every UI test passes in both themes, two full runs in a row. The harness changed; the app didn't (no version bump).
+
+## §122.70 — r193: open item 11 checked, and a starter long gone from the club
+**Open item 11 (a CPU club at 31–32 wins):** already fixed in r117 (§104.2: a CPU club starts its best five). Checked again across seeds 2–5: the worst CPU clubs won 52, 56, 53 and 53, every season inside the band. Closed.
+
+**Found while checking (seed 5): a pitcher traded away 106 days earlier started a game for us.** By then he was a free agent. The box score had him as our starting pitcher; the harness caught it as "nobody plays after leaving".
+- **How:** the weather card "a bullpen game in game two" names the starter on that game (`userStarterId`). When that game two was postponed and made up months later, the name stayed on it. The sim started a named pitcher who was available, without asking whether he was still on the club. The rotation's own pick had the same gap: an id in `rotation.order` was "ready" without being rostered.
+- **Fix:**
+  - A postponed game that is made up drops its named starter (`userStarterId`, `keepRotation`), in `_postponeGame`. The makeup starts whoever is in turn then.
+  - `SimEngine`: a named starter must be on our roster, and `_getRotationSP` only picks a pitcher on the club (`onClub`).
+- **The harness** (sim-season, with `TX_DUMP`) now prints a stray player's slots, roster, transactions, feed and wire. At the offseason pool check it does the same for a pool player who isn't a free agent.
+
+**Seen on other seeds, not new.** These are open items. Seed 2 also fails them on r188 (`old2`), and seed 5 shows the first:
+- **The weather messages' sender, around a game that moved:** a "wrong sender" (the crew on a road date, or the Travel Coordinator at home). A "GM's decision at home" was also counted as not home or spring. Both are probably games made up at the other park.
+- **The free-agent pool (seed 5):** one player ("Vazquez") is in the pool with group bullpen, no club and tier free agent, and has no transactions. Something sets a group without a club, or leaves a signed player in the pool.
+- **The second prospect report** (compose) named the same player twice (seed 2, r188).
+- **The scouting director's tips:** one run rolled 8 diamonds against 2.8 expected (seed 5). A tolerance or a real rate, to check.
+
+**Fresh team:** not required.
+
+**Suite (r193):** every run passes: the season sim, multi-season, every check, and every UI test in both themes. It's the first full suite with no rerun needed.
