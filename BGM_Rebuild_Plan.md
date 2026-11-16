@@ -11727,3 +11727,118 @@ Every club is handled the same way. **A fresh team is required:** `constants.js`
 **No fresh team needed.** The plans are unchanged, and nothing in the app reads the story yet.
 
 **Suite (r179):** everything passes: season sim 3812/3812, multi-season 59/59, check-weather-story 14/14. test-wear-ui (dark, a known flake) passed on rerun.
+
+## §122.54 — r180: §122.51 phase 3a — the grounds crew's word about our home games (messages on the clock, with push)
+
+**What the GM gets.** For each of our home games the weather touches, the Head Groundskeeper's messages arrive at their moments. Spring is included (updates only). Each moment of the game's weather story (§122.53) becomes one message. There are no decisions yet; they come in 3b.
+
+**What becomes a message** (`engine/WeatherMessages.js`, pure: `pickTold`, `crewMessage`, `postponedMessage`):
+- **Always:**
+  - the morning look;
+  - any change to the start (`start_delayed`, `start_estimate`, `start_on_time`, `start_doubt`);
+  - crew trouble;
+  - each delay, resume estimate, restart and call;
+  - the rain clearing;
+  - the postponement (written by the schedule itself, `_wxTellPostponed`, with where the game went).
+- **Most of the time (70%, seeded per moment), so a game day reads believably and never floods:**
+  - the tarp on and off before the game when the start isn't affected (at most two cover-ups);
+  - a change in the chance alone;
+  - a heads-up;
+  - a late watch;
+  - "We're under way" after a held start.
+
+  The tarp coming off with the start or restart riding on it is always told.
+- **Words:** the crew's own voice, short. Estimates are clock times (allowed by the GM, §122.51). There is a little seeded variety in the openings. Examples:
+  - "First pitch delayed: about 7:40 PM" / "We won't start on time against the Harborview Gulls. Estimated first pitch: 7:40 PM."
+  - "New estimate: first pitch 7:55 PM" / "It's taking longer than we figured. Now looking at 7:55 PM (was 7:40 PM)."
+  - "The field is taking longer" / "There was more water under the tarp than we figured. Another 20 minutes or so. First pitch now about 8:00 PM."
+  - "Rain delay" / "Play is stopped in the bottom of the 6th and the tarp is on. We're estimating play resumes around 9:20 PM."
+
+**The card** (`CardEngine.deliverCrewMessage`):
+- tag WEATHER, from the Head Groundskeeper, one button: **Understood**;
+- key `wx:story:{season}:{gameTime}:{moment id}`, so each moment comes once;
+- it expires 18 hours after the scheduled first pitch;
+- from 2 hours before first pitch, `_urgent`.
+
+**On the clock** (`GameEngine`):
+- **Before first pitch:** a clock event `wxtell` delivers each moment at its own time (`_wxStoryNext`, `_wxStoryTell`). This covers our home games within 16 hours. The story is cached by what it depends on: the park, the field (drainage, the crew's prep), the patience, and the sim's delays once played.
+- **After first pitch:** the league clock holds at our first pitch, so what comes after is parked at its moments (`_wxStoryPark`) once the game's weather is settled. That's at `_activateGameNow` (the sim has played it: its real delays and ruling) and when a held start goes to DELAYED on its way to a postponement.
+- **What's been told** is kept on the game: `g.wxTold = { gameTime, at }`. A game that moves starts afresh.
+- **Push:** both paths run in the look-ahead, so push has every message with the app closed. `getPushSchedule` sends `_urgent` messages as they happen, through quiet hours (the weather exception, §8.8). The rest wait for the morning as before.
+- **No double alerts:** at home, `GamePushes` no longer sends its own weather or called-off pushes; the crew's messages carry them. Road games keep them until phase 4 brings their updates.
+
+**Checks:**
+- **sim-season** (new):
+  - the crew's word about our home games: each moment once, none about road games, at most 15 on a game day (seed 142: 56 messages over 24 game days, median 2, most 5);
+  - every held start at home was told, and every home postponement.
+- **check-game-pushes:**
+  - at home each real delay, restart, held start, postponement and suspension has the crew's message at its moment, and there's no weather game push;
+  - the made-up "rare ones" game is on the road;
+  - at home the same game has no weather pushes;
+  - quiet hours: the crew's word near game time is sent as it happens, while other messages wait for the morning.
+- **test-crew-messages-ui** (new, dark and light): a wet game day's messages in Messages under the Head Groundskeeper, the estimate in the subject, opened ("…Estimated first pitch: 7:40 PM." with Understood), and Understood clears it.
+
+**No fresh team needed.**
+
+## §122.55 — r180: §122.51 phase 3b — the weather's decisions at home
+
+r180 ships 3a (§122.54) and 3b together. **Fresh team required:** our home games' plans now depend on the GM's calls, and `constants.js` changed.
+
+**What changed in the weather itself:**
+- **The GM decides at home.** For our home regular-season games the club no longer calls a game off ahead from the forecast (`game.gmCalls`; the postseason stays with the league, and spring and road games are unchanged). The moment the club would have called it — or, failing that, when the crew first sees no window before first pitch — the crew asks the GM instead.
+- **The GM's say is part of a game's plan** (`GameWeather.gameParams`, `planKey`). It reads:
+  - `gmCalls` / `gmCallAt` — no call ahead / postponed at the GM's moment, `calledBy: 'gm'`;
+  - `bp` — batting practice:
+    - `'cages'`: the field is covered at the first rain from 3 h to 90 min out;
+    - `'field'`: the crew waits for batting practice to end unless it pours, and the rain on the open field is `BP_OPEN_MM_WORK` (2) × the work later;
+  - `extraHands` — `EXTRA_HANDS_CUT` (half) of any crew trouble saved;
+  - `startInRain` — a held start goes ahead once the rain is below the bar that stops a game under way, and the radar need only show nothing that would stop play;
+  - `sayAt` — when the call was made. Going ahead in light rain counts only from then, and a first pitch the call moved is never sooner than 5 minutes after it (`_notBefore`).
+- **A plan made under other terms is made again** (`_wxPlanFits`). A plan without a key — one a check built by hand — is taken as given.
+- **Replanning** (`GameEngine._wxReplanDue`, from `tick` and the clock). A decision that changes a game's weather sets `g.wxReplan`:
+  - before first pitch, the game is simply planned again;
+  - in a held start (its plays already worked out at the scheduled time, nothing shown but the hold), the game is played again from the new plan (`_simOurGame`, taken out of `_activateGameNow`; the same dice), and the crew's word still to come is redone (`CardEngine.withdrawScheduledWeather`, then `_wxStoryPark`).
+- **A game that moves forgets the GM's calls** for its old date (`_wxMove`).
+- **The story** gets a `gap` moment: a held start that would go at least `gapGainMin` (15) minutes sooner in light rain. Most held starts are storms, where waiting is the only choice, so this comes up about once in six held starts — once by an hour in the trial.
+
+**The decisions** (`CardEngine.deliverWeatherDecision`, `WeatherMessages.decisionWords`; tag WEATHER, autoResolve `'roster'`, `wx_{kind}_{yes|no|auto}`). A decision stands in for that moment's message, so a situation is never told twice:
+
+| Decision | When | Yes | No | Unanswered |
+|---|---|---|---|---|
+| **Batting practice** (`bp`), "Batting Practice in the Cages" / "…on the Field" | the morning look, with rain due 4 h to 90 min before first pitch; answer by 3 h out | the field is covered at the first rain; team morale −1 | the field stays open through batting practice | on the field (no cost beyond the risk) |
+| **Call it off** (`calloff`), "Call It Off" / "Wait It Out" | when the club would have called it ahead (else the crew's first "no window"); 45 min, never past 10 min before first pitch | postponed now (`calledBy 'gm'`), made up as usual | the club waits. Lost late anyway (decided within 15 min of first pitch or after): crew overtime $8K and the crowd's goodwill −2 | waits; goodwill −1 |
+| **The crowd** (`comps`, from Stadium Ops), "Feed the Crowd ($XK)" / "No" | a held start or delay expected to run 45+ min (once a game; not the postseason); 20 min | about $0.35 a fan (min $4K); goodwill +1 | goodwill −1 | goodwill −2 |
+| **Extra hands** (`hands`), "Extra Hands ($5K)" / "We'll Wait" | crew trouble before or during a held start; 10 min | $5K; the trouble halved, and the game planned (or replayed) again | — | goodwill −1 |
+| **Start in the rain** (`rain`), "Start at 7:10 PM" / "Wait for It to Stop" | the `gap` moment; 15 min (and 10 min before that start) | the start goes ahead in light rain from the call; planned (or replayed) again | — | goodwill −1 |
+
+- **Our game's decisions time out on its own clock.** The league clock holds at our first pitch, so `CardEngine.expireGameWeatherDecisions` runs from `tick`.
+- **The rain-likely starter question and the doubleheader question are unchanged.**
+
+**The owner** (`CardEngine.noteWeatherCall`; `userTeam.wxCalls`):
+- **Poor calls:**
+  - any decision left unanswered (not batting practice);
+  - calling off a game the forecast gave under 50%;
+  - waiting out a forecast of 80%+ and losing it late.
+- **The reaction:** three in 30 days and the owner writes ("Our weather calls": what they were), and Owner Trust −3. Those calls are then counted.
+
+**Checks:**
+- **check-weather-decisions** (new, 14), in a real league:
+  - call it off: postponed at the moment (`gm`), made up, the crew says so, an 80% forecast is not a poor call;
+  - wait it out and lose it late: overtime charged, goodwill down, a poor call;
+  - batting practice: in the cages the field is never slower to be ready (on the field: some later starts, more work);
+  - a held start found in a real season and decided: the question arrives at its moment; first pitch goes from the new plan, sooner, never before the call; nothing told twice;
+  - a decision left in a held start times out on the game's clock with its default and cost, and counts as poor;
+  - three poor calls: the owner's message and the trust hit;
+  - no call-off question in spring, and no story yet for road games.
+- **sim-season** (new check): the GM's decisions only at home, never in spring, each once a game, none left open after its game. It also prints the season's weather calls, how many were poor, and the owner's trust.
+- **test-crew-messages-ui:** adds the call-off question (Call It Off / Wait It Out, with its "Due" time), and Wait It Out remembers the chance waited on.
+
+**Fixed on the way:** a postponement reads the game as scheduled (`entry.gameTime`); the game object itself has moved to its makeup by then. The overtime check had been reading the makeup's time.
+
+**check-field-care made steadier.** A new club's weather seed is fresh each run, and the harness's schedule itself differs a little from run to run: 63 or 64 home games at different times, even with the random seed fixed. That is older non-determinism, and it's why seasons in the sim differ run to run. A dry draw left fewer than four wet home games to compare, and the check failed now and then. It now takes the first of a few weather seeds with weather to work with. **Open:** the drainage pitch check (the pitch didn't come within two days) failed twice in about 20 runs and couldn't be caught with debug on. It probably rides on the same schedule variation. Worth a look, along with where the schedule's randomness comes from.
+
+**Suite (r180):** everything passes after reruns. Season sim 3798/3798 (the crew's word: 34 messages over 18 game days, median 2, most 6; the GM's decisions: 7, all batting practice — 4 left to the default, 2 cages, 1 field; 8 weather calls, 1 poor). Multi-season 59/59. check-weather-decisions 14/14. Failed once and passed on rerun:
+- test-sheet-close-ui (dark, known);
+- test-game-pushes-ui (light);
+- test-team-roster-ui (light);
+- check-field-care (the seed fix above).

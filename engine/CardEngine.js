@@ -2448,13 +2448,14 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
   const horizon = foreseen && Number.isFinite(foreseen.untilMs) ? foreseen.untilMs : -Infinity;
   const planned = (state?.scheduledCards || [])
     .filter(c => !c._seed && c.deliverAtMs > horizon)
-    .map(c => ({ instanceId: c.instanceId, sender: c.sender, subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs }));
+    .map(c => ({ instanceId: c.instanceId, sender: c.sender, subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent }));
   const coming = (foreseen?.messages || [])
-    .map(m => ({ instanceId: m.instanceId, sender: m.sender, subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs }));
+    .map(m => ({ instanceId: m.instanceId, sender: m.sender, subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent }));
   const cards = !alertOn(state, PUSH_ALERTS.messages) ? [] : [...coming, ...planned]
     // Pool cards are already planned outside quiet hours; real-time roster
     // cards reach the inbox when they happen and only the alert waits (§65).
-    .map(c => ({ c, at: pushTimeFor(c.at, qs, qe) }))
+    // §122.51 the grounds crew near game time is urgent: it gets past quiet hours (§8.8).
+    .map(c => ({ c, at: c.urgent ? c.at : pushTimeFor(c.at, qs, qe) }))
     // An alert that would sound after the card's deadline is pointless.
     .filter(({ c, at }) => at > nowMs - 60 * 1000 && !(Number.isFinite(c.expiresAtMs) && at >= c.expiresAtMs))
     .map(({ c, at }) => ({
@@ -3710,6 +3711,125 @@ export function deliverDrainageCard(info, atMs) {
   }), atMs);
 }
 
+/**
+ * §122.51 (phase 3) A message from the grounds crew about one of our home games' weather (WeatherMessages):
+ * news that needs no answer — "Understood". Each moment once (its key). Near game time it gets past quiet
+ * hours (`urgent`). It stays until the day after the game.
+ */
+export function deliverCrewMessage(info, atMs) {
+  const state = StateManager.get();
+  if (_cardsWithKey(state, info.key).length) return null;
+  return _deliverAt(_rosterCard(state, {
+    tag: 'WEATHER', sender: info.sender || 'Head Groundskeeper', avatar: '🌧', type: info.urgent ? 'urgent' : 'normal',
+    _rosterKey: info.key, _wxGameTime: info.gameTime, _wxCrew: true, ...(info.urgent ? { _urgent: true } : {}),
+    subject: info.subject, preview: info.preview || info.body, body: info.body,
+    yesLabel: 'Understood', noLabel: null, autoResolve: 'skip', expiresAtMs: info.expiresAtMs ?? info.gameTime + 18 * 3_600_000,
+    _raw: {},
+  }), atMs);
+}
+
+/**
+ * §122.51 (phase 3b) A weather decision at one of our home games, on a clock: batting practice ('bp'),
+ * calling the game off ('calloff'), the crowd during a long delay ('comps'), extra hands when the field
+ * runs long ('hands'), going ahead in light rain ('rain'). It stands in for that moment's message
+ * (WeatherMessages.decisionWords). Unanswered by its deadline, the club does the default and it costs
+ * a little more (and counts toward the owner's patience with our weather calls).
+ *   info: { key, kind, gameTime, subject, body, yesLabel, noLabel, expiresAtMs, sender?, urgent?, chance?, costK? }
+ */
+export function deliverWeatherDecision(info, atMs) {
+  const state = StateManager.get();
+  if (_cardsWithKey(state, info.key).length) return null;
+  return _deliverAt(_rosterCard(state, {
+    tag: 'WEATHER', sender: info.sender || 'Head Groundskeeper', avatar: '🌧', type: info.urgent ? 'urgent' : 'normal',
+    _rosterKey: info.key, _wxGameTime: info.gameTime, _wxDecision: info.kind, ...(info.urgent ? { _urgent: true } : {}),
+    _wxChance: info.chance ?? null, _wxCostK: info.costK ?? null,
+    subject: info.subject, preview: info.preview || info.body, body: info.body,
+    yesLabel: info.yesLabel, noLabel: info.noLabel, autoResolve: 'roster', expiresAtMs: info.expiresAtMs,
+    yesMsg: info.yesMsg || null, noMsg: info.noMsg || null,
+    _raw: { onYes: `wx_${info.kind}_yes`, onNo: `wx_${info.kind}_no`, onAuto: `wx_${info.kind}_auto` },
+  }), atMs);
+}
+
+const _WX_DECISION = /^wx_(bp|calloff|comps|hands|rain)_(yes|no|auto)$/;
+const WX_CALLS = Object.freeze({ windowDays: 30, poorCount: 3, ownerTrust: -3, autoAtmo: -1, compsAtmo: 1, noCompsAtmo: -1, cagesMorale: -1 });
+
+/**
+ * A home weather decision taken (or left to its deadline). What it sets on the game, the game's weather
+ * reads at its next look (`wxReplan`: GameEngine plans it again — and, in a held start, plays it again).
+ */
+function _applyWeatherDecision(kind, choice, instance, atMs) {
+  const st = StateManager.get();
+  const gt = instance._wxGameTime;
+  const i = (st.schedule || []).findIndex(g => g.gameTime === gt && g.isHome && !g._committed && !g.cancelled);
+  const auto = choice === 'auto', yes = choice === 'yes';
+  let poor = auto && kind !== 'bp';
+  StateManager.mutate(s => {
+    const g = i >= 0 ? s.schedule[i] : null;
+    const u = s.userTeam;
+    const atmo = (n) => { u.atmosphere = Math.max(0, Math.min(100, (u.atmosphere ?? 50) + n)); };
+    const pay = (k, label) => { if (k && u.finances) Finance.post(u.finances, -k, 'facilities', label, atMs); };
+    if (kind === 'bp' && g) { g.wxBp = yes ? 'cages' : 'field'; g.wxReplan = true; if (yes) u.morale = Math.max(0, (u.morale ?? 50) + WX_CALLS.cagesMorale); }
+    if (kind === 'calloff' && g) {
+      if (yes) { g.wxGmCallAt = atMs; g.wxReplan = true; poor = (instance._wxChance ?? 100) < 50; }
+      else g.wxWaited = { atMs, chance: instance._wxChance ?? null, auto };
+    }
+    if (kind === 'comps') { if (yes) { pay(instance._wxCostK, 'Food and drink for the crowd'); atmo(WX_CALLS.compsAtmo); } else atmo(WX_CALLS.noCompsAtmo); }
+    if (kind === 'hands' && g && yes) { pay(instance._wxCostK, 'Extra grounds crew'); g.wxExtraHands = true; g.wxSayAt = atMs; g.wxReplan = true; }
+    if (kind === 'rain' && g && yes) { g.wxStartInRain = true; g.wxSayAt = atMs; g.wxReplan = true; }
+    if (auto && kind !== 'bp') atmo(WX_CALLS.autoAtmo);
+  });
+  _noteWeatherCall({ kind, choice, poor }, atMs);
+}
+
+/**
+ * §122.51 noteWeatherCall({ kind, choice, poor }, atMs) — a weather call at home, for the owner's patience:
+ * three poor ones in a month (left unanswered, calling off a game the forecast gave a fair chance, waiting out
+ * one it gave none and losing it late) and the owner says so, and trusts the GM a little less.
+ */
+export function noteWeatherCall(call, atMs) { _noteWeatherCall(call, atMs); }
+function _noteWeatherCall(call, atMs) {
+  StateManager.mutate(s => { s.userTeam.wxCalls = [...(s.userTeam.wxCalls || []), { atMs, ...call }].slice(-40); });
+  const st = StateManager.get();
+  const poor = (st.userTeam.wxCalls || []).filter(c => c.poor && !c.counted && c.atMs > atMs - WX_CALLS.windowDays * 86_400_000);
+  if (poor.length < WX_CALLS.poorCount) return;
+  const what = { calloff: (c) => (c.choice === 'yes' ? 'calling off a game the forecast gave a fair chance' : 'waiting out a forecast that showed no game, then losing it late'),
+                 comps: () => 'leaving the crowd waiting with nothing', hands: () => 'leaving the crew short when the field ran long', rain: () => 'leaving a held start without an answer' };
+  const words = [...new Set(poor.map(c => (c.choice === 'auto' ? 'leaving the grounds crew without an answer' : (what[c.kind] || (() => 'a weather call'))(c))))];
+  const owner = st.userTeam.ownerName || 'Ownership';
+  StateManager.mutate(s => {
+    for (const c of s.userTeam.wxCalls || []) if (c.poor && !c.counted && c.atMs > atMs - WX_CALLS.windowDays * 86_400_000) c.counted = true;
+    s.userTeam.ownerTrust = Math.max(0, Math.min(100, (s.userTeam.ownerTrust ?? 60) + WX_CALLS.ownerTrust));
+  });
+  _deliverNotice(`wx:owner:${st.seasonNum || 1}:${Math.round(atMs / 60_000)}`, {
+    tag: 'OWNER', sender: owner, avatar: '💼',
+    subject: 'Our weather calls',
+    body: `${poor.length} weather calls at home this month have gone against us: ${_list(words)}. That's money and goodwill we didn't need to lose. I expect better judgment. (Owner Trust ${WX_CALLS.ownerTrust}.)`,
+  }, atMs);
+}
+
+/**
+ * §122.51 (phase 3b) expireGameWeatherDecisions(gameTime, nowMs) — the league clock holds at our first pitch, so a
+ * decision during our game (a held start, a delay) reaches its deadline on the game's own clock: by now.
+ */
+export function expireGameWeatherDecisions(gameTime, nowMs) {
+  const st = StateManager.get();
+  const due = [...(st.inbox || []).filter(c => !c.resolved), ...(st.scheduledCards || [])]
+    .filter(c => c._wxDecision && c._wxGameTime === gameTime && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= nowMs)
+    .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
+  const seed = diceSeed(st);
+  for (const c of due) withDice(dice(seed, 'expire', c.instanceId, c.expiresAtMs), () => expire(c.instanceId, c.expiresAtMs));
+  return due.length;
+}
+
+/** §122.51 withdraw weather cards still parked (not yet arrived) whose key starts with `prefix`, due after `afterMs` (a decision redid the game's weather). */
+export function withdrawScheduledWeather(prefix, afterMs) {
+  const st = StateManager.get();
+  const ids = new Set((st.scheduledCards || []).filter(c => c.tag === 'WEATHER' && String(c._rosterKey || '').startsWith(prefix) && c.deliverAtMs > afterMs).map(c => c.instanceId));
+  if (!ids.size) return 0;
+  StateManager.mutate(s => { s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId)); });
+  return ids.size;
+}
+
 /** Withdraw unresolved weather cards whose key starts with `prefix` (the game moved or was called off). */
 export function withdrawWeatherCards(prefix) {
   return _withdraw(c => c.tag === 'WEATHER' && String(c._rosterKey || '').startsWith(prefix));
@@ -3718,6 +3838,8 @@ export function withdrawWeatherCards(prefix) {
 /** The weather decisions (inside _applyRosterAction). */
 function _applyWeatherAction(action, instance, atMs) {
   const raw = instance._raw || {};
+  const dm = action.match(_WX_DECISION);
+  if (dm) { _applyWeatherDecision(dm[1], dm[2], instance, atMs); return; }
   if (action === 'wx_hold_starter') {
     // Still tonight's game, not started, both men able: they swap places in the rotation.
     const st = StateManager.get();
@@ -5490,6 +5612,9 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'as_lobby_yes', 'as_lobby_no',
   // §78 the owner's cut orders
   'fin_dump_yes', 'fin_dump_no', 'fin_release',
+  // §102.5 / §122.51 the weather's decisions
+  'wx_hold_starter', 'wx_bullpen_game',
+  ...['bp', 'calloff', 'comps', 'hands', 'rain'].flatMap(k => [`wx_${k}_yes`, `wx_${k}_no`, `wx_${k}_auto`]),
 ]));
 
 function _cardActionsHandled(card) {

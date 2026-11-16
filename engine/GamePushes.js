@@ -64,6 +64,8 @@ export function gamePushes(state, L, nowMs) {
   // live: sent only as it happens; later: waits out quiet hours.
   const add = (kind, at, id, title, body, { tag = id, live = false } = {}) => {
     if (!Number.isFinite(at) || !alertOn(state, kind)) return;
+    // §122.51 at home the grounds crew's messages carry the weather (held starts, delays, postponements, a call).
+    if (L.isHome && (kind === PUSH_ALERTS.weather || kind === PUSH_ALERTS.calledOff)) return;
     const when = pushTimeFor(at, qs, qe);
     if (live && when !== at) return;   // news only as it happens
     out.push({ id, deliverAt: when, title, body, tag, kind });

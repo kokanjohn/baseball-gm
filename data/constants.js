@@ -602,6 +602,12 @@ export const GAME_WEATHER = Object.freeze({
   // and so the crew's estimate, doesn't know it's coming.
   TROUBLE: Object.freeze({ chance: 0.12, minMin: 10, maxMin: 30, drainageCut: 0.25, prepCut: 0.5 }),
   TROUBLE_SEEN_MIN:    10,    // …found out this long after the tarp comes off (the crew's estimate moves then)
+  // §122.51 (phase 3) the GM's say: extra hands save this share of the crew's trouble; batting practice runs from
+  // BP_FROM_MIN to BP_TO_MIN before first pitch (on the field, rain on the open field is BP_OPEN_MM_WORK × the work).
+  EXTRA_HANDS_CUT:     0.5,
+  BP_FROM_MIN:         180,
+  BP_TO_MIN:           90,
+  BP_OPEN_MM_WORK:     2,
   SOGGY_IN:            1.5,   // this much rain in the 6 hours before first pitch → field work first
   SOGGY_WORK_MIN:      30,
   WASHOUT_IN:          3.0,   // this much → the field is unplayable: postponed
@@ -1928,6 +1934,7 @@ export const WEATHER_STORY = Object.freeze({
   chanceStep: 25,
   estLeadMin: 90, estStepMin: 10, delayedMin: 5,
   headsUpMin: 20, lateWatchMin: 60,
+  gapGainMin: 15,   // (phase 3) a held start: going ahead in light rain would start it this much sooner
 });
 
 export const FIELD_CARE = Object.freeze({

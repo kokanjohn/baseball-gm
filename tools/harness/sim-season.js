@@ -1506,6 +1506,39 @@ function checkWeatherSeason(st) {
   const noWx = all.filter(x => x.played && !x.g.weather?.label);
   check(`weather: every game played keeps its weather at first pitch (${all.filter(x => x.played).length} games)`, noWx.length === 0,
         noWx.slice(0, 3).map(x => `${x.g.date} ${x.homeId}`).join(', '));
+  // §122.51 (phase 3) the grounds crew's word about our home games: each moment once, the start's every change told.
+  {
+    const crew = [...mailSeen.values()].filter(c => c._wxCrew);
+    const keys = crew.map(c => c._rosterKey);
+    const dupes = keys.filter((k, i) => keys.indexOf(k) !== i);
+    const gt = (c) => +String(c._rosterKey).split(':')[3];
+    const homeTimes = new Set(st.schedule.filter(g => g.isHome).flatMap(g => [g.gameTime, ...(g.postponements || []).map(p => p.gameTime)]));
+    const away = crew.filter(c => !homeTimes.has(gt(c)));
+    const held = st.schedule.filter(g => g.isHome && g._committed && g.result !== 'postponed' && Number.isFinite(g.wxResult?.startAt) && g.wxResult.startAt - g.gameTime >= 5 * 60_000);
+    const heldBad = held.filter(g => !crew.some(c => gt(c) === g.gameTime && /:(start_delayed|start_estimate|first_pitch):/.test(c._rosterKey)));
+    const ppdHome = st.schedule.filter(g => g.isHome).flatMap(g => (g.postponements || []).filter(p => !p.resumption).map(p => p.gameTime));
+    const ppdBad = ppdHome.filter(t => !crew.some(c => c._rosterKey.endsWith(`:${t}:ppd`)));
+    const per = {};
+    for (const c of crew) per[gt(c)] = (per[gt(c)] || 0) + 1;
+    const counts = Object.values(per).sort((a, b) => a - b);
+    check(`weather: the grounds crew's word about our home games — ${crew.length} messages over ${counts.length} game days (median ${counts[counts.length >> 1] ?? 0}, most ${counts[counts.length - 1] ?? 0}); each moment once; none about road games`,
+          dupes.length === 0 && away.length === 0 && (counts[counts.length - 1] ?? 0) <= 15, `dupes ${dupes.length}, road ${away.length}`);
+    check(`weather: every held start at home was told (${held.length}), and every home postponement (${ppdHome.length})`,
+          heldBad.length === 0 && ppdBad.length === 0, `held untold ${heldBad.map(g => g.date).join(',')}; ppd untold ${ppdBad.length}`);
+    // §122.51 (phase 3b) the GM's weather decisions: only at home, never in spring, each once a game, none left open.
+    const dec = [...mailSeen.values()].filter(c => c._wxDecision);
+    const byGame = (c) => st.schedule.find(g => g.gameTime === c._wxGameTime || (g.postponements || []).some(p => p.gameTime === c._wxGameTime));
+    const decBad = dec.filter(c => { const g = byGame(c); return !g || !g.isHome || g.isSpring; });
+    const dk = dec.map(c => c._rosterKey), decDup = dk.filter((k, i) => dk.indexOf(k) !== i);
+    const now = [...(st.inbox || [])];
+    const open = dec.filter(c => !now.find(x => x.instanceId === c.instanceId)?.resolved && (st.schedule.find(g => g.gameTime === c._wxGameTime)?._committed));
+    const kinds = {};
+    for (const c of dec) { const r = now.find(x => x.instanceId === c.instanceId); const k = `${c._wxDecision}:${r?.choice || '?'}`; kinds[k] = (kinds[k] || 0) + 1; }
+    check(`weather: the GM's decisions at home — ${dec.length} (${Object.entries(kinds).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}); only at home, never in spring, each once a game, none left open after its game`,
+          decBad.length === 0 && decDup.length === 0 && open.length === 0, `not home/spring ${decBad.length}, twice ${decDup.length}, open ${open.length}`);
+    const wxCalls = st.userTeam.wxCalls || [];
+    console.log(`  weather calls: ${wxCalls.length} (${wxCalls.filter(c => c.poor).length} poor); owner trust ${st.userTeam.ownerTrust}`);
+  }
   // §102.5 the weather's decisions: the manager asked about starters when rain was likely; doubleheaders asked about game two.
   const wxCards = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c.tag === 'WEATHER');
   const byId = (id) => wxCards.filter(c => c.cardId === id);

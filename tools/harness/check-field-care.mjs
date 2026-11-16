@@ -44,7 +44,7 @@ const S = () => SM.get(), U = () => S().userTeam;
 
 // ── A season of home games, four ways ───────────────────────────
 console.log('Our home games in this season\'s weather, planned four ways');
-const ctx = weatherContext(S());
+const ctx = { ...weatherContext(S()) };
 const homes = S().schedule.filter(g => g.isHome && !g.isSpring);
 const planOf = (g, field) => gameWeatherPlan(ctx, { gameTime: g.gameTime, ...gameTeams(g, true), ...(field ? { field } : {}) });
 const minutes = (p) => p.outcome === PLAN_OUTCOME.POSTPONED ? Infinity : p.delays.reduce((a, d) => a + (d.endT - d.startT) / 60_000, 0);
@@ -65,7 +65,15 @@ const compare = (field) => {
   }
   return t;
 };
-const C1 = compare({ drainage: 1 }), C3 = compare({ drainage: 3 }), CP = compare({ drainage: 0, prep: true });
+// (§122.51 a new club's weather seed is fresh each run, and a dry draw left too few wet home games to compare — a
+//  failure now and then: the first of a few seeds with weather to work with)
+let C1, C3, CP;
+for (let k = 0; k < 12; k++) {
+  if (k) { SM.mutate(s => { s.weatherSeed = `check-field-care-${k}`; }); Object.assign(ctx, weatherContext(S())); }
+  C3 = compare({ drainage: 3 });
+  if (C3.wet >= 4) break;
+}
+C1 = compare({ drainage: 1 }); CP = compare({ drainage: 0, prep: true });
 const row = (n, t) => `    ${n.padEnd(16)} ${t.wet} home games with weather: ${t.better} better, ${t.same} about the same, ${t.worse} worse · postponed ${t.ppd0} → ${t.ppd} · infield softness ${t.soft0.toFixed(1)} → ${t.soft.toFixed(1)}`;
 console.log(row('drainage 1', C1)); console.log(row('drainage 3', C3)); console.log(row('the crew', CP));
 check('there was weather to work with this season', C3.wet >= 4, `${C3.wet} home games with weather`);

@@ -62,9 +62,25 @@ export function fieldParams(field = null) {
     softIn: (1 + D.softPerLevel * lvl) / (prep ? P.soft : 1),   // the rain before first pitch that makes the infield fully soft
   };
 }
+/**
+ * §122.51 (phase 3) gameParams(game) — the field's numbers plus the GM's say in this game's weather:
+ *   startInRain   — a held start goes ahead in light rain (`game.startInRain`): the tarp comes off once the
+ *                   rain is below the bar that stops a game under way, and the radar need only show nothing
+ *                   that would stop play;
+ *   troubleCut    — share of any crew trouble the extra hands save (`game.extraHands`);
+ *   bp            — batting practice: 'cages' (the field covered at the first rain while it would run)
+ *                   or 'field' (the crew waits for it to end unless it pours); null: the crew's usual.
+ */
+export function gameParams(game = {}) {
+  return { ...fieldParams(game?.field || null), crewWindowMin: GW.CREW_WINDOW_MIN, startInRain: !!game?.startInRain,
+           troubleCut: game?.extraHands ? GW.EXTRA_HANDS_CUT : 0, bp: game?.bp || null, sayAt: game?.sayAt ?? null };
+}
+/** §122.51 everything a plan depends on beyond the weather and the clock, as a key (a plan made under other terms is made again). */
+export const planKey = (game) => `${fieldKey(game?.field || null)}|s${game?.sayAt ?? ''}|r${game?.startInRain ? 1 : 0}|h${game?.extraHands ? 1 : 0}|b${game?.bp || ''}|g${game?.gmCalls ? 1 : 0}|c${game?.gmCallAt ?? ''}`;
+
 /** A plan's field, as a key (a plan made for another field is made again). */
 export const fieldKey = (field) => (field ? `d${field.drainage || 0}${field.prep ? 'p' : ''}` : '');
-const NO_FIELD = fieldParams(null);
+const NO_FIELD = { ...fieldParams(null), crewWindowMin: GW.CREW_WINDOW_MIN, startInRain: false, troubleCut: 0, bp: null, sayAt: null };
 
 const MIN = 60_000;
 const STEP = GW.STEP_MIN * MIN;
@@ -102,7 +118,9 @@ function _stopReason(s, soakMin, F = NO_FIELD) {
 const _afterCurfew = (ctx, t) => { const h = localHour(t, ctx.tzMin); return h >= GW.CURFEW_LOCAL_H && h < 9; };
 const LIGHTNING_CLEAR = GW.LIGHTNING_CLEAR_MIN * MIN;
 /** No more than a sprinkle (the field can take it with the tarp off). */
-const _sprinkle = (s, F) => !s.lightning && s.rate < F.dryRate && !(s.kind !== PRECIP_RAIN && s.dbz > DBZ_MIN);
+const _sprinkle = (s, F, beforeStart = false, t = 0) => !s.lightning && s.rate < (beforeStart && F.startInRain && t >= (F.sayAt ?? -Infinity) ? GW.SOAK_RATE_MMH : F.dryRate) && !(s.kind !== PRECIP_RAIN && s.dbz > DBZ_MIN);
+/** §122.51 a start the GM's call changed is never before the call (plus a few minutes to get going). */
+const _notBefore = (F, t) => (F.sayAt != null ? Math.max(t, F.sayAt + 5 * MIN) : t);
 /**
  * §122.51 Is the radar clear ahead? `look(t)` gives the sampler the crew reads at
  * moment t (the truth's: the run of that hour; a forecast's: its own). Before
@@ -111,7 +129,7 @@ const _sprinkle = (s, F) => !s.lightning && s.rate < F.dryRate && !(s.kind !== P
  */
 function _clearAhead(look, t, started, F) {
   const s = look(t);
-  for (let u = t + STEP; u <= t + GW.CREW_WINDOW_MIN * MIN; u += STEP) {
+  for (let u = t + STEP; u <= t + (F?.crewWindowMin ?? GW.CREW_WINDOW_MIN) * MIN; u += STEP) {
     const x = s(u);
     if (x.lightning || (x.kind !== PRECIP_RAIN && x.dbz >= GW.SNOW_DBZ) || x.rate >= (started ? GW.STOP_RATE_MMH : GW.TARP_ON_RATE_MMH)) return false;
   }
@@ -209,18 +227,19 @@ function _run(ctx, sample, gameTime, state, opts = {}) {
     // In a delay (or waiting to start).
     delay.mm += s.rate * (GW.STEP_MIN / 60);
     if (s.lightning) { delay.lastLightning = t; if (delay.reason !== STOP_REASON.LIGHTNING && delay.atPlayMin === played && t === delay.startT) delay.reason = STOP_REASON.LIGHTNING; }
-    const sprinkle = _sprinkle(s, F);
+    const sprinkle = _sprinkle(s, F, startAt == null, t);
     if (!sprinkle) { delay.dryFrom = null; delay.resumeAt = null; delay.offT = null; }
     else if (delay.dryFrom == null) delay.dryFrom = t;
     if (delay.resumeAt == null && sprinkle && !delay.fieldOnly
         && t - delay.lastLightning >= LIGHTNING_CLEAR && t - delay.dryFrom >= F.dryMin * MIN
-        && (!opts.look || _clearAhead(opts.look, t, startAt != null, F))) {
+        && (!opts.look || _clearAhead(opts.look, t, startAt != null || (F.startInRain && t >= (F.sayAt ?? -Infinity)), F))) {
       // (A wait for lightning alone, with the field never covered, needs no crew work.)
       const covered = !delay.uncovered || delay.mm >= 0.5;
       const trouble = covered && opts.trouble ? opts.trouble(delay.troubleKey ?? delay.startT) : 0;
       delay.trouble = trouble;
       delay.offT = t;
       delay.resumeAt = t + (covered ? _prepMin(F, delay.mm) + trouble : 0) * MIN;
+      if (startAt == null) delay.resumeAt = _notBefore(F, delay.resumeAt);
     }
     if (delay.fieldOnly && delay.resumeAt == null && sprinkle && t - delay.lastLightning >= LIGHTNING_CLEAR) {
       delay.resumeAt = Math.max(t, delay.startT + F.soggyWorkMin * MIN);
@@ -268,28 +287,35 @@ const _closeDelay = (d, endT) => ({
 function _pregame(sample, gameTime, F, opts = {}) {
   const t0 = gameTime - GW.PREGAME_TARP_MIN * MIN;
   const tarps = [];
-  let tarp = null, wetRun = 0, lastLightning = -Infinity;
+  let tarp = null, wetRun = 0, lastLightning = -Infinity, openMm = 0;
   for (let t = t0; t < gameTime; t += STEP) {
     const s = sample(t);
     if (s.lightning) lastLightning = t;
     const frozen = s.kind !== PRECIP_RAIN && s.dbz >= GW.SNOW_DBZ;
     if (!tarp) {
       wetRun = s.rate >= GW.TARP_ON_RATE_MMH || frozen ? wetRun + GW.STEP_MIN : 0;
+      // §122.51 batting practice: in the cages, the field is covered at the first rain while it would run; on the
+      // field, the crew waits for it to end unless it pours — and the rain that lands on the open field is work later.
+      const inBp = F.bp && t >= gameTime - GW.BP_FROM_MIN * MIN && t < gameTime - GW.BP_TO_MIN * MIN;
+      const onMin = inBp && F.bp === 'cages' ? GW.STEP_MIN : inBp && F.bp === 'field' ? Infinity : GW.TARP_ON_MIN;
+      if (inBp && F.bp === 'field' && s.rate > 0) openMm += s.rate * (GW.STEP_MIN / 60);
       // (Already raining when the crew starts watching: the field was covered.)
-      if (s.rate >= GW.STOP_RATE_MMH || frozen || wetRun >= GW.TARP_ON_MIN || (t === t0 && wetRun > 0)) {
-        tarp = { onT: t === t0 ? t : t - (wetRun - GW.STEP_MIN) * MIN, reason: frozen ? STOP_REASON.SNOW : STOP_REASON.RAIN, mm: 0, dryFrom: null, offT: null, resumeAt: null, trouble: 0 };
+      if (s.rate >= GW.STOP_RATE_MMH || frozen || wetRun >= onMin || (t === t0 && wetRun > 0)) {
+        tarp = { onT: t === t0 ? t : t - (Math.min(wetRun, onMin === Infinity ? GW.STEP_MIN : wetRun) - GW.STEP_MIN) * MIN, reason: frozen ? STOP_REASON.SNOW : STOP_REASON.RAIN,
+                 mm: openMm * GW.BP_OPEN_MM_WORK, dryFrom: null, offT: null, resumeAt: null, trouble: 0 };
+        openMm = 0;
       }
     }
     if (!tarp) continue;
     tarp.mm += s.rate * (GW.STEP_MIN / 60);
-    const sprinkle = _sprinkle(s, F);
+    const sprinkle = _sprinkle(s, F, true, t);
     if (!sprinkle) { tarp.dryFrom = null; tarp.offT = null; tarp.resumeAt = null; }
     else if (tarp.dryFrom == null) tarp.dryFrom = t;
     if (tarp.resumeAt == null && sprinkle && t - lastLightning >= LIGHTNING_CLEAR && t - tarp.dryFrom >= F.dryMin * MIN
-        && (!opts.look || _clearAhead(opts.look, t, false, F))) {
+        && (!opts.look || _clearAhead(opts.look, t, F.startInRain && t >= (F.sayAt ?? -Infinity), F))) {
       tarp.trouble = opts.trouble ? opts.trouble(tarp.onT) : 0;
       tarp.offT = t;
-      tarp.resumeAt = t + (_prepMin(F, tarp.mm) + tarp.trouble) * MIN;
+      tarp.resumeAt = _notBefore(F, t + (_prepMin(F, tarp.mm) + tarp.trouble) * MIN);
     }
     if (tarp.resumeAt != null && t >= tarp.resumeAt) {
       tarps.push({ onT: tarp.onT, offT: tarp.offT, readyT: tarp.resumeAt, mm: Math.round(tarp.mm * 10) / 10, ...(tarp.trouble ? { trouble: tarp.trouble } : {}) });
@@ -388,11 +414,12 @@ export function gameWeatherPlan(ctx, game, opts = {}) {
   const venue = venueOf(ctx.map, game);
   const gameTime = game.gameTime;
   // r170 our park's field (drainage, the game's prep): null elsewhere
-  const F = fieldParams(game.field), field = game.field || null;
+  const F = gameParams(game), field = game.field || null;
   const P = patienceOf(game);
-  const base = { v: PLAN_VERSION, venueId: venue.teamId, gameTime, playMin: GW.PLAY_MIN, field, fieldKey: fieldKey(field), patience: P.key };
+  const base = { v: PLAN_VERSION, venueId: venue.teamId, gameTime, playMin: GW.PLAY_MIN, field, fieldKey: fieldKey(field), planKey: planKey(game), patience: P.key };
   const sample = _sampler(ctx, venue.x, venue.y);
-  const trouble = crewTrouble(ctx, venue.teamId, field);
+  const luck = crewTrouble(ctx, venue.teamId, field);
+  const trouble = (k) => Math.round(luck(k) * (1 - F.troubleCut));
   const postpone = (decidedAt, calledBy, reason, tarps = []) => ({
     ...base, outcome: PLAN_OUTCOME.POSTPONED, decidedAt, calledBy, reason, startAt: null, tarps, delays: [], endT: null, stopAtPlayMin: null,
   });
@@ -407,10 +434,16 @@ export function gameWeatherPlan(ctx, game, opts = {}) {
   const look = _crewLook(ctx, venue);
   const pg = _pregame(sample, gameTime, F, { trouble, look });
 
+  // §122.51 at home the GM calls it: off at the moment the GM said so.
+  if (game.gmCallAt != null && game.gmCallAt < gameTime + 6 * 60 * MIN) {
+    const no = _forecastSaysNo(ctx, venue, gameTime, null, game.gmCallAt, F, P);
+    return postpone(game.gmCallAt, 'gm', no?.reason ?? STOP_REASON.RAIN, pg.tarps.filter(x => x.onT < game.gmCallAt));
+  }
   // The club reads the forecast before first pitch (the run the GM sees then):
   // the game must look unplayable by the day's own rules, and the chance of
   // rain the GM sees high enough for the club's patience.
-  for (let i = 0; opts.aheadCalls !== false && i < GW.PREGAME_CALLS_MIN.length; i++) {
+  // (§122.51 at home the GM decides: no call ahead unless the GM makes it.)
+  for (let i = 0; opts.aheadCalls !== false && !game.gmCalls && i < GW.PREGAME_CALLS_MIN.length; i++) {
     const t = gameTime - GW.PREGAME_CALLS_MIN[i] * MIN;
     const no = _forecastSaysNo(ctx, venue, gameTime, null, t, F, P);
     if (no && chanceOfPrecip(ctx, t, venue.x, venue.y, gameTime, gameTime + GW.PLAY_MIN * MIN).chance >= P.callChance[i]) {
@@ -477,7 +510,7 @@ export function runShows(ctx, game, atT, t0, t1, minRate, cache = null) {
 export function projectGame(ctx, game, plan, atT, opts = {}) {
   const venue = venueOf(ctx.map, game);
   const gameTime = game.gameTime;
-  const F = fieldParams(game.field), P = patienceOf(game);
+  const F = { ...gameParams(game), ...(opts.startInRain ? { startInRain: true, sayAt: atT } : {}) }, P = patienceOf(game);
   const cache = opts.cache || new Map();
   const samplerAt = (key, c) => { let s = cache.get(key); if (!s) { s = _sampler(c, venue.x, venue.y); cache.set(key, s); } return s; };
   const truth = samplerAt('truth', ctx);
@@ -490,7 +523,7 @@ export function projectGame(ctx, game, plan, atT, opts = {}) {
   const seenBy = (offT) => offT != null && offT + GW.TROUBLE_SEEN_MIN * MIN <= atT;
   for (const x of plan?.tarps || []) if (x.trouble && seenBy(x.offT)) seen.set(x.onT, x.trouble);
   for (const d of plan?.delays || []) if (d.trouble && seenBy(d.offT)) seen.set(d.tarpOnT ?? d.startT, d.trouble);
-  const trouble = (key) => seen.get(key) || 0;
+  const trouble = (key) => Math.round((seen.get(key) || 0) * (1 - F.troubleCut));
   const fo = fieldOutlook(ctx, game, atT);
   if (fo.snowCover || fo.washout) return { outcome: PLAN_OUTCOME.POSTPONED, startAt: null, delays: [], played: 0, late: false, reason: fo.snowCover ? STOP_REASON.SNOW : STOP_REASON.FIELD, field: true };
   const pre = fo;

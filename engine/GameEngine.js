@@ -96,7 +96,9 @@ import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import * as Coach from './CoachEngine.js';
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso, weatherContext } from './WeatherClimate.js';
-import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME, fieldKey } from './GameWeather.js';
+import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME, fieldKey, planKey } from './GameWeather.js';
+import { gameStory } from './GameWeatherStory.js';
+import { pickTold, crewMessage, postponedMessage, decisionWords } from './WeatherMessages.js';
 import { fieldFor, drainageLevel, drainageCostK, roadWindow, prepCostK, wetHomeGames, settleDrainage } from './FieldCare.js';   // r170
 import { rainTotal } from './WeatherConditions.js';   // r170
 import { findMakeupSlot, seriesShift, gameTeams, clubFreeAt } from './WeatherSchedule.js';
@@ -519,6 +521,7 @@ export function tick() {
   // of a game not yet played — so the game below starts with the roster it
   // really has.
   advanceClock(clockNow());
+  _wxReplanDue(clockNow());   // §122.51 a weather decision that changes our game
   // §80: a game day nobody planned yet (a save from before r74) gets its inbox.
   planCardsForNextGame();
 
@@ -526,6 +529,8 @@ export function tick() {
   const game  = getNextGame();
 
   if (!game) return null;
+  // §122.51 (phase 3b) a weather decision during our game reaches its deadline on the game's clock.
+  if (game.gameTime <= clockNow() && CardEngine.expireGameWeatherDecisions(game.gameTime, clockNow())) _wxReplanDue(clockNow());
 
   // §102.3 the weather's say about our game. (The league clock holds at our
   // first pitch, so what happens at or after it is decided here.)
@@ -537,6 +542,7 @@ export function tick() {
       if (now >= game.wx.decidedAt) { _postponeGame(ref, game.wx.decidedAt); return null; }
       if (now >= game.gameTime && game.status !== GAME_STATUS.DELAYED) {
         StateManager.mutate(s => { const g = s.schedule[game.index]; if (g) g.status = GAME_STATUS.DELAYED; });
+        if (game.isHome) _wxStoryPark(game.index);   // §122.51 the crew's word while the start is held
       }
       return null;
     }
@@ -676,6 +682,37 @@ function _activateGameNow(game) {
   // was open.)
   const unwatched = now > (game.gameTime || 0) + MAX_LIVE_WINDOW_MS;
 
+  const { wx, isSpring, plays, boxScore, liveLineups, resumeState, weather } = _simOurGame(state, game);
+
+  // Write plays to state and transition to LIVE
+  StateManager.mutate(s => {
+    const g = s.schedule[game.index];
+    if (!g) return;
+    g.plays         = plays;
+    g.livePlayIndex = 0;
+    g.status        = GAME_STATUS.LIVE;
+    if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = weather; }
+    if (resumeState) g.resumeState = resumeState;   // §109 suspended: where it stands, finished when it resumes
+    // Pre-computed full-game box (promoted to g.boxScore at commit) + seed lineups.
+    g._precomputedBoxScore = boxScore;
+    g.liveLineups          = liveLineups;
+    if (unwatched) g._silentlyCommitted = true;   // the screens: a result the GM didn't watch
+    // §78: the crowd is in the seats at first pitch (the gate is banked at the final).
+    if (g.isHome && !isSpring && !g.attendance) {
+      const crowd = Finance.crowdFor(s, 'user', { atMs: g.gameTime || clockNow(), playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true) });
+      if (crowd) { g.attendance = crowd.attendance; g.gateK = crowd.gateK; g.sellout = crowd.sellout; }
+    }
+  });
+  // §122.51 the crew's word through the game, now that its weather is settled: each at its moment.
+  if (game.isHome) _wxStoryPark(game.index);
+}
+
+/**
+ * _simOurGame(state, game) — our game, played: its weather (the plan and the park through it) and every play.
+ * Deterministic (the game's own dice): §122.51 a held start is played again this way when a decision
+ * changes its weather before anything but the hold has been shown.
+ */
+function _simOurGame(state, game) {
   const userTeam    = state.userTeam;
   const players     = state.players;
 
@@ -704,7 +741,7 @@ function _activateGameNow(game) {
   const isSpring = game.isSpring || state.phase === PHASE.SPRING_TRAINING;
   const wx = _wxAtFirstPitch(state, game, true);   // §102.3
 
-  const { plays, boxScore, liveLineups, resumeState, weather } = generatePlays(
+  const out = generatePlays(
     wx ? { ...game, ...wx.record } : game,
     userTeam,
     opponentTeam,
@@ -714,25 +751,7 @@ function _activateGameNow(game) {
       staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true), injuryYear: baseballYear(state) }
   );
 
-  // Write plays to state and transition to LIVE
-  StateManager.mutate(s => {
-    const g = s.schedule[game.index];
-    if (!g) return;
-    g.plays         = plays;
-    g.livePlayIndex = 0;
-    g.status        = GAME_STATUS.LIVE;
-    if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = weather; }
-    if (resumeState) g.resumeState = resumeState;   // §109 suspended: where it stands, finished when it resumes
-    // Pre-computed full-game box (promoted to g.boxScore at commit) + seed lineups.
-    g._precomputedBoxScore = boxScore;
-    g.liveLineups          = liveLineups;
-    if (unwatched) g._silentlyCommitted = true;   // the screens: a result the GM didn't watch
-    // §78: the crowd is in the seats at first pitch (the gate is banked at the final).
-    if (g.isHome && !isSpring && !g.attendance) {
-      const crowd = Finance.crowdFor(s, 'user', { atMs: g.gameTime || clockNow(), playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true) });
-      if (crowd) { g.attendance = crowd.attendance; g.gateK = crowd.gateK; g.sellout = crowd.sellout; }
-    }
-  });
+  return { wx, isSpring, ...out };
 }
 
 /**
@@ -1764,13 +1783,22 @@ function _wxPatienceFor(state, g, vg) {
   return how === 'series-dh' ? 'easy' : how === 'off-day' || how === 'meeting-dh' ? 'normal' : 'hard';
 }
 
+/** Is a game's plan made under its terms now (r170 the field, §122.51 the GM's calls)? A plan with no key (one a check made by hand) is taken as given. */
+const _wxPlanFits = (plan, vg) => plan.planKey == null ? (plan.fieldKey || '') === fieldKey(vg.field || null) : plan.planKey === planKey(vg);
+
 /** Where a game is played and when, for its weather (the All-Star Game: the host's park). */
 function _wxVenueGame(state, g, isUser) {
   if (g.isAllStar) return { gameTime: g.gameTime, homeId: state.allStar?.season?.hostId || 'user', patience: 'post' };
   const t = gameTeams(g, isUser);
   // r170 our park's field: its drainage, and the crew's prep for this game
   const field = isUser && !g.isSpring ? fieldFor(state, t.venueId, g.gameTime) : null;
-  return { gameTime: g.gameTime, ...t, ...(field ? { field } : {}), ...(g.wxPatience ? { patience: g.wxPatience } : {}), ...(g.isSpring ? { isSpring: true } : {}), ...(g.isPlayoff ? { isPlayoff: true } : {}) };
+  // §122.51 (phase 3b) at our park the GM has a say: calling it off before first pitch (regular season — the
+  // league runs the postseason), batting practice, extra hands, going ahead in light rain.
+  const ours = isUser && t.venueId === 'user' && !g.isSpring;
+  const say = ours ? { ...(!g.isPlayoff ? { gmCalls: true } : {}), ...(g.wxGmCallAt != null ? { gmCallAt: g.wxGmCallAt } : {}),
+                       ...(g.wxBp ? { bp: g.wxBp } : {}), ...(g.wxExtraHands ? { extraHands: true } : {}), ...(g.wxStartInRain ? { startInRain: true } : {}),
+                       ...(g.wxSayAt != null ? { sayAt: g.wxSayAt } : {}) } : {};
+  return { gameTime: g.gameTime, ...t, ...(field ? { field } : {}), ...(g.wxPatience ? { patience: g.wxPatience } : {}), ...(g.isSpring ? { isSpring: true } : {}), ...(g.isPlayoff ? { isPlayoff: true } : {}), ...say };
 }
 
 /**
@@ -1792,7 +1820,7 @@ function _ensureWeatherPlans(clockMs) {
     const vg = _wxVenueGame(st, g, isUser);
     const venueId = vg.venueId ?? vg.homeId;
     if (g.wx && g.wx.gameTime === g.gameTime && g.wx.venueId === venueId && !!g.wx.resumption === susp
-        && (g.wx.fieldKey || '') === fieldKey(vg.field || null)) return;   // (r170 or the field changed)
+        && _wxPlanFits(g.wx, vg)) return;   // (r170 the field, §122.51 the GM's calls)
     todo.push({ ref: _wxRefOf(g, isUser), vg, susp, g });
   };
   st.schedule.forEach(g => consider(g, true));
@@ -2026,12 +2054,191 @@ function _wxMove(s, g, isUser, { date, gameTime, venueId }) {
   if (venueId && venueId !== home) g.venueId = venueId; else delete g.venueId;
   g.wx = null;
   delete g.wxPatience;   // §122.51 (worked out again where it now sits)
+  for (const k of ['wxWaited', 'wxGmCallAt', 'wxBp', 'wxExtraHands', 'wxStartInRain', 'wxSayAt', 'wxReplan']) delete g[k];   // §122.51 the GM's calls were for the old date
 }
 
 const _wxReasonWord = (r) => (r === 'lightning' ? 'storms' : r === 'snow' ? 'snow' : r === 'wet field' ? 'a wet field' : 'rain');
 function _wxTeamAbbr(s, id) { return id === 'user' ? s.userTeam.abbr : (s.leagueTeams.find(t => t.id === id)?.abbr || id); }
 function _wxMatchup(s, g, isUser) { const t = gameTeams(g, isUser); return `${_wxTeamAbbr(s, t.awayId)} at ${_wxTeamAbbr(s, t.homeId)}`; }
 const _wxDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+
+// ── §122.51 (phase 3) The grounds crew's word about our home games ─────────
+// Each home game's weather story (GameWeatherStory) — what the crew knows,
+// moment by moment — becomes the crew's messages (WeatherMessages). Before
+// first pitch the clock delivers each at its own moment ('wxtell'); the league
+// clock holds at our first pitch, so what comes after (a held start, the game
+// itself) is parked then, each at its moment, once the game's weather is
+// settled. Both run inside the look-ahead, so push has them with the app
+// closed. A game's record of what's been told: g.wxTold = { gameTime, at }.
+
+const _wxStories = new Map();
+const _WX_TELL_AHEAD_MS = 16 * 3_600_000;   // (the morning look comes 4–10 hours before first pitch)
+
+/** Our home game's story, as messages to tell: { events, ctx } (cached by what it depends on). */
+function _wxStoryOf(st, g) {
+  if (!g?.isHome || g.isAllStar || !Number.isFinite(g.gameTime) || g.wx?.resumption || g.status === GAME_STATUS.SUSPENDED) return null;
+  const ctx = weatherContext(st);
+  let vg = _wxVenueGame(st, g, true);
+  if (!vg.patience) {
+    const p = _wxPatienceFor(st, g, vg);
+    StateManager.mutate(s => { const x = s.schedule[g.index]; if (x && x.gameTime === g.gameTime) x.wxPatience = p; });
+    vg = { ...vg, patience: p };
+  }
+  const res = g.wxResult && g.plays?.length ? g.wxResult : null;
+  const key = `${ctx.seed}|${g.gameTime}|${vg.venueId ?? vg.homeId}|${planKey(vg)}|${vg.patience}|${res ? (res.delays || []).map(d => d.startT).join(',') + ':' + (res.ruling?.outcome || '') : '-'}`;
+  let x = _wxStories.get(key);
+  if (!x) {
+    const plan = g.wx && g.wx.gameTime === g.gameTime && !g.wx.resumption && _wxPlanFits(g.wx, vg) ? g.wx : gameWeatherPlan(ctx, vg);
+    const story = gameStory(ctx, vg, plan, res ? { result: res } : {});
+    // §122.51 (phase 3b) at home the GM calls it: the moment the club would have called it off ahead (or, failing
+    // that, the crew first sees no window before first pitch) is a question for the GM.
+    if (vg.gmCalls && vg.gmCallAt == null) {
+      const club = gameWeatherPlan(ctx, { ...vg, gmCalls: false });
+      const doubt = story.find(e => e.kind === 'start_doubt' && e.at < g.gameTime - 15 * 60_000);
+      const askAt = club.outcome === PLAN_OUTCOME.POSTPONED && club.calledBy === 'forecast' && club.decidedAt < g.gameTime ? club.decidedAt : doubt?.at ?? null;
+      if (askAt != null) story.push({ id: `calloff_ask:${g.gameTime}:${Math.round(askAt / 60_000)}`, at: askAt, kind: 'calloff_ask' });
+      story.sort((a, b) => a.at - b.at);
+    }
+    x = { events: pickTold(story, ctx.seed), seed: ctx.seed, gm: !!vg.gmCalls || (vg.venueId === 'user' && !vg.isSpring) };
+    _wxStories.set(key, x);
+    if (_wxStories.size > 40) _wxStories.delete(_wxStories.keys().next().value);
+  }
+  return x;
+}
+
+const _wxToldAt = (g) => (g.wxTold?.gameTime === g.gameTime ? g.wxTold.at : -Infinity);
+const _wxOpenForTell = (g) => !g._committed && !g.cancelled && g.isHome && (g.status === GAME_STATUS.SCHEDULED || g.status === GAME_STATUS.PRE_GAME_WATCH);
+
+/** The next moment (by `uptoMs`) the crew has something to say before one of our home games' first pitch. */
+function _wxStoryNext(st, uptoMs) {
+  let best = null;
+  for (let i = st.currentGameIndex || 0; i < (st.schedule || []).length; i++) {
+    const g = st.schedule[i];
+    if (!Number.isFinite(g.gameTime) || g.gameTime - _WX_TELL_AHEAD_MS > uptoMs) break;
+    if (!_wxOpenForTell(g)) continue;
+    const s = _wxStoryOf(st, g);
+    if (!s) continue;
+    const told = _wxToldAt(g);
+    const e = s.events.find(x => x.at > told && x.at < g.gameTime);
+    if (e && e.at <= uptoMs && (best == null || e.at < best)) best = e.at;
+  }
+  return best;
+}
+
+const WX_DECIDE = Object.freeze({ bpDeadlineLeadMin: 180, bpMinTimeMin: 30, calloffMin: 45, calloffLastMin: 10, compsMin: 20, compsWaitMin: 45,
+                                   compsPerFanK: 0.00035, compsMinK: 4, handsMin: 10, handsK: 5, rainMin: 15, overtimeK: 8, lateAtmo: -2 });
+
+function _wxTellOne(st, g, s, e) {
+  const info = { gameTime: g.gameTime, opp: g.opponent || '', seed: s.seed, delays: g.wxResult?.delays, ruling: g.wxResult?.ruling };
+  const season = st.seasonNum || 1, T = g.gameTime, M = 60_000;
+  const decide = (kind, d, expiresAtMs, extra = {}) => {
+    const w = decisionWords(kind, d, { ...info, ...extra });
+    return CardEngine.deliverWeatherDecision({ key: `wx:dec:${season}:${T}:${kind}`, kind, gameTime: T, ...w, expiresAtMs,
+                                               urgent: d.at >= T - 120 * M, ...extra }, d.at);
+  };
+  // §122.51 (phase 3b) at our park, some moments are the GM's to decide (they stand in for that moment's message).
+  if (s.gm) {
+    if (e.kind === 'outlook' && e.rainAt != null && e.rainAt >= T - 240 * M && e.rainAt <= T - 90 * M
+        && e.at <= T - (WX_DECIDE.bpDeadlineLeadMin + WX_DECIDE.bpMinTimeMin) * M) {
+      if (decide('bp', e, T - WX_DECIDE.bpDeadlineLeadMin * M)) return;
+    }
+    if (e.kind === 'calloff_ask') {
+      const f = (() => { try { return forecastForGame(weatherContext(st), e.at, _wxVenueGame(st, g, true)); } catch { return null; } })();
+      decide('calloff', { ...e, chance: f?.chance ?? null }, Math.min(e.at + WX_DECIDE.calloffMin * M, T - WX_DECIDE.calloffLastMin * M), { chance: f?.chance ?? null });
+      return;
+    }
+    if (e.kind === 'crew_trouble' && !e.inGame && e.estStart != null) {
+      if (decide('hands', e, e.at + WX_DECIDE.handsMin * M, { costK: WX_DECIDE.handsK })) return;
+    }
+    if (e.kind === 'gap') { decide('rain', e, Math.min(e.at + WX_DECIDE.rainMin * M, e.gapStart - 10 * M)); return; }
+    // A long wait for the crowd (its own question, from Stadium Ops, once a game).
+    const wait = e.kind === 'start_delayed' ? (e.estStart - T) / M : e.kind === 'delay' ? (e.estResume ? (e.estResume - e.at) / M : 60) : 0;
+    if (!g.isPlayoff && wait >= WX_DECIDE.compsWaitMin) {
+      const fans = g.attendance || 25_000;
+      const costK = Math.max(WX_DECIDE.compsMinK, Math.round(fans * WX_DECIDE.compsPerFanK));
+      decide('comps', { ...e, at: e.at + 5 * M, waitMin: Math.round(wait / 5) * 5, inGame: e.kind === 'delay' }, e.at + (5 + WX_DECIDE.compsMin) * M, { costK });
+    }
+  }
+  if (e.kind === 'gap' || e.kind === 'calloff_ask') return;   // (decisions only)
+  const m = crewMessage(e, info);
+  if (m) CardEngine.deliverCrewMessage({ key: `wx:story:${season}:${T}:${e.id}`, gameTime: T, ...m }, e.at);
+}
+
+/**
+ * §122.51 (phase 3b) a decision changed our game's weather (g.wxReplan): plan it again. Before first pitch that's
+ * all (the crew's word carries on from the new story). In a held start — its plays already worked out, nothing
+ * but the hold shown — the game is played again under the new plan, and the crew's word still to come is redone.
+ */
+function _wxReplanDue(nowMs) {
+  const st = StateManager.get();
+  for (let i = st.currentGameIndex || 0; i < (st.schedule || []).length && i < (st.currentGameIndex || 0) + 3; i++) {
+    const g = st.schedule[i];
+    if (!g?.wxReplan) continue;
+    StateManager.mutate(s => { const x = s.schedule[i]; x.wxReplan = false; if (!x.plays?.length) x.wx = null; });
+    if (!g.plays?.length) continue;
+    const shown = (g.plays || []).slice(0, g.livePlayIndex || 0);
+    if (g._committed || shown.some(p => !(p._wx?.pre))) continue;   // (under way: too late to change it)
+    const season = st.seasonNum || 1;
+    CardEngine.withdrawScheduledWeather(`wx:story:${season}:${g.gameTime}:`, nowMs);
+    CardEngine.withdrawScheduledWeather(`wx:dec:${season}:${g.gameTime}:`, nowMs);
+    withDice(_gameDice(StateManager.get(), g, true, 'start'), () => {
+      StateManager.mutate(s => { s.schedule[i].wx = null; });
+      const sim = _simOurGame(StateManager.get(), StateManager.get().schedule[i]);
+      StateManager.mutate(s => {
+        const x = s.schedule[i];
+        x.plays = sim.plays; x._precomputedBoxScore = sim.boxScore; x.liveLineups = sim.liveLineups;
+        if (sim.wx) { Object.assign(x, sim.wx.record); x.wx = sim.wx.plan; x.wxResult = sim.weather; }
+        if (sim.resumeState) x.resumeState = sim.resumeState; else delete x.resumeState;
+        x.wxTold = { gameTime: x.gameTime, at: nowMs };
+      });
+    });
+    _wxStoryPark(i);
+  }
+}
+
+/** The crew's word due by `atMs`, before first pitch. */
+function _wxStoryTell(atMs) {
+  const st = StateManager.get();
+  for (let i = st.currentGameIndex || 0; i < (st.schedule || []).length; i++) {
+    const g = st.schedule[i];
+    if (!Number.isFinite(g.gameTime) || g.gameTime - _WX_TELL_AHEAD_MS > atMs) break;
+    if (!_wxOpenForTell(g)) continue;
+    const s = _wxStoryOf(st, g);
+    if (!s) continue;
+    const told = _wxToldAt(g);
+    const due = s.events.filter(x => x.at > told && x.at <= atMs && x.at < g.gameTime);
+    if (!due.length) continue;
+    for (const e of due) _wxTellOne(st, g, s, e);
+    StateManager.mutate(x => { const y = x.schedule[i]; if (y) y.wxTold = { gameTime: y.gameTime, at: due[due.length - 1].at }; });
+  }
+}
+
+/** The rest of the crew's word for our home game (its weather settled: a held start, the game itself), each parked at its moment. */
+function _wxStoryPark(i) {
+  const st = StateManager.get();
+  const g = st.schedule?.[i];
+  if (!g) return;
+  const s = _wxStoryOf(st, g);
+  if (!s) return;
+  const told = _wxToldAt(g);
+  const rest = s.events.filter(x => x.at > told);
+  for (const e of rest) _wxTellOne(st, g, s, e);
+  if (rest.length) StateManager.mutate(x => { const y = x.schedule[i]; if (y) y.wxTold = { gameTime: y.gameTime, at: rest[rest.length - 1].at }; });
+}
+
+/** §122.51 for the checks: our game's weather terms (the park, the field, the GM's calls), and its story as the crew will tell it. */
+export function weatherGameOf(state, g) { return _wxVenueGame(state, g, true); }
+export function weatherStoryOf(g) { return _wxStoryOf(StateManager.get(), g)?.events || []; }
+
+/** Our home game postponed: the crew says so, and where it went. */
+function _wxTellPostponed(ref, entry, atMs) {
+  const st = StateManager.get();
+  const x = _wxResolve(st, ref).g;
+  if (!x) return;
+  const makeup = x.cancelled ? null : `${_wxDay(x.date)}${x.makeup?.how?.endsWith('dh') ? ', as part of a doubleheader' : ''}`;
+  const m = postponedMessage({ reason: entry.reason, calledBy: entry.calledBy, makeup, spring: !!x.isSpring, cancelled: !!x.cancelled });
+  CardEngine.deliverCrewMessage({ key: `wx:story:${st.seasonNum || 1}:${entry.gameTime}:ppd`, gameTime: entry.gameTime, ...m, preview: m.body }, atMs);
+}
 
 /**
  * _postponeGame(ref, atMs) — the weather called a game off before it started
@@ -2045,6 +2252,7 @@ function _postponeGame(ref, atMs) {
   if (!g || !g.wx) return;
   const plan = g.wx;
   const entry = { date: g.date, gameTime: g.gameTime, decidedAt: plan.decidedAt, reason: plan.reason, calledBy: plan.calledBy };
+  const waited = g.wxWaited ? { ...g.wxWaited } : null;   // §122.51 (read before the game moves: a move clears it)
   const why = _wxReasonWord(plan.reason);
   let dhFor = null;
   if (g.isSpring) {
@@ -2058,6 +2266,7 @@ function _postponeGame(ref, atMs) {
       s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('weather', isUser ? s.userTeam.abbr : _wxTeamAbbr(s, x.homeId),
         `Spring: ${_wxMatchup(s, x, isUser)} rained out (${why}) — not made up`, atMs)]);
     });
+    if (isUser && g.isHome) _wxTellPostponed(ref, entry, atMs);
     return;
   }
   const moves = g.isPlayoff || g.isAllStar ? seriesShift(st, g, isUser).map(m => ({ ...m, venueId: null })) : null;
@@ -2086,6 +2295,20 @@ function _postponeGame(ref, atMs) {
     _wxSortSchedule(s);
   });
   if (dhFor) _wxDoubleheaderCard(dhFor, entry.date, atMs);
+  if (isUser && g.isHome) {
+    // §122.51 (phase 3b) the GM chose to wait it out (or left it), and it was lost late anyway: the crew's overtime
+    // and an unhappy crowd. Waiting out a forecast that showed no game is a poor call.
+    // (entry.gameTime: the game as scheduled — the game itself has moved to its makeup by now)
+    if (waited && entry.decidedAt >= entry.gameTime - 15 * 60_000) {
+      StateManager.mutate(s => {
+        const u = s.userTeam;
+        if (u.finances) Finance.post(u.finances, -WX_DECIDE.overtimeK, 'facilities', 'Grounds crew overtime', atMs);
+        u.atmosphere = Math.max(0, Math.min(100, (u.atmosphere ?? 50) + WX_DECIDE.lateAtmo));
+      });
+      if (!waited.auto) CardEngine.noteWeatherCall({ kind: 'calloff', choice: 'no', poor: (waited.chance ?? 0) >= 80 }, atMs);
+    }
+    _wxTellPostponed(ref, entry, atMs);
+  }
 }
 
 /**
@@ -2211,7 +2434,7 @@ function _wxHoldForClubs(ref, atMs) {
 function _wxAtFirstPitch(state, g, isUser) {
   const ctx = weatherContext(state);
   const vg = _wxVenueGame(state, g, isUser);
-  const plan = g.wx && g.wx.gameTime === g.gameTime && !g.wx.resumption && (g.wx.fieldKey || '') === fieldKey(vg.field || null) ? g.wx : gameWeatherPlan(ctx, vg);
+  const plan = g.wx && g.wx.gameTime === g.gameTime && !g.wx.resumption && _wxPlanFits(g.wx, vg) ? g.wx : gameWeatherPlan(ctx, vg);
   if (plan.outcome === PLAN_OUTCOME.POSTPONED) return null;
   const conditions = gameConditions(ctx, plan);
   return { plan, sim: { plan, conditions }, record: gameRecord(ctx, plan, conditions) };
@@ -2900,6 +3123,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
   if (state.faLookAt == null) StateManager.mutate(s => { s.faLookAt = clockMs; });   // §122 daily looks count from here
   let overdueRun = false;
   for (let guard = 0; guard < 12000; guard++) {
+    _wxReplanDue(clockMs);           // §122.51 a weather decision that changes our game
     _ensureWeatherPlans(clockMs);   // §102.3 every game's weather, a few hours ahead
     const st   = StateManager.get();
     const game = [..._leagueGameEvents(st, clockMs), ..._userWeatherEvents(st, clockMs)].sort((a, b) => a.at - b.at)[0];
@@ -2917,10 +3141,13 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     // r170 the groundskeeper reads the forecast for our next home game: the extra crew?
     const prepAt = _fieldNextAsk(st, clockMs);
     const prep = prepAt != null ? { kind: 'fieldask', at: prepAt } : null;
+    // §122.51 the grounds crew's word about our next home games' weather, each moment at its own time.
+    const tellAt = _wxStoryNext(st, clockMs);
+    const tell = tellAt != null ? { kind: 'wxtell', at: tellAt } : null;
     // §122 each day, the CPU clubs look at the free agents.
     const lookAt = _nextFaLook(st, clockMs);
     const look = lookAt != null ? { kind: 'falook', at: lookAt } : null;
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, look].filter(Boolean);
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     // r139 §121 the cards due by this moment arrive before it (a card the event withdraws, after it, never does).
@@ -2942,6 +3169,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'roster') { /* the roster step above was the event */ }
     else if (next.kind === 'wxask') _wxUserCards(next.at);
     else if (next.kind === 'fieldask') _fieldPrepCards(next.at);
+    else if (next.kind === 'wxtell') _wxStoryTell(next.at);
     else if (next.kind === 'falook') {
       CardEngine.directorTips(next.at);   // §122.15 our scouting director hears first (or doesn't)
       StateManager.mutate(s => { s.faLookAt = next.at; events.push(...cpuFreeAgentLook(s, next.at)); });

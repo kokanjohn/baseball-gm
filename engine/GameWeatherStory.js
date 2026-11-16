@@ -42,6 +42,8 @@
  *   resumed        { mins, playMin }
  *   called         { reason }
  *   late_watch     { eta }                                                          rain due around the end
+ *   gap            { gapStart, estStart }                                           (phase 3) a held start: going ahead in light rain
+ *                                                                                    would start it at gapStart (first such moment only)
  * proj: 'ontime' | 'delayed' | 'doubt'.
  */
 
@@ -130,7 +132,7 @@ export function gameStory(ctx, game, plan, opts = {}) {
   const grid = [];
   for (let t = Math.ceil(watchFrom / (WS.crewEveryMin * MIN)) * WS.crewEveryMin * MIN; t < end; t += WS.crewEveryMin * MIN) grid.push({ at: t, kind: 'check' });
   const moments = [...truthMoments.filter(m => m.at < end && m.at >= t0 - 6 * 60 * MIN), ...grid].sort((a, b) => a.at - b.at || (a.kind === 'check') - (b.kind === 'check'));
-  let est = null, doubt = false;   // the estimate last given (null: on time, as scheduled)
+  let est = null, doubt = false, gapTold = false;   // the estimate last given (null: on time, as scheduled)
   const estFrom = gameTime - WS.estLeadMin * MIN;
   for (const m of moments) {
     if (m.kind === 'tarp_on') { add(m.at, 'tarp_on', { reason: m.light ? 'lightning' : m.reason, inGame: false }); }
@@ -150,6 +152,14 @@ export function gameStory(ctx, game, plan, opts = {}) {
       continue;
     }
     if (!speak) continue;
+    // (phase 3) a held start that could go ahead in light rain: the GM could start it sooner.
+    if (!gapTold && m.at >= gameTime - 30 * MIN && k === 'delayed' && !game.startInRain) {
+      const alt = projectGame(ctx, game, plan, m.at, { cache, startInRain: true });
+      if (alt.outcome === PLAN_OUTCOME.PLAYED && !alt.late && alt.startAt > m.at && alt.startAt <= p.startAt - WS.gapGainMin * MIN) {
+        add(m.at, 'gap', { gapStart: r5(alt.startAt), estStart: e });
+        gapTold = true;
+      }
+    }
     if (k === 'doubt') { if (!doubt) { add(m.at, 'start_doubt'); doubt = true; } continue; }
     const late = e - gameTime >= WS.delayedMin * MIN;
     if (est == null) {
