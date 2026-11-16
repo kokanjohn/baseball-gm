@@ -222,7 +222,7 @@ export function refresh() {
   const ovrColor   = ropt.teamOvr >= 75 ? '#22C55E' : ropt.teamOvr >= 65 ? '#4A9EE0' : 'var(--muted)';
 
   container.innerHTML = `
-    <div class="section-pad" style="padding-bottom:0;">
+    <div class="section-pad team-top" style="padding-bottom:0;">
       <div class="roster-title-row">
         <div class="section-title">Team</div>
         <div class="roster-ratings-pair">
@@ -1172,6 +1172,28 @@ function _injectCSS() {
     .sm-pick-sub{font-size:11px;color:var(--muted);}
     .sm-pick-ovr{font-size:16px !important;flex-shrink:0;}
     .sm-arrow{font-size:16px;color:var(--border);flex-shrink:0;}
+
+    /* §122.63 sideways (body[data-wide]): the top folds into one line — title, payroll, OVR, the two bars —
+       over slim sub-tabs, the rows tighten, and the season line spreads across the width. */
+    @media (orientation:landscape) and (max-height:540px){
+      body[data-wide] .team-top{display:grid;grid-template-columns:auto 1fr 1fr;column-gap:18px;align-items:center;padding:6px 16px 0;}
+      body[data-wide] .team-top .roster-title-row{margin:0;gap:10px;justify-content:flex-start;}
+      body[data-wide] .team-top .section-title{font-size:22px;letter-spacing:2px;margin:0;}
+      body[data-wide] .team-top .roster-rating-card{flex-direction:row;align-items:baseline;gap:6px;padding:3px 8px;}
+      body[data-wide] .team-top .rrc-value{font-size:17px !important;margin:0 !important;}
+      body[data-wide] .team-top .ropt-row{margin:0 !important;}
+      body[data-wide] .team-top .ropt-hint-btn{width:20px;height:20px;}
+      body[data-wide] .team-top .team-subtabs{grid-column:1/-1;margin:4px 0 0;}
+      body[data-wide] .team-top .team-subtab{padding:5px 4px;}
+      body[data-wide] .tr-block{margin-top:4px;}
+      body[data-wide] .tr-title{padding:3px 16px;}
+      body[data-wide] .tr-name{padding-top:3px;padding-bottom:3px;}
+      body[data-wide] .tr-ovr .rating-num{font-size:17px;}
+      body[data-wide] .tr-move{padding:2px 0;}
+      body[data-wide] .tr-td{flex:1 0 38px;}
+      body[data-wide] .tr-c-hab{flex-basis:50px;} body[data-wide] .tr-c-whip,body[data-wide] .tr-c-avg,body[data-wide] .tr-c-ops,body[data-wide] .tr-c-era{flex-basis:42px;}
+      body[data-wide] .tr-c-imp{flex-basis:46px;}
+    }
   `;
   document.head.appendChild(style);
 }

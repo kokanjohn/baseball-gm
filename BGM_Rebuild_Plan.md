@@ -12363,3 +12363,22 @@ test-setup-name-ui (upright) and test-landscape-ui pass in both themes.
 **Open item 1 is closed:** scrolling, sheets and typing sideways have been checked on the GM's phone (r186 and this fix).
 
 **Fresh team:** not required.
+
+## §122.63 — r188: open item 2, the Team screen compact sideways
+Sideways (844×390), the Team screen showed only two player rows. The title, the Payroll and OVR cards, the two bars and the sub-tabs took about 200 px.
+
+**Sideways only** (`body[data-wide]` under the sideways media query; the `.team-top` class is on the screen's top block):
+- **Top:** one line of the title, Payroll and OVR (label and value side by side) and the Hitters and Pitchers bars. Slim sub-tabs sit under it; the block is 63 px.
+- **Rows:** tighter, with OVR at 17 px and a slimmer MOVE.
+- **Columns:** the season columns grow to spread the line across the width, so IMP ends at the right edge.
+
+Six whole player rows now show (was 2). Upright is unchanged.
+
+**test-landscape-ui:**
+- one top line, at most 90 px;
+- at least 5 whole rows above the nav;
+- IMP ends at the right edge.
+
+Passes in both themes, and test-team-roster-ui passes.
+
+**Fresh team:** not required.

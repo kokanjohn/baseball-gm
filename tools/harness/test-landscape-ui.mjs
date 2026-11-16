@@ -112,6 +112,16 @@ const team = await page.evaluate(() => {
            hidden: sc.scrollWidth - sc.clientWidth };
 });
 check(`sideways, Team: full width (${team.body}px), the table ${team.sc}px wide, ${team.hidden}px left to scroll`, team.body >= 840 && team.sc >= 800 && !team.turn);
+const fold = await page.evaluate(() => {
+  const top = document.querySelector('.team-top'), nav = document.querySelector('.bottom-nav').getBoundingClientRect();
+  const t = top.querySelector('.section-title').getBoundingClientRect(), h = top.querySelectorAll('.ropt-row');
+  const rows = [...document.querySelectorAll('.tr-row[data-player]')].filter(r => r.getBoundingClientRect().bottom <= nav.top).length;
+  const imp = document.querySelector('.tr-head .tr-c-imp').getBoundingClientRect().right;
+  return { oneLine: [...h].every(r => Math.abs(r.getBoundingClientRect().top - t.top) < 16), top: Math.round(top.getBoundingClientRect().height), rows, imp: Math.round(imp) };
+});
+check(`sideways, Team: the title, payroll, OVR and both bars on one line, ${fold.top}px with the sub-tabs`, fold.oneLine && fold.top <= 90);
+check(`sideways, Team: ${fold.rows} whole player rows show (was 2)`, fold.rows >= 5);
+check(`sideways, Team: the season line spreads to the right edge (IMP ends at ${fold.imp}px)`, fold.imp >= 830);
 await page.screenshot({ path: `${out}/landscape-team-${theme}.png` });
 
 await page.tap('.nav-item[data-tab="league"]'); await page.waitForTimeout(400);
