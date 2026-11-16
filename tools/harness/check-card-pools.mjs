@@ -27,7 +27,6 @@ const MARKERS = {
   _rosterContract: 'author note: the roster action (onYes / onNo)', _catcherOnly: 'author note: {active_catcher}',
   _requiresBPCoverage: 'the action\'s own feasibility (CardActions.canSpare)', _requiresCatcherCoverage: 'the action\'s own feasibility (CardActions.canSpare)',
   _expireFx: 'superseded by the default answer plus autoResolveTax (§78.8)',
-  _relYes: 'OPEN: relationship effects are not applied (reported in §122.57)', _relNo: 'OPEN: relationship effects are not applied (reported in §122.57)',
 };
 
 const all = [];

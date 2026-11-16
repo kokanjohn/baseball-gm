@@ -12246,3 +12246,72 @@ User go-ahead (Nov 16, "Continue"). What the screens show now follows the same w
 **§122.51 status:** phases 1–5 are built.
 - Phase 6 (checks and tuning) has largely ridden along with each release: region rates, messages per game day, screenshots, full seasons.
 - What remains of it is the open climate question: North and East postponement rates are below the §102.6 benchmark, and that's the GM's call.
+
+## §122.60 — r185: relationships on cards, winter offers and club funds; §122.51 phase 6 (seasons in every region)
+User request (Nov 16): fix the two issues reported in §122.57 (the cards' relationship effects never applied; an accepted winter upgrade that did nothing), and start phase 6.
+
+### A card's effect on the people in it (`_relYes` / `_relNo`, 16 cards)
+- **What they are:** coaches pressed by ownership, the bench coach mediating, an extension asked for today, "wants to be captain", a bigger name on the bench, the manager back from illness, and five personal-leave cards. Their effects on the people involved were written in the data but never applied.
+- **What's applied now:** `CardEngine._applyRelationships`, on the answer and on an unanswered card's default.
+  - **Staff** (`mgr_nm`, `pc_nm`, `hc_nm`, `bc_nm`) → `coachingStaff.{manager, pitchingCoach, hittingCoach, benchCoach}.relationship`. A coach's relationship already scales how much his players develop (`DevelopmentEngine.gainMultiplier`) and colours his replies (`ComposeReplies`).
+  - **Players** (`act_pi`, `act_hi`, `ldr_nm`, `pl_nm`) → the player the card's text names (its role token): his `gmRelationship`. It shows on his player card and decides how much his injury reports tell us (`InjuryEngine.getInjuryReport`).
+  - **Scale:** each point on a card is 3 on the 0–100 scale (`REL_UNIT`). The cards' ±1–3 were written for a smaller scale.
+- `deliverCardById` (the debug injector) reaches the personal-leave pool too.
+
+### Winter offers and club funds
+- **The problem (§122.57):** a winter upgrade accepted after another winter decision had spent the funds did nothing. r182 made it wait with a note, but the offer still sat in the inbox, unaffordable.
+- **The rule now** (`syncWinterOffers`, run after every decision and at each roster step): a winter offer that spends club funds (the season-ticket campaign, a ballpark or facility upgrade) stays only while the funds cover it. Otherwise it's withdrawn, and Recent says "The concourse upgrade is off the table this winter: club funds no longer cover $560K." It's the same rule roster cards follow (a player card stays only while the club can spare him).
+- The fan event stays: its "no" is a decision with its own cost to the fans.
+- The campaign's own silent no-op (the same bug) gets the same last-guard note as the upgrade.
+
+### Phase 6: a full league season in every region
+The suite plays the North only. South, East and West seasons (seed 9) were played in full.
+
+| Region | Postponed (league, regular season) | Doubleheaders | Crew messages at home (median / most a game day) | Travel Coordinator on the road |
+|---|---|---|---|---|
+| North (suite) | 1.1–2.1% | 6–18 | 2 / 5 | 2 / 2 |
+| South | 2.7% | 20 | 2 / 6 | 2 / 3 |
+| East | 2.4% | 14 | 2 / 8 | 2 / 5 |
+| West | 0.6% | 6 | 1 / 4 | 2 / 4 |
+
+Every held start and every postponement was told, home and road, each from its sender. The weather decisions came only at home and never in spring.
+
+**Found and fixed:**
+- **The opening slate of cards** (`deliverSeedCards`) went to the inbox without the card log. A story card from it (`sp1` spring field prep, `sp2`) could be dealt again the same spring. It's logged now.
+- **Two cards of one story the same day** (a suite complaint before the game and another during it): both could be drawn in the same day's plan before either was logged. One a day now (`takenStories`, like families).
+- **The groundskeeper's memory** of "the latest call the GM made on the crew's work" counted game-day weather questions ("The field is taking longer: extra hands?"), which read badly as work done for the crew. They're excluded.
+
+**Check corrections** (the engine was right):
+- **The rotation refill check** counted a starter by position. The refill reads a starter by designation and availability: one resting today takes the open turn at the next roster step.
+- **The compose check's** test decision is now the newest one (a real field decision made since rightly wins).
+- **The name check** knows the league's places: "Arroyo" is the Arroyo Dust Devils' city and also a surname.
+
+**Not a bug:**
+- **East, relievers on a third straight day:** 25 of 4,541 outings (0.55%, over the 0.5% bar) in one run, 7 (0.15%) in the rerun. Most were arms the engine knew were down, used when the pen was spent in a wet stretch's doubleheaders.
+
+### The climate question (open, the GM's decision)
+Rates from the plans (`weather-season-rates`, 4 seeds, about 3,600 games a region):
+
+| Region | Postponed | Target (§102.6) |
+|---|---|---|
+| North | 1.9% | about 3% |
+| South | 2.2% | about 2% |
+| East | 1.5% | 3–3.5% |
+| West | 0.9% | 1–2% |
+
+**What it isn't:**
+- **Not the calls:** patience is MLB-like (up to three hours' wait for a start, two and a half for a delay).
+- **Not the speed of the rain systems** (the guess in §122.52): slowing cool-season shields by 30% and 50% left North at 1.7% and East at 1.4–1.5%, an experiment run and reverted.
+
+**What it is:** how often the model lays down a cold, steady rain over a whole evening in a North or East spring. Real April rainouts are mostly that.
+
+Raising it is a climate recalibration: more or longer stalled cool-season systems, with the region calibration rerun so the wet-day counts stay true. It would be a release of its own.
+
+**Suite (r185):**
+- The season sim passes 3820/3820, multi-season 59/59, and every check-*.mjs, including check-game-day-cards with its 29 checks: relationships (a coach backed or not, a player's family loss, an unanswered personal matter) and winter offers withdrawn when unaffordable.
+- **Screen tests:** the first pass failed together because the local web server had stopped. Rerun with it restarted, all pass but test-team-roster-ui (light), which passed on rerun (real-clock flake).
+- The South rerun confirmed the seed-slate fix (no repeat) and found the same-day story pair, now fixed.
+
+**Fresh team:** not required.
+- The relationship effects and the winter-offer rule apply from the next card.
+- An existing save's opening slate is long past (the log starts empty for it, §122.57).

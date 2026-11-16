@@ -44,6 +44,8 @@ import {
   ALLSTAR_SQUAD_SIZE, ALLSTAR_STARTER_INNINGS, LINEUP_SLOTS, FA_POOL_MAX,
 } from '../../data/constants.js';
 import * as Roster from '../../engine/RosterEngine.js';
+import { pitchRoles as _pitchRoles } from '../../engine/Positions.js';
+import { isAvailable as _isAvailable } from '../../engine/PlayerFactory.js';
 import * as WxClimate from '../../engine/WeatherClimate.js';
 import {
   reconcileRoster, applyRosterMutation, eligibleSlotsFor, pendingArrivals, nextCalendarDay,
@@ -116,8 +118,10 @@ function namedAudit(st, card, ids, text, where) {
   }
   const names = new Set(Object.values(st.players || {}).map(p => p?.name));
   const people = new Set([...Object.values(st.userTeam?.coachingStaff || {}).map(x => x?.name), st.userTeam?.ownerName, st.userTeam?.gmName]);
+  // (§122.60 the league's places — a club's city, a town on the map — aren't people, even when a surname shares the word)
+  const places = new Set([st.userTeam?.city, ...(st.leagueTeams || []).flatMap(t => String(t.name || '').split(' ').slice(0, -1)), ...(st.leagueTeams || []).map(t => t.city)].filter(Boolean));
   for (const w of String(text || '').match(/\b[A-Z][a-zA-Z'-]+\b/g) || []) {
-    if (SURNAMES.has(w) && !names.has(w) && !OUTSIDE.has(w) && !people.has(w)) namedStats.bad.push(`${where}: "${w}" reads as a player's name, but nobody in the league has it`);
+    if (SURNAMES.has(w) && !names.has(w) && !OUTSIDE.has(w) && !people.has(w) && !places.has(w)) namedStats.bad.push(`${where}: "${w}" reads as a player's name, but nobody in the league has it`);
   }
 }
 // r158 every message the season delivers, for the voice rules (§122.30): by instance, as delivered.
@@ -151,7 +155,8 @@ async function checkComposeTruth(st, at) {
   check(`compose: a second prospect report covers someone new (${st.players[first.memo.playerId]?.name} → ${st.players[second.memo.playerId]?.name})`,
         !first.memo.playerId || !second.memo.playerId || second.memo.playerId !== first.memo.playerId);
   // The GM's own decision, in the reply of the person it concerned.
-  const dec = { instanceId: 'test-dec', cardId: 'test_tarp', tag: 'FACILITIES', subject: 'Tarp replacement — the old one is torn', resolved: true, choice: 'no', resolvedAtMs: at - 2 * 86_400_000 };
+  // (the newest call on the crew's work: the reply speaks to the latest one — §122.60 a real one made since would win)
+  const dec = { instanceId: 'test-dec', cardId: 'test_tarp', tag: 'FACILITIES', subject: 'Tarp replacement — the old one is torn', resolved: true, choice: 'no', resolvedAtMs: at - 60_000 };
   const st3 = { ...st, inbox: [...(st.inbox || []), dec] };
   const gk = writeComposeReply(st3, { topicId: 'gk_field', channelId: 'groundskeeper', atMs: at });
   check('compose: the groundskeeper remembers the tarp the GM passed on', /tarp replacement/i.test(gk?.body || ''), gk?.body?.slice(0, 300));
@@ -1002,7 +1007,9 @@ function runFaultInjection(base) {
     // (the starters the refill draws on: the rotation and the pitcher bench — r152: a starter working
     //  out of the bullpen, or one in transit after a trade, isn't one, and CI's runs found both)
     const spPool = [PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.PITCHER_BENCH];
-    const allSP = st.userTeam.rosterIds.map(id => st.players[id]).filter(q => q && q.pos === 'SP' && !q.isInjured && q.group !== 'il');
+    // (§122.60 a starter as the refill reads one: designated a starter, and available today — one resting today
+    //  takes the open turn at the next roster step, not this one)
+    const allSP = st.userTeam.rosterIds.map(id => st.players[id]).filter(q => q && _pitchRoles(q).includes('SP') && _isAvailable(q) && q.group !== 'il');
     const healthySP = allSP.filter(q => spPool.includes(q.group)).length;
     check(`fault(user SP): rotation restored to 5 (or every healthy starter: ${healthySP})`,
           st.userTeam.rotation.order.length === Math.min(ROSTER_LIMITS.STARTING_PITCHERS, healthySP),

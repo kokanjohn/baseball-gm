@@ -235,7 +235,9 @@ W.gk_field = (f, r, who) => {
   else if (lvlNow && rain24 >= 0.25) out.push(`The new drainage earned its keep: the field took the rain${lvlNow >= 2 ? ' without much trouble' : ' better than it used to'}.`);
   if (nh && f.state.fieldPrep?.[nh.gameTime]) out.push(`The extra crew is booked for ${gameWords(f, nh)}.`);
   // What the GM did for the crew.
-  const mine = f.decisions().filter(d => ['FACILITIES', 'OPERATIONS', 'FINANCE', 'WEATHER'].includes(d.tag) && GROUNDS_WORDS.test(d.subject) && f.atMs - d.at < 120 * MS_DAY);
+  // (§122.60 not a game day's weather question — batting practice, extra hands: a call for that game, not work done for the crew)
+  const mine = f.decisions().filter(d => ['FACILITIES', 'OPERATIONS', 'FINANCE', 'WEATHER'].includes(d.tag) && GROUNDS_WORDS.test(d.subject) && f.atMs - d.at < 120 * MS_DAY
+    && !d.card?._wxDecision);
   const d = mine[0];   // the latest call the GM made on the crew's work
   if (d?.choice === 'yes') out.push(`${Cap(aboutOf(d.subject))} you signed off on ${f.atMs - d.at < 3 * MS_DAY ? 'is already' : 'has been'} making a difference.`);
   else if (d) out.push(`We're still making do without ${aboutOf(d.subject).replace(/^the /, 'the ')} — no complaints, but it's the first thing I'd ask for when there's room in the budget.`);

@@ -214,6 +214,7 @@ export function checkAndDeliver(context) {
   const delivered = [];
   const taken = new Set();
   const takenFamilies = new Set();   // §94 one version of a family a season — across today's moments too
+  const takenStories = new Set();    // §122.60 and one card of a story (`_story`) a day: its log isn't written until it's scheduled
   for (const moment of ['pregame', 'ingame', 'between', 'leave']) {
     const pools = byMoment[moment];
     let n = Math.min(want[moment], room - delivered.length);
@@ -221,7 +222,7 @@ export function checkAndDeliver(context) {
     const eligible = [];
     for (const poolName of pools) {
       for (const card of _filterEligible(ALL_POOLS[poolName] || [], context, state, poolName)) {
-        if (!taken.has(card.id) && !(card._family && takenFamilies.has(card._family))) eligible.push({ ...card, _fromPool: poolName });
+        if (!taken.has(card.id) && !(card._family && takenFamilies.has(card._family)) && !(card._story && takenStories.has(card._story))) eligible.push({ ...card, _fromPool: poolName });
       }
     }
     if (cardDebug.onEligible) cardDebug.onEligible(moment, eligible.map(c => c.id));
@@ -231,9 +232,10 @@ export function checkAndDeliver(context) {
     let made = 0;
     for (const cardDef of _selectCards(eligible, context, state, eligible.length)) {
       if (made >= n) break;
-      if (taken.has(cardDef.id) || (cardDef._family && takenFamilies.has(cardDef._family))) continue;
+      if (taken.has(cardDef.id) || (cardDef._family && takenFamilies.has(cardDef._family)) || (cardDef._story && takenStories.has(cardDef._story))) continue;
       taken.add(cardDef.id);
       if (cardDef._family) takenFamilies.add(cardDef._family);
+      if (cardDef._story) takenStories.add(cardDef._story);
       const { _fromPool, ...def } = cardDef;
       const instance = _createInstance(def, context, state);
       if (instance) { delivered.push({ ...instance, _pool: _fromPool, _moment: moment }); made++; }
@@ -307,10 +309,8 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
     // Apply budget cost / revenue — the exact amounts the card text showed.
     _applyChoiceMoney(s, instance, choice);
 
-    // Apply player relationship effects
-    if (instance._playerRelationshipEffect) {
-      _applyPlayerRelationshipEffect(s, instance._playerRelationshipEffect, choice);
-    }
+    // Apply relationship effects (a player's with the GM, the manager's and the coaches' — §122.60)
+    _applyRelationships(s, instance, choice);
 
     // Narrative flag instrumentation (Section 34.6 — LOCKED)
     // Centralized here — no scattered setFlag calls across other files.
@@ -355,6 +355,7 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
   _applyRosterAction(instance, choice, StateManager.get(), { atMs: clockNow(), feasible: actionOk });
   _maybeChainFollowup(instance, choice, clockNow());
   _makePromise(instance, choice, clockNow());
+  syncWinterOffers(clockNow());   // §122.60 a decision that spent money: an offer it no longer covers is off the table
   // r154 §95 a decision that changed the club's rating (a release, a call-up)
   // is a point on its history at the moment it was made — not at the next tick.
   const after = StateManager.get(), last = (after.ratingHistory || []).slice(-1)[0];
@@ -554,6 +555,7 @@ export function expire(instanceId, atMs = clockNow()) {
     }
     _logChoice(s, instance, def);   // §122.57 what the unanswered card did
     _applySoftEffects(s, def === 'yes' ? instance.yesEffect : instance.noEffect, def, instance);
+    _applyRelationships(s, instance, def);   // §122.60 the default's effect on the people involved, too
     _applyChoiceMoney(s, instance, def);
     _applySoftEffects(s, tax, 'auto', instance);
   });
@@ -1640,6 +1642,7 @@ export function syncRosterCards(events = [], atMs = clockNow()) {
   return withDice(dice(diceSeed(StateManager.get()), 'roster', atMs), () => _syncRosterCards(events, atMs));
 }
 function _syncRosterCards(events, atMs) {
+  syncWinterOffers(atMs);   // §122.60
   let delivered = 0;
   const seed = diceSeed(StateManager.get());
   for (const ev of events) {
@@ -2684,6 +2687,7 @@ export function deliverSeedCards(cardIds, context) {
   StateManager.mutate(s => {
     s.inbox = [...(s.inbox || []), ...instances.map(c => ({ ...c, arrivedAtMs }))];
     _sortInbox(s.inbox);
+    for (const c of instances) _logDealt(s, { ...c, deliverAtMs: arrivedAtMs });   // §122.60 the opening slate counts too (sp1 came again)
   });
   return instances.length;
 }
@@ -2707,6 +2711,7 @@ export function deliverCardById(cardId) {
     PREGAME30_POOL,
     INGAME_POOL,
     BETWEEN_GAMES_POOL,
+    PERSONAL_LEAVE_POOL,                          // §122.60 (a player's leave)
     MONEY_BETWEEN, MONEY_PREGAME,                 // r147 the money cards
     ...Object.values(MOMENT_CARDS),               // and the moments, too
   ];
@@ -3547,6 +3552,35 @@ function _applySoftEffects(state, effects, choice, instance) {
     }
   }
 }
+
+/**
+ * §122.60 a card's effect on the people in it (`_relYes` / `_relNo` on the card): the manager's and the coaches'
+ * relationship with the GM (a coach's shapes how much his players develop — DevelopmentEngine.gainMultiplier), and a
+ * player's (his player card; what his injury reports tell us — InjuryEngine). Each point on a card is REL_UNIT on the
+ * 0–100 scale. A player key names the player the card's text is about (its role token).
+ */
+const REL_UNIT = 3;
+const REL_STAFF = Object.freeze({ mgr_nm: 'manager', pc_nm: 'pitchingCoach', hc_nm: 'hittingCoach', bc_nm: 'benchCoach' });
+const REL_PLAYER = Object.freeze({ act_pi: 'active_pitcher', act_hi: 'active_hitter', ldr_nm: 'leader_player', pl_nm: 'pl_player' });
+function _applyRelationships(state, instance, choice) {
+  if (instance._playerRelationshipEffect) _applyPlayerRelationshipEffect(state, instance._playerRelationshipEffect, choice);
+  const rel = choice === 'yes' ? instance._raw?._relYes : choice === 'no' ? instance._raw?._relNo : null;
+  if (!rel) return;
+  const clamp = (v) => Math.max(0, Math.min(100, Math.round(v)));
+  const staff = state.userTeam?.coachingStaff || {};
+  const tp = instance._tokenPlayers || {};
+  for (const [key, n] of Object.entries(rel)) {
+    if (!n) continue;
+    if (REL_STAFF[key]) {
+      const c = staff[REL_STAFF[key]];
+      if (c && !c.vacant) c.relationship = clamp((c.relationship ?? 50) + n * REL_UNIT);
+    } else if (REL_PLAYER[key]) {
+      const p = state.players?.[tp[REL_PLAYER[key]] || (key === 'pl_nm' ? instance._targetPlayerId : null)];
+      if (p) p.gmRelationship = clamp((p.gmRelationship ?? 50) + n * REL_UNIT);
+    }
+  }
+}
+export const _relForChecks = Object.freeze({ REL_UNIT, REL_STAFF, REL_PLAYER });
 
 function _applyPlayerRelationshipEffect(state, effect, choice) {
   if (!effect || !effect.playerId) return;
@@ -5273,6 +5307,23 @@ export function deliverCampaignCard(atMs, expiresAtMs) {
   return _deliverAt(card, atMs);
 }
 
+/**
+ * §122.60 syncWinterOffers(atMs) — a winter offer that spends club funds (the season-ticket campaign, a ballpark or
+ * facility upgrade) stays only while the funds cover it. When another decision spent them first (or the money ran
+ * short another way), the offer is withdrawn and Recent says so: accepting it could only have done nothing.
+ * (The fan event stays: its "no" is a decision with its own cost to the fans.)
+ */
+const _WINTER_SPEND = Object.freeze({ fo_campaign: (o) => 'The season-ticket campaign', fo_facility: (o) => `The ${o.kind === 'concourse' ? 'concourse' : o.kind === 'field' ? 'drainage' : 'training center'} upgrade` });
+export function syncWinterOffers(atMs = clockNow()) {
+  const st = StateManager.get();
+  const gone = (st.inbox || []).filter(c => !c.resolved && _WINTER_SPEND[c.cardId] && c._foOffer && !Finance.canSpend(st, c._foOffer.cost));
+  if (!gone.length) return 0;
+  const ids = new Set(gone.map(c => c.instanceId));
+  StateManager.mutate(s => { s.inbox = (s.inbox || []).filter(c => !ids.has(c.instanceId)); });
+  for (const c of gone) _ourNews(`${_WINTER_SPEND[c.cardId](c._foOffer)} is off the table this winter: club funds no longer cover ${formatK(c._foOffer.cost)}`, atMs);
+  return gone.length;
+}
+
 /** One ballpark or facility upgrade, where the club needs it most. */
 export function deliverFacilityCard(atMs, expiresAtMs) {
   const state = StateManager.get();
@@ -5600,7 +5651,12 @@ function _applyOffseasonAction(action, instance, atMs) {
     case 'os_fa_pass': return true;
     // §112.4 the front office
     case 'fo_tix_change': StateManager.mutate(s => FrontOffice.applyTicketPrice(s, instance._foOffer)); return true;
-    case 'fo_camp_run':   StateManager.mutate(s => { if (Finance.canSpend(s, instance._foOffer.cost)) FrontOffice.applyCampaign(s, instance._foOffer, atMs); }); return true;
+    case 'fo_camp_run': {
+      // §122.60 (withdrawn as soon as the funds can't cover it — syncWinterOffers; this is the last guard)
+      if (!Finance.canSpend(StateManager.get(), instance._foOffer.cost)) { _ourNews(`The season-ticket campaign waits: club funds no longer cover ${formatK(instance._foOffer.cost)}`, atMs); return true; }
+      StateManager.mutate(s => FrontOffice.applyCampaign(s, instance._foOffer, atMs));
+      return true;
+    }
     case 'fo_fac_build': {
       // §122.57 club funds no longer cover it (another winter decision spent them first): it waits, and Recent says so.
       if (!Finance.canSpend(StateManager.get(), instance._foOffer.cost)) { _ourNews(`The ${instance._foOffer.kind} upgrade waits: club funds no longer cover ${formatK(instance._foOffer.cost)}`, atMs); return true; }

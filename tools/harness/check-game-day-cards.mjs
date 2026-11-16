@@ -161,5 +161,50 @@ console.log('How a card comes back');
   check('never before a road game', ![...all(eligibleNow())].some(x => x.startsWith('pg30_')));
 }
 
+// §122.60 a card's effect on the people in it: the manager's and the coaches' relationship, a player's.
+console.log('Relationships');
+{
+  const { REL_UNIT } = CardEngine._relForChecks;
+  const staff = () => SM.get().userTeam.coachingStaff;
+  const rel = (role) => staff()[role]?.relationship ?? 50;
+  SM.mutate(s => { s.inbox = []; s.scheduledCards = []; for (const r of ['manager', 'pitchingCoach', 'hittingCoach', 'benchCoach']) if (s.userTeam.coachingStaff[r]) s.userTeam.coachingStaff[r].relationship = 50; });
+  // Ownership presses about the pitching coach; the GM backs ownership (no): the coach and the manager cool.
+  const a = CardEngine.deliverCardById('coach_pressure_pitching');
+  const pc0 = rel('pitchingCoach'), m0 = rel('manager');
+  CardEngine.resolve(a.instanceId, 'no');
+  check(`backing ownership over the pitching coach: the coach ${pc0} → ${rel('pitchingCoach')}, the manager ${m0} → ${rel('manager')}`,
+        rel('pitchingCoach') === pc0 - 3 * REL_UNIT && rel('manager') === m0 - 2 * REL_UNIT);
+  // A player's loss in the family: let him go (yes) — he remembers it.
+  const b = CardEngine.deliverCardById('pl_bereavement');
+  const pid = b?._tokenPlayers?.pl_player;
+  const r0 = SM.get().players[pid]?.gmRelationship ?? 50;
+  CardEngine.resolve(b.instanceId, 'yes');
+  check(`a player's family loss, time granted: his relationship ${r0} → ${SM.get().players[pid]?.gmRelationship}`, !!pid && SM.get().players[pid].gmRelationship === Math.min(100, r0 + 2 * REL_UNIT));
+  // A player's personal matter, left unanswered: its default does what it does to him, too.
+  const c = CardEngine.deliverCardById('pl_personal_matter');
+  const sp = c?._tokenPlayers?.pl_player;
+  const s0 = SM.get().players[sp]?.gmRelationship ?? 50;
+  CardEngine.expire(c.instanceId, clock.get() + 1000);
+  const after = SM.get().inbox.find(x => x.instanceId === c.instanceId);
+  const def = after?.autoChoice || c.autoResolve || 'no';
+  const want = { yes: 2, no: -1 }[def] ?? 0;
+  check(`a personal matter left unanswered: its default (${def}) moves him too (${s0} → ${SM.get().players[sp]?.gmRelationship})`,
+        !!sp && SM.get().players[sp].gmRelationship === Math.max(0, Math.min(100, s0 + want * REL_UNIT)));
+}
+
+// §122.60 a winter offer stays only while the club can pay for it.
+console.log('Winter offers and club funds');
+{
+  const funds = SM.get().userTeam.finances.funds || 0;
+  const offer = (id, cardId, costK) => ({ instanceId: id, cardId, subject: 'x', body: 'x', yesLabel: 'Build it', noLabel: 'Not this winter', type: 'normal', resolved: false,
+                                          _foOffer: { kind: 'concourse', cost: costK, level: 1 }, _raw: { onYes: 'fo_fac_build', onNo: 'fo_fac_skip' }, arrivedAtMs: clock.get() });
+  SM.mutate(s => { s.inbox = [offer('w-cheap', 'fo_facility', 10), offer('w-dear', 'fo_campaign', funds + 50_000)]; });
+  const n = CardEngine.syncWinterOffers(clock.get());
+  const ids = SM.get().inbox.map(c => c.instanceId);
+  const news = (SM.get().activityFeed || []).slice(-3).map(e => e.text || e.message || '').join(' | ');
+  check(`an offer the funds no longer cover is withdrawn, one they cover stays (${n} withdrawn: ${ids.join(', ')})`, n === 1 && ids.includes('w-cheap') && !ids.includes('w-dear'));
+  check(`…and Recent says why ("${news.slice(-110)}")`, /off the table this winter: club funds no longer cover/.test(news));
+}
+
 console.log(`\n${pass}/${pass + fail} checks passed`);
 process.exit(fail ? 1 : 0);
