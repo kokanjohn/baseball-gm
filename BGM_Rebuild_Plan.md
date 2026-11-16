@@ -12315,3 +12315,8 @@ Raising it is a climate recalibration: more or longer stalled cool-season system
 **Fresh team:** not required.
 - The relationship effects and the winter-offer rule apply from the next card.
 - An existing save's opening slate is long past (the log starts empty for it, §122.57).
+
+### §122.60 addendum — the climate question, decided (GM, Nov 16)
+**Keep the rates as they are.** Most games get played, even with a delay. A postponement is occasional, and the GM can watch the system move across the map toward it. A day completely washed out will be rare, and that's accepted.
+
+North (1.9%) and East (1.5%) stay below the MLB benchmarks of §102.6 by choice. The benchmarks are no longer a target for tuning. §122.51 is complete.
