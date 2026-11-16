@@ -1670,7 +1670,9 @@ function _rosterEventCards(ev, atMs) {
       const p = st.players[ev.playerId];
       const won = ev.teamId === 'user';
       const winner = won ? null : (st.leagueTeams || []).find(t => t.id === ev.teamId)?.name;
-      if (p && _deliverNotice(`claim:${ev.playerId}:${ev.atMs}`, {
+      // §122.66 lost: the next-best fit is a decision (claim, sign, or keep watching), when there is one.
+      if (p && !won && _claimLostCard(st, p, winner, ev.atMs ?? atMs)) delivered++;
+      else if (p && _deliverNotice(`claim:${ev.playerId}:${ev.atMs}`, {
         cardId: won ? 'claim_won' : 'claim_lost', tag: 'ROSTER',
         sender: 'Player Dev.', avatar: '📋', type: won ? 'good' : 'normal',
         subject: won ? `Claim awarded: ${p.name}` : `Claim lost: ${p.name}`,
@@ -5534,6 +5536,65 @@ function _faPosCard(st, p, ev, fit) {
   }), at);
 }
 const atMsNow = () => clockNow();
+
+/**
+ * §122.66 Another club won a waiver claim of ours. The next-best fit for the same role, ours to take
+ * now: another player on waivers (put in a claim), else a free agent (sign), each within a few
+ * points of the one we lost; else Pro Scouting keeps watching the trade market (while it's open).
+ * Nothing at all: false (the plain notice).
+ */
+function _claimLostCard(st, lost, winner, atMs) {
+  const lead = `${winner || 'Another club'} had priority in the claiming order (worse record) and claimed ${_who(lost)}.`;
+  const key = `claim:${lost.id}:${atMs}`;
+  if (_cardsWithKey(st, key).length) return true;
+  const near = (x) => x && x.id !== lost.id && x.teamId !== 'user' && _sameRole(x, lost) && (x.ovr || 0) >= (lost.ovr || 0) - 5;
+  const dropFor = (x) => {
+    const room = FreeAgency.roomFor(st, x);
+    return room.needsDrop ? (room.candidates.find(c => !c.starter)?.player || null) : undefined;
+  };
+  const base = (x, drop) => ({ tag: 'ROSTER', sender: 'Player Dev.', avatar: '📋', type: 'normal',
+    _targetPlayerId: x.id, _playerIds: [lost.id, ...(drop ? [drop.id] : [])], _dropId: drop?.id || null,
+    subject: `Claim lost: ${lost.name}`, autoResolve: 'roster', _rosterKey: key, _autoLabel: 'No answer — passed' });
+  // Another player on waivers.
+  const wav = (st.waiverPool || []).map(id => st.players[id])
+    .filter(x => near(x) && x._waivedBy !== 'user' && !x._userClaim).sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
+  for (const x of wav) {
+    const drop = dropFor(x);
+    if (drop === null || FreeAgency.claimBlocker(st, x.id, drop?.id || null, atMs)) continue;
+    const ends = FreeAgency.waiverEndsAt(x);
+    return !!_deliverAt(_rosterCard(st, { ...base(x, drop), cardId: 'claim_lost',
+      preview: `The next-best fit on waivers: ${_ref(x)}.`,
+      body: `${lead} The next-best fit on waivers is ${_ref(x)}, ${formatK(x.contractSalary || 0)}; the claim window closes ${When.untilDay(ends, atMs)}.`
+          + `${drop ? ` If it's ours, ${drop.name} goes to make room.` : ''}`,
+      yesLabel: `Claim ${x.name}`, noLabel: 'Pass', expiresAtMs: Math.min(ends, atMs + 2 * 86_400_000),
+      _raw: { onYes: 'claim_next', onNo: null, onAuto: null },
+    }), atMs);
+  }
+  // A free agent.
+  const fas = FreeAgency.freeAgentList(st).filter(near).sort((a, b) => (b.ovr || 0) - (a.ovr || 0)).slice(0, 12);
+  for (const x of fas) {
+    const drop = dropFor(x);
+    if (drop === null || FreeAgency.signBlocker(st, x.id, drop?.id || null)) continue;
+    const t = FreeAgency.termsFor(st, x);
+    return !!_deliverAt(_rosterCard(st, { ...base(x, drop), cardId: 'claim_lost',
+      preview: `The next-best fit is a free agent: ${_ref(x)}.`,
+      body: `${lead} The next-best fit is a free agent, ${_ref(x)}: ${formatK(t.salary || 0)}${t.years > 1 ? ` a year for ${t.years} years` : ' for the year'}.`
+          + `${drop ? ` ${drop.name} would go to make room.` : ''}`,
+      yesLabel: `Sign ${x.name}`, noLabel: 'Pass', expiresAtMs: atMs + 2 * 86_400_000,
+      _raw: { onYes: 'fa_pos_sign', onNo: null, onAuto: null },
+    }), atMs);
+  }
+  // Nobody now: the trade market, watched.
+  if (!tradeWindow(st).open) return false;
+  return !!_deliverWatchCard(key, {
+    cardId: 'claim_lost', sender: 'Pro Scouting',
+    subject: `Claim lost: ${lost.name}`,
+    preview: 'Nobody on waivers or in free agency fits the spot right now.',
+    body: `${lead} Nobody on waivers or in free agency fits the spot right now.`,
+    spec: { type: 'role', pos: lost.pos, nativePos: posLabel(lost), primary: primaryPos(lost), excludeId: lost.id },
+    what: `someone to fill ${lost.name}'s role`, atMs,
+  });
+}
 
 /** r167 §122.35 the pitching coach's sim games are over: how far the pitcher got. */
 function _deliverSimReport(ev, atMs) {

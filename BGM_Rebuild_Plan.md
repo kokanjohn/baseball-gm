@@ -12476,3 +12476,29 @@ Before the fix it fails just as the GM saw: counts 8/6/2 → 10/8/3, and Edit, T
 
 **Fresh team:** not required.
 All UI tests pass, both themes. test-swipe-close-ui (dark) and test-wear-ui (light) each failed once and passed on rerun (open item 7, flaky).
+
+## §122.66 — r191: open item 4, a waiver claim lost to another club is a decision
+§91 left one loss as a notice: "Claim lost: X" from Player Dev. said only that a club higher in the claiming order (worse record) took the player, with one button, Understood. The trade version ("X beat us to Y") already offered the next-best option or Keep Watching.
+
+**Now** (`CardEngine._claimLostCard`, from the WAIVER_CLAIMED event when our claim lost), the message offers the next-best fit we can take now. The fit is the same role (`_sameRole`), rated within 5 of the player we lost, the best first. The choices, in order:
+1. **Another player on waivers:** "Claim X" or Pass.
+   - The new action `claim_next` (`FreeAgency.claim`) puts the claim in.
+   - The text gives the salary and when the window closes.
+   - The non-starter who would go to make room is named, if our side is full.
+2. **Else a free agent:** "Sign X" or Pass, through the r168 `fa_pos_sign` action. The terms and who would go to make room are in the text.
+3. **Else,** while the trade window is open, Pro Scouting's watch: Keep Watching or Drop It, the same as the trade card. It checks the trade market every day for two weeks for the role.
+4. **Only with none of these** (trade window closed) does the plain notice remain.
+
+The card keeps the `claim_lost` id and "Claim lost: X" subject. The lost player and the player who would make room are linked.
+
+**check-claim-lost** (new):
+- lost, with another reliever on waivers → Claim X, and Claim puts our claim in;
+- nobody on waivers → Sign the free agent, and Sign makes them ours;
+- nobody anywhere → Pro Scouting's Keep Watching / Drop It;
+- gender-neutral.
+
+§91's "Open" line (the trade card with nobody else fitting) was already closed by §99's watch.
+
+**Fresh team:** not required.
+
+**Suite:** all pass. test-swipe-close-ui (dark) failed in this run and in r190's at the first spring game, "not committed yet", and passed on rerun. It runs on the real clock (open item 9).

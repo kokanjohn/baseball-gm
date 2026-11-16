@@ -30,7 +30,7 @@ import { eventRand } from './Dice.js';
 import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeaching, teachablePositions, startSimGames, activeSimGames, stretchRead } from './PlayerWork.js';
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
 import { setPitchRole } from './Positions.js';   // r163
-import { signBlocker, sign as signFA } from './FreeAgency.js';   // r168
+import { signBlocker, sign as signFA, claimBlocker, claim as claimWaiver } from './FreeAgency.js';   // r168, §122.66
 import { setStrategy, setPenRole } from './Strategy.js';   // r169
 import { startPromo, post as postMoney, canSpend } from './FinanceEngine.js';   // r169
 import { PROMOTIONS } from '../data/constants.js';   // r169
@@ -126,6 +126,12 @@ const simGames = {
 const faPosSign = {
   feasible: (st, c) => !signBlocker(st, c._targetPlayerId, c._dropId || null),
   apply: (d, c, atMs) => signFA(d, c._targetPlayerId, atMs, c._dropId || null),
+};
+
+/** §122.66 a claim on the next-best player on waivers (after another club won the one we wanted). */
+const claimNext = {
+  feasible: (st, c) => !claimBlocker(st, c._targetPlayerId, c._dropId || null) && !st.players[c._targetPlayerId]?._userClaim,
+  apply: (d, c) => { claimWaiver(d, c._targetPlayerId, c._dropId || null); return [{ type: 'WAIVER_CLAIM_ENTERED', playerId: c._targetPlayerId }]; },
 };
 
 /** r169 how the club plays (the batting order, the running game, the hook): the choice the GM tapped. */
@@ -594,6 +600,7 @@ export const CARD_ACTIONS = Object.freeze({
   coach_work:           work,      // r159 §122.31
   teach_position:       teach,     // r166 §122.35
   fa_pos_sign:          faPosSign, // r168 §122.35
+  claim_next:           claimNext, // §122.66
   set_strategy:         strategy,  // r169
   pen_role:             penRole,   // r169
   ticket_promo:         ticketPromo, // r169
