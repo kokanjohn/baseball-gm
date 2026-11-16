@@ -34,7 +34,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r189';
+export const APP_VERSION = 'tfo-v2-r190';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -296,7 +296,55 @@ export function updateHeader(state) {
  * Main entry point. Called once on DOMContentLoaded.
  * Wires EventBus listeners, loads active slot, applies theme/colors.
  */
+// §122.65 init() runs again for every new team (setup → App.init) on the same page: what it wires
+// (EventBus listeners, the shell's buttons, Settings) is wired once, or a second handler on an
+// expander (Edit, Team Colors, Theme) opens it and the first closes it again in the same tap.
+let _busWired = false, _shellWired = false;
+
 export async function init() {
+  if (!_busWired) { _busWired = true; _wireBus(); }
+
+  // Load active slot (restores previous session if one exists)
+  const hasSlot = await StateManager.init();
+
+  if (!hasSlot) {
+    // No saved game — show setup screen
+    _showScreen('setup');
+    const { mount: mountSetup } = await import('./screens/SetupScreen.js');
+    mountSetup();
+    return;
+  }
+
+  const state = StateManager.get();
+
+  if (!state || !state.phase) {
+    // Slot loaded but state is invalid — show setup screen
+    _showScreen('setup');
+    const { mount: mountSetup } = await import('./screens/SetupScreen.js');
+    mountSetup();
+    return;
+  }
+
+  // Apply theme + colors from loaded state
+  initThemeAndColors(state.settings);
+
+  // Update header
+  updateHeader(state);
+
+  // Show main app shell
+  _showScreen('app');
+
+  if (!_shellWired) { _shellWired = true; _wireShell(); }
+
+  const versionLabel = document.getElementById('app-version-label');
+  if (versionLabel) versionLabel.textContent = `The Front Office — v2 · ${APP_VERSION}`;
+  _refreshUpdateStatus();
+
+  await _mountApp(state);
+}
+
+/** The EventBus listeners and the milestone overlay (once a page). */
+function _wireBus() {
   // Wire EventBus listeners
   EventBus.on('card:delivered',      () => _updateInboxBadge());
   EventBus.on('card:resolved',       () => _updateInboxBadge());
@@ -360,37 +408,10 @@ export async function init() {
       StateManager.mutate(s => { s.pendingMilestone = null; });
     }
   });
+}
 
-  // Load active slot (restores previous session if one exists)
-  const hasSlot = await StateManager.init();
-
-  if (!hasSlot) {
-    // No saved game — show setup screen
-    _showScreen('setup');
-    const { mount: mountSetup } = await import('./screens/SetupScreen.js');
-    mountSetup();
-    return;
-  }
-
-  const state = StateManager.get();
-
-  if (!state || !state.phase) {
-    // Slot loaded but state is invalid — show setup screen
-    _showScreen('setup');
-    const { mount: mountSetup } = await import('./screens/SetupScreen.js');
-    mountSetup();
-    return;
-  }
-
-  // Apply theme + colors from loaded state
-  initThemeAndColors(state.settings);
-
-  // Update header
-  updateHeader(state);
-
-  // Show main app shell
-  _showScreen('app');
-
+/** The shell's buttons and the Settings sheet (once a page; every handler reads the state when it runs). */
+function _wireShell() {
   // r145 the club funds pill opens Team → Finances.
   document.getElementById('head-budget')?.addEventListener('click', async () => {
     const TS = await import('./screens/TeamScreen.js');
@@ -445,12 +466,8 @@ export async function init() {
   // Wire settings pickers (listeners only — swatches populated on open)
   _initSettingsPickers();
 
-  // ── Version display + developer menu + update controls ────
+  // ── Developer menu + update controls ────
   // (Replaces the old hidden 700ms long-press with explicit buttons.)
-  const versionLabel = document.getElementById('app-version-label');
-  if (versionLabel) versionLabel.textContent = `The Front Office — v2 · ${APP_VERSION}`;
-  _refreshUpdateStatus();
-
   document.getElementById('settings-open-debug')?.addEventListener('click', async () => {
     settingsModal?.classList.remove('open');
     const { openDebug } = await import('./screens/DebugScreen.js');
@@ -477,7 +494,10 @@ export async function init() {
       set('Update check failed', true);
     }
   });
+}
 
+/** Every boot (a reopen, a new team): the screens, the clocks caught up, the tick. */
+async function _mountApp(state) {
   // ── Mount all screens ──────────────────────────────────────────────────
   // Each screen module registers itself with registerTabReset on mount.
   // Must happen before switchTab() is called.

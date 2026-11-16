@@ -12452,3 +12452,27 @@ Passes in both themes, and test-team-roster-ui passes.
 - check-message-lookahead, a known intermittent failure (it fails in earlier releases' suites too);
 - test-game-pushes-ui (light);
 - test-sheet-close-ui (dark).
+
+## §122.65 — r190: Settings after a new team (Edit, Team Colors, Theme wouldn't open)
+**The GM's report** (r189, after starting the fresh team it needed): in Settings, Edit (Team Info) wouldn't open, and neither would Team Colors or Theme.
+
+**Root cause:** `App.init()` wired the page every time it ran. Setup calls `App.init()` after "Take the Job", on the same page that had already booted, so a new team meant a second set of listeners:
+- **Expanders:** each expander had two click handlers toggling the same panel. The first opened it and the second closed it in the same tap.
+- **EventBus:** the listeners were doubled too (`game:committed` 8 → 10 a team; a page that booted onto setup then built a team already had two). So a final ran `_onGameCommitted` and the push sync twice, and a decision ran the catch-up tick twice.
+- This was there before r189. A fresh team brought it out.
+
+**Fix:** `init()` is split into three parts.
+- `_wireBus()`: the EventBus listeners and the milestone overlay, once a page.
+- `_wireShell()`: the header's buttons, the Settings sheet and its pickers, the developer and update buttons, once a page, at the first boot with a team. Every handler reads the state when it runs.
+- `_mountApp(state)`: every boot. It mounts the screens (already guarded by each screen's `_mounted`), catches the clocks up, starts the tick (guarded), opens the dashboard and syncs push. The version label and update status are refreshed each boot.
+
+**test-settings-newteam-ui** (new; the page builds two teams, as setup does):
+- the EventBus listener counts are unchanged after the second team;
+- Edit opens the fields with the new team's city;
+- Team Colors and Theme open;
+- a theme tap changes the theme.
+
+Before the fix it fails just as the GM saw: counts 8/6/2 → 10/8/3, and Edit, Team Colors and Theme don't open. Both themes pass.
+
+**Fresh team:** not required.
+All UI tests pass, both themes. test-swipe-close-ui (dark) and test-wear-ui (light) each failed once and passed on rerun (open item 7, flaky).
