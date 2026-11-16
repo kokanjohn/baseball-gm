@@ -178,7 +178,18 @@ await page.screenshot({ path: `${out}/staff-sheet-${theme}.png` });
 await page.click('#ts-swap-close'); await page.waitForTimeout(300);
 await page.click('.staff-card-tap[data-staff="manager"]'); await page.waitForTimeout(500);
 const mgr = await page.evaluate(() => document.getElementById('ts-swap-modal')?.innerText || '');
-check('the manager\'s sheet: contract and relationship', /Manager/.test(mgr) && /Contract/.test(mgr) && /Relationship with you/.test(mgr), mgr.slice(0, 200));
+check('the manager\'s sheet: rating, style and what it means, contract and relationship', /Manager/.test(mgr) && /Rating\s*\S.*\(\d+\)/.test(mgr) && /Style\s*(Runner|Station to station|Quick hook|Rides the starters)/.test(mgr)
+      && !/Overruled/.test(mgr) && /Contract/.test(mgr) && /Relationship with you/.test(mgr), mgr.slice(0, 300));
+await page.click('#ts-swap-close'); await page.waitForTimeout(300);
+// §122.64 playing against the manager's style: the sheet says so.
+await page.evaluate(async () => {
+  const SM = await import('/baseball-gm/store/StateManager.js'); const M = await import('/baseball-gm/engine/ManagerEngine.js');
+  SM.mutate(s => { const st = M.styleOf(s.userTeam.coachingStaff.manager); s.userTeam.strategy = { ...(s.userTeam.strategy || {}), [st.part]: 'normal' }; });
+});
+await page.click('.staff-card-tap[data-staff="manager"]'); await page.waitForTimeout(500);
+const mgr2 = await page.evaluate(() => document.getElementById('ts-swap-modal')?.innerText || '');
+check('overruled: the sheet says what the club plays instead', /Overruled: you have (Run Normally|Normal Hook)/.test(mgr2), mgr2.slice(0, 300));
+await page.screenshot({ path: `${out}/staff-manager-${theme}.png` });
 await page.click('#ts-swap-close'); await page.waitForTimeout(300);
 // r145 the club funds pill in the header opens Team → Finances (from another tab).
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('league'); });
@@ -198,6 +209,10 @@ await page.waitForTimeout(300);
 await page.click('#ltab-teams'); await page.waitForTimeout(400);
 await page.click('.lgt-card[data-team]:not([data-team="user"])'); await page.waitForTimeout(600);
 const tm = await page.evaluate(() => ({ text: document.getElementById('league-team-modal')?.innerText || '', rows: document.querySelectorAll('#league-team-modal .ltm-row').length }));
+check('the club\'s sheet names its manager, rating and style', /MANAGER\s*\S+ \d{2}\s*(Runner|Station to station|Quick hook|Rides the starters)/.test(tm.text), tm.text.slice(0, 300));
+const ltmW = await page.evaluate(() => { const e = document.querySelector('#league-team-modal .ltm-stats'); return e.scrollWidth - e.clientWidth; });
+check(`the club's sheet: the stats fit across (${ltmW}px over)`, ltmW <= 1);
+await page.screenshot({ path: `${out}/league-team-manager-${theme}.png` });
 check('Teams: tapping a club opens its sheet — standing, rating, payroll, lineup, rotation, bullpen, bench',
       /Division/.test(tm.text) && /Team rating/i.test(tm.text) && /Payroll/i.test(tm.text) && /Lineup/i.test(tm.text) && /Rotation/i.test(tm.text) && /Bullpen/i.test(tm.text) && tm.rows >= 20, tm.text.slice(0, 300));
 await page.screenshot({ path: `${out}/team-sheet-${theme}.png` });

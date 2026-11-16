@@ -12382,3 +12382,73 @@ Six whole player rows now show (was 2). Upright is unchanged.
 Passes in both themes, and test-team-roster-ui passes.
 
 **Fresh team:** not required.
+
+## §122.64 — r189: open item 3, managers with a rating and a style (every club's)
+**The GM chose:** a rating and a style for every club's manager, ours and the CPU clubs', so a good manager can turn up on the market.
+
+**The model** (`engine/ManagerEngine.js`, pure):
+- Where the manager lives: ours is `userTeam.coachingStaff.manager`; a CPU club's is `team.manager`.
+- **Rating:** `quality`, 40–90 (60 is league-typical), from `Coach.rollQuality`. Our manager is paid by it (`salaryFor`: about $160K–$295K).
+- **Style:** one of four, each about one part of `team.strategy`:
+  - **Runner** → Run More;
+  - **Station to station** → Run Less;
+  - **Quick hook** → Quick Hook;
+  - **Rides the starters** → Long Leash.
+
+**The rating in play** (`lateClosePoints`, SimEngine):
+- In a late, close game (the 7th on, within two runs, no spring, no All-Star Game), each side's hitters get rating points on contact and power, and its pitchers on stuff and control.
+- The points: +2 at 90, 0 at 60, −1.3 at 40.
+- `_buildLineup` carries `mgr`, `gs.mgr` holds both sides' points, and `simulateAtBat` adds them through `context.mgr`. A resumed game keeps them.
+- Calibrated with check-managers on the same schedule and dice, the CPU managers held at 60:
+  - an elite manager (90) is about +2.4 wins a season;
+  - a poor one (40) about −1.3.
+
+**The style in play:**
+- A CPU club always plays its manager's style (`applyStyle` on hiring), so the clubs now differ in running and hook.
+- A new league deals the CPU styles from a shuffled deck, so there are about as many quick hooks as long leashes. With purely random styles, one season sim had the league's starters at 4.76 IP/GS (test band 4.8–6.6; 4.95 before). With the deck it's 4.95 again.
+- Ours starts the club on the style (a new franchise or a new hire). The GM can overrule it through the Manager's and Bench Coach's settings. While overruled:
+  - the late, close edge is halved;
+  - each regular-season game takes 0.5 off the relationship (`afterGame`, in `_commitAt`), down to a floor of 15. Twenty games against the style is −10.
+- Compose:
+  - The Manager on the hook states the style, leans the advice toward it when the numbers don't decide, and says when the club is playing it the GM's way instead.
+  - The Bench Coach on running says what the manager wants, and that the manager isn't happy when overruled.
+
+**The winter:**
+- `cpuWinter`, at the start of `beginOffseason` before the records are locked:
+  - a CPU club under .420 lets its manager go 60% of the time, under .470 25%;
+  - any manager leaves on their own 4% of the time.
+- The new manager is the best on the market (40% of the time) or someone new. The ones let go go on the market (`state.managerPool`: two winters, at most 8).
+- The moves reach the Recent feed and the League wire: "Ironfield Bears let manager X go after a 60–102 season; Y takes over".
+- **Our search:** "Open a search" on the contract card no longer swaps in a random name.
+  - The manager stays through the winter (`searching`).
+  - A few hours later, the Front Office's "Hiring: manager" card (`deliverManagerHireCard`, manager gate) brings two candidates:
+    - the best manager on the market (with the club and record they were let go after), or else a strong outside hire who asks more;
+    - a cheaper one with another style.
+  - With no decision by spring, the second is hired.
+  - `applyManagerHire` puts the hire on a two-year deal, starts the club on their style, and takes them off the market (morale −3, as before).
+- The contract card now reads the manager ("X is a solid manager (rated 64) who goes to the bullpen early"), and "A 2 years extension" is now "A 2-year extension".
+- No manager shares a name with another or with our staff. Coach candidates and token people skip the managers' names.
+
+**UI:**
+- The manager's sheet (Team → Staff) shows the Rating and a Style row with what it means. When the GM is overruling the style, the row says "Overruled: you have Normal Hook".
+- League → a club's sheet shows the Manager (name, rating, style) beside the rating, payroll and roster.
+
+**Tests:**
+- check-managers (new):
+  - every club has a manager, unique names, ours paid by the rating;
+  - every club starts on its style, and the styles vary;
+  - the win effect and overruled halving;
+  - the points table;
+  - relationship wear and its floor;
+  - the CPU winter and the market;
+  - the candidates, gender-neutral text;
+  - the hire;
+  - our search end to end through the cards (contract card, search, candidates card holding the gate, the hire clearing it).
+- test-fa-screens-ui: the manager's sheet (rating, style, overruled) and the club sheet's manager, in both themes.
+
+**Fresh team: required** (new league data: every club's manager).
+
+**Suite:** all pass except three that pass on rerun:
+- check-message-lookahead, a known intermittent failure (it fails in earlier releases' suites too);
+- test-game-pushes-ui (light);
+- test-sheet-close-ui (dark).

@@ -24,6 +24,7 @@ import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teach
 import { PLAYER_WORK, POSITION_RULES } from '../data/constants.js';
 import { posLabel, pitchRoles } from './Positions.js';   // r163 §122.35
 import { strategyOf, battingOrder, recommendOrder, styleChoices, ORDER_STYLES, RUN_STYLES, HOOK_STYLES, penRolesOf } from './Strategy.js';   // r169
+import * as Managers from './ManagerEngine.js';   // §122.64
 import { bullpenRoles } from './PitchingEngine.js';   // r169
 import { PROMOTIONS, FIELD_CARE } from '../data/constants.js';   // r169, r170
 import { drainageAt, drainageLevel, prepCostK } from './FieldCare.js';   // r170
@@ -812,8 +813,15 @@ W.mgr_hook = (f, r, who) => {
     out.push(f.season === 'spring' ? `In spring the starters are building up, so the hook doesn't apply until Opening Day.` : `It's too early to judge the two groups against each other.`);
     rec = cur;
   }
+  // §122.64 the manager's own style, when it's about the hook (it leans the advice when the numbers don't).
+  const mine = Managers.styleOf(f.u.coachingStaff?.manager);
+  if (mine?.part === 'hook') {
+    out.push(mine.setting === 'quick' ? `I'm a quick-hook manager. I'd rather go to the bullpen a batter early than a batter late.` : `I like to let my starters work deep.`);
+    if (rec === 'normal' || rec === cur) rec = mine.setting;
+  }
   out.push(`A quick hook means fresher arms on the mound and a busier bullpen. A long leash rests the bullpen, but tired starters give up more late and pile up workload.`);
   out.push(cur === 'normal' ? `Right now I'm going to the bullpen when the starter's stamina runs out.` : cur === 'quick' ? `Right now I'm going to the bullpen early.` : `Right now I'm letting the starters work deep.`);
+  if (mine?.part === 'hook' && cur !== mine.setting) out.push(`That's your call, not how I'd run it.`);
   return { body: out, memo: { hook: cur, rec }, decision: { team: true, onYes: 'set_strategy', choices: styleChoices('hook', cur, rec), expiresInMs: 3 * MS_DAY } };
 };
 
@@ -850,6 +858,11 @@ W.bc_tactics = (f, r, who) => {
     out.push(spd >= 60 ? `We have speed in this lineup (${Math.round(spd)} on average). I'd use it.` : spd <= 45 ? `This isn't a fast lineup (${Math.round(spd)} on average). Running costs us more outs than it gains.` : `We have some speed, not a lot. The fast runners should pick their spots.`);
   }
   out.push(cur === 'normal' ? `Right now the fast runners pick their spots.` : cur === 'more' ? `Right now we're running a lot.` : `Right now we're holding the runners.`);
+  // §122.64 the manager's style, when it's about the running game.
+  const mg = f.u.coachingStaff?.manager, mine = Managers.styleOf(mg);
+  if (mine?.part === 'run' && mg?.name) out.push(mine.setting === 'more'
+    ? `${mg.name} wants to run${cur !== 'more' ? `, and isn't happy we're not` : ''}.`
+    : `${mg.name} would rather hold the runners${cur !== 'less' ? `, and isn't happy we're not` : ''}.`);
   return { body: out, memo: { run: cur, rec }, decision: { team: true, onYes: 'set_strategy', choices: styleChoices('run', cur, rec), expiresInMs: 3 * MS_DAY } };
 };
 

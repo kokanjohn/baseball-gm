@@ -84,6 +84,7 @@ import { setFlag, selectCardVariant } from './NarrativeEngine.js';
 import { buildTokenMap, applyTokens, hasUnresolvedTokens, formatK, bullpenRecentERA, playerTokenValues, intlTypeOf } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as Coach from './CoachEngine.js';
+import * as Managers from './ManagerEngine.js';   // §122.64
 import { isDiamond, worthOf } from './Diamonds.js';
 import * as FrontOffice from './FrontOffice.js';
 import * as Development from './DevelopmentEngine.js';
@@ -5101,7 +5102,8 @@ export function deliverManagerContractCard(atMs, expiresAtMs) {
     subject: `${m.name || 'The manager'} — contract decision`,
     preview: 'The manager\'s contract is up. Extend, or open a search?',
     body: `${m.name || 'The manager'}'s contract is up after a ${last.wins ?? '—'}–${last.losses ?? '—'} season. `
-        + `A ${_years(MANAGER_EXTENSION_YEARS_UI)} extension keeps the clubhouse steady (salary up 5%). Opening a search brings in a new voice — and some uncertainty. `
+        + `${_managerRead({ ...m, background: '' }).replace(/^[^:]+: /, `${m.name || 'The manager'} is `)} `
+        + `A ${MANAGER_EXTENSION_YEARS_UI}-year extension keeps the clubhouse steady (salary up 5%). A search brings in a new voice: two candidates to choose from. `
         + `With no decision by the time spring training opens, ${m.name || 'the manager'} stays on a one-year deal — knowing we didn't choose to extend.`,
     yesLabel: `Extend ${_years(MANAGER_EXTENSION_YEARS_UI)}`, noLabel: 'Open a search',
     expiresAtMs,
@@ -5111,6 +5113,35 @@ export function deliverManagerContractCard(atMs, expiresAtMs) {
   return _deliverAt(card, atMs);
 }
 const MANAGER_EXTENSION_YEARS_UI = 2;
+
+/** "Grattan, let go by the Tideland Anchors after a 60–102 season: a solid manager (rated 64) who goes to the bullpen early." */
+function _managerRead(x) {
+  const w = Managers.qualityWord(x.quality);
+  return `${x.name}${x.background ? `, ${x.background}` : ''}: ${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w} manager (rated ${x.quality}) who ${Managers.styleWords(x)}.`;
+}
+
+/** §122.64 The search: two candidates for manager; the one we pass on stays on the market. Due by spring. */
+export function deliverManagerHireCard(atMs, expiresAtMs) {
+  const state = StateManager.get();
+  const m = state.userTeam.coachingStaff?.manager || {};
+  if (!m.searching) return null;
+  const [A, B] = Managers.candidates(state, { taken: new Set([m.name]) });
+  const card = _rosterCard(state, {
+    cardId: 'os_mgr_hire', tag: 'MANAGER_CONTRACT', sender: 'Front Office', avatar: '🤝', type: 'normal',
+    _rosterKey: `os:mgrhire:${state.seasonNum}`, _mgrCands: [A, B], _osGate: 'manager',
+    subject: 'Hiring: manager',
+    preview: `${A.name} (rated ${A.quality}, ${Managers.styleLabel(A).toLowerCase()}) or ${B.name} (rated ${B.quality}, ${Managers.styleLabel(B).toLowerCase()}).`,
+    body: `The search to replace ${m.name || 'our manager'} has two candidates. `
+        + `${_managerRead(A)} The ask: ${formatK(A.salary)} a year for two years. `
+        + `${_managerRead(B)} The ask: ${formatK(B.salary)} a year for two years. `
+        + `The club starts on the new manager's style. With no decision by the time spring training opens, we hire ${B.name}.`,
+    yesLabel: `Hire ${A.name} (${formatK(A.salary)})`, noLabel: `Hire ${B.name} (${formatK(B.salary)})`,
+    expiresAtMs,
+    _raw: { onYes: 'os_mgr_hire_a', onNo: 'os_mgr_hire_b', onAuto: 'os_mgr_hire_b' },
+    _autoLabel: `No decision — ${B.name} hired`,
+  });
+  return _deliverAt(card, atMs);
+}
 
 // §112.2 THE COACHES — the day-2 evaluation and the hiring market.
 const _UNIT = { pitchingCoach: 'the pitching staff', hittingCoach: 'the lineup', bullpenCoach: 'the bullpen', benchCoach: 'the bases and the late-game work',
@@ -5185,7 +5216,7 @@ export function deliverCoachHireCard(role, atMs, expiresAtMs) {
   if (!staff[role]?.vacant) return null;
   const U = state.offseason?.review?.units || null;
   const info = Coach.ROLE_INFO[role];
-  const taken = new Set([...Object.values(staff).map(x => x?.name), state.userTeam.ownerName,
+  const taken = new Set([...Object.values(staff).map(x => x?.name), state.userTeam.ownerName, ...Managers.managerNames(state),
     ...[...(state.inbox || []), ...(state.scheduledCards || [])].flatMap(c => (c._coachCands || []).map(x => x.name))].filter(Boolean));
   const [A, B] = Coach.candidates(state, role, U, { taken });
   const need = Coach.neededSpecialty(role, U, state);
@@ -5620,7 +5651,19 @@ function _applyOffseasonAction(action, instance, atMs) {
     case 'os_walk':         StateManager.mutate(s => Offseason.applyLetWalk(s, id, atMs)); return true;
     case 'os_walk_auto':    StateManager.mutate(s => Offseason.applyLetWalk(s, id, atMs, { auto: true })); return true;
     case 'os_mgr_extend':   StateManager.mutate(s => Offseason.applyManagerDecision(s, 'extend'));  return true;
-    case 'os_mgr_replace':  StateManager.mutate(s => Offseason.applyManagerDecision(s, 'replace')); return true;
+    case 'os_mgr_replace': {
+      StateManager.mutate(s => Offseason.applyManagerDecision(s, 'replace'));
+      // §122.64 the candidates, a few hours later (before spring).
+      const os = StateManager.get().offseason;
+      if (os) deliverManagerHireCard(Math.min(atMs + (2 + eventRand() * 3) * 3600_000, os.springAt - 6 * 3600_000), os.springAt);
+      return true;
+    }
+    case 'os_mgr_hire_a':
+    case 'os_mgr_hire_b': {
+      const cand = (instance._mgrCands || [])[action === 'os_mgr_hire_a' ? 0 : 1];
+      StateManager.mutate(s => { if (cand && s.userTeam.coachingStaff?.manager?.searching) Offseason.applyManagerHire(s, cand); });
+      return true;
+    }
     case 'os_mgr_auto':     StateManager.mutate(s => Offseason.applyManagerDecision(s, 'auto'));    return true;
     // §112.2 the coaches
     case 'os_coach_renew':  StateManager.mutate(s => Offseason.applyCoachDecision(s, instance._coachRole, 'renew', { salary: instance._coachAsk })); return true;
@@ -5957,7 +6000,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'os_owner_accept', 'os_owner_push', 'os_owner_auto',
   'os_priority_a', 'os_priority_b',
   'os_resign', 'os_walk', 'os_walk_auto',
-  'os_mgr_extend', 'os_mgr_replace', 'os_mgr_auto',
+  'os_mgr_extend', 'os_mgr_replace', 'os_mgr_auto', 'os_mgr_hire_a', 'os_mgr_hire_b',
   'os_coach_renew', 'os_coach_keep', 'os_coach_letgo', 'os_coach_fire', 'os_hire_a', 'os_hire_b',
   'os_fa_sign', 'os_fa_pass',
   'os_extend', 'os_extend_pass', 'os_release', 'os_release_keep',

@@ -37,6 +37,8 @@ import * as GameEngine from '../../engine/GameEngine.js';
 import { getRosterNeeds } from '../../engine/TransactionEngine.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as Coach from '../../engine/CoachEngine.js';
+import * as Managers from '../../engine/ManagerEngine.js';   // §122.64
+import { strategyOf, RUN_STYLES, HOOK_STYLES } from '../../engine/Strategy.js';
 import * as When from '../../engine/When.js';
 import { posLabel, eligibleAt, pitchRoles } from '../../engine/Positions.js';   // r163 §122.35
 
@@ -908,6 +910,12 @@ const STAFF_LABELS = { manager: 'Manager', pitchingCoach: 'Pitching Coach', hitt
                        bullpenCoach: 'Bullpen Coach', scoutingDirector: 'Scouting Director' };
 
 /** r145 a staff member's sheet: rating and specialty (coaches and the scouting director), background, pay, contract, the relationship. */
+/** §122.64 the club's setting for the part of the game the manager's style is about ("Normal Hook"). */
+function _settingNow(team, m) {
+  const part = Managers.styleOf(m)?.part, k = strategyOf(team)[part];
+  return (part === 'run' ? RUN_STYLES : HOOK_STYLES)[k]?.label || k;
+}
+
 function _openStaffSheet(state, key) {
   const d = state.userTeam?.coachingStaff?.[key];
   if (!d || d.vacant) return;
@@ -922,6 +930,8 @@ function _openStaffSheet(state, key) {
   const words = Coach.specialtyWords(key, d.specialty);
   const rows = [
     Number.isFinite(d.quality) ? row('Rating', `${cap(Coach.qualityWord(d.quality))} (${d.quality})`) : '',
+    key === 'manager' && Managers.styleOf(d) ? row('Style', _escape(Managers.styleLabel(d)),
+      _escape(Managers.overruled(state.userTeam, d) ? `Overruled: you have ${_settingNow(state.userTeam, d)}` : `${Managers.styleWords(d).replace(/^./, c => c.toUpperCase())}`)) : '',
     d.specialty ? row('Specialty', _escape(cap(Coach.specialtyShort(d.specialty))), words ? _escape(cap(words.replace(/^an? [^:]+: /, ''))) : '') : '',
     d.background ? row('Background', _escape(cap(d.background))) : '',
     row('Salary', `${formatSalary(d.salary || 0)} a year`),

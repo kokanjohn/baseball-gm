@@ -67,6 +67,7 @@ import { injuriesFromPlays, beginInjury, clearInjuryUpdate } from './InjuryEngin
 
 import { computeOVR, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { STAFF_NAMES } from '../data/player-names.js';
+import * as Managers from './ManagerEngine.js';   // §122.64
 import {
   generatePlays,
   accumulateStats,
@@ -416,6 +417,11 @@ export async function startNewGame(config) {
 
     // Owner — named so ownership cards read "{owner_name} wants…" (§60).
     s.userTeam.ownerName = pickStaffName();
+
+    // §122.64 every club's manager has a rating and a style; each club starts on its manager's style.
+    Object.assign(s.userTeam.coachingStaff.manager, Managers.rollManager(eventRand));
+    Managers.applyStyle(s.userTeam);
+    Managers.staffLeague(s, eventRand, new Set(staffPool.slice(0, staffIdx)));
 
     // Schedule
     s.schedule       = schedule;
@@ -882,6 +888,7 @@ function _commitAt(gameIndex) {
       // series. Only regular-season games count in the standings.
       const kind = g.isPlayoff ? 'playoff' : g.isSpring ? 'spring' : 'regular';
       _creditResult(s.userTeam, outcome, kind);
+      if (kind === 'regular') Managers.afterGame(s.userTeam);   // §122.64 a game played against the manager's style
 
       // The opponent's record gets the mirror result — this game IS their
       // game for the date (one league calendar, §67).
@@ -3498,6 +3505,9 @@ function _feedLeagueMoves(events) {
   const level = st.leagueTalentOffset || 0;
   const abbrOf = (id) => id === 'user' ? st.userTeam.abbr : (st.leagueTeams.find(t => t.id === id)?.abbr || '');
   const lines = [];
+  // §122.64 a CPU club's new manager.
+  const mgrText = (e) => `${e.fired ? `${_clubName(st, e.teamId)} let manager ${e.out} go after a ${e.record} season` : `Manager ${e.out} leaves ${_clubName(st, e.teamId)}`}; ${e.in} takes over`;
+  for (const e of events || []) if (e.type === 'MANAGER_CHANGE') lines.push([abbrOf(e.teamId), mgrText(e), e.atMs]);
   for (const e of events || []) {
     const p = st.players[e.playerId];
     if (!p) continue;
@@ -3511,6 +3521,7 @@ function _feedLeagueMoves(events) {
   }
   // §90 the League wire keeps every signing, and the notable departures.
   const wire = [];
+  for (const e of events || []) if (e.type === 'MANAGER_CHANGE') wire.push({ atMs: e.atMs, kind: 'manager', teamIds: [e.teamId], text: mgrText(e) });
   for (const e of events || []) {
     const p = st.players[e.playerId];
     if (!p) continue;

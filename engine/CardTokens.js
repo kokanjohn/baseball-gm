@@ -365,6 +365,7 @@ function _outsideNames(state) {
 
 function _pickPerson(state) {
   const taken = new Set(Object.values(state.userTeam?.coachingStaff || {}).map(s => s?.name));
+  for (const t of state.leagueTeams || []) if (t.manager?.name) taken.add(t.manager.name);   // §122.64 never another club's manager
   const pool  = STAFF_NAMES.filter(n => !taken.has(n));
   return _pick(pool) || 'Our lead scout';
 }

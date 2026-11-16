@@ -80,6 +80,7 @@ import {
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
 import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost } from './Positions.js';
 import { battingOrder, strategyOf, runStyle, hookStyle } from './Strategy.js';   // r169
+import { lateClosePoints } from './ManagerEngine.js';   // §122.64
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -411,7 +412,7 @@ function _generateResumption(game, userTeam, opponentTeam, players, context) {
       });
       sl.id = sub.id; sl.subbed = false; sl.sub = true;
     }
-    lineups[side] = { slots, bench, bullpen: fresh[side].bullpen, roles: fresh[side].roles };
+    lineups[side] = { slots, bench, bullpen: fresh[side].bullpen, roles: fresh[side].roles, mgr: fresh[side].mgr };
   }
   // A runner who has left: whoever took his place in the order runs for him.
   const bases = { ...R.bases };
@@ -485,6 +486,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     userTarget: _hooked(_pitcherTargetInnings(userSP && players[userSP.id], { exhibition, isSpring, springNum: game?.index }), exhibition || isSpring ? null : userLineup.hook),
     oppTarget:  _hooked(_pitcherTargetInnings(oppSP && players[oppSP.id], { exhibition, isSpring, springNum: game?.index }), exhibition || isSpring ? null : oppLineup.hook),
     userRuns: 0, oppRuns: 0,
+    mgr: { user: userLineup.mgr || 0, opp: oppLineup.mgr || 0 },   // §122.64 each manager's late, close-game points
     // §118 injuries on the field: the season year (for age), and who has already left hurt.
     injuryYear: ctx.injuryYear ?? null,
     hurt: new Set(),
@@ -884,8 +886,12 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     }
     // r167 §122.35 a starter working in relief: the short-stint boost (by age)
     const shortStint = gs[`${pSide}Role`] !== ROLE.STARTER && pitcher ? reliefBoost(pitcher, gs.injuryYear != null ? computeAge(pitcher.dob, gs.injuryYear) : null) : null;
+    // §122.64 the 7th on, within two runs: each side's manager has a hand in it.
+    const batRuns = (isUserBatting ? gs.userScore : gs.oppScore) + halfRuns, fieldRuns = isUserBatting ? gs.oppScore : gs.userScore;
+    const mgr = !isSpring && !gs.exhibition && inning >= 7 && Math.abs(batRuns - fieldRuns) <= 2
+      ? { bat: gs.mgr?.[isUserBatting ? 'user' : 'opp'] || 0, pitch: gs.mgr?.[isUserBatting ? 'opp' : 'user'] || 0 } : null;
     const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
-      { inning, isSpring, norms: gs.norms, pitcherTired, relief: shortStint,
+      { inning, isSpring, norms: gs.norms, pitcherTired, relief: shortStint, mgr,
         scoutHit: gs.scout ? (isUserBatting ? gs.scout.bat : gs.scout.pitch) : 1,
         hrMod: gs.env?.hrMod, hitEnv: gs.env?.hitMod, walkMod: gs.env?.walkMod });
     // Increment the THROWING pitcher's batters-faced count. When the user is
@@ -1098,13 +1104,14 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   const psr = trueRatings(pitcher);
 
   // Apply injury penalty if active
-  const contact  = _effectiveSR(batter,  'contact',  sr.contact);
-  const power    = _effectiveSR(batter,  'power',    sr.power);
+  const mb = context.mgr?.bat || 0, mp = context.mgr?.pitch || 0;   // §122.64 the managers, late and close
+  const contact  = _effectiveSR(batter,  'contact',  sr.contact) + mb;
+  const power    = _effectiveSR(batter,  'power',    sr.power) + mb;
   const speed    = _effectiveSR(batter,  'speed',    sr.speed);
   // §112.2 a late-innings bullpen coach: our relievers from the eighth on.
   const late     = _staff?.late && pitcher.teamId === 'user' && pitcher.pos === 'RP' && inning >= 8 ? _staff.late : 0;
-  const stuff    = _effectiveSR(pitcher, 'stuff',    psr.stuff) + late + (context.relief?.stuff || 0);      // r167 short stint
-  const control  = _effectiveSR(pitcher, 'control',  psr.control) + late + (context.relief?.control || 0);
+  const stuff    = _effectiveSR(pitcher, 'stuff',    psr.stuff) + late + mp + (context.relief?.stuff || 0);      // r167 short stint
+  const control  = _effectiveSR(pitcher, 'control',  psr.control) + late + mp + (context.relief?.control || 0);
 
   // ── Sacrifice bunt check ──────────────────────────────────────
   // Eligible when: low-power batter, runner(s) on, < 2 outs, late inning
@@ -2632,6 +2639,7 @@ function _buildLineup(team, players, isCPU) {
     roles,
     defense: lineupSlots.length === 9 ? defenseOf(lineupSlots, players) : null,   // r165 §122.35 who's out of position
     run: runStyle(team), hook: hookStyle(team),   // r169 how the club plays (Strategy)
+    mgr: lateClosePoints(team),                   // §122.64 the manager's edge in a late, close game
   };
 }
 

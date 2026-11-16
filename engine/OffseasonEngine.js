@@ -83,11 +83,12 @@ import {
   HITTER_TARGET,
   PITCHER_TARGET,
 } from './RosterEngine.js';
-import { STAFF_NAMES, PLAYER_SURNAMES } from '../data/player-names.js';
+import { PLAYER_SURNAMES } from '../data/player-names.js';
 import { uniqueName, namesInUse, surnameOf } from './Names.js';
 import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
 import * as Coach from './CoachEngine.js';
+import * as Managers from './ManagerEngine.js';   // §122.64
 import { trainingWinterBonus } from './FrontOffice.js';
 import { fillsNeed } from './LeagueTrades.js';
 import { clockNow } from './Clock.js';
@@ -408,6 +409,7 @@ export function beginOffseason(draft, atMs) {
     Finance.seasonEndReview(draft, atMs, t.id);
     Finance.cpuNextTarget(draft, t.id);
   }
+  const mgrMoves = Managers.cpuWinter(draft, atMs);   // §122.64 a losing season can cost a CPU manager the job
   _lockSeason(draft, atMs);
   const reps = _playingTime(draft);   // r162 §122.34 (before the season's lines are archived)
   _archiveStats(draft);
@@ -433,7 +435,7 @@ export function beginOffseason(draft, atMs) {
   draft.userTeam._ownerWinTarget = nextWinTarget(draft);
   const out = _retirements(draft, atMs, nextYear);
   if (posTurn.length) out.push({ type: 'POSITIONS_TURN', teamId: 'user', changes: posTurn, atMs });
-  return out;
+  return [...out, ...mgrMoves];
 }
 
 function _lockSeason(draft, atMs) {
@@ -987,6 +989,15 @@ export function applyOwnership(draft, offer, mode) {
   return { payrollTarget: target, trust };
 }
 
+/** §122.64 Hire one of the search's candidates (a new voice: the clubhouse takes a moment). */
+export function applyManagerHire(draft, cand) {
+  const u = draft.userTeam;
+  const r = Managers.hire(draft, cand, (draft.seasonNum || 1) + 1);
+  u.managerConfidence = 55;
+  u.morale = Math.max(0, (u.morale || 50) - 3);
+  return r;
+}
+
 export function managerContractIsUp(draft) {
   const m = draft.userTeam?.coachingStaff?.manager;
   return !!m && (m.contractExpiry ?? 99) <= (draft.seasonNum || 1) + 1;
@@ -1004,13 +1015,9 @@ export function applyManagerDecision(draft, mode) {
     return { name: m.name };
   }
   if (mode === 'replace') {
-    const taken = new Set(Object.values(u.coachingStaff).map(s => s?.name).concat(u.ownerName));
-    const name = _shuffle(STAFF_NAMES.filter(n => !taken.has(n)))[0] || 'New Manager';
-    const prev = m.name;
-    Object.assign(m, { name, contractExpiry: start + MANAGER_EXTENSION_YEARS, relationship: 50, managerConfidence: 55 });
-    u.managerConfidence = 55;
-    u.morale = Math.max(0, (u.morale || 50) - 3);
-    return { name, prev };
+    // §122.64 a search: the manager stays through the winter; the candidates card (CardEngine) makes the hire.
+    m.searching = true;
+    return { name: m.name };
   }
   m.contractExpiry = start + 1;
   u.managerConfidence = Math.max(0, (u.managerConfidence || 60) + MANAGER_AUTO_CONFIDENCE);

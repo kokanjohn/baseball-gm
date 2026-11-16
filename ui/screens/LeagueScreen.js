@@ -36,6 +36,7 @@ import * as Finance from '../../engine/FinanceEngine.js';
 import { PHASE } from '../../data/constants.js';
 import * as When from '../../engine/When.js';
 import { primaryPos, pitchRoles, eligibleAt, posLabel } from '../../engine/Positions.js';   // r163 §122.35
+import * as Managers from '../../engine/ManagerEngine.js';   // §122.64
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -932,6 +933,7 @@ function _openLeagueTeamModal(team, state) {
     entry && place > 0 ? `${formatGB(entry.gb)} GB` : '',
     team.streak ? `Streak ${formatStreak(team.streak)}` : '',
   ].filter(Boolean).join(' · ');
+  const mgr = Managers.managerOf(isUser ? state.userTeam : team);   // §122.64
   let rating = null, payroll = null;
   try { rating = Roster.teamRating(state, id); } catch { /* not rated */ }
   try { payroll = Finance.payrollOf(state, id); } catch { /* no books */ }
@@ -979,6 +981,7 @@ function _openLeagueTeamModal(team, state) {
         ${rating != null ? `<div><div class="ltm-k">Team rating</div><div class="ltm-v">${rating}</div></div>` : ''}
         ${payroll != null ? `<div><div class="ltm-k">Payroll</div><div class="ltm-v">${_money(payroll)}</div></div>` : ''}
         <div><div class="ltm-k">Roster</div><div class="ltm-v">${roster.length}</div></div>
+        ${mgr?.name ? `<div class="ltm-mgr"><div class="ltm-k">Manager</div><div class="ltm-v">${_escape(mgr.name)}${Number.isFinite(mgr.quality) ? ` <span class="ltm-mq">${mgr.quality}</span>` : ''}</div>${Managers.styleLabel(mgr) ? `<div class="ltm-ms">${_escape(Managers.styleLabel(mgr))}</div>` : ''}</div>` : ''}
       </div>
       <div class="modal-divider" style="flex-shrink:0;"></div>
       <div style="overflow-y:auto;flex:1;padding-bottom:max(16px,env(safe-area-inset-bottom));">
@@ -1191,6 +1194,7 @@ function _injectCSS() {
     .ltm-stats{display:flex;gap:22px;padding:0 20px 12px;flex-shrink:0;}
     .ltm-k{font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);}
     .ltm-v{font-size:17px;font-weight:800;color:var(--text);margin-top:1px;}
+    .ltm-mgr{min-width:0;} .ltm-mgr .ltm-v{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .ltm-mq{color:var(--muted);font-weight:700;} .ltm-ms{font-size:11px;color:var(--muted);margin-top:1px;white-space:nowrap;}
     .ltm-head{padding:8px 20px 4px;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);background:var(--surface2);}
     .ltm-row{display:flex;align-items:center;gap:10px;width:100%;padding:9px 20px;border:0;border-bottom:1px solid var(--border);background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;}
     .ltm-row:active{background:var(--surface2);}
