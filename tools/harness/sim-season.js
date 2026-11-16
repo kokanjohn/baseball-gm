@@ -18,7 +18,7 @@ import * as SM from '../../store/StateManager.js';
 import { startNewGame, tick, commitGame, buildCardContext, advanceClock } from '../../engine/GameEngine.js';
 import { getRosterNeeds, auditRosters, rankPickups, signPickup, fillShortRosters } from '../../engine/TransactionEngine.js';
 import { CARD_ACTIONS } from '../../engine/CardActions.js';
-import { onRelease, HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
+import { cardRepeatRule, onRelease, HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation, playRuns } from '../../engine/SimEngine.js';
 import { voiceProblems, RULE_NAMES } from './voice-rules.mjs';
@@ -56,9 +56,18 @@ const SEED  = parseInt(process.argv[3] || '1', 10);
 
 // ── Checklist plumbing ───────────────────────────────────────────
 const results = [];
+// (DUMP_CARDS: how many game days each pool card could have been dealt — CardEngine.cardDebug)
+const eligSeen = {};
+if (process.env.DUMP_CARDS) import('../../engine/CardEngine.js').then(CE => { CE.cardDebug.onEligible = (moment, ids) => { for (const id of ids) eligSeen[id] = (eligSeen[id] || 0) + 1; }; CE.cardDebug.onDropped = (id) => { eligSeen[`dropped:${id}`] = (eligSeen[`dropped:${id}`] || 0) + 1; }; });
 const check = (label, cond, detail = '') =>
   results.push({ label, pass: !!cond, detail });
 const summarize = () => {
+  // (DUMP_CARDS=path: every message the run delivered, by card — for measuring what the pools deal)
+  if (process.env.DUMP_CARDS) {
+    const by = {};
+    for (const c of mailSeen.values()) { const k = c.cardId || (c._wxCrew ? 'wx_crew' : c._wxDecision ? `wx_dec_${c._wxDecision}` : c._composeTopic ? `compose:${c._composeTopic}` : c.tag || '?'); by[k] = (by[k] || 0) + 1; }
+    import('node:fs').then(fs => { fs.writeFileSync(process.env.DUMP_CARDS, JSON.stringify(by, null, 1)); fs.writeFileSync(process.env.DUMP_CARDS + '.elig.json', JSON.stringify(eligSeen, null, 1)); });
+  }
   console.log('\n──────── INVARIANT CHECKLIST ────────');
   let passed = 0;
   for (const r of results) {
@@ -286,7 +295,7 @@ function gmActs() {
     }
     // §112.4 say yes to every front-office proposal, so every path runs.
     if (/^fo_/.test(c.cardId)) {
-      gm.fo = gm.fo || {}; gm.fo[c.cardId] = { offer: c._foOffer, funds0: SM.get().userTeam.finances.funds, atmo0: SM.get().userTeam.atmosphere };
+      gm.fo = gm.fo || {}; gm.fo[c.cardId] = { offer: c._foOffer, funds0: SM.get().userTeam.finances.funds, atmo0: SM.get().userTeam.atmosphere, afford: Finance.canSpend(SM.get(), c._foOffer?.cost || 0) };
       resolveCard(c.instanceId, 'yes'); gm.acted++; advanceClock(clock.get());
       gm.fo[c.cardId].funds1 = SM.get().userTeam.finances.funds; gm.fo[c.cardId].atmo1 = SM.get().userTeam.atmosphere;
       continue;
@@ -565,8 +574,9 @@ async function runOffseasonChecks() {
     if (camp) check(`front office: the campaign is paid now and builds next season's base (${camp.offer.cost}K; +${Math.round(camp.offer.fill * 1000) / 10}% of seats)`,
                     Math.round(camp.funds0 - camp.funds1) === camp.offer.cost && st.userTeam.finances.campaign?.season === 2);
     const fac = gm.fo?.fo_facility;
-    if (fac) check(`front office: the ${fac.offer.kind} upgrade is built (${fac.offer.cost}K; level ${st.userTeam.facilities?.[fac.offer.kind]})`,
-                   Math.round(fac.funds0 - fac.funds1) === fac.offer.cost && st.userTeam.facilities?.[fac.offer.kind] === (fo0.fac[fac.offer.kind] || 0) + 1);
+    if (fac) check(`front office: the ${fac.offer.kind} upgrade is built — or waits when the funds no longer cover it (${fac.offer.cost}K; ${fac.afford ? 'affordable' : 'short'}; level ${st.userTeam.facilities?.[fac.offer.kind]})`,
+                   fac.afford ? Math.round(fac.funds0 - fac.funds1) === fac.offer.cost && st.userTeam.facilities?.[fac.offer.kind] === (fo0.fac[fac.offer.kind] || 0) + 1
+                              : Math.round(fac.funds0 - fac.funds1) === 0 && (st.userTeam.facilities?.[fac.offer.kind] || 0) === (fo0.fac[fac.offer.kind] || 0));
     if (ev && gm.fo?.fo_event) check(`front office: the fan event moves the atmosphere (${gm.fo.fo_event.atmo0} → ${gm.fo.fo_event.atmo1})`,
                                      gm.fo.fo_event.atmo1 - gm.fo.fo_event.atmo0 === Math.min(100 - gm.fo.fo_event.atmo0, ev._foOffer.yes.atmo || 0));
     const GEN = /\b(he|him|his|she|her|guys?|men|man)\b/i;
@@ -1428,6 +1438,27 @@ function checkMessageVoice(st) {
   const personOf = (sender) => { const base = String(sender).replace(/\s*\([^)]*\)\s*$/, '').trim();
     return base === st.userTeam?.ownerName ? { name: base, owner: true } : persons.has(base) ? base : null; };
   const mail = [...mailSeen.values()];
+  {
+    // §122.57 how often a pool card comes back: a story once a season; the game day's moments, a player's card, at most
+    // a few a season and weeks apart; two cards of one story a month apart. (Chained cards — a follow-up, a scouting
+    // trip's leads — are their own: keyed `_rosterKey`.)
+    const DAY = 86_400_000, over = [], close = [], story = [];
+    const drawn = mail.filter(c => !c._rosterKey && cardRepeatRule(c.cardId));
+    const by = {};
+    for (const c of drawn) (by[`${c._season}|${c.cardId}`] ||= []).push(c.deliverAtMs ?? c.arrivedAtMs);
+    for (const [k, ts] of Object.entries(by)) {
+      const r = cardRepeatRule(k.split('|')[1]);
+      if (ts.length > (r.once ? 1 : r.max)) over.push(`${k}×${ts.length}`);
+      ts.sort((a, b) => a - b);
+      if (!r.once && ts.some((t, i) => i && t - ts[i - 1] < r.gapDays * DAY - 60_000)) close.push(k);
+    }
+    const stories = {};
+    for (const c of drawn) { const r = cardRepeatRule(c.cardId); if (r.story) (stories[r.story] ||= []).push(c.deliverAtMs ?? c.arrivedAtMs); }
+    for (const [k, ts] of Object.entries(stories)) { ts.sort((a, b) => a - b); if (ts.some((t, i) => i && t - ts[i - 1] < 30 * DAY - 60_000)) story.push(k); }
+    check(`messages: a story card comes once a season, a repeatable one within its limit (${drawn.length} drawn)`, over.length === 0, over.slice(0, 8).join(', '));
+    check('messages: a repeatable card comes back no sooner than its gap', close.length === 0, close.slice(0, 8).join(', '));
+    check('messages: two cards of one story at least a month apart', story.length === 0, story.join(', '));
+  }
   const bad = {};
   for (const c of mail) for (const [rule, f] of voiceProblems(c, personOf)) (bad[rule] ||= []).push(`${c.cardId}${f ? '.' + f : ''} [${c.sender}]`);
   const kinds = new Set(mail.map(c => c.cardId)).size;

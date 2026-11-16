@@ -11928,3 +11928,169 @@ Each failure now came back every run, so each could be traced to its cause.
 **Suite (r181):** the season sim (3818/3818) and multi-season (59/59) pass, as does every check-*.mjs. The season: the crew's word, 44 messages over 18 game days (median 2, most 5); the GM's decisions, 8 (4 batting practice left to the default, 1 answered; a call-off, a season-ticket holder, the booth); 15 weather calls, 9 poor (the harness GM leaves most questions), owner trust 49. Screen tests that failed once and passed on rerun: test-positions-ui (dark), test-wear-ui (dark and light, a known flake). test-game-pushes-ui (light) was fixed as above.
 
 **Fresh team:** not required. No plan or schedule logic changed for a game that's already set up, and the retired cards simply stop being dealt. (A save keeps any retired card already in its inbox until it's answered or expires.)
+
+## §122.57 — r182: the card pools, dealt as written (a full audit before Phase 4)
+User question (Nov 15): are the messages being drawn from the full pool, and appearing as they should? Answer after measuring two full seasons: no. User decision: fix it as its own release before Phase 4, and make sure the cards being brought back fit the newer messages (the weather, the crowd during a delay, the GM/manager line).
+
+### What was wrong
+- **A pool never wired.** `PREGAME30_POOL` (18 cards for the half hour before first pitch) was not exported and not referenced. None of it was ever dealt.
+- **Conditions never read.** Fourteen gate keys on live cards did nothing:
+  - `_maxGames`, `_minTier`, `_requiresBelowFifty`, `_requiresLoseStreak`, `_requiresILDepth`, `_requiresAway`, `_requiresPostponed`, `_requiresLeaderTrait`, `_minSpringGame`, `_requiresVeteranOrConsistentTrait`, `_oncePerSeries`, `_oncePerRoadTrip`, `_notWhilePending`, `_seasonCooldown`;
+  - plus `_requeueOnNo` / `_requeueCooldown` and `_toastOnly`.
+
+  So "missed the team flight" came at home, a slump card during a win streak, and "the trade deadline is approaching" 30 games before it (its window counted spring games and an older season length).
+- **The same story, again and again.** Only `_oncePerSeason` cards were limited. In one season, for example:
+  - the 25-year season-ticket family came 19–23 times;
+  - "a fight in the clubhouse" 6 times;
+  - the attendant's rival offer 4 times (it was meant to come every other season);
+  - "wants to be captain" 3 times;
+  - the travel contract 5 times.
+- **Sponsors that didn't exist.** Cards spoke of "our scoreboard sponsor", "the jersey patch sponsor" or "the section renamed by a sponsorship deal" whether or not the GM had signed one. A second scoreboard offer could come after the first was signed.
+- **Follow-ups after an unanswered card.** An unanswered card did what its default does, but its sequel never came (`expire` didn't chain the follow-up).
+- **A draw lost to a card that couldn't be made.** A selected card with no free agent to fit (or nobody to spare) dropped the moment's card instead of passing to the next.
+- **Orphans.** `tier_fa_followup_card` and `dl_rival_activity_card` had no parent card, and two live `s1` cards shared one id.
+
+### The card log (`state.cardLog`)
+Per pool card:
+- how many times it was dealt each season (three seasons kept);
+- when it last was;
+- the GM's last answer, or what the unanswered card did.
+
+A `story:<name>` entry does the same for a group of related cards. It's written when a card is scheduled (`_scheduleCards`, `_deliverAt`) and at `resolve` / `expire`. A card withdrawn before it arrives is taken back out (`_unlogDealt`). Older saves start with an empty log.
+
+### How a card comes back (`_repeatRule`, `_repeatOk`)
+| Card | Rule |
+|---|---|
+| a story (most decision cards) | once a season |
+| `_oncePerSeason`, a family (`_family`) | once a season |
+| the game day's moments (pre-game, the half hour, in-game), travel and homestand days | 3 a season at most, 14 days apart |
+| a card about one of our players (training, discipline, illness, a signing) | 2 a season, 21 days apart |
+| a player's personal leave | 2 a season, 30 days apart |
+| `_repeat: { gapDays, max }` | its own (the locker room, the anthem, the presenting sponsor, the ops troubles and the discipline cards: 2 a season, 30 days apart) |
+| `_requeueCooldown` (a proposal that comes back) | after its cooldown, 2 a season; settled by a yes (or, `_requeueOnNo: false`, by a no) |
+| `_seasonCooldown` | not in the seasons that follow (the attendant's offer: every third season at most) |
+| `_doneAfterYes` | settled for good once accepted (a captain named) |
+| `_story` | two cards of one story at least 30 days apart (the season-ticket milestone, the visiting clubhouse, a suite) |
+
+Chained cards (a follow-up, a scouting trip's leads) are their own and aren't limited by this.
+
+### The gates, read
+- **Timing:**
+  - `_maxGames`;
+  - `_minSpringGame`;
+  - `_beforeDeadline: [min, max]`, regular-season games before the deadline window opens. The deadline cards `dl1` and `dl2` use it in place of game counts.
+- **Travel:**
+  - `_requiresAway` — we travel to a road series: the next game is away and opens its series (missed the flight, a transport problem);
+  - `_requiresRoadAhead: n` — at least n road games from the next one (the ballpark rented while we're away, `rv1`–`rv4`);
+  - `_oncePerSeries` and `_oncePerRoadTrip`, read from the card log.
+- **The record and the clubhouse:**
+  - `_requiresBelowFifty` (10+ games and under .500);
+  - `_requiresLoseStreak`;
+  - `_requiresILDepth`;
+  - `_requiresLeaderTrait` (a clubhouse leader or a veteran, picked first for the card);
+  - `_needsBenchVet` (sp12: a veteran or steady hand off the bench; replaces `_requiresVeteranOrConsistentTrait`);
+  - `_minTier`;
+  - `_notWhilePending`.
+- **Sponsors:**
+  - `_sponsorSlot` marks an offer: jersey patch, section, outfield wall, scoreboard, dugout, helmet, pouring rights, GM suite. Once a slot is sold this season, no other offer for it is made.
+  - `_requiresSponsor` needs one. The presenting sponsor is ours unless `sp_renew` ended without a yes this season.
+  - `sp_complaint` needs a scoreboard sponsor and a crowd that isn't packed. `pg_sth_complaint` needs a section sponsor. `jersey_patch_wear` needs a patch sponsor.
+- **Enforced by the action, not their own name:** `_requiresBPCoverage` and `_requiresCatcherCoverage` (the action's `canSpare` feasibility, checked when the card is made).
+- **Dropped:** `_requiresLiveMode` (the game is live-only).
+
+### The draw
+- **Timely cards weigh 3×.** A card whose moment is narrow weighs three times as much while it's true:
+  - spring;
+  - the run-up to the deadline;
+  - a streak;
+  - the club's situation (`_when`);
+  - a travel day;
+  - a sponsor's card;
+  - a narrow `_maxGames` window.
+
+  The everyday cards wait.
+- **The draw passes on.** The moment's cards are drawn in weighted order. A card that can't be made right now gives its place to the next.
+
+### The half hour before first pitch (`PREGAME30_POOL`, exported; part of `ALL_POOLS.PREGAME_POOL`)
+- Home games only, delivered 12–30 minutes before first pitch, answered by it.
+- Unanswered, each does what the staff would do on their own, plus goodwill −1:
+  - the anthem: the recorded track;
+  - the concessions: pour by hand;
+  - the rest: the "no" answer.
+
+  The old `_expireFx` / `autoResolve: 'skip'` (which did nothing) is gone. Each unanswered message says what happened.
+- **Reviewed against the newer messages:**
+  - **Retired:**
+    - `pg30_tarp` — the weather system owns the tarp, and a seized tarp motor contradicts the crew's messages;
+    - `pg30_sp_visiting_bus` — delaying the game is the umpires' and the league's call, not the GM's;
+    - `pg30_sp_infield` — field prep belongs to the field-care system and the weather, and its effect on the game can't land since the game is simulated at first pitch.
+  - **Moved:** the jersey-patch wear card becomes a decision between games (`jersey_patch_wear`), only with a patch sponsor.
+  - **Withdrawn in a weather hold** (`_noWeatherHold`): the anthem, the season-ticket holder's recognition on the field and the sponsor on the field. Withdrawn whether still to come or arrived and unanswered, when the crew tells of the tarp, a held start or a delay.
+  - **Words:**
+    - the timing fits the delivery (fans already in, no "gates open in 15 minutes", no "22 minutes to first pitch");
+    - Guest Services writes "we";
+    - "season-ticket holder", not "STH";
+    - the recognition is a 30th season, so it doesn't repeat the 25-year family of `pg_fan_moment`;
+    - pulling the concessions costs the sales the text names.
+  - `pg30_sth_seats` counts as a season-ticket complaint (more after poor weather calls). The crowd-during-a-delay season-ticket question isn't asked on a day one is coming (`CardEngine.STH_CARD_IDS`).
+- `pg_fan_moment` and `pg_media_access` are home-only now (a family in our park, our office clearing our gate).
+
+### The game day's cards follow the game
+- **Called off:** its game-day cards (before first pitch, during the game), still to come or arrived and unanswered, are withdrawn and never counted (`withdrawGameDayCards`, from `_postponeGame`). The same goes for a held start the plan calls off (`_wxStoryPark`).
+- **Played late or interrupted:** the in-game cards move onto the game as it's played (`retimeGameCards`, from `_wxStoryPark` at first pitch and at a re-sim). They keep the same time into the game after a held start, are pushed past each delay, and are withdrawn when the game is over by then. Before, an in-game card ("between innings") could arrive during a two-hour held start.
+
+### Other fixes
+- **A notice with nothing to decide** (both answers the same, or `_toastOnly`) shows one "Understood", like the other notices (`ms_4_followup`, `ms_5_followup`, `ms_8_followup`).
+- **Retired:**
+  - `rv5`: "the rainout extended our road trip", which isn't how makeups work;
+  - its follow-up;
+  - the two orphan follow-ups.
+- **Renamed:** the second `s1` is `s1_vet`.
+- **A winter facility upgrade** accepted when the funds no longer cover it (another winter decision spent them first) waits, and Recent says so (it had silently done nothing).
+
+### Not changed, after measuring
+The money cards (`_when`) were dealt for nearly every situation that occurred: in each season, 9–10 of the 13 families. The rest are siblings for other archetypes, or situations those seasons never reached (in the red, a CPU club in trouble, the postseason party). They work as designed, so they weren't loosened.
+
+### Open
+`_relYes` / `_relNo` (relationship effects on 16 cards: coaches, the manager, a player) are not applied anywhere. A decision's effect on a relationship is promised in data only. check-card-pools lists them as open.
+
+### Checks
+- **check-card-pools** (new, static):
+  - every pool is wired;
+  - every condition a card names is one the engine reads, or a listed marker;
+  - no two live cards share an id;
+  - every follow-up has a live parent;
+  - a one-answer card is a notice;
+  - every live card has a repeat rule;
+  - the half-hour cards are dealt at the pre-game moment.
+- **check-game-day-cards** (new, 24 checks):
+  - a called-off game's cards withdrawn and uncounted;
+  - in-game cards retimed past a held start and a delay, and dropped past the end;
+  - the tarp withdraws the anthem and the ceremony but not the elevator;
+  - once a season, two weeks apart, three a season, and a requeued proposal settled by a yes;
+  - sponsors (no second scoreboard offer; patch, section and presenting sponsor cards);
+  - the half hour (12–30 minutes, answered by first pitch, never on the road).
+- **sim-season:**
+  - a story card once a season, a repeatable one within its limit;
+  - no sooner than its gap;
+  - two cards of one story a month apart.
+
+  The facility check accepts "waits when the funds no longer cover it". `DUMP_CARDS=path` also writes `path.elig.json` (`CardEngine.cardDebug`: the days each card could have been dealt, and draws that couldn't be made).
+- **test-pool-cards-ui** (new): the concessions question (its money in the text, two answers) and a notice ("Understood" clears it), dark and light.
+
+### Measured (two seasons, contender seed 1 and ember seed 7)
+| | before | after |
+|---|---|---|
+| pre-game cards dealt | 5 of 5 (one pool) | 21 of 21 (with the half hour) |
+| the most any pre-game card came in a season | 23 | 3 |
+| decision cards dealt | 109 of 131 | 121 of 154 |
+| follow-ups | 2 | 8 |
+| pool messages a run | about 315 | about 235 |
+
+Fewer messages, almost none repeated. The decision cards never dealt are:
+- the prestige-tier cards (tier 1 in a first season);
+- the losing-team cards (both clubs were winning);
+- the money siblings above;
+- a few spring cards, now weighted up.
+
+**Fresh team:** not required. An existing save starts with an empty card log, so this season's earlier cards don't count toward the limits. Cards already in the inbox stay until answered.

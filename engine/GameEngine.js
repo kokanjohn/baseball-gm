@@ -2177,7 +2177,7 @@ function _wxTellOne(st, g, s, e) {
       const poor = CardEngine.recentPoorCalls(st, e.at);
       const cands = [];
       if (wait >= WX_DECIDE.compsWaitMin) cands.push('comps');
-      if (!coming(['pg_sth_complaint', 'ig_suite_complaint']) && roll('sth') < WX_DECIDE.sthChance + WX_DECIDE.sthPerPoor * poor) cands.push('sth');
+      if (!coming(CardEngine.STH_CARD_IDS) && roll('sth') < WX_DECIDE.sthChance + WX_DECIDE.sthPerPoor * poor) cands.push('sth');
       if (!coming(['ig_broadcast_feed']) && roll('booth') < WX_DECIDE.boothChance) cands.push('booth');
       if (wait >= WX_DECIDE.compsWaitMin && roll('antics') < WX_DECIDE.anticsChance) cands.push('antics');
       const order = [...cands.filter(k => k === 'comps'), ...cands.filter(k => k !== 'comps').sort((a, b) => roll(a) - roll(b))];
@@ -2253,22 +2253,29 @@ function _wxStoryTell(atMs) {
     const told = _wxToldAt(g);
     const due = s.events.filter(x => x.at > told && x.at <= atMs && x.at < g.gameTime);
     if (!due.length) continue;
+    // §122.57 the tarp is on, the start in doubt: no anthem, ceremony or sponsor on the field (the card is withdrawn).
+    if (due.some(x => _WX_HOLD_KINDS.has(x.kind))) CardEngine.withdrawNoWeatherHold(g.gameTime);
     for (const e of due) _wxTellOne(st, g, s, e);
     StateManager.mutate(x => { const y = x.schedule[i]; if (y) y.wxTold = { gameTime: y.gameTime, at: due[due.length - 1].at }; });
   }
 }
 
 /** The rest of the crew's word for our home game (its weather settled: a held start, the game itself), each parked at its moment. */
+const _WX_HOLD_KINDS = new Set(['tarp_on', 'start_delayed', 'start_doubt', 'delay']);
+
 function _wxStoryPark(i) {
   const st = StateManager.get();
   const g = st.schedule?.[i];
   if (!g) return;
+  // §122.57 the game's in-game cards: onto the game as it's played — or, a start held until it's called off, none.
+  if (g.wx?.outcome === PLAN_OUTCOME.POSTPONED) CardEngine.withdrawGameDayCards(g.gameTime);
+  else if (g.wx) CardEngine.retimeGameCards(g.gameTime, g.wx);
   const s = _wxStoryOf(st, g);
   if (!s) return;
   const told = _wxToldAt(g);
   const rest = s.events.filter(x => x.at > told);
   // §122.56 "drag the infield?" has no place in a game the weather holds up (the crew has its hands full).
-  if (s.events.some(x => x.kind === 'delay' || x.kind === 'start_delayed' || x.kind === 'tarp_on')) CardEngine.withdrawNoWeatherHold(g.gameTime);
+  if (s.events.some(x => _WX_HOLD_KINDS.has(x.kind))) CardEngine.withdrawNoWeatherHold(g.gameTime);
   for (const e of rest) _wxTellOne(st, g, s, e);
   if (rest.length) StateManager.mutate(x => { const y = x.schedule[i]; if (y) y.wxTold = { gameTime: y.gameTime, at: rest[rest.length - 1].at }; });
 }
@@ -2302,6 +2309,8 @@ function _postponeGame(ref, atMs) {
   const waited = g.wxWaited ? { ...g.wxWaited } : null;   // §122.51 (read before the game moves: a move clears it)
   const why = _wxReasonWord(plan.reason);
   let dhFor = null;
+  // §122.57 the called-off game's own messages (the half hour before first pitch, the game itself) don't come.
+  if (isUser) CardEngine.withdrawGameDayCards(entry.gameTime);
   if (g.isSpring) {
     StateManager.mutate(s => {
       const x = _wxResolve(s, ref).g;

@@ -24,6 +24,7 @@ import {
   DECISIONS_POOL,
   FOLLOWUP_POOL,
   PREGAME_POOL,
+  PREGAME30_POOL,
   INGAME_POOL,
   BETWEEN_GAMES_POOL,
   COMPOSE_RESPONSE_POOL,
@@ -119,7 +120,8 @@ import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, starts
 const ALL_POOLS = {
   // §83 the Club Funds families join the moments they belong to.
   DECISIONS_POOL: [...DECISIONS_POOL, ...MONEY_BETWEEN],
-  PREGAME_POOL:   [...PREGAME_POOL, ...MONEY_PREGAME],
+  // §122.57 r182 the half hour before first pitch joins the pre-game moment (it had never been wired).
+  PREGAME_POOL:   [...PREGAME_POOL, ...PREGAME30_POOL, ...MONEY_PREGAME],
   INGAME_POOL,
   BETWEEN_GAMES_POOL,
   FOLLOWUP_POOL,
@@ -215,19 +217,27 @@ export function checkAndDeliver(context) {
   for (const moment of ['pregame', 'ingame', 'between', 'leave']) {
     const pools = byMoment[moment];
     let n = Math.min(want[moment], room - delivered.length);
-    if (!pools || n <= 0) continue;
+    if (!pools || (n <= 0 && !cardDebug.onEligible)) continue;
     const eligible = [];
     for (const poolName of pools) {
-      for (const card of _filterEligible(ALL_POOLS[poolName] || [], context, state)) {
+      for (const card of _filterEligible(ALL_POOLS[poolName] || [], context, state, poolName)) {
         if (!taken.has(card.id) && !(card._family && takenFamilies.has(card._family))) eligible.push({ ...card, _fromPool: poolName });
       }
     }
-    for (const cardDef of _selectCards(eligible, context, state, n)) {
+    if (cardDebug.onEligible) cardDebug.onEligible(moment, eligible.map(c => c.id));
+    if (n <= 0) continue;
+    // §122.57 the draw in weighted order: a card that can't be made right now (no free agent fits, nobody to spare) gives
+    // its place to the next one, so the moment still gets its card.
+    let made = 0;
+    for (const cardDef of _selectCards(eligible, context, state, eligible.length)) {
+      if (made >= n) break;
+      if (taken.has(cardDef.id) || (cardDef._family && takenFamilies.has(cardDef._family))) continue;
       taken.add(cardDef.id);
       if (cardDef._family) takenFamilies.add(cardDef._family);
       const { _fromPool, ...def } = cardDef;
       const instance = _createInstance(def, context, state);
-      if (instance) delivered.push({ ...instance, _pool: _fromPool, _moment: moment });
+      if (instance) { delivered.push({ ...instance, _pool: _fromPool, _moment: moment }); made++; }
+      else if (cardDebug.onDropped) cardDebug.onDropped(def.id);
     }
   }
 
@@ -287,6 +297,7 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
       card.choice      = choice;
       card.resolvedAtMs = clockNow();   // §95 when the decision was made (Completed tab)
     }
+    _logChoice(s, instance, choice);   // §122.57
 
     // Apply soft metric effects
     _applySoftEffects(s, effects, choice, instance);
@@ -522,6 +533,7 @@ export function expire(instanceId, atMs = clockNow()) {
     StateManager.mutate(s => {
       const card = s.inbox.find(c => c.instanceId === instanceId);
       if (card) { card.resolved = true; card.choice = 'skip'; card.resolvedAtMs = atMs; }
+      _logChoice(s, instance, 'skip');
     });
     return;
   }
@@ -540,11 +552,13 @@ export function expire(instanceId, atMs = clockNow()) {
       card.resolvedAt = s.currentGameIndex || 0;
       card.resolvedAtMs = atMs;
     }
+    _logChoice(s, instance, def);   // §122.57 what the unanswered card did
     _applySoftEffects(s, def === 'yes' ? instance.yesEffect : instance.noEffect, def, instance);
     _applyChoiceMoney(s, instance, def);
     _applySoftEffects(s, tax, 'auto', instance);
   });
   _makePromise(instance, def, atMs);   // r147 the default's promise, too
+  _maybeChainFollowup(instance, def, atMs);   // §122.57 and what follows from it (an unanswered "no" has its sequel too)
   // §74: an unanswered card that resolves to "no" does what "no" does (e.g.
   // a player on personal leave still goes, for the minimum).
   const onNo = instance._raw?.onNo;
@@ -620,6 +634,7 @@ function _deliverAt(instance, atMs) {
   const card = { ...instance, instanceId, deliverAtMs: atMs };
   StateManager.mutate(s => {
     s.scheduledCards = [...(s.scheduledCards || []), card].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+    _logDealt(s, card);   // §122.57 (a follow-up, a pool card delivered by hand)
   });
   return card;   // (the card as parked — with the id it will have in the inbox)
 }
@@ -2135,19 +2150,25 @@ function _scheduleCards(instances, state, game = null) {
     if (c._moment === 'soon') {
       // A milestone happening now (the GM takes over, camp opens): within the hour.
       timed.push({ ...c, deliverAtMs: nowMs + lead + eventRand() * 30 * 60_000 });
+    } else if (c._raw?._isPreGame30 && c._moment === 'pregame') {
+      // §122.57 the half hour before first pitch: 12–30 minutes out, answered by first pitch.
+      if (!Number.isFinite(T) || T - nowMs < lead + 15 * 60_000) continue;
+      timed.push({ ...c, _gameTime: T, deliverAtMs: Math.max(nowMs + lead, T - (12 + eventRand() * 18) * 60_000), expiresAtMs: T });
     } else if (c._moment === 'pregame' || (!c._moment && c._pool === 'PREGAME_POOL')) {
       if (!Number.isFinite(T) || T - nowMs < lead + 15 * 60_000) continue;
-      timed.push({ ...c, deliverAtMs: Math.max(nowMs + lead, T - (45 + eventRand() * 105) * 60_000), expiresAtMs: T });
+      timed.push({ ...c, _gameTime: T, deliverAtMs: Math.max(nowMs + lead, T - (45 + eventRand() * 105) * 60_000), expiresAtMs: T });
     } else if (c._moment === 'ingame' || (!c._moment && c._pool === 'INGAME_POOL')) {
       if (!Number.isFinite(T)) continue;
       const at = Math.max(nowMs + lead, T + (20 + eventRand() * 100) * 60_000);
       if (at > T + CARD_DAY.ingameLastMs) continue;          // the game is over by then
-      timed.push({ ...c, deliverAtMs: at, expiresAtMs: T + CARD_DAY.ingameExpireMs });
+      // (§122.57 _gameTime: retimed to the game as played — a held start, a delay — or withdrawn if it's called off)
+      timed.push({ ...c, _gameTime: T, _ingameAt: at - T, deliverAtMs: at, expiresAtMs: T + CARD_DAY.ingameExpireMs });
     } else loose.push(c);
   }
   if (timed.length) {
     StateManager.mutate(s => {
       s.scheduledCards = [...(s.scheduledCards || []), ...timed].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+      for (const c of timed) _logDealt(s, c);
     });
   }
   instances = loose;
@@ -2166,6 +2187,7 @@ function _scheduleCards(instances, state, game = null) {
   StateManager.mutate(s => {
     s.scheduledCards = [...(s.scheduledCards || []), ...scheduled]
       .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+    for (const c of scheduled) _logDealt(s, c);
   });
 }
 
@@ -2675,6 +2697,7 @@ export function deliverCardById(cardId) {
     DECISIONS_POOL,
     FOLLOWUP_POOL,
     PREGAME_POOL,
+    PREGAME30_POOL,
     INGAME_POOL,
     BETWEEN_GAMES_POOL,
     MONEY_BETWEEN, MONEY_PREGAME,                 // r147 the money cards
@@ -3001,7 +3024,122 @@ export function resolveTokens(text, context, state) {
 // ELIGIBILITY FILTERING
 // ─────────────────────────────────────────────────────────────
 
-function _filterEligible(pool, context, state) {
+// ─────────────────────────────────────────────────────────────
+// §122.57 r182 THE CARD LOG — how often each pool card was dealt, when, and the GM's last answer
+// ─────────────────────────────────────────────────────────────
+
+/** For the checks: called with each moment's eligible card ids as the day is planned. */
+export const cardDebug = { onEligible: null, onDropped: null };
+
+/** How a card may come back (§122.57). `once`: once a season; else at most `max` a season, `gapDays` apart. */
+const REPEAT = Object.freeze({
+  ops:     Object.freeze({ gapDays: 14, max: 3 }),   // the game day's moments, travel and homestand days
+  player:  Object.freeze({ gapDays: 21, max: 2 }),   // a card about one of our players (a different one each time)
+  leave:   Object.freeze({ gapDays: 30, max: 2 }),   // a player's personal leave
+  story:   30,                                        // days between two cards of one story (`_story`)
+  seasons: 3,                                         // seasons of counts kept
+});
+const HITTER_GROUPS_CARD = Object.freeze([PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS]);
+const _REPEAT_POOL = Object.freeze({ PREGAME_POOL: 'ops', INGAME_POOL: 'ops', BETWEEN_GAMES_POOL: 'ops', PERSONAL_LEAVE_POOL: 'leave' });
+
+/** Is this a pool card (its definition travels with it) — not a roster, weather or notice card? */
+const _isPoolCard = (c) => !!c?.cardId && c._raw?.id === c.cardId;
+
+function _logEntry(s, id) {
+  const log = (s.cardLog ||= {});
+  return (log[id] ||= { n: {}, lastMs: null, choice: null, choiceSeason: null });
+}
+/** A pool card was dealt (scheduled to arrive at `card.deliverAtMs`). */
+function _logDealt(s, card) {
+  if (!_isPoolCard(card)) return;
+  const season = card._season ?? s.seasonNum ?? 1;
+  const at = card.deliverAtMs ?? clockNow();
+  for (const id of [card.cardId, card._raw._story ? `story:${card._raw._story}` : null].filter(Boolean)) {
+    const e = _logEntry(s, id);
+    e.n[season] = (e.n[season] || 0) + 1;
+    for (const k of Object.keys(e.n)) if (+k < season - REPEAT.seasons) delete e.n[k];
+    e.lastMs = Math.max(e.lastMs ?? -Infinity, at);
+  }
+}
+/** A pool card was withdrawn before it arrived (its game was called off): it never happened. */
+function _unlogDealt(s, card) {
+  if (!_isPoolCard(card)) return;
+  const season = card._season ?? s.seasonNum ?? 1;
+  for (const id of [card.cardId, card._raw._story ? `story:${card._raw._story}` : null].filter(Boolean)) {
+    const e = s.cardLog?.[id];
+    if (e?.n?.[season]) e.n[season]--;
+  }
+}
+/** The GM's answer (or what an unanswered card did: 'yes' / 'no' / 'skip'). */
+function _logChoice(s, card, choice) {
+  if (!_isPoolCard(card)) return;
+  const e = _logEntry(s, card.cardId);
+  e.choice = choice; e.choiceSeason = card._season ?? s.seasonNum ?? 1;
+}
+
+/** The repeat rule for a card from `poolName` (§122.57). */
+function _repeatRule(card, poolName) {
+  if (card._oncePerSeason) return { once: true };
+  if (card._repeat) return card._repeat;
+  if (card._requeueCooldown != null) return { requeue: true, gapDays: card._requeueCooldown, max: 2 };
+  if (card._family) return { once: true };
+  if (_REPEAT_POOL[poolName]) return REPEAT[_REPEAT_POOL[poolName]];
+  if (card._rosterContract || card.onYes || card._restGames || card._trainGames || _ROLE_TOKEN.test([card.subject, card.body].join(' '))) return REPEAT.player;
+  return { once: true };   // a story happens once a season
+}
+
+/** For the checks (§122.57): a pool card's repeat rule, by id ({ once } or { gapDays, max }); null if not a pool card. */
+export function cardRepeatRule(cardId) {
+  for (const [poolName, pool] of Object.entries(ALL_POOLS)) {
+    const d = pool.map(e => e?.card || e).find(x => x?.id === cardId && !x._retired);
+    if (d) return { pool: poolName, ...(_repeatRule(d, poolName)), story: d._story || null };
+  }
+  return null;
+}
+
+/** May this card be dealt again now? (`log`: state.cardLog) */
+function _repeatOk(card, poolName, log, season, nowMs) {
+  const DAY = 86_400_000;
+  const e = log[card.id];
+  const n = e?.n?.[season] || 0;
+  if (card._doneAfterYes && e?.choice === 'yes') return false;   // settled for good (a captain named)
+  if (card._seasonCooldown && e?.lastMs != null && Object.keys(e.n || {}).some(k => +k < season && +k > season - card._seasonCooldown - 1 && e.n[k] > 0)) return false;
+  if (card._story) {
+    const st = log[`story:${card._story}`];
+    if (st?.lastMs != null && nowMs - st.lastMs < REPEAT.story * DAY) return false;
+  }
+  if (!n) return true;
+  const rule = _repeatRule(card, poolName);
+  if (rule.once) return false;
+  // A card that comes back (`_requeueCooldown`): settled by a yes — or, `_requeueOnNo: false`, by a no.
+  if (rule.requeue && e.choiceSeason === season && (card._requeueOnNo === false ? e.choice !== 'yes' : e.choice === 'yes')) return false;
+  if (n >= rule.max) return false;
+  return e.lastMs == null || nowMs - e.lastMs >= rule.gapDays * DAY;
+}
+
+/** Sponsorships (§122.57): a slot is ours this season once an offer for it was accepted; the presenting sponsor is ours unless it walked. */
+function _hasSponsor(state, slot) {
+  const season = state.seasonNum || 1;
+  const log = state.cardLog || {};
+  if (slot === 'presenting') { const e = log.sp_renew; return !(e && e.choiceSeason === season && e.choice !== 'yes'); }
+  return SPONSOR_OFFERS.some(d => d._sponsorSlot === slot && log[d.id]?.choiceSeason === season && log[d.id]?.choice === 'yes');
+}
+const SPONSOR_OFFERS = Object.freeze([...DECISIONS_POOL].map(e => e?.card || e).filter(d => d?._sponsorSlot && !d._retired));
+
+/** The schedule around the next game (§122.57): consecutive road games from it, and where this series and this road trip began. */
+function _stretch(state, next) {
+  const sched = state.schedule || [];
+  const i = sched.indexOf(next);
+  if (!next || i < 0) return { roadAhead: 0, seriesStartMs: null, tripStartMs: null, seriesOpener: false };
+  let roadAhead = 0;
+  for (let j = i; j < sched.length && !sched[j].isHome; j++) if (!sched[j].isSpring) roadAhead++;
+  let a = i; while (a > 0 && sched[a - 1].opponent === next.opponent && !!sched[a - 1].isHome === !!next.isHome) a--;
+  let b = i; while (!next.isHome && b > 0 && !sched[b - 1].isHome) b--;
+  const t0 = (g) => Number.isFinite(g?.gameTime) ? g.gameTime - 2 * 86_400_000 : null;   // (a day or two before its first game)
+  return { roadAhead, seriesOpener: a === i, seriesStartMs: t0(sched[a]), tripStartMs: next.isHome ? null : t0(sched[b]) };
+}
+
+function _filterEligible(pool, context, state, poolName = null) {
   const gameIdx   = state.currentGameIndex || 0;
   const phase     = state.phase;
   const isSpring  = phase === PHASE.SPRING_TRAINING;
@@ -3023,6 +3161,16 @@ function _filterEligible(pool, context, state) {
   ]);
 
   const sit = cardSituation(state, context);
+  // §122.57 r182 the gates every card's conditions name (several were never read), and how a card may come back.
+  const season = state.seasonNum || 1;
+  const log = state.cardLog || {};
+  const nowMs = clockNow();
+  const u = state.userTeam || {};
+  const stretch = _stretch(state, context.nextGame);
+  const healthy = (u.rosterIds || []).map(id => state.players?.[id]).filter(p => p && isAvailable(p) && p.group !== PLAYER_GROUP.IL);
+  const onIL = (u.rosterIds || []).filter(id => state.players?.[id]?.group === PLAYER_GROUP.IL).length;
+  const startingIds = new Set((u.lineupSlots || []).map(x => x?.playerId).filter(Boolean));
+  const dealtSince = (id, ms) => ms != null && (log[id]?.lastMs ?? -Infinity) >= ms;
   const familiesThisSeason = new Set(
     [...(state.inbox || []), ...(state.scheduledCards || [])]
       .filter(c => c._family && (c._season ?? state.seasonNum) === state.seasonNum)
@@ -3044,12 +3192,25 @@ function _filterEligible(pool, context, state) {
 
     // Game index gates
     if (card._minGames    !== undefined && gameIdx < card._minGames)    return false;
+    if (card._maxGames    !== undefined && gameIdx > card._maxGames)    return false;
+    if (card._minSpringGame !== undefined && (context.springGameIndex ?? 0) < card._minSpringGame) return false;
+    // "The deadline is coming": a number of regular-season games before its window opens.
+    if (card._beforeDeadline) {
+      const left = TRADE_DEADLINE_OPEN - regIdx;
+      if (!isRegular || left < card._beforeDeadline[0] || left > card._beforeDeadline[1]) return false;
+    }
     if (card._maxSpringGame !== undefined && context.springGameIndex !== undefined
         && context.springGameIndex > card._maxSpringGame) return false;
 
     // Location gates
     if (card._requiresHome && !context.nextGame?.isHome) return false;
     if (card._requiresRoad && context.nextGame?.isHome)  return false;
+    // We travel to a road series (a flight, a bus): the next game is away and opens its series.
+    if (card._requiresAway && (!context.nextGame || context.nextGame.isHome || !stretch.seriesOpener)) return false;
+    // The ballpark is ours to rent: at least this many road games from the next one.
+    if (card._requiresRoadAhead && stretch.roadAhead < card._requiresRoadAhead) return false;
+    if (card._oncePerSeries && dealtSince(card.id, stretch.seriesStartMs)) return false;
+    if (card._oncePerRoadTrip && dealtSince(card.id, stretch.tripStartMs)) return false;
 
     // Series / schedule context gates
     if (card._requiresTravelDay      && !context.isTravelDay)       return false;
@@ -3070,6 +3231,19 @@ function _filterEligible(pool, context, state) {
 
     // Once-per-season deduplication
     if (card._oncePerSeason && deliveredIds.has(card.id)) return false;
+    // How often a card may come back (§122.57): stories once a season, the game day's moments now and then.
+    if (!_repeatOk(card, poolName, log, season, nowMs)) return false;
+    // The record and the clubhouse
+    if (card._requiresBelowFifty && !((u.wins || 0) + (u.losses || 0) >= 10 && (u.wins || 0) < (u.losses || 0))) return false;
+    if (card._requiresLoseStreak !== undefined && (u.streak || 0) > card._requiresLoseStreak) return false;
+    if (card._requiresILDepth && onIL < card._requiresILDepth) return false;
+    if (card._requiresLeaderTrait && !healthy.some(p => ['clubhouseLeader', 'veteran'].includes(p.trait))) return false;
+    if (card._needsBenchVet && !healthy.some(p => HITTER_GROUPS_CARD.includes(p.group) && !startingIds.has(p.id) && ['veteran', 'consistent'].includes(p.trait))) return false;
+    if (card._minTier !== undefined && (state.prestigeTier || 1) < card._minTier) return false;
+    if (card._notWhilePending && card._notWhilePending.some(id => pendingIds.has(id))) return false;
+    // Sponsorships: an offer for a slot we already sold this season isn't made; a card about our sponsor needs one.
+    if (card._sponsorSlot && _hasSponsor(state, card._sponsorSlot)) return false;
+    if (card._requiresSponsor && !_hasSponsor(state, card._requiresSponsor)) return false;
 
     // Roster coverage gates
     if (card._requiresBenchSP && !_hasBenchSP(state)) return false;
@@ -3108,6 +3282,15 @@ export function recentPoorCalls(state, atMs = clockNow()) {
   return Math.min(STH_BOOST.max, (state.userTeam?.wxCalls || []).filter(c => c.poor && c.atMs > atMs - STH_BOOST.windowDays * 86_400_000 && c.atMs <= atMs).length);
 }
 
+const TIMELY_WEIGHT = 3;
+const _TIMELY_KEYS = ['_requiresSpring', '_beforeDeadline', '_when', '_requiresBelowFifty', '_requiresLoseStreak', '_minStreak',
+  '_requiresDivClose', '_requiresLossGap', '_requiresTravelDay', '_requiresHomeStandOpener', '_requiresHomeStandCloser',
+  '_requiresRoadTripOpener', '_requiresAway', '_requiresSponsor', '_maxSpringGame', '_requiresDeadlineWindow'];
+function _timely(card) {
+  if (_TIMELY_KEYS.some(k => card[k] != null && card[k] !== false)) return true;
+  return card._maxGames != null && card._maxGames - (card._minGames || 0) <= 20;
+}
+
 function _selectCards(eligible, context, state, maxCount) {
   if (eligible.length === 0) return [];
 
@@ -3127,6 +3310,10 @@ function _selectCards(eligible, context, state, maxCount) {
     // Streak-based urgency boost
     const streak = state.userTeam?.streak || 0;
     if (Math.abs(streak) >= 5 && card.tag === 'CULTURE') weight *= 1.3;
+
+    // §122.57 a card whose moment is narrow (spring, the run-up to the deadline, a losing streak, the club's situation,
+    // a travel day) is the one to send while it's true: the everyday cards wait.
+    if (_timely(card)) weight *= TIMELY_WEIGHT;
 
     // §122.56 season-ticket holders complain regardless, and more after poor weather calls at home.
     if (card._sth) weight *= 1 + STH_BOOST.perPoorCall * recentPoorCalls(state);
@@ -3203,6 +3390,10 @@ function _createInstance(cardDef, context, state) {
     expireMsg: t(cardDef._expireMsg),
   };
 
+  // §122.57 a notice with nothing to decide (both answers the same) reads like the other notices: one "Understood".
+  const notice = !!cardDef._toastOnly || (!!cardDef.yesLabel && cardDef.yesLabel === cardDef.noLabel);
+  if (notice) { text.yesLabel = 'Understood'; text.noLabel = null; }
+
   // Delivery guard: a card that would show a raw {token} is never delivered.
   const unresolved = Object.entries(text).filter(([, v]) => hasUnresolvedTokens(v));
   if (unresolved.length) {
@@ -3248,8 +3439,8 @@ function _createInstance(cardDef, context, state) {
     _family:          cardDef._family || null,       // §83 one version of a family a season
     _aboutTeamId:     cardDef._aboutTroubledTeam ? (values._troubledTeamId || null) : null,
     _season:          state.seasonNum || 1,
-    autoResolve:      cardDef.autoResolve   || null,
-    autoResolveTax:   cardDef.autoResolveTax || null,
+    autoResolve:      notice ? 'yes' : (cardDef.autoResolve || null),
+    autoResolveTax:   notice ? null : (cardDef.autoResolveTax || null),
     _playerRelationshipEffect: cardDef._playerRelationshipEffect || null,
     _budgetCost:      budgetCostK,
     _budgetCostNo:    budgetCostNoK,
@@ -3859,14 +4050,62 @@ export function expireGameWeatherDecisions(gameTime, nowMs) {
   return due.length;
 }
 
-/** §122.56 withdraw a game's parked cards that don't belong in a weather hold ("drag the infield?"). */
+/** §122.56 withdraw a game's cards that don't belong in a weather hold ("drag the infield?"; §122.57 the anthem, a
+ *  ceremony on the field, a sponsor on the field) — still to come, or arrived and unanswered. */
 export function withdrawNoWeatherHold(gameTime) {
-  const st = StateManager.get();
-  const ids = new Set((st.scheduledCards || []).filter(c => (c._noWeatherHold || c.cardId === 'ig_grounds_crew') && c.deliverAtMs >= gameTime - 60_000 && c.deliverAtMs <= gameTime + 8 * 3_600_000).map(c => c.instanceId));
-  if (!ids.size) return 0;
-  StateManager.mutate(s => { s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId)); });
-  return ids.size;
+  const hold = (c) => c._noWeatherHold || c._raw?._noWeatherHold || c.cardId === 'ig_grounds_crew';
+  const ofGame = (c) => c._gameTime === gameTime || (c._gameTime == null && c.deliverAtMs >= gameTime - 60_000 && c.deliverAtMs <= gameTime + 8 * 3_600_000);
+  return _withdrawDayCards(c => hold(c) && ofGame(c));
 }
+
+/** §122.57 our game called off: its game-day cards (before first pitch, during the game) are withdrawn — still to come,
+ *  or arrived and unanswered — and never counted as dealt. */
+export function withdrawGameDayCards(gameTime) {
+  return _withdrawDayCards(c => c._gameTime === gameTime && ['pregame', 'ingame'].includes(c._moment));
+}
+
+function _withdrawDayCards(pred) {
+  const st = StateManager.get();
+  const hit = [...(st.inbox || []).filter(c => !c.resolved), ...(st.scheduledCards || [])].filter(pred);
+  if (!hit.length) return 0;
+  const ids = new Set(hit.map(c => c.instanceId));
+  StateManager.mutate(s => {
+    s.inbox          = (s.inbox || []).filter(c => c.resolved || !ids.has(c.instanceId));
+    s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId));
+    for (const c of hit) _unlogDealt(s, c);
+  });
+  return hit.length;
+}
+
+/**
+ * §122.57 retimeGameCards(gameTime, { startAt, endT, delays }) — our game's in-game cards, moved onto the game as it
+ * is played: the same time into the game (after a held start), pushed past each delay, and withdrawn when the game is
+ * over by then. (Planned the day before against the scheduled first pitch; the weather settles it at first pitch.)
+ */
+export function retimeGameCards(gameTime, { startAt = null, endT = null, delays = [] } = {}) {
+  const st = StateManager.get();
+  const cards = (st.scheduledCards || []).filter(c => c._gameTime === gameTime && c._moment === 'ingame');
+  if (!cards.length || !Number.isFinite(startAt)) return 0;
+  const stops = (delays || []).filter(d => Number.isFinite(d.startT) && Number.isFinite(d.endT) && d.startT >= startAt).sort((a, b) => a.startT - b.startT);
+  const end = Number.isFinite(endT) ? endT : startAt + 3 * 3_600_000;
+  const moved = new Map(), gone = [];
+  for (const c of cards) {
+    let at = startAt + (c._ingameAt ?? (c.deliverAtMs - gameTime));
+    for (const d of stops) if (d.startT <= at) at += d.endT - d.startT;
+    if (at > end - 15 * 60_000) gone.push(c);
+    else moved.set(c.instanceId, { deliverAtMs: at, expiresAtMs: Math.max(at + 30 * 60_000, end + 30 * 60_000) });
+  }
+  StateManager.mutate(s => {
+    s.scheduledCards = (s.scheduledCards || []).filter(c => !gone.some(g => g.instanceId === c.instanceId))
+      .map(c => moved.has(c.instanceId) ? { ...c, ...moved.get(c.instanceId) } : c)
+      .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+    for (const c of gone) _unlogDealt(s, c);
+  });
+  return moved.size + gone.length;
+}
+
+/** §122.57 the season-ticket stories (a like question from the crowd during a delay isn't asked the same day). */
+export const STH_CARD_IDS = Object.freeze(Object.values(ALL_POOLS).flat().map(e => e?.card || e).filter(d => d?._sth && !d._retired).map(d => d.id));
 
 /** §122.51 withdraw weather cards still parked (not yet arrived) whose key starts with `prefix`, due after `afterMs` (a decision redid the game's weather). */
 export function withdrawScheduledWeather(prefix, afterMs) {
@@ -5355,7 +5594,12 @@ function _applyOffseasonAction(action, instance, atMs) {
     // §112.4 the front office
     case 'fo_tix_change': StateManager.mutate(s => FrontOffice.applyTicketPrice(s, instance._foOffer)); return true;
     case 'fo_camp_run':   StateManager.mutate(s => { if (Finance.canSpend(s, instance._foOffer.cost)) FrontOffice.applyCampaign(s, instance._foOffer, atMs); }); return true;
-    case 'fo_fac_build':  StateManager.mutate(s => { if (Finance.canSpend(s, instance._foOffer.cost)) FrontOffice.applyFacility(s, instance._foOffer, atMs); }); return true;
+    case 'fo_fac_build': {
+      // §122.57 club funds no longer cover it (another winter decision spent them first): it waits, and Recent says so.
+      if (!Finance.canSpend(StateManager.get(), instance._foOffer.cost)) { _ourNews(`The ${instance._foOffer.kind} upgrade waits: club funds no longer cover ${formatK(instance._foOffer.cost)}`, atMs); return true; }
+      StateManager.mutate(s => FrontOffice.applyFacility(s, instance._foOffer, atMs));
+      return true;
+    }
     case 'fo_event_yes':  StateManager.mutate(s => FrontOffice.applyEvent(s, instance._foOffer, true, atMs)); return true;
     case 'fo_event_no':   StateManager.mutate(s => FrontOffice.applyEvent(s, instance._foOffer, false, atMs)); return true;
     case 'fo_tix_hold': case 'fo_camp_skip': case 'fo_fac_skip': return true;

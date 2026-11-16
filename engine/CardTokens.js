@@ -159,6 +159,8 @@ export function buildTokenMap(cardDef, context, state) {
   // an extension demand from a player in his contract year, a reliever with
   // a starter's stamina, a fielder who could DH, a starter with a bench option.
   const fit = _cardFit(cardDef, state);
+  // §122.57 a card about a clubhouse leader picks them first (no other role takes them).
+  const leaderFirst   = cardDef?._requiresLeaderTrait ? take(_pickLeader(state, used)) : null;
   const activeSP      = take(_pickActivePitcher(state, 'SP', used, fit.pitcher));
   const activeBP      = take(_pickActivePitcher(state, 'RP', used, fit.bp || fit.pitcher));
   const anyPitcher    = take(_pickAnyActivePitcher(state, used, fit.pitcher));
@@ -166,7 +168,7 @@ export function buildTokenMap(cardDef, context, state) {
   const secondHitter  = take(_pickActiveHitter(state, used));
   const thirdHitter   = take(_pickActiveHitter(state, used));
   const veteran       = take(_pickVeteranHitter(state, used));
-  const leader        = take(_pickLeader(state, used));
+  const leader        = leaderFirst || take(_pickLeader(state, used));
   const plPlayer      = take(_pickActivePlayer(state, used));
   const farmPitcher   = _pickFarm(state, true);
   const farmHitter    = _pickFarm(state, false);
@@ -579,6 +581,8 @@ function _cardFit(cardDef, state) {
     const dh = (u.lineupSlots || []).find(s => s.slot === 'DH');
     out.hitter = (p) => starting.has(p.id) && dh?.playerId !== p.id;
   }
+  // §122.57 a veteran (or a steady hand) off the bench who wants to know where they stand.
+  if (d._needsBenchVet) out.hitter = (p) => !starting.has(p.id) && ['veteran', 'consistent'].includes(p.trait);
   if (d._requiresPositionMatch) {
     out.hitter = (p) => starting.has(p.id) && !!_benchAlternative(state, p, new Set());
   }
