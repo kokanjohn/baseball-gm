@@ -714,19 +714,31 @@ function _composeTopics(state, ch) {
     const skills = pick ? `<div class="compose-h compose-deal-h">${t.choices === 'positions' ? 'Which position?' : t.choices === 'roles' ? 'Which role?' : 'Work on what?'}</div>
       <div class="compose-skills">${_choicesFor(t, pick).map(c => `<button type="button" class="compose-skill${_composeSkill === c.key ? ' selected' : ''}" data-skill="${c.key}">
         <span class="cs-name">${c.name}</span><span class="cs-val">${c.val}</span></button>`).join('')}</div>` : '';
+    // r197 the Send button right under the topic's last step: where the eye already is.
+    const send = isSel && !off ? _composeSendBtn(t) : '';
     return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
       <span>${_escape(t.label)}</span>
       <span class="topic-desc">${_escape(note || t.desc)}</span>
-    </div>${deals}${players}${skills}`;
+    </div>${deals}${players}${skills}${send}`;
   }).join('');
-  const sel = ch.topics.find(t => t.id === _composeTopic);
-  const canSend = !!_composeTopic && (!(sel?.deal || sel?.player) || !!_composeDeal) && (!sel?.skill || !!_composeSkill);
   return `
     <button type="button" class="compose-back" id="compose-back">‹ All recipients</button>
     <div class="compose-to"><span class="compose-to-label">To</span> ${_escape(ch.label)}<span class="compose-to-role">${_escape(ch.role)}</span></div>
     <div class="compose-h">What about?</div>
-    <div class="compose-topic-list">${rows}</div>
-    <button class="compose-send-btn" ${canSend ? '' : 'disabled'} id="compose-send-btn">${canSend ? 'Send Message' : !_composeTopic ? 'Pick a topic' : sel?.player && !_composeDeal ? 'Pick a player' : sel?.skill ? (sel.choices === 'positions' ? 'Pick a position' : sel.choices === 'roles' ? 'Pick a role' : 'Pick a skill') : 'Pick a deal'}</button>`;
+    <div class="compose-topic-list">${rows}</div>`;
+}
+
+/** The picked topic's Send button: ready once every step is chosen, else what's left to pick. */
+function _composeSendBtn(sel) {
+  const canSend = (!(sel.deal || sel.player) || !!_composeDeal) && (!sel.skill || !!_composeSkill);
+  const label = canSend ? 'Send Message' : sel.player && !_composeDeal ? 'Pick a player'
+    : sel.skill ? (sel.choices === 'positions' ? 'Pick a position' : sel.choices === 'roles' ? 'Pick a role' : 'Pick a skill') : 'Pick a deal';
+  return `<button class="compose-send-btn compose-send-inline" ${canSend ? '' : 'disabled'} id="compose-send-btn">${label}</button>`;
+}
+
+/** r197 after a step is picked: the Send button in view, clear of the tab bar (its scroll-margin), scrolled only as far as needed. */
+function _composeShowSend() {
+  document.getElementById('compose-send-btn')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 /** A trade topic with one deal on the table: that deal, picked already. */
@@ -879,14 +891,15 @@ function _attachTabListeners(state) {
       const ch = COMPOSE_CHANNELS.find(c => c.id === _composeChannel);
       _composeDeal = _composeDeal || _onlyDeal(ch, _composeTopic);
       refresh();
+      _composeShowSend();
     });
   });
   document.querySelectorAll('[data-deal]').forEach(el => {
-    el.addEventListener('click', () => { _composeDeal = el.dataset.deal; refresh(); });
+    el.addEventListener('click', () => { _composeDeal = el.dataset.deal; refresh(); _composeShowSend(); });
   });
-  document.getElementById('compose-player')?.addEventListener('change', (e) => { _composeDeal = e.target.value || null; _composeSkill = null; refresh(); });
+  document.getElementById('compose-player')?.addEventListener('change', (e) => { _composeDeal = e.target.value || null; _composeSkill = null; refresh(); _composeShowSend(); });
   document.querySelectorAll('[data-skill]').forEach(el => {
-    el.addEventListener('click', () => { _composeSkill = el.dataset.skill; refresh(); });
+    el.addEventListener('click', () => { _composeSkill = el.dataset.skill; refresh(); _composeShowSend(); });
   });
 
   // Compose send button

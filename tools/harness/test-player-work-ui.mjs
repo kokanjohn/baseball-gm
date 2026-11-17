@@ -53,6 +53,12 @@ check('…and Send waits for a skill', await page.evaluate(() => document.getEle
 await tap('.compose-skill[data-skill="contact"]');
 await page.screenshot({ path: `${out}/work-compose-${theme}.png` });
 check('a skill picked: Send is ready', await page.evaluate(() => !document.getElementById('compose-send-btn')?.disabled));
+await page.waitForTimeout(500);
+{ // r197 right under the last step (the skills), on screen above the tab bar
+  const at = await page.evaluate(() => { const b = document.getElementById('compose-send-btn'), r = b.getBoundingClientRect(), nav = document.querySelector('.bottom-nav')?.getBoundingClientRect();
+    return { after: b.previousElementSibling?.className, inView: r.top >= 0 && r.bottom <= (nav?.top ?? window.innerHeight) }; });
+  check(`…right under the skills, on screen (${at.after})`, /compose-skills/.test(at.after || '') && at.inView, JSON.stringify(at));
+}
 await tap('#compose-send-btn');
 const sent = await page.evaluate(async () => { const SM = await import('/baseball-gm/store/StateManager.js'); return (SM.get().scheduledCards || []).find(c => c._composeTopic === 'hc_work'); });
 check(`sent: the message waits for the coach's reply ("${sent?._composeLabel}")`, !!sent && sent._composeArg?.skill === 'contact' && sent._composeArg?.playerId === who.id);

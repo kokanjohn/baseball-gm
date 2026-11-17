@@ -83,12 +83,20 @@ await page.click('.compose-person[data-channel="groundskeeper"]');
 await page.waitForSelector('.compose-to', { timeout: 5000 });
 const vis = await page.evaluate(() => {
   const vh = window.innerHeight, inView = (el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= vh - 60; };   // (above the tab bar)
-  return { topics: [...document.querySelectorAll('.compose-topic-btn')].map(inView), send: inView(document.getElementById('compose-send-btn')),
+  return { topics: [...document.querySelectorAll('.compose-topic-btn')].map(inView), send: !!document.getElementById('compose-send-btn'),
            to: document.querySelector('.compose-to').textContent.replace(/\s+/g, ' ').trim() };
 });
-check(`after picking the groundskeeper, the topics and Send are on screen, no scrolling (“${vis.to}”; ${vis.topics.length} topics)`, vis.topics.length >= 2 && vis.topics.every(Boolean) && vis.send);
+check(`after picking the groundskeeper, the topics are on screen, no scrolling, and no Send until a topic is picked (“${vis.to}”; ${vis.topics.length} topics)`, vis.topics.length >= 2 && vis.topics.every(Boolean) && !vis.send);
 await page.screenshot({ path: `${out}/compose-topics-${theme}.png` });
 await page.click('.compose-topic-btn[data-topic="gk_field"]');
+await page.waitForTimeout(500);
+// r197 Send sits right under the picked topic (its last step), on screen above the tab bar.
+const sendAt = await page.evaluate(() => {
+  const b = document.getElementById('compose-send-btn'), r = b?.getBoundingClientRect(), nav = document.querySelector('.bottom-nav')?.getBoundingClientRect();
+  return { after: b?.previousElementSibling?.dataset?.topic, ready: b && !b.disabled, inView: !!r && r.top >= 0 && r.bottom <= (nav?.top ?? window.innerHeight) };
+});
+check(`Send right under the picked topic (${sendAt.after}), ready and on screen`, sendAt.after === 'gk_field' && sendAt.ready && sendAt.inView, JSON.stringify(sendAt));
+await page.screenshot({ path: `${out}/compose-send-under-${theme}.png` });
 const t0 = Date.now();
 await page.click('#compose-send-btn');
 await page.waitForTimeout(400);

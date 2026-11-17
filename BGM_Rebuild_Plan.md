@@ -12730,3 +12730,22 @@ The pitching coach's current contract stands; the new pay applies at the next hi
   - CPU clubs made 4 trades with each other in the season, against a floor of 5.
 
 **Fresh team:** not required. An existing save drops its bullpen coach once on load.
+
+## §122.74 — r197: Compose's Send button under the last step
+**The GM's report** (Nov 17 2026): after the last pick in Compose (the topic, then a deal, a player, a skill, a position or a role), the Send button sat at the bottom of the topic list. A long list put it off screen, and it wasn't clear that a scroll was needed to send.
+
+**Now** (InboxScreen `_composeSendBtn`, `_composeShowSend`):
+- **Send sits right under the picked topic's last step:**
+  - under the topic itself when there's nothing more to pick;
+  - otherwise under the deals, the player or the choices.
+- **Until every step is chosen,** it says what's left ("Pick a player", "Pick a skill", "Pick a role"…).
+- **No topic picked:** no button.
+- **After each pick,** the page scrolls only as far as needed to show the button above the tab bar (`scroll-margin-bottom`).
+
+**Checks:**
+- **test-compose-ui:** no Send until a topic is picked; then Send is right under it, ready, and on screen.
+- **test-player-work-ui:** with a skill picked, Send is right under the skills and on screen.
+
+The compose, work, strategy, teaching and trade-advice UI tests pass in both themes.
+
+**Fresh team:** not required.
