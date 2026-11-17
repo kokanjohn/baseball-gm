@@ -794,3 +794,79 @@ export function scoutRead(offer, state, teamId, ourBlocker = null) {
 
 // §90 shared with LeagueTrades (CPU-to-CPU deals and the scout's packages).
 export { _isKey as isKeyPiece, _plays as playsSlot, _isRentalPlayer as isRental, _packageValue as packageValue };
+
+// ─────────────────────────────────────────────────────────────
+// r198 §122.75 THE DEAL, ON PAPER
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * dealSheet(state, offer, { teamName }) — a deal as a table: the players each
+ * way and the money. One source for every place that shows a deal's numbers
+ * (the deal table; the payroll lines in text read the same totals).
+ *   offer: our terms — incomingIds (we get), outgoingIds (we send), cashK (+ they
+ *          pay us, − we pay them), retain { id: share the sending club keeps
+ *          paying this season }.
+ * Money is $K. A salary is a year's; "rest of this season" is that times the
+ * share of the season still to be paid (remainingShare).
+ *   → { get: [row], send: [row], rem,
+ *       salary: { get, send, net },          a year, net of salary kept by the sender
+ *       rest:   { get, send, net },          the rest of this season
+ *       cashK, netThisSeason,                (+ costs us) rest-of-season salary plus cash
+ *       payroll: { now, after, target },
+ *       later:  { get, send, net } }         every season after this one, one total
+ *   row: { id, name, pos, ovr, age, salary, years (seasons after this one),
+ *          kept (share), keptBy ('them'|'us'|null), injured }
+ */
+export function dealSheet(state, offer, { teamName = 'They' } = {}) {
+  const P = (id) => state.players?.[id];
+  const ret = offer?.retain || {};
+  const year = baseballYear(state);
+  const row = (p, ours) => ({
+    id: p.id, name: p.name, pos: p.pos, ovr: p.ovr, age: computeAge(p.dob, year),
+    salary: p.contractSalary || 0, years: yearsAfterThis(p, state),
+    kept: ret[p.id] || 0, keptBy: ret[p.id] ? (ours ? 'us' : 'them') : null,
+    injured: !!p.isInjured,
+  });
+  const get = (offer?.incomingIds || []).map(P).filter(Boolean).map(p => row(p, false));
+  const send = (offer?.outgoingIds || []).map(P).filter(Boolean).map(p => row(p, true));
+  // What each side costs us a year: an incoming salary less what they keep paying; an outgoing one
+  // less what we keep paying (that share stays on our books this season).
+  const yr = (rows) => Math.round(rows.reduce((s, r) => s + r.salary * (1 - r.kept), 0));
+  const rem = remainingShare(state);
+  const salary = { get: yr(get), send: yr(send) };
+  salary.net = salary.get - salary.send;
+  const rest = { get: Math.round(salary.get * rem), send: Math.round(salary.send * rem) };
+  rest.net = rest.get - rest.send;
+  const cashK = offer?.cashK || 0;
+  const later = { get: get.reduce((s, r) => s + r.salary * r.years, 0), send: send.reduce((s, r) => s + r.salary * r.years, 0) };
+  later.net = later.get - later.send;
+  const now = Finance.payrollOf(state, 'user');
+  return {
+    teamName, get, send, rem, salary, rest, cashK,
+    netThisSeason: rest.net - cashK,
+    payroll: { now, after: now + salary.net, target: Finance.seasonTarget(state.userTeam?.finances) || 0 },
+    later,
+  };
+}
+
+/**
+ * dealOfCard(state, card) — r198 the deal a trade message is about (our terms), or null:
+ * a club's offer, Pro Scouting's package, their counter, a deal they accepted.
+ *   → { teamId, team, offer }
+ */
+export function dealOfCard(state, card) {
+  if (!card) return null;
+  let teamId = null, offer = null;
+  if (card._tradeOffer && card._proposingTeamId) { teamId = card._proposingTeamId; offer = card._tradeOffer; }
+  else if (card._ideaOffer && card._ideaTeamId)   { teamId = card._ideaTeamId; offer = card._ideaOffer; }
+  else if (card._dealOffer?.offer)                { teamId = card._dealOffer.teamId; offer = card._dealOffer.offer; }
+  else if (card._reviseOffer?.offer && ['talk_counter'].includes(card.cardId)) { teamId = card._reviseOffer.teamId; offer = card._reviseOffer.offer; }
+  else if (card.cardId === 'talk_accepted' && card._talkTeamId) {
+    // (a save from before r198: the deal is the talk's, while it's still that talk)
+    const talk = talkWith(state, card._talkTeamId);
+    if (talk?.offer && talk.id === card._talkId) { teamId = card._talkTeamId; offer = talk.offer; }
+  }
+  if (!offer || !teamId) return null;
+  const team = (state.leagueTeams || []).find(t => t.id === teamId)?.name || 'They';
+  return { teamId, team, offer };
+}

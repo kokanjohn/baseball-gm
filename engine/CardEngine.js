@@ -4494,7 +4494,7 @@ export function deliverTalkReply(teamId, r, atMs) {
   const key = `talk:${teamId}:${talk.id}:${r.decision}:${talk.round}`;
   const base = { tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', _talkTeamId: teamId, _talkId: talk.id, _talkRound: talk.round, _rosterKey: key };
   if (r.decision === 'accept') {
-    return _deliverAt(_rosterCard(state, { ...base, cardId: 'talk_accepted', type: 'good',
+    return _deliverAt(_rosterCard(state, { ...base, cardId: 'talk_accepted', type: 'good', _dealOffer: { teamId, offer: talk.offer },   // r198 the deal table
       subject: `${name} accepted our offer`,
       preview: `They'll do it: ${Negotiation.describeOffer(state, talk.offer, name)}.`,
       body: `${name} called back: they'll do the deal — ${Negotiation.describeOffer(state, talk.offer, name)}. `

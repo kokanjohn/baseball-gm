@@ -1,0 +1,119 @@
+/**
+ * ui/components/DealSheet.js
+ * r198 §122.75 a deal as a table: what we get and what we send, side by side,
+ * and the money under both — a year, the rest of this season, later seasons,
+ * cash, and the payroll after the deal against ownership's target.
+ *
+ *   openDealSheet({ offer, teamName, title })
+ *     offer: our terms (incomingIds we get, outgoingIds we send, cashK + to us,
+ *            retain { id: share the sending club keeps paying this season })
+ *
+ * The numbers are TradeEngine.dealSheet's: the same totals the staff's words use.
+ * A name opens the player.
+ */
+
+import * as StateManager from '../../store/StateManager.js';
+import { dealSheet } from '../../engine/TradeEngine.js';
+import { formatK } from '../../engine/CardTokens.js';
+import { posLabel } from '../../engine/Positions.js';
+
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const _e = (s) => String(s ?? '').replace(/[&<>"']/g, c => ESC[c]);
+
+export function openDealSheet({ offer, teamName = 'They', title = 'The Deal' } = {}) {
+  const state = StateManager.get();
+  if (!state || !offer) return;
+  _injectCSS();
+  document.getElementById('ds-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ds-overlay';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-sheet ds-sheet"><div class="modal-handle"></div>${_html(state, dealSheet(state, offer, { teamName }), title)}</div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('open'));
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#ds-close')?.addEventListener('click', close);
+  overlay.querySelectorAll('[data-ds-player]').forEach(b => b.addEventListener('click', () => {
+    import('./PlayerCard.js').then(PC => PC.openPlayerCard(b.dataset.dsPlayer, StateManager.get()));
+  }));
+}
+
+/** "2 more seasons" / "final season" */
+const _years = (n) => (n > 0 ? `${n} more season${n === 1 ? '' : 's'}` : 'final season');
+/** A sum that costs us (+) or saves us (−). */
+const _net = (k) => (Math.round(k) > 0 ? `Costs us ${formatK(Math.round(k))}` : Math.round(k) < 0 ? `Saves us ${formatK(-Math.round(k))}` : 'No change');
+
+function _cell(state, r) {
+  const p = state.players[r.id];
+  const kept = r.kept ? `<div class="ds-kept">${r.keptBy === 'us' ? 'We keep' : 'They keep'} paying ${Math.round(r.kept * 100)}% this season</div>` : '';
+  return `<div class="ds-player">
+    <button type="button" class="ds-name" data-ds-player="${_e(r.id)}">${_e(r.name)}</button>
+    <div class="ds-meta">${_e(p ? posLabel(p) : r.pos)} · OVR ${r.ovr} · ${r.age}${r.injured ? ' · hurt' : ''}</div>
+    <div class="ds-pay">${r.salary > 0 ? `${formatK(r.salary)} a year` : 'No salary'} · ${_years(r.years)}</div>
+    ${kept}
+  </div>`;
+}
+
+function _html(state, d, title) {
+  const col = (rows) => (rows.length ? rows.map(r => _cell(state, r)).join('') : '<div class="ds-none">No players</div>');
+  const k = (v) => formatK(Math.round(v));
+  const cash = d.cashK > 0 ? `${formatK(d.cashK)} to us` : d.cashK < 0 ? `${formatK(-d.cashK)} from us` : null;
+  const gap = d.payroll.target > 0 ? d.payroll.after - d.payroll.target : null;
+  const restRow = d.rem > 0.02 && d.rem < 0.98;
+  return `
+    <div class="ds-head">
+      <div class="ds-titles"><div class="ds-title">${_e(title)}</div><div class="ds-sub">With ${_e(d.teamName)}</div></div>
+    </div>
+    <div class="ds-grid">
+      <div class="ds-colh">We Get</div><div class="ds-colh">We Send</div>
+      <div class="ds-col">${col(d.get)}</div><div class="ds-col">${col(d.send)}</div>
+    </div>
+    <table class="ds-money">
+      <thead><tr><th></th><th>We Get</th><th>We Send</th></tr></thead>
+      <tbody>
+        <tr><td>Salary a year</td><td>${k(d.salary.get)}</td><td>${k(d.salary.send)}</td></tr>
+        ${restRow ? `<tr><td>Rest of this season</td><td>${k(d.rest.get)}</td><td>${k(d.rest.send)}</td></tr>` : ''}
+        <tr><td>Later seasons</td><td>${k(d.later.get)}</td><td>${k(d.later.send)}</td></tr>
+      </tbody>
+    </table>
+    <div class="ds-totals">
+      ${cash ? `<div class="ds-row"><span>Cash</span><span>${cash}</span></div>` : ''}
+      <div class="ds-row"><span>This season, net</span><span>${_net(d.netThisSeason)}</span></div>
+      <div class="ds-row"><span>Payroll after the deal</span><span class="${gap > 0 ? 'ds-cost' : ''}">${k(d.payroll.after)}${gap == null ? '' : gap > 0 ? ` · ${k(gap)} over target` : ` · ${k(-gap)} under target`}</span></div>
+      <div class="ds-row"><span>Later seasons, net</span><span>${_net(d.later.net)}</span></div>
+    </div>
+    <button type="button" class="ds-close" id="ds-close">Close</button>`;
+}
+
+function _injectCSS() {
+  if (document.getElementById('ds-css')) return;
+  const st = document.createElement('style');
+  st.id = 'ds-css';
+  st.textContent = `
+    .ds-sheet{max-height:calc(90 * var(--vh));overflow-y:auto;padding:0 16px max(16px,env(safe-area-inset-bottom));}
+    .ds-head{padding:10px 0 12px;border-bottom:1px solid var(--border);margin-bottom:10px;}
+    .ds-title{font-size:17px;font-weight:700;color:var(--text);}
+    .ds-sub{font-size:12px;color:var(--muted);margin-top:2px;}
+    .ds-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;}
+    .ds-colh{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);}
+    .ds-col{display:flex;flex-direction:column;gap:6px;min-width:0;}
+    .ds-player{border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface2);min-width:0;}
+    .ds-name{display:block;max-width:100%;background:none;border:0;padding:0;font:inherit;font-size:14px;font-weight:700;color:var(--text);text-align:left;cursor:pointer;
+      text-decoration:underline;text-decoration-color:var(--border);text-underline-offset:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .ds-meta,.ds-pay{font-size:11px;color:var(--soft);margin-top:3px;}
+    .ds-pay{color:var(--text);font-variant-numeric:tabular-nums;}
+    .ds-kept{font-size:11px;color:var(--muted);margin-top:3px;}
+    .ds-none{font-size:12px;color:var(--muted);padding:8px 2px;}
+    .ds-money{width:100%;border-collapse:collapse;margin-top:14px;font-size:12px;font-variant-numeric:tabular-nums;}
+    .ds-money th{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);text-align:right;padding:0 0 6px;}
+    .ds-money td{padding:7px 0;border-top:1px solid var(--border);color:var(--text);text-align:right;}
+    .ds-money td:first-child,.ds-money th:first-child{text-align:left;color:var(--soft);}
+    .ds-totals{margin-top:10px;border-top:1px solid var(--border);}
+    .ds-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;color:var(--soft);}
+    .ds-row span:last-child{color:var(--text);font-weight:600;text-align:right;font-variant-numeric:tabular-nums;}
+    .ds-row span.ds-cost{color:var(--danger);}
+    .ds-close{display:block;width:100%;margin-top:16px;padding:12px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font:inherit;font-size:14px;font-weight:600;cursor:pointer;}
+  `;
+  document.head.appendChild(st);
+}

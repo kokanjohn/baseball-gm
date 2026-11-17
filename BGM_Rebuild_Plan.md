@@ -12749,3 +12749,43 @@ The pitching coach's current contract stands; the new pay applies at the next hi
 The compose, work, strategy, teaching and trade-advice UI tests pass in both themes.
 
 **Fresh team:** not required.
+
+## §122.75 — r198: the deal as a table ("See the Deal")
+**The GM's call** (Nov 17 2026): a way to review a trade as a table, with columns for the players coming in and going out and the money easy to see.
+- **Where:** both places. "See the Deal" on every trade message, and the director's review will include the table (next release, §122.76).
+- **Layout:** side by side.
+- **Later seasons:** one total.
+
+**The numbers** (`TradeEngine.dealSheet(state, offer, { teamName })`, pure): one source for every place that shows a deal's money.
+- **Players each way:** for each one, position, OVR, age, salary, seasons after this one, the share the sending club keeps paying, and hurt or not.
+- **Salary a year,** each side, net of the share the sender keeps. The net agrees with `evaluateTrade.payrollDelta`.
+- **The rest of this season:** the year's salary times `remainingShare`. The row shows only part-way through a season.
+- **Cash**, and **this season, net**: the rest-of-season salary less cash to us.
+- **Payroll after the deal,** against ownership's target. It agrees with `evaluateTrade.newPayroll`.
+- **Later seasons:** salary times seasons left, each side and net, as one total.
+
+`dealOfCard(state, card)` finds the deal behind any trade message: a club's offer (`_tradeOffer`), Pro Scouting's package (`_ideaOffer`), their counter (`_reviseOffer`), or a deal they accepted. For that last one, `talk_accepted` now carries `_dealOffer`; a saved card falls back to the talk while it's the same talk.
+
+**The table** (`ui/components/DealSheet.js`, `openDealSheet`): a sheet.
+- **Two columns,** "We Get" and "We Send". Each player shows:
+  - the name, which opens the player;
+  - position · OVR · age;
+  - "$X a year · N more seasons" or "· final season";
+  - "They keep paying 50% this season" or "We keep paying…", when a share is kept.
+- **The money under both columns:** salary a year, the rest of this season, later seasons.
+- **The totals:** cash ("$250K to us"); this season, net ("Costs us" / "Saves us"); payroll after the deal, against the target (red when over); later seasons, net.
+
+**Where to find it:** "See the Deal" sits under any unresolved trade message's text, above "Your decision" (InboxScreen). Messages with no deal don't have it.
+
+**Checks:**
+- **check-deal-sheet** (new):
+  - every kind of trade message gives its deal; one with no deal gives none;
+  - three a side with salary kept both ways and cash: each total matches the trade engine and a hand count;
+  - once the deal is done and everyone reports, payroll is exactly what the table said.
+- **test-deal-sheet-ui** (new):
+  - from an offer, "See the Deal" opens the table, a name opens the player, and Close closes it;
+  - three a side fits at 390px with no name cut off;
+  - a message with no deal has no button.
+  - Both themes.
+
+**Fresh team:** not required.

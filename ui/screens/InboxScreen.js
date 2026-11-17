@@ -33,6 +33,7 @@ import { namedPlayers } from '../../engine/ComposeReplies.js';
 import { workPlayers, skillsOf, teachablePositions } from '../../engine/PlayerWork.js';
 import { posLabel, startsAt, familiarity } from '../../engine/Positions.js';   // r163 §122.35
 import { penRoleOf } from '../../engine/Strategy.js';   // r169
+import { dealOfCard } from '../../engine/TradeEngine.js';   // r198 the deal table
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -480,6 +481,7 @@ function _renderReading(card, inbox, state) {
         </div>
       </div>
       <div class="mr-body">${_paragraphs(card.body || card.preview || '', _messagePlayers(card, state))}</div>
+      ${dealOfCard(state, card) ? `<button class="btn-revise btn-deal" data-deal-sheet="${card.instanceId}">See the Deal</button>` : ''}
       <div class="mr-reply">
         <div class="mr-reply-h">
           <span>Your decision</span>
@@ -813,6 +815,18 @@ function _attachTabListeners(state) {
     _openCard = null;
     refresh();
     window.scrollTo(0, _listScroll);
+  });
+
+  // r198 §122.75 a trade message's deal as a table
+  document.querySelectorAll('[data-deal-sheet]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const st = StateManager.get();
+      const d = dealOfCard(st, getInbox().find(c => c.instanceId === btn.dataset.dealSheet));
+      if (!d) return;
+      const { openDealSheet } = await import('../components/DealSheet.js');
+      openDealSheet({ offer: d.offer, teamName: d.team });
+    });
   });
 
   // §85 a counter we want to answer with our own revised offer
