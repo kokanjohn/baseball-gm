@@ -12571,3 +12571,30 @@ The GM's call (Nov 16 2026): the save-slot limit comes off the active list, like
 **Fresh team:** not required.
 
 **Suite (r193):** every run passes: the season sim, multi-season, every check, and every UI test in both themes. It's the first full suite with no rerun needed.
+
+## §122.71 — r194: the extra seeds' findings, fixed
+Seven seeds were run, not just the suite's one. Each failure found turned out to be a fault in the game or the harness, and each is fixed below. Seeds 1–7 all pass now.
+
+**A free agent read as a reliever with no club (seed 5, "Vazquez").**
+- The injury clock (`TransactionEngine.applyDue`) gave every healed player outside our club an active group (`defaultActiveGroup`). A player let go while hurt healed into "bullpen" with no club, still in the free-agent pool.
+- Now a player with no club heals as what he is: in the pool, group free agent. The winter's healing (`OffseasonEngine._develop`) is treated the same way.
+- Covered by **check-fa-heal** (new). Before the fix it shows the free agent turning "bp".
+
+**The second prospect report repeated the first (seed 2).** With only one young player, the scouting director reported the same one again as if new. When everyone young has had a report lately, the reply now opens: "Nobody new to report since my last look…", then where that player stands now (`memo.again`). The sim check accepts that.
+
+**The weather messages' sender, and the GM's calls "not at home" (seeds 2 and 5).** These were the harness's mistakes, missing two records the game didn't keep:
+- **A makeup at the other park:** a postponement entry now records where the game was to be played (`venueId`).
+- **A game two that waits for game one:** its first pitch moves. It now keeps the time it was scheduled for (`heldFrom`).
+- **A game moved to make room for a makeup:** it keeps where and when it was (`movedFrom`, in `_wxMove`).
+
+The sim attributes each date to the park the game was at then. The crew's word and the Travel Coordinator's were right all along.
+
+**A pregame message came back two days later (seed 7).** A rainout withdraws the day's pregame and in-game cards, and took each one off the card log, even one the GM already had in Messages. That card was then free to be drawn again ("the locker room", seen Jan 5, again Jan 7, again Feb 10, against a 30-day gap and two a season). Now only a card that never arrived comes off the log (`_withdrawDayCards`).
+
+**The scouting director's tips (seeds 5 and 6).** A diamond looked at too late to beat the word gets no roll, but it was marked as rolled, so the sim expected a tip from it. It's now marked `'late'`, and the sim counts only real rolls. "None at all" fails only when it would be under a 1% chance. Seed 6's 0.6% case had been those late looks.
+
+**The release check (seed 7)** now measures payroll as the release lands, before the clock runs and can sign someone for the open spot. Debug dumps for these paths: `WX_DUMP`, `CARD_DUMP`, `TX_DUMP`.
+
+**Fresh team:** not required.
+
+**Suite (r194):** every run passes, the new check-fa-heal included. Seeds 2–7 of the season sim pass too.

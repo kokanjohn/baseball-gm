@@ -659,11 +659,14 @@ W.sc_prospect = (f, r, who) => {
   if (!farm.length) return { body: ['We\'re thin on young players right now — nothing worth a report.'], memo: {} };   // (our young players: there's no farm, §122)
   const reported = new Set(f.pastReplies('sc_prospect').slice(0, 3).map(x => x.memo?.playerId));
   const ranked = farm.sort((a, b) => (b.ovr - 0.8 * f.age(b)) - (a.ovr - 0.8 * f.age(a)));
-  const p = ranked.find(x => !reported.has(x.id)) || ranked[0];
+  const fresh = ranked.find(x => !reported.has(x.id));
+  const p = fresh || ranked[0];
   const sr = p.subRatings || {};
   const keys = p.pos === 'SP' || p.pos === 'RP' ? ['stuff', 'control', 'stamina'] : ['contact', 'power', 'speed'];
   const ks = keys.filter(k => sr[k] != null).sort((a, b) => sr[b] - sr[a]);
-  const out = [`${p.name} — ${p.pos}, ${f.age(p)} years old, ${p.ovr} overall right now.`];
+  // §122.71 everyone young has had a report lately: say so, and where the best of them stands now.
+  const out = fresh ? [] : [`Nobody new to report since my last look${ranked.length === 1 ? `: ${p.name} is still the one young player we have` : ''}. Here's where ${p.name} stands now.`];
+  out.push(`${p.name} — ${p.pos}, ${f.age(p)} years old, ${p.ovr} overall right now.`);
   out.push(`Best tool: ${ks[0]} (${sr[ks[0]]}). Needs work: ${ks[ks.length - 1]} (${sr[ks[ks.length - 1]]}).`);
   const dev = f.devStatus(p);
   if (dev.active) out.push(dev.appliedActive >= 0.5 ? `The development plan is about ${dev.appliedActive.toFixed(1)} points in.` : `The development plan has just started.`);
@@ -671,7 +674,7 @@ W.sc_prospect = (f, r, who) => {
   const block = same.sort((a, b) => b.ovr - a.ovr)[0];
   if (block) out.push(block.ovr - p.ovr <= 3 ? `Close to pushing ${block.name} for playing time.` : `${block.name} is ahead at the position, so ${p.name} has time to develop.`);
   if (f.age(p) <= 20) out.push(`Very young for the level. The ceiling is the reason we like this player.`);
-  return { body: out, memo: { playerId: p.id } };
+  return { body: out, memo: { playerId: p.id, ...(fresh ? {} : { again: true }) } };
 };
 
 /**

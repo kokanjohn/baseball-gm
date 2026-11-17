@@ -2059,6 +2059,9 @@ function _wxSortSchedule(s) {
 /** Move one game (ours or the league's) to a new date and first pitch. Its plan is worked out again. */
 function _wxMove(s, g, isUser, { date, gameTime, venueId }) {
   const home = gameTeams(g, isUser).homeId;
+  // §122.71 where and when it was before the move (a game moved to make room for a makeup has no postponement of its
+  // own; what was said about it at its old time stays tied to it)
+  if (g.gameTime !== gameTime) g.movedFrom = [...(g.movedFrom || []), { gameTime: g.gameTime, venueId: gameTeams(g, isUser).venueId }];
   if (!isUser && g.date !== date) {
     const list = s.leagueSchedule.dayMap[g.date] || [];
     const i = list.indexOf(g);
@@ -2353,7 +2356,8 @@ function _postponeGame(ref, atMs) {
   const { g, isUser } = _wxResolve(st, ref);
   if (!g || !g.wx) return;
   const plan = g.wx;
-  const entry = { date: g.date, gameTime: g.gameTime, decidedAt: plan.decidedAt, reason: plan.reason, calledBy: plan.calledBy };
+  // (§122.71 and where it was to be played: a makeup can move it to the other park)
+  const entry = { date: g.date, gameTime: g.gameTime, decidedAt: plan.decidedAt, reason: plan.reason, calledBy: plan.calledBy, venueId: gameTeams(g, isUser).venueId };
   const waited = g.wxWaited ? { ...g.wxWaited } : null;   // §122.51 (read before the game moves: a move clears it)
   const why = _wxReasonWord(plan.reason);
   const hostCity = isUser && !g.isHome || isUser && gameTeams(g, true).venueId !== 'user' ? cityOf(weatherContext(st).map, gameTeams(g, true).venueId, null) : null;   // §122.58 (before it moves)
@@ -2527,6 +2531,8 @@ function _wxHoldForClubs(ref, atMs) {
   if (!need || need <= g.gameTime) return false;
   StateManager.mutate(s => {
     const x = _wxResolve(s, ref).g;
+    // §122.71 the first pitch it was scheduled for (the crew's word and the GM's calls before the wait were about it)
+    x.heldFrom ??= x.gameTime;
     x.gameTime = need;
     x.wx = null;
     if (isUser) _wxSortSchedule(s);

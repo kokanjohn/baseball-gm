@@ -152,8 +152,9 @@ async function checkComposeTruth(st, at) {
   const first = writeComposeReply(st, { topicId: 'sc_prospect', channelId: 'scouting', atMs: at });
   const st2 = { ...st, composeLog: [{ topicId: 'sc_prospect', channelId: 'scouting', atMs: at - 86_400_000, memo: first.memo }] };
   const second = writeComposeReply(st2, { topicId: 'sc_prospect', channelId: 'scouting', atMs: at + 86_400_000 });
-  check(`compose: a second prospect report covers someone new (${st.players[first.memo.playerId]?.name} → ${st.players[second.memo.playerId]?.name})`,
-        !first.memo.playerId || !second.memo.playerId || second.memo.playerId !== first.memo.playerId);
+  check(`compose: a second prospect report covers someone new, or says there's nobody new (${st.players[first.memo.playerId]?.name} → ${st.players[second.memo.playerId]?.name}${second.memo.again ? ', nobody new' : ''})`,
+        !first.memo.playerId || !second.memo.playerId || second.memo.playerId !== first.memo.playerId
+        || (second.memo.again && /Nobody new to report/.test(second.body)));   // (§122.71 one young player: says so)
   // The GM's own decision, in the reply of the person it concerned.
   // (the newest call on the crew's work: the reply speaks to the latest one — §122.60 a real one made since would win)
   const dec = { instanceId: 'test-dec', cardId: 'test_tarp', tag: 'FACILITIES', subject: 'Tarp replacement — the old one is torn', resolved: true, choice: 'no', resolvedAtMs: at - 60_000 };
@@ -314,8 +315,15 @@ function gmActs() {
     if (c.cardId === 'os_release' && !gm.released) {
       const p0 = SM.get().players[c._targetPlayerId];
       gm.released = { id: c._targetPlayerId, salary: p0.contractSalary, expiry: p0.contractExpiry, season: SM.get().seasonNum, room0: Finance.payrollRoom(SM.get()), pay0: Finance.payrollOf(SM.get(), 'user') };
-      resolveCard(c.instanceId, 'no'); gm.acted++; advanceClock(clock.get());
+      const ros0 = new Map((SM.get().userTeam.rosterIds || []).map(id => [id, SM.get().players[id]?.contractSalary || 0]));
+      resolveCard(c.instanceId, 'no'); gm.acted++;
+      // (§122.71 measured as the release lands: the clock run after it can sign someone for the open spot)
       gm.released.room1 = Finance.payrollRoom(SM.get()); gm.released.pay1 = Finance.payrollOf(SM.get(), 'user');
+      if (process.env.CARD_DUMP) { const s1 = SM.get(), ros1 = new Map((s1.userTeam.rosterIds || []).map(id => [id, s1.players[id]?.contractSalary || 0]));
+        console.log('RELD', JSON.stringify({ added: [...ros1].filter(([id]) => !ros0.has(id)).map(([id, k]) => [s1.players[id]?.name, k, s1.players[id]?.group]),
+          gone: [...ros0].filter(([id]) => !ros1.has(id)).map(([id, k]) => [s1.players[id]?.name, k]), changed: [...ros1].filter(([id, k]) => ros0.has(id) && ros0.get(id) !== k).map(([id, k]) => [s1.players[id]?.name, ros0.get(id), k]),
+          pending: (s1.transactions || []).filter(t => t.status === 'pending' && t.teamId === 'user').map(t => [s1.players[t.playerId]?.name, s1.players[t.playerId]?.contractSalary]) })); }
+      advanceClock(clock.get());
       continue;
     }
     // §112.2 let the first coach go every run, so the hiring path is always exercised.
@@ -1467,6 +1475,13 @@ function checkMessageVoice(st) {
     const stories = {};
     for (const c of drawn) { const r = cardRepeatRule(c.cardId); if (r.story) (stories[r.story] ||= []).push(c.deliverAtMs ?? c.arrivedAtMs); }
     for (const [k, ts] of Object.entries(stories)) { ts.sort((a, b) => a - b); if (ts.some((t, i) => i && t - ts[i - 1] < 30 * DAY - 60_000)) story.push(k); }
+    if (process.env.CARD_DUMP) for (const k of [...over, ...close].map(x => x.split('×')[0])) {
+      const [sea, id] = k.split('|');
+      for (const c of drawn.filter(c => String(c._season) === sea && c.cardId === id)) {
+        const now = (st.inbox || []).find(x => x.instanceId === c.instanceId);
+        console.log('CARDD', k, c.instanceId, new Date(c.deliverAtMs ?? c.arrivedAtMs).toISOString(), 'inbox', !!now, now?.resolved, now?.choice, 'game', c._gameTime && new Date(c._gameTime).toISOString(), c._withdrawn, JSON.stringify(st.cardLog?.[id]));
+      }
+    }
     check(`messages: a story card comes once a season, a repeatable one within its limit (${drawn.length} drawn)`, over.length === 0, over.slice(0, 8).join(', '));
     check('messages: a repeatable card comes back no sooner than its gap', close.length === 0, close.slice(0, 8).join(', '));
     check('messages: two cards of one story at least a month apart', story.length === 0, story.join(', '));
@@ -1557,18 +1572,29 @@ function checkWeatherSeason(st) {
     const dupes = keys.filter((k, i) => keys.indexOf(k) !== i);
     const gt = (c) => +String(c._rosterKey).split(':')[3];
     // (a game's times: as played, every date it was postponed from, and the date it was suspended on)
-    const timesOf = (g) => [g.gameTime, ...(g.postponements || []).map(p => p.gameTime), ...(g.suspension?.gameTime ? [g.suspension.gameTime] : [])];
+    // (§122.71 and a game two's first pitch before it waited for game one: heldFrom)
+    const timesOf = (g) => [g.gameTime, ...(g.heldFrom ? [g.heldFrom] : []), ...(g.movedFrom || []).map(m => m.gameTime), ...(g.postponements || []).map(p => p.gameTime), ...(g.suspension?.gameTime ? [g.suspension.gameTime] : [])];
     const ourPark = (g) => (g.venueId || (g.isHome ? 'user' : null)) === 'user';
-    const homeTimes = new Set(st.schedule.filter(ourPark).flatMap(timesOf));
-    const roadTimes = new Set(st.schedule.filter(g => !ourPark(g)).flatMap(timesOf));
+    // §122.71 each date at the park it was at then: a game called off at one park can be made up at the other
+    // (a postponement keeps where it was to be played — `venueId`; older entries: where the game is now).
+    const parkTimes = (g) => [[g.gameTime, ourPark(g)], ...(g.heldFrom ? [[g.heldFrom, ourPark(g)]] : []), ...(g.movedFrom || []).map(m => [m.gameTime, m.venueId === 'user']), ...(g.postponements || []).map(p => [p.gameTime, p.venueId ? p.venueId === 'user' : ourPark(g)]),
+                              ...(g.suspension?.gameTime ? [[g.suspension.gameTime, ourPark(g)]] : [])];
+    const homeTimes = new Set(st.schedule.flatMap(parkTimes).filter(([, home]) => home).map(([t]) => t));
+    const roadTimes = new Set(st.schedule.flatMap(parkTimes).filter(([, home]) => !home).map(([t]) => t));
     const stray = crew.filter(c => !homeTimes.has(gt(c)) && !roadTimes.has(gt(c)));
     const wrongVoice = crew.filter(c => homeTimes.has(gt(c)) ? c.sender !== 'Head Groundskeeper' : c.sender !== 'Travel Coordinator')
       .filter(c => !(homeTimes.has(gt(c)) && roadTimes.has(gt(c))));   // (a date both: a game moved between parks)
+    if (process.env.WX_DUMP) for (const c of [...stray, ...wrongVoice]) {
+      const t = gt(c), near = st.schedule.filter(g => Math.abs(g.gameTime - t) < 3 * 86_400_000 || (g.postponements || []).some(p => Math.abs(p.gameTime - t) < 3 * 86_400_000));
+      console.log('WXD', c.sender, c.subject, c._rosterKey, new Date(t).toISOString(), JSON.stringify(near.map(g => ({ d: g.date, t: new Date(g.gameTime).toISOString(), home: g.isHome, v: g.venueId, opp: g.opponent,
+        ppd: (g.postponements || []).map(p => [new Date(p.gameTime).toISOString(), p.venueId]), mk: g.makeup, moved: g._movedFrom, st: g.status })))); }
+    for (const c of (process.env.WX_DUMP ? [...mailSeen.values()].filter(c => c._wxDecision) : [])) { const g = st.schedule.find(g => timesOf(g).includes(c._wxGameTime));
+      if (!g || !homeTimes.has(c._wxGameTime) || g.isSpring) console.log('WXDEC', c._wxDecision, c.subject, new Date(c._wxGameTime).toISOString(), JSON.stringify(g && { d: g.date, home: g.isHome, v: g.venueId, sp: g.isSpring, ppd: g.postponements })); }
     const heldOf = (pred) => st.schedule.filter(g => pred(g) && g._committed && g.result !== 'postponed' && Number.isFinite(g.wxResult?.startAt) && g.wxResult.startAt - g.gameTime >= 5 * 60_000);
     const untold = (gs) => gs.filter(g => !crew.some(c => gt(c) === g.gameTime && /:(start_delayed|start_estimate|first_pitch):/.test(c._rosterKey)));
     const held = heldOf(ourPark), heldRoad = heldOf(g => !ourPark(g) && !g.isAllStar);
-    const ppdOf = (pred) => st.schedule.filter(pred).flatMap(g => (g.postponements || []).filter(p => !p.resumption).map(p => p.gameTime));
-    const ppdHome = ppdOf(ourPark), ppdRoad = ppdOf(g => !ourPark(g) && !g.isAllStar);
+    const ppdOf = (gs) => gs.flatMap(g => (g.postponements || []).filter(p => !p.resumption).map(p => p.gameTime));
+    const ppdHome = ppdOf(st.schedule).filter(t => homeTimes.has(t)), ppdRoad = ppdOf(st.schedule.filter(g => !g.isAllStar)).filter(t => !homeTimes.has(t));
     const ppdUntold = (ts) => ts.filter(t => !crew.some(c => c._rosterKey.endsWith(`:${t}:ppd`)));
     const per = {}, perRoad = {};
     for (const c of crew) { const t = gt(c); (roadTimes.has(t) && !homeTimes.has(t) ? perRoad : per)[t] = ((roadTimes.has(t) && !homeTimes.has(t) ? perRoad : per)[t] || 0) + 1; }
@@ -1582,7 +1608,7 @@ function checkWeatherSeason(st) {
     // §122.51 (phase 3b) the GM's weather decisions: only at home, never in spring, each once a game, none left open.
     const dec = [...mailSeen.values()].filter(c => c._wxDecision);
     const byGame = (c) => st.schedule.find(g => timesOf(g).includes(c._wxGameTime));
-    const decBad = dec.filter(c => { const g = byGame(c); return !g || !g.isHome || g.isSpring; });
+    const decBad = dec.filter(c => { const g = byGame(c); return !g || !homeTimes.has(c._wxGameTime) || g.isSpring; });   // (§122.71 at our park on that date)
     const dk = dec.map(c => c._rosterKey), decDup = dk.filter((k, i) => dk.indexOf(k) !== i);
     const now = [...(st.inbox || [])];
     const open = dec.filter(c => !now.find(x => x.instanceId === c.instanceId)?.resolved && (st.schedule.find(g => g.gameTime === c._wxGameTime)?._committed));
@@ -2606,11 +2632,14 @@ async function main() {
     //  shows is that the daily look ran and rolled the market's diamonds; a tip must come once a few were expected.
     //  check-scouting-director covers the tips themselves.)
     const { tipChance } = await import('../../engine/CoachEngine.js');
-    const rolled = Object.values(st.players).filter(p => p._tipRolled);
+    const rolled = Object.values(st.players).filter(p => p._tipRolled === true);   // (§122.71 not the ones looked at too late to beat the word: no roll)
     const expected = rolled.reduce((a, p) => a + tipChance(st.userTeam.coachingStaff, p), 0);
     const tipped = gm.cardIdsSeen.has('scout_tip');
-    check(`scouting director: on the staff (${d?.name}, rated ${d?.quality}, ${d?.specialty}); the daily look rolled ${rolled.length} diamonds (${expected.toFixed(1)} tips expected)${tipped ? ', and tips came through' : ''}`,
-          !!d?.name && rolled.length > 0 && (tipped || expected < 1.5), [...gm.cardIdsSeen].filter(x => /scout/.test(x)).join(','));
+    // §122.71 none at all is a fail only when it would be a long shot: the chance of no tip, roll by roll, under 1%.
+    // (Seed 5 rolled 8 with 2.8 expected and got none: about a 3% season — luck, not a fault.)
+    const pNone = rolled.reduce((a, p) => a * (1 - tipChance(st.userTeam.coachingStaff, p)), 1);
+    check(`scouting director: on the staff (${d?.name}, rated ${d?.quality}, ${d?.specialty}); the daily look rolled ${rolled.length} diamonds (${expected.toFixed(1)} tips expected)${tipped ? ', and tips came through' : `, none came (a ${(pNone * 100).toFixed(1)}% chance)`}`,
+          !!d?.name && rolled.length > 0 && (tipped || pNone >= 0.01), [...gm.cardIdsSeen].filter(x => /scout/.test(x)).join(','));
   }
 
   if (process.env.DBG) {

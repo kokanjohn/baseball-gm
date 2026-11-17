@@ -4114,10 +4114,14 @@ function _withdrawDayCards(pred) {
   const hit = [...(st.inbox || []).filter(c => !c.resolved), ...(st.scheduledCards || [])].filter(pred);
   if (!hit.length) return 0;
   const ids = new Set(hit.map(c => c.instanceId));
+  const seen = new Set((st.inbox || []).filter(c => ids.has(c.instanceId)).map(c => c.instanceId));
   StateManager.mutate(s => {
     s.inbox          = (s.inbox || []).filter(c => c.resolved || !ids.has(c.instanceId));
     s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId));
-    for (const c of hit) _unlogDealt(s, c);
+    // §122.71 a card the GM already had in Messages still counts toward how often it comes (its gap, its limit):
+    // only one that never arrived is taken off the log. (A pregame card seen, then withdrawn with the rainout, came
+    // straight back two days later.)
+    for (const c of hit) if (!seen.has(c.instanceId)) _unlogDealt(s, c);
   });
   return hit.length;
 }
@@ -5924,17 +5928,17 @@ export function directorTips(atMs) {
   const cands = (st.freeAgentPool || []).map(id => st.players[id])
     .filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT && !p._tipRolled && Number.isFinite(p._buzzAt) && p._buzzAt > atMs && isDiamond(p, level))
     .sort((a, b) => worthOf(b) - worthOf(a) || String(a.id).localeCompare(String(b.id)));
-  const rolled = [];
+  const rolled = [], late = [];
   let pick = null;
   const lead = Coach.tipLeadDays(staff) * 86_400_000;
   for (const p of cands) {
     rolled.push(p.id);
-    if (atMs + lead > p._buzzAt - 86_400_000) continue;   // too late to beat the word
+    if (atMs + lead > p._buzzAt - 86_400_000) { late.push(p.id); continue; }   // too late to beat the word (§122.71 marked so: no roll)
     if (eventRand() < Coach.tipChance(staff, p)) { pick = p; break; }
   }
   if (!rolled.length) return 0;
   StateManager.mutate(s => {
-    for (const id of rolled) s.players[id]._tipRolled = true;
+    for (const id of rolled) s.players[id]._tipRolled = late.includes(id) ? 'late' : true;
     if (pick) { s.players[pick.id]._tipAt = atMs + lead; s.userTeam._lastTipAt = atMs + lead; }
   });
   return pick && _deliverScoutTip(pick.id, atMs + lead) ? 1 : 0;

@@ -518,6 +518,10 @@ export function applyDue(draft, clockMs, { reconcileAll = false } = {}) {
             draft.ilReturnQueue = [...(draft.ilReturnQueue || []), p.id];
           }
           events.push({ type: 'IL_ELIGIBLE', playerId: p.id, teamId: 'user', atMs: inj.eligibleAt });
+        } else if (!p.teamId) {
+          // §122.71 a player let go while hurt heals as what he is now — a free agent (or on waivers). The
+          // active group is for a club's own; given here, a free agent in the pool read as a reliever with no club.
+          Object.assign(p, clearInjuryUpdate(), p.group === PLAYER_GROUP.IL ? { group: PLAYER_GROUP.FREE_AGENT } : {});
         } else {
           Object.assign(p, clearInjuryUpdate(), { group: defaultActiveGroup(p) });
           events.push({ type: 'IL_ELIGIBLE', playerId: p.id, teamId: p.teamId, atMs: inj.eligibleAt });

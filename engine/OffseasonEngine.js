@@ -568,7 +568,7 @@ function _develop(p, nextYear, seasonNum, staff = null, facility = 0, played = n
   }
   if (p.injury || p.isInjured || p.group === PLAYER_GROUP.IL) {
     Object.assign(p, clearInjuryUpdate());
-    if (p.group === PLAYER_GROUP.IL) p.group = defaultActiveGroup(p);
+    if (p.group === PLAYER_GROUP.IL) p.group = p.teamId ? defaultActiveGroup(p) : PLAYER_GROUP.FREE_AGENT;   // §122.71 (no club: still a free agent)
   }
   p.injuryPenalty = null;
 }
