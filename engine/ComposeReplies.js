@@ -78,7 +78,6 @@ const STAFF = {
   pitching_coach:  { key: 'pitchingCoach', role: 'Pitching Coach' },
   hitting_coach:   { key: 'hittingCoach',  role: 'Hitting Coach' },
   bench_coach:     { key: 'benchCoach',    role: 'Bench Coach' },
-  bullpen_coach:   { key: 'bullpenCoach',  role: 'Bullpen Coach' },
   groundskeeper:   { rel: 'groundskeeperRelationship',  role: 'Head Groundskeeper' },
   ticket_office:   { rel: 'ticketOfficeRelationship',   role: 'Ticket Office' },
   scouting:        { key: 'scoutingDirector', role: 'Scouting Director' },
@@ -562,7 +561,7 @@ const _tactics = (f, r, who) => {
   return { body: out, memo: {} };
 };
 
-// ── Bullpen Coach ──────────────────────────────────────────────
+// ── The bullpen (r196 the pitching coach's; there's no bullpen coach) ──
 
 const _bpcAvailable = (f, r, who) => {
   const bp = f.bullpen();
@@ -835,8 +834,8 @@ W.pc_rotation = (f, r, who) => {
   return { body: [...t.body, ...notes], memo: {} };
 };
 
-/** The Bullpen Coach on the bullpen: who's available, the work it has done, and who has which role. */
-W.bpc_health = (f, r, who) => {
+/** The Pitching Coach on the bullpen: who's available, the work it has done, and who has which role. */
+W.pc_bullpen = (f, r, who) => {
   const h = _bpcAvailable(f, r, who), u = _penUsage(f, r, who);
   const mine = penRolesOf(f.u);
   const named = [mine.closer && `${f.P(mine.closer)?.name} closing`, ...mine.setup.map(id => `${f.P(id)?.name} setting up`)].filter(Boolean);
@@ -869,8 +868,8 @@ W.bc_tactics = (f, r, who) => {
   return { body: out, memo: { run: cur, rec }, decision: { team: true, onYes: 'set_strategy', choices: styleChoices('run', cur, rec), expiresInMs: 3 * MS_DAY } };
 };
 
-/** The Bullpen Coach on one reliever's role (the GM picks the pitcher and the role). */
-W.bpc_roles = (f, r, who, arg) => {
+/** The Pitching Coach on one reliever's role (the GM picks the pitcher and the role). */
+W.pc_roles = (f, r, who, arg) => {
   const st = f.state, p = arg?.playerId ? st.players[arg.playerId] : null, role = arg?.skill;
   if (!p || p.teamId !== 'user' || !['closer', 'setup', 'auto'].includes(role)) return { body: [`${p?.name || 'That pitcher'} isn't someone I can give a role right now.`], memo: {}, topic: 'that pitcher' };
   const name = p.name, topic = `${name}'s role`;
@@ -946,7 +945,7 @@ const TOPIC_LABELS = {
   gk_field: 'the field', gk_weather: 'the weather', gk_prep: 'getting the field ready', mgr_lineup: 'the batting order', mgr_morale: 'the clubhouse',
   mgr_hook: 'the hook', pc_rotation: 'the rotation',
   pc_prospect: 'our young pitchers', hc_slump: 'the slump', hc_development: 'our young hitters',
-  bc_tactics: 'the running game', bpc_health: 'the bullpen', bpc_roles: 'the bullpen roles', tix_attendance: 'attendance',
+  bc_tactics: 'the running game', pc_bullpen: 'the bullpen', pc_roles: 'the bullpen roles', tix_attendance: 'attendance',
   tix_promo: 'a promotion', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
   hc_work: 'the work', pc_work: 'the work', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',

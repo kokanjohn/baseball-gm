@@ -11,8 +11,9 @@
  *
  *   Roles and specialties:
  *     pitchingCoach  command (control) · power (stuff) · youth (young arms grow faster)
+ *                    — the whole staff, starters and relievers (r196 §122.73: the
+ *                    bullpen coach's job folded in)
  *     hittingCoach   contact · power · youth (young hitters grow faster)
- *     bullpenCoach   command (relievers' control) · late (relievers in the 8th and later)
  *     benchCoach     baserunning (speed on the bases) · defense (fewer errors)
  *
  *   The offseason (§112.2): day 2 evaluates each coach on their side of the
@@ -43,12 +44,11 @@ import { eventRand } from './Dice.js';
 import { PLAYER_ORIGIN, ARCHETYPE_CARD_WEIGHTS } from '../data/constants.js';
 
 /** Every staff role with a quality and a specialty (the manager is separate). */
-export const COACH_ROLES = ['pitchingCoach', 'hittingCoach', 'bullpenCoach', 'benchCoach', 'scoutingDirector'];
+export const COACH_ROLES = ['pitchingCoach', 'hittingCoach', 'benchCoach', 'scoutingDirector'];
 
 export const ROLE_INFO = {
-  pitchingCoach: { label: 'Pitching Coach', title: 'pitching coach', base: 125, specialties: ['command', 'power', 'youth'] },
+  pitchingCoach: { label: 'Pitching Coach', title: 'pitching coach', base: 150, specialties: ['command', 'power', 'youth'] },   // r196 the bullpen too
   hittingCoach:  { label: 'Hitting Coach',  title: 'hitting coach',  base: 125, specialties: ['contact', 'power', 'youth'] },
-  bullpenCoach:  { label: 'Bullpen Coach',  title: 'bullpen coach',  base: 75,  specialties: ['command', 'late'] },
   benchCoach:    { label: 'Bench Coach',    title: 'bench coach',    base: 75,  specialties: ['baserunning', 'defense'] },
   scoutingDirector: { label: 'Scouting Director', title: 'scouting director', base: 90, specialties: ['pro', 'intl', 'amateur'], scout: true },
 };
@@ -64,10 +64,6 @@ const SPEC_WORDS = {
     power:   'a power coach: more extra-base hits',
     youth:   'a development coach: young hitters grow faster',
   },
-  bullpenCoach: {
-    command: 'a strike-thrower: relievers who don\'t walk people',
-    late:    'a late-innings specialist: sharper arms in the eighth and ninth',
-  },
   benchCoach: {
     baserunning: 'a baserunning coach: more steals, more extra bases',
     defense:     'a defensive coach: cleaner fielding, fewer errors',
@@ -78,7 +74,7 @@ const SPEC_WORDS = {
     amateur: 'an amateur scout: reads rookies and independent-league players',
   },
 };
-const SPEC_SHORT = { command: 'command', power: 'power', youth: 'young players', contact: 'contact', late: 'late innings', baserunning: 'baserunning', defense: 'defense',
+const SPEC_SHORT = { command: 'command', power: 'power', youth: 'young players', contact: 'contact', baserunning: 'baserunning', defense: 'defense',
                      pro: 'pro scouting', intl: 'international', amateur: 'rookies and indie ball' };
 
 export const specialtyWords = (role, spec) => SPEC_WORDS[role]?.[spec] || '';
@@ -101,10 +97,14 @@ export const qualityOf = (c) => (!c || c.vacant ? VACANT_QUALITY : Number.isFini
 const _off = (c) => (qualityOf(c) - 60) / 30;          // −0.67 (40) … 0 (60) … +1 (90)
 const _spec = (c, k) => (c && !c.vacant && c.specialty === k ? 1 : 0);
 
-/** What a coach of this quality earns ($K a year). */
-export function salaryFor(role, q) {
+/**
+ * What a coach of this quality earns ($K a year). With `rand`, the market's say too (r196): two
+ * coaches of the same quality don't ask the same, ±12%. Without it, the going rate (a renewal's base).
+ */
+export function salaryFor(role, q, rand = null) {
   const b = ROLE_INFO[role]?.base || 75;
-  return Math.round(b * (0.7 + 0.6 * clamp((q - QUALITY_MIN) / (QUALITY_MAX - QUALITY_MIN), 0, 1)) / 5) * 5;
+  const market = rand ? 0.88 + 0.24 * rand() : 1;
+  return Math.round(b * (0.7 + 0.6 * clamp((q - QUALITY_MIN) / (QUALITY_MAX - QUALITY_MIN), 0, 1)) * market / 5) * 5;
 }
 
 /** A quality around `mean` (the sum of three rolls: most coaches are near it). */
@@ -139,16 +139,17 @@ export function ensureAbilities(staff, rand = eventRand) {
  */
 export function staffEffects(staff) {
   if (!staff) return null;
-  const pc = staff.pitchingCoach, hc = staff.hittingCoach, bp = staff.bullpenCoach, bc = staff.benchCoach;
+  const pc = staff.pitchingCoach, hc = staff.hittingCoach, bc = staff.benchCoach;
   // A specialty is worth more in a better coach's hands.
   const S = (c, k) => _spec(c, k) * clamp((qualityOf(c) - 30) / 60, 0, 1);
-  const P = _off(pc) * 0.3, H = _off(hc) * 0.3, B = _off(bp) * 0.3, R = _off(bc);
-  const spStuff = P + 0.25 * S(pc, 'power'), spControl = P + 0.25 * S(pc, 'command');
+  const P = _off(pc) * 0.3, H = _off(hc) * 0.3, R = _off(bc);
+  const stuff = P + 0.25 * S(pc, 'power'), control = P + 0.25 * S(pc, 'command');
   return {
     bat:  { contact: H + 0.25 * S(hc, 'contact'), power: H + 0.25 * S(hc, 'power'), speed: 0.4 * R + 1.5 * S(bc, 'baserunning') },
-    sp:   { stuff: spStuff, control: spControl },
-    rp:   { stuff: 0.5 * spStuff + B, control: 0.5 * spControl + B + 0.25 * S(bp, 'command') },
-    late: 0.6 * S(bp, 'late'),                        // relievers' stuff and control from the eighth on
+    sp:   { stuff, control },
+    // r196 the pitching coach has the whole staff: the relievers get what the two coaches gave them
+    // together (half the pitching coach's plus a bullpen coach's of the same quality).
+    rp:   { stuff: 1.5 * stuff, control: 1.5 * control },
     errorMult: clamp(1 - 0.12 * R - 0.3 * S(bc, 'defense'), 0.6, 1.2),
   };
 }
@@ -256,8 +257,13 @@ export function evaluate(role, U) {
   const facts = [];
   let score = 0.5;
   if (role === 'pitchingCoach') {
-    score = 0.6 * _rankScore(U.spEra, of) + 0.2 * _rankScore(U.bb9, of) + 0.2 * _rankScore(U.k9, of);
+    // r196 the whole staff: the rotation, the bullpen (and its blown saves), walks and strikeouts.
+    const rate = U.svo ? U.bs / U.svo : null;
+    score = 0.4 * _rankScore(U.spEra, of) + 0.2 * _rankScore(U.rpEra, of) + 0.1 * (rate == null ? 0.5 : clamp(1 - (rate - 0.2) / 0.3, 0, 1))
+          + 0.15 * _rankScore(U.bb9, of) + 0.15 * _rankScore(U.k9, of);
     if (U.spEra?.v != null) facts.push(`the rotation's ${f2(U.spEra.v)} ERA (${rk(U.spEra)})`);
+    if (U.rpEra?.v != null) facts.push(`a ${f2(U.rpEra.v)} relief ERA (${rk(U.rpEra)})`);
+    if (U.svo) facts.push(`${U.bs} blown save${U.bs === 1 ? '' : 's'} in ${U.svo} chances`);
     if (U.bb9?.v != null) facts.push(`${f1(U.bb9.v)} walks per nine (league ${f1(U.bb9.avg)})`);
     if (U.k9?.v != null) facts.push(`${f1(U.k9.v)} strikeouts per nine (league ${f1(U.k9.avg)})`);
     const g = U.growth;
@@ -277,11 +283,6 @@ export function evaluate(role, U) {
       score += avg >= 1.5 ? 0.08 : avg <= -0.5 ? -0.08 : 0;
       facts.push(`our young hitters ${avg >= 0.5 ? `gained ${f1(avg)} points each` : avg <= -0.5 ? `slipped ${f1(-avg)} points each` : 'held steady'} over the winter`);
     }
-  } else if (role === 'bullpenCoach') {
-    const rate = U.svo ? U.bs / U.svo : null;
-    score = 0.7 * _rankScore(U.rpEra, of) + 0.3 * (rate == null ? 0.5 : clamp(1 - (rate - 0.2) / 0.3, 0, 1));
-    if (U.rpEra?.v != null) facts.push(`a ${f2(U.rpEra.v)} relief ERA (${rk(U.rpEra)})`);
-    if (U.svo) facts.push(`${U.bs} blown save${U.bs === 1 ? '' : 's'} in ${U.svo} chances`);
   } else if (role === 'benchCoach') {
     const one = U.oneRun || { w: 0, l: 0 };
     const onePct = one.w + one.l >= 8 ? one.w / (one.w + one.l) : null;
@@ -313,7 +314,6 @@ export function neededSpecialty(role, U, state) {
   };
   if (role === 'pitchingCoach') return bad(U?.bb9) ? 'command' : bad(U?.k9) ? 'power' : young(true) >= 4 ? 'youth' : 'command';
   if (role === 'hittingCoach')  return bad(U?.obp) ? 'contact' : bad(U?.slg) ? 'power' : young(false) >= 4 ? 'youth' : 'contact';
-  if (role === 'bullpenCoach')  return U?.svo && U.bs / U.svo > 0.3 ? 'late' : 'command';
   if (role === 'benchCoach')    return bad(U?.sbPct) ? 'baserunning' : 'defense';
   if (role === 'scoutingDirector') {
     const by = U?.scouting?.missedBy || {};
@@ -324,9 +324,8 @@ export function neededSpecialty(role, U, state) {
 }
 
 const BACKGROUNDS = {
-  pitchingCoach: ['pitched eleven years in the majors', 'ran a farm system\'s pitching program', 'was a college pitching coach with a national title', 'came up through the minors as a pitching coordinator', 'was a pitching analyst before moving to the dugout'],
+  pitchingCoach: ['pitched eleven years in the majors', 'ran a farm system\'s pitching program', 'was a college pitching coach with a national title', 'came up through the minors as a pitching coordinator', 'was a pitching analyst before moving to the dugout', 'closed games for six seasons', 'ran a club\'s relief-pitcher program'],
   hittingCoach:  ['hit .280 over a long big-league career', 'was the assistant hitting coach on a pennant winner', 'ran a hitting lab that pro players use in the winter', 'coached hitters in the minors for a decade', 'was a scout before turning to coaching'],
-  bullpenCoach:  ['closed games for six seasons', 'caught for nine years and handled a lot of bullpens', 'was a minor-league pitching coach', 'ran a club\'s relief-pitcher program'],
   benchCoach:    ['managed in the minors for eight years', 'was a utility infielder known for reading the game', 'ran a club\'s defensive positioning', 'coached third base on two playoff teams'],
   scoutingDirector: ['ran a club\'s pro scouting for six years', 'built a scouting network in the Caribbean', 'scouted the independent leagues for a decade', 'was a crosschecker for a club that won a title', 'moved from the analytics department into scouting'],
 };
@@ -349,7 +348,7 @@ export function candidates(state, role, U, { rand = eventRand, taken = new Set()
     const quality = rollQuality(rand, mean, 10);
     return {
       name: names[i] || `Coach ${i + 1}`, role, specialty, quality,
-      salary: Math.round(salaryFor(role, quality) * premium / 5) * 5,
+      salary: Math.round(salaryFor(role, quality, rand) * premium / 5) * 5,
       background: bg.splice(Math.floor(rand() * bg.length) % bg.length, 1)[0] || '',
       fits: specialty === need,
     };
@@ -412,10 +411,6 @@ export function needReason(role, spec, U) {
     if (spec === 'contact') return `contact: a ${g(U?.obp, f3)} on-base percentage, the league ${lg(U?.obp, f3)}`;
     if (spec === 'power')   return `power: ${g(U?.slg, f3)} slugging, the league ${lg(U?.slg, f3)}`;
     return 'a teacher for the young hitters in the lineup';
-  }
-  if (role === 'bullpenCoach') {
-    if (spec === 'late') return `the late innings: ${U?.bs ?? 0} blown saves in ${U?.svo ?? 0} chances`;
-    return 'strike-throwing out of the bullpen';
   }
   if (role === 'scoutingDirector') {
     const by = U?.scouting?.missedBy || {};

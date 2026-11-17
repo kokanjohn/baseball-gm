@@ -40,7 +40,7 @@ await startNewGame({ archetypeId: 'contender', gmName: 'Test GM', city: 'Testvil
 const S = () => SM.get(), staff = () => S().userTeam.coachingStaff;
 const d0 = staff().scoutingDirector;
 check(`a new club has a director: ${d0?.name}, rated ${d0?.quality}, ${d0?.specialty}, ${d0?.salary}K a year`,
-      !!d0 && Number.isFinite(d0.quality) && Coach.ROLE_INFO.scoutingDirector.specialties.includes(d0.specialty) && d0.salary === Coach.salaryFor('scoutingDirector', d0.quality));
+      !!d0 && Number.isFinite(d0.quality) && Coach.ROLE_INFO.scoutingDirector.specialties.includes(d0.specialty) && Math.abs(d0.salary - Coach.salaryFor('scoutingDirector', d0.quality)) <= Coach.salaryFor('scoutingDirector', d0.quality) * 0.13 + 5);   // r196 ±12% for the market
 check('the name is nobody else\'s on the staff', Object.entries(staff()).filter(([k, v]) => k !== 'scoutingDirector' && v?.name === d0.name).length === 0 && d0.name !== S().userTeam.ownerName);
 const old = structuredClone(S()); delete old.userTeam.coachingStaff.scoutingDirector;
 check('an old save hires one once (and only once)', ensureScoutingDirector(old) && !!old.userTeam.coachingStaff.scoutingDirector?.name && !ensureScoutingDirector(old));

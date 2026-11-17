@@ -94,6 +94,10 @@ const fresh = () => {
   //  watch off for 12 hours, as it should: the slate is cleared of it too)
   SM.mutate(s => { s.scheduledCards = (s.scheduledCards || []).filter(c => !['roster_advice', 'lineup_return'].includes(c.cardId));
                    for (const c of s.inbox || []) if (['roster_advice', 'lineup_return'].includes(c.cardId)) { c.resolved = true; c.choice = 'skip'; } });
+  // (r196 the staff looks once, 4 hours after our last game: "now" is past it)
+  SM.mutate(s => { const u = s.userTeam, now = clock.get();
+    if ((u._lastGameAt ?? -Infinity) > now - 4 * 3600_000) u._lastGameAt = now - 4 * 3600_000;
+    if ((u._takeoverAt ?? -Infinity) > now - 3 * 3600_000) u._takeoverAt = now - 3 * 3600_000; });
   SM.mutate(s => { s.restWatch = {}; for (const id of s.userTeam.rosterIds) if (s.players[id]) { s.players[id].wear = 0; s.players[id].straight = 0; s.players[id].load = 0; } });
 };
 const ask = (id, wear, straight) => {

@@ -83,7 +83,7 @@ const summarize = () => {
 
 // ── §106 compose replies: every topic, written from the live state ─
 const composeStats = { n: 0, bad: [], slow: 0, maxMs: 0 };
-const COMPOSE_CH = { gk_: 'groundskeeper', mgr_: 'manager', pc_: 'pitching_coach', hc_: 'hitting_coach', bc_: 'bench_coach', bpc_: 'bullpen_coach',
+const COMPOSE_CH = { gk_: 'groundskeeper', mgr_: 'manager', pc_: 'pitching_coach', hc_: 'hitting_coach', bc_: 'bench_coach',
                      tix_: 'ticket_office', sc_: 'scouting' };
 function composeAudit(st, atMs, where) {
   const G = /\b(he|him|his|himself|he's|he'll|he'd|she|her|hers|herself|guy|guys|fella|fellas|man|men|boys)\b/i;
@@ -345,7 +345,8 @@ function gmActs() {
       if (pick) { SM.mutate(d => { res = signPickup(d, pick.id, 'user', clock.get(), 'gm'); }); advanceClock(clock.get()); }
       if (res?.ok) { gm.teamScreen++; assertNoGhosts('after a free-agent signing'); continue; }
     }
-    if (r < 0.75) { resolveCard(c.instanceId, Math.random() < 0.6 ? 'yes' : 'no'); gm.acted++; }
+    // (a "no" only where the card has a second button — r196)
+    if (r < 0.75) { resolveCard(c.instanceId, Math.random() < 0.6 || !c.noLabel ? 'yes' : 'no'); gm.acted++; }
     else gm.ignored++;
     advanceClock(clock.get());
     assertNoGhosts(`after ${c.cardId}`);
@@ -630,7 +631,7 @@ async function runOffseasonChecks() {
   {
     // §112.2 the coaches: evaluated on their side of the game, renewed / let go / fired, the chairs filled by spring.
     const U = gm.review?.units;
-    const roles = ['pitchingCoach', 'hittingCoach', 'bullpenCoach', 'benchCoach'];
+    const roles = ['pitchingCoach', 'hittingCoach', 'benchCoach'];
     check(`coaches: the review measures each side of the game (rotation ERA ${U?.spEra?.v?.toFixed(2)} #${U?.spEra?.rank}, pen ${U?.rpEra?.v?.toFixed(2)} #${U?.rpEra?.rank}, OPS ${U?.ops?.v?.toFixed(3)} #${U?.ops?.rank}, of ${U?.of})`,
           !!U && U.of >= 10 && [U.spEra, U.rpEra, U.ops, U.bb9, U.k9].every(m => m?.v != null && m.rank >= 1 && m.rank <= U.of));
     check(`coaches: blown saves recorded (${U?.bs} blown in ${U?.svo} chances)`, (U?.bs || 0) > 0 && (U?.svo || 0) >= (U?.bs || 0));
@@ -881,8 +882,12 @@ async function runAllStarChecks() {
   clock.set(asg.gameTime - 1000); advanceClock(clock.get());
   const pre = SM.get();
   const snap = JSON.stringify(Object.values(pre.players).map(p => [p.id, p.stats, p.springStats]));
-  const wl   = JSON.stringify([pre.userTeam, ...pre.leagueTeams].map(t => [t.wins, t.losses]));
-  const rot  = JSON.stringify(pre.leagueTeams.map(t => t.rotation?.currentIndex));
+  const wlOf = (s) => JSON.stringify([s.userTeam, ...[...s.leagueTeams].sort((a, b) => String(a.id).localeCompare(String(b.id)))].map(t => [t.id || 'user', t.wins, t.losses]));
+  const wl   = wlOf(pre);
+  // (by club, not by place in the list — r196 the list's order can change in the meantime; and a club whose
+  //  rotation itself changed meanwhile — a starter waived, traded, hurt — turns over for that, not the game)
+  const rotOf = (s) => JSON.stringify([...s.leagueTeams].sort((a, b) => String(a.id).localeCompare(String(b.id))).map(t => [t.id, (t.rotation?.order || []).join(), t.rotation?.currentIndex]));
+  const rot  = rotOf(pre);
   clock.set(asg.gameTime + 1000); advanceClock(clock.get());
   const liveG = Object.values(SM.get().leagueSchedule.dayMap).flat().find(g => g.isAllStar);
   check('all-star: goes live at first pitch, with plays', liveG.status === GAME_STATUS.LIVE && liveG.plays?.length > 50,
@@ -904,8 +909,8 @@ async function runAllStarChecks() {
   check(`all-star: the reserves get in (${subs} substitutions)`, subs >= 5);
   check('all-star: an exhibition — no stats, standings or rotations move',
         snap === JSON.stringify(Object.values(post.players).map(p => [p.id, p.stats, p.springStats]))
-        && wl === JSON.stringify([post.userTeam, ...post.leagueTeams].map(t => [t.wins, t.losses]))
-        && rot === JSON.stringify(post.leagueTeams.map(t => t.rotation?.currentIndex)));
+        && wl === wlOf(post)
+        && JSON.parse(rot).every(([id, order, i]) => { const b = JSON.parse(rotOf(post)).find(x => x[0] === id); return !b || b[1] !== order || b[2] === i; }));
   if (process.env.ASG_DUMP) { console.log('RESULT', JSON.stringify(post.allStar.season.result)); for (const f of post.activityFeed.slice(-6)) console.log('FEED', JSON.stringify(f)); const lc = [...(post.inbox||[]),...(post.scheduledCards||[])].filter(c => (c.cardId||'').startsWith('as_')||c.cardId?.startsWith('trade_')).map(c=>c.cardId+':'+c.subject); console.log('CARDS', lc.join(' || ')); }
   check('all-star: result and MVP recorded', !!post.allStar.season.result
         && (!post.allStar.season.result.mvpId || [...(box.home.hitters), ...(box.away.hitters), ...box.home.pitchers, ...box.away.pitchers].some(x => x.id === post.allStar.season.result.mvpId)));
@@ -2099,7 +2104,10 @@ async function main() {
       for (const pl of pre?.plays || []) for (const id of [pl.batterId, pl.pitcherId]) if (id && Number.isFinite(pl._timestamp)) { if (!(id in firstAt)) firstAt[id] = pl._timestamp; lastAt[id] = pl._timestamp; }
       // (A player in the box with no play of his own here — a resumed game's second part, whose
       //  plays the harness doesn't keep — played when the game was finished: g.gameTime.)
-      const on = (x, team) => [firstAt[x.id] ?? g.gameTime, lastAt[x.id] ?? g.gameTime].every(t => onTeamAt(x.id, team, t));
+      // (r196 …and a suspended game's first part was played when it began: someone with no play in the
+      //  second part played then — traded before it resumed, the stats still stand)
+      const part1 = g.suspension && Number.isFinite(g.suspension.gameTime) ? [g.suspension.gameTime, g.suspension.atMs ?? g.suspension.gameTime] : null;
+      const on = (x, team) => (x.id in firstAt ? [firstAt[x.id], lastAt[x.id]] : part1 || [g.gameTime, g.gameTime]).every(t => onTeamAt(x.id, team, t));
       const wrong = [
         ...[...userSide.hitters, ...userSide.pitchers].filter(x => !on(x, 'user')),
         ...(oppT ? [...oppSide.hitters, ...oppSide.pitchers].filter(x => !on(x, oppT.id)) : []),

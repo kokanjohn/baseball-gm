@@ -2655,9 +2655,9 @@ export const COMPOSE_RESPONSE_POOL = {
     yesLabel:'Noted', yesEffect:{}, yesMsg:"Noted.",
   },
 
-  bpc_health: {
-    id:'compose_bpc_health', autoResolve:'yes', type:'normal', tag:'OPERATIONS',
-    sender:'Bullpen Coach', avatar:'💪',
+  pc_bullpen: {
+    id:'compose_pc_bullpen', autoResolve:'yes', type:'normal', tag:'OPERATIONS',
+    sender:'Pitching Coach', avatar:'💪',
     subject:"Reliever availability today",
     body:"Here's the availability chart. Three arms are fully rested and ready for multi-inning work if needed. Two others worked last night and are good for an inning each if the game demands it. One is on a maintenance day — nothing concerning, just managing workload. I'll update the full picture by batting practice.",
     yesLabel:'Noted', yesEffect:{}, yesMsg:"Bullpen availability confirmed.",

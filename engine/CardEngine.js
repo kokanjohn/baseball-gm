@@ -271,6 +271,10 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
   let instance = (state.inbox || []).find(c => c.instanceId === instanceId);
   if (!instance) throw new Error(`CardEngine.resolve: instance '${instanceId}' not found`);
   if (instance.resolved) return;
+  // r196 §122.73 a "no" the card doesn't offer (no second button: Messages never shows one) is not an
+  // answer. Taken as one, it closed an injury report with no decision — the player stuck "being
+  // evaluated" for months, holding a roster spot nobody could fill.
+  if (choice === 'no' && !instance.noLabel) return;
   // §113 a card with choices (`_choices`): the one the GM tapped. The
   // Completed tab shows it as the decision.
   if (choice === 'yes' && pick != null && (instance._choices || []).some(c => c.key === pick)) {
@@ -1008,7 +1012,7 @@ function _deliverLineupNudge(state, player, n, atMs) {
   const game = _nextUserGame(state, atMs + 10 * 60_000);
   if (!game) return null;
   const staff = state.userTeam.coachingStaff || {};
-  const coach = staff[{ lineup: 'hittingCoach', rotation: 'pitchingCoach', bullpen: 'bullpenCoach' }[spot.kind]];
+  const coach = staff[{ lineup: 'hittingCoach', rotation: 'pitchingCoach', bullpen: 'pitchingCoach' }[spot.kind]];
   const mgr = _managerName(state);
   const sender = n > 1 || !coach || coach.vacant ? mgr : coach.name;
   const X = player, Y = spot.player;
@@ -1082,6 +1086,26 @@ function _lineupNudges(atMs) {
 }
 
 /**
+ * r196 §122.73 when the staff looks at the roster: 4 hours after our last game (3 after the takeover,
+ * before there's been one). The roster clock makes it an event of its own (GameEngine, 'staff'), so the
+ * rest and roster-advice watches decide at that moment — once — and never at whenever the clock happened
+ * to run next. (They decided at every look: with the app open the clock ran every few minutes, and a
+ * spacing gate that opened at 6:22 let one message through that a closed app, next looking at 9:24, gave
+ * to the other.)
+ */
+export function staffLookAt(st) {
+  const u = st?.userTeam;
+  return Math.max((u?._lastGameAt ?? -Infinity) + 4 * 3600_000, (u?._takeoverAt ?? -Infinity) + 3 * 3600_000);
+}
+/** True once per look for a watch (`key`: its state), from the look on; marks it looked. */
+function _staffLooks(st, atMs, key) {
+  const look = staffLookAt(st);
+  if (!Number.isFinite(look) || atMs < look || (st[key]?.lookAt ?? -Infinity) >= look) return false;
+  StateManager.mutate(s => { s[key] = { ...(s[key] || {}), lookAt: look }; });
+  return true;
+}
+
+/**
  * r162 §122.34 the staff's roster suggestions: a better bat on the bench (the hitting coach), a better
  * arm on the pitcher bench (the pitching coach), a young player who'd grow with regular playing time
  * (the scouting director). A decision: make the change, or "I have a plan" — then quiet for that
@@ -1091,6 +1115,7 @@ function _lineupNudges(atMs) {
 function _adviceWatch(atMs) {
   const st = StateManager.get(), u = st.userTeam;
   if (!u?.lineupSlots?.length || ![PHASE.SPRING_TRAINING, PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK, PHASE.POSTSEASON].includes(st.phase)) return 0;
+  if (!_staffLooks(st, atMs, 'adviceWatch')) return 0;   // r196 once, at the staff's look
   const cur = st.schedule?.[st.currentGameIndex];
   if (cur && !cur._committed && Number.isFinite(cur.gameTime) && cur.gameTime <= atMs && !cur.cancelled) return 0;   // (between games)
   const W = st.adviceWatch || {};
@@ -1110,7 +1135,7 @@ function _adviceWatch(atMs) {
                           (W.lastAt ?? -Infinity) + ROSTER_ADVICE.gapMs, ...answered);
     const at = Number.isFinite(from) ? from + _randBetween(20, 50) * 60_000 : atMs;
     const card = _adviceCard(st, a, at);
-    StateManager.mutate(s => { s.adviceWatch = { lastAt: at, asked: { ...(s.adviceWatch?.asked || {}), [a.key]: at } }; });
+    StateManager.mutate(s => { s.adviceWatch = { ...(s.adviceWatch || {}), lastAt: at, asked: { ...(s.adviceWatch?.asked || {}), [a.key]: at } }; });
     return _deliverAt(card, at) ? 1 : 0;
   });
 }
@@ -1234,6 +1259,7 @@ function _nextStarter(team, players, atMs, skipId = null) {
 function _restWatch(atMs) {
   const st = StateManager.get(), u = st.userTeam;
   if (!u?.lineupSlots?.length || ![PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK, PHASE.POSTSEASON].includes(st.phase)) return 0;
+  if (!_staffLooks(st, atMs, 'restWatch')) return 0;   // r196 once, at the staff's look
   // (not while one of our games is on: the staff writes between games)
   const cur = st.schedule?.[st.currentGameIndex];
   if (cur && !cur._committed && Number.isFinite(cur.gameTime) && cur.gameTime <= atMs && !cur.cancelled) return 0;
@@ -1298,7 +1324,7 @@ function _restWatch(atMs) {
 function _restDeliver(st, c, game, at) {
   const card = _restCard(st, c, game, at);
   StateManager.mutate(s => {
-    s.restWatch = { lastAt: at, byPlayer: { ...(s.restWatch?.byPlayer || {}), [c.p.id]: { atMs: at, worn: c.w.worn } } };
+    s.restWatch = { ...(s.restWatch || {}), lastAt: at, byPlayer: { ...(s.restWatch?.byPlayer || {}), [c.p.id]: { atMs: at, worn: c.w.worn } } };
   });
   return _deliverAt(card, at) ? 1 : 0;
 }
@@ -1543,6 +1569,46 @@ function _deliverNeedCard(state, need, index, needs, atMs) {
   return _deliverAt(card, atMs);
 }
 
+/**
+ * r196 §122.73 a full roster that can't field nine for a game: who's out, and the move — the day-to-day
+ * bat out longest to the IL (backdated), a free-agent bat into the spot, reporting in time for that game.
+ * At the deadline the manager makes it.
+ */
+function _deliverBatsCard(state, deadline, atMs) {
+  const needs = getRosterNeeds(state, 'user', atMs);
+  const need = needs.bats?.[0], game = needs.batsGame;
+  const ilP = need && state.players[need.ilFirst];
+  if (!ilP || !game) return null;
+  const T = game.gameTime, players = state.players;
+  const out = (state.userTeam.rosterIds || []).map(id => players[id]).filter(p => p && !['SP', 'RP'].includes(p.pos) && p.group !== PLAYER_GROUP.IL);
+  const dtd = out.filter(p => p.injury?.status === 'dtd' && (p.injury.returnAt ?? Infinity) > T);
+  const away = out.filter(p => !p.isInjured && (p.onPersonalLeave || (p.unavailable && p.unavailable.reason !== 'rest' && !(p.unavailable.untilMs && p.unavailable.untilMs <= T))));
+  const why = [dtd.length ? `${_list(dtd.map(p => p.name))} ${dtd.length > 1 ? 'are' : 'is'} day-to-day` : '',
+               away.length ? `${_list(away.map(p => p.name))} ${away.length > 1 ? 'are' : 'is'} away` : ''].filter(Boolean);
+  const picks = rankPickups(state, 'user', { side: 'hitter', pos: null }).slice(0, 3);
+  const choices = picks.map(p => {
+    const t = signingTerms(state, p), line = _lineNow(p) || _lastLine(p);
+    return { key: p.id, label: `IL ${ilP.name}, Sign ${p.name}`, sub: `${posLabel(p)}, OVR ${p.ovr}, ${formatK(t.salary || 0)} a year${line ? `; ${line}` : ''}` };
+  });
+  const when = When.untilFull(T, atMs);
+  const card = _rosterCard(state, {
+    cardId: 'bats_short', tag: 'ROSTER', sender: _managerName(state), avatar: '📋', type: 'urgent',
+    _rosterKey: `bats:${deadline}`, _targetPlayerId: ilP.id, _choices: choices.length ? choices : null,
+    subject: `We can't field nine ${when}`,
+    preview: `${_list(why)}. ${ilP.name} to the IL and a signing would fix it.`,
+    body: `For our game ${when}, only ${9 - needs.batsShort} of our hitters can play: ${_list(why)}. `
+        + `Putting ${_who(ilP)} on the IL (backdated) opens a spot, and a bat signed before ${_clock(deadline)} reports in time for that game. `
+        + (picks.length ? 'These are the best free agents for it, on one-year deals (paid only for the days on our roster).' : 'No free agent we can afford fits right now; look at the waiver wire.')
+        + ` If nothing's done by ${_clock(deadline)} (${_day(deadline, atMs)}), I'll make the move myself.`,
+    yesLabel: picks.length ? `IL ${ilP.name}, Sign ${picks[0].name}` : 'Understood',
+    noLabel: "I'll handle it in Team",
+    expiresAtMs: deadline,
+    _raw: { onYes: picks.length ? 'bats_fix' : 'need_defer', onNo: 'need_defer', onAuto: 'need_auto' },
+    _autoLabel: `No decision — ${_managerName(state)} made the move`,
+  });
+  return _deliverAt(card, atMs);
+}
+
 /** §122.9 last season's line in a few words (a free agent with no games this year). */
 function _lastLine(p) {
   const e = (p?.seasonLog || []).filter(x => x?.stats).at(-1);
@@ -1596,6 +1662,17 @@ function _deliverManagerFillCard(ev) {
   const names = ids.map(id => st.players[id].name);
   const mgr   = _managerName(st);
   const cost  = `Ownership noticed (Owner Trust ${ev.penalty?.ownerTrust ?? -2}, Atmosphere ${ev.penalty?.atmosphere ?? -1}).`;
+  // r196 §122.73 we couldn't field nine: the manager put a day-to-day bat on the IL and signed one.
+  if (ev.ilIds?.length) {
+    const il = _list(ev.ilIds.map(id => st.players[id]?.name).filter(Boolean));
+    return _deliverNotice(`managerfill:bats:${ev.atMs}`, {
+      cardId: 'manager_fill_bats', sender: mgr, type: 'urgent',
+      subject: names.length ? `I signed ${_list(names)}` : `${il} to the IL`,
+      preview: `We couldn't field nine for the next game, so I made the move.`,
+      body: `Nobody made a move before the deadline, and we couldn't field nine for the next game. I put ${il} on the IL (backdated)`
+          + (names.length ? ` and signed ${_list(names)}${_mfillTerms(st, ids)}, reporting at midnight. ${cost}` : '.'),
+    }, ev.atMs);
+  }
   if (!ids.length) {
     return _deliverNotice(`managerfill:${ev.atMs}`, {
       sender: mgr, type: 'urgent',
@@ -1753,6 +1830,11 @@ function _rosterConditionCards(delivered, atMs) {
     });
   }
 
+  // r196 §122.73 a game we can't field nine for: one message, keyed to its deadline.
+  state = StateManager.get();
+  const bdl = state.userTeam?.batsDeadlineAt;
+  if (Number.isFinite(bdl) && bdl > atMs && !_cardsWithKey(state, `bats:${bdl}`).length && _deliverBatsCard(state, bdl, atMs)) delivered++;
+
   // §89: an answer to our offer, decided when we sent it, that can no longer
   // be carried out (a player in it got hurt or moved, the window closed) is
   // replaced by their call that the deal is off — at the time the answer
@@ -1809,6 +1891,7 @@ function _rosterConditionCards(delivered, atMs) {
         || !(state.schedule || []).some(g => g.index === c._restGame?.index && g.gameTime === c._restGame?.gameTime && !g._committed && !g.cancelled);
     }
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
+    if (key.startsWith('bats:'))     return key !== `bats:${state.userTeam?.batsDeadlineAt}`;   // r196 fixed, or the deadline moved
     if (key.startsWith('openspots:')) return key !== `openspots:${managerFillAt(state)}` || !openSpots(state).any;
     // §70: a free agent who signed elsewhere (or left); a re-sign card for a
     // player no longer ours (retired, traded).
@@ -5169,7 +5252,7 @@ export function deliverManagerHireCard(atMs, expiresAtMs) {
 }
 
 // §112.2 THE COACHES — the day-2 evaluation and the hiring market.
-const _UNIT = { pitchingCoach: 'the pitching staff', hittingCoach: 'the lineup', bullpenCoach: 'the bullpen', benchCoach: 'the bases and the late-game work',
+const _UNIT = { pitchingCoach: 'the pitching staff', hittingCoach: 'the lineup', benchCoach: 'the bases and the late-game work',
                 scoutingDirector: 'the scouts' };
 
 /** "a solid coach (rated 64), a command teacher: fewer walks" */
@@ -6084,6 +6167,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'need_callup',
   'need_defer',
   'need_auto',
+  'bats_fix',   // r196 §122.73
   'mfill_keep', 'mfill_sendback',
   'openspots_fill', 'openspots_defer', 'openspots_auto',   // r153
   // §71–72 card actions (CardActions registry)
@@ -6210,6 +6294,18 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     case 'need_defer':
     case 'need_auto':
       break;   // the roster clock owns the deadline
+
+    // r196 §122.73 we can't field nine: the day-to-day bat out longest to the IL, a signing in the spot.
+    case 'bats_fix': {
+      const st = StateManager.get();
+      const need = getRosterNeeds(st, 'user', atMs).bats?.[0];
+      if (!need) break;   // (fixed meanwhile)
+      StateManager.mutate(s => { const p = s.players[need.ilFirst]; if (p?.injury?.status === 'dtd') Object.assign(p, placeOnILUpdate(p)); });
+      reconcileUser();
+      callUpBest(instance._pick || instance._choices?.[0]?.key, { side: 'hitter', pos: null });
+      reconcileUser();
+      break;
+    }
 
     // ── r153 our open spots: the manager's fill now, or the GM sets it ──
     case 'openspots_fill': {

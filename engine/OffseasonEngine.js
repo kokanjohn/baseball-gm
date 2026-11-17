@@ -1080,7 +1080,7 @@ function _settleStaff(draft) {
     if (c.vacant) {
       const taken = new Set(Object.values(staff).map(x => x?.name).filter(Boolean).concat(draft.userTeam.ownerName));
       const [cand] = Coach.candidates(draft, role, null, { taken });
-      Coach.hire(staff, role, { ...cand, quality: 55, salary: Coach.salaryFor(role, 55) }, start);
+      Coach.hire(staff, role, { ...cand, quality: 55, salary: Coach.salaryFor(role, 55, eventRand) }, start);
     } else if ((c.contractExpiry ?? 99) <= start) {
       c.contractExpiry = start + 2;
     }

@@ -28,7 +28,7 @@ const first = await page.evaluate(async (theme) => {
   const SM = await import('/baseball-gm/store/StateManager.js');
   const CE = await import('/baseball-gm/engine/CardEngine.js');
   SM.mutate(s => { s.settings.theme = theme; });
-  CE.syncRosterCards([], Date.now());
+  CE.syncRosterCards([], CE.staffLookAt(SM.get()));   // r196 the staff's first look: 3 hours after the takeover
   const c = (SM.get().scheduledCards || []).find(x => x.cardId === 'roster_advice');
   return c ? { id: c.instanceId, at: c.deliverAtMs, kind: c._advice.kind, inName: SM.get().players[c._advice.inId].name, outName: SM.get().players[c._advice.outId].name } : null;
 }, theme);

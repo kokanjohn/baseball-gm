@@ -619,7 +619,6 @@ function _renderStaff(state) {
     { key: 'pitchingCoach',label: 'Pitching Coach',  role: 'Field Staff',  data: staff.pitchingCoach },
     { key: 'hittingCoach', label: 'Hitting Coach',   role: 'Field Staff',  data: staff.hittingCoach  },
     { key: 'benchCoach',   label: 'Bench Coach',     role: 'Field Staff',  data: staff.benchCoach    },
-    { key: 'bullpenCoach', label: 'Bullpen Coach',   role: 'Field Staff',  data: staff.bullpenCoach  },
     { key: 'scoutingDirector', label: 'Scouting Director', role: 'Front Office', data: staff.scoutingDirector },
   ].filter(e => e.data);
 
@@ -907,7 +906,7 @@ function _doMove(playerId, key) {
 }
 
 const STAFF_LABELS = { manager: 'Manager', pitchingCoach: 'Pitching Coach', hittingCoach: 'Hitting Coach', benchCoach: 'Bench Coach',
-                       bullpenCoach: 'Bullpen Coach', scoutingDirector: 'Scouting Director' };
+                       scoutingDirector: 'Scouting Director' };
 
 /** r145 a staff member's sheet: rating and specialty (coaches and the scouting director), background, pay, contract, the relationship. */
 /** §122.64 the club's setting for the part of the game the manager's style is about ("Normal Hook"). */

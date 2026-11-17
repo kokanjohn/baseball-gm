@@ -32,6 +32,7 @@
  */
 
 import { dice, diceSeed, diceId } from './Dice.js';
+import { clockNow } from './Clock.js';
 import {
   PLAYER_GROUP,
   PHASE,
@@ -73,7 +74,7 @@ import { signToClub, signingTerms } from './MarketEngine.js';
 import { markAvailable, cpuView } from './Diamonds.js';
 import { adjustRapport } from './TradeEngine.js';
 import { releaseToFreeAgency } from './OffseasonEngine.js';
-import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate } from './InjuryEngine.js';
+import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate, placeOnILUpdate } from './InjuryEngine.js';
 import { computeAge, createPlayer, baseballYear } from './PlayerFactory.js';
 import { newPlayerName } from './Names.js';
 
@@ -157,6 +158,56 @@ export function vacancyDeadline(state, atMs) {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * batsShortFor(state, coming) — r196 §122.73 our next game a signing could still reach (one on a later
+ * day: a signing reports the next morning), and the bats it can't field. Who can play it: hitters
+ * available, sitting a day for rest (the manager plays them before fielding eight), day-to-day and back
+ * by then, away and back by then, reporting by then, and `coming` (signings the open spots will bring).
+ * Each bat short is a need with the day-to-day hitter out longest to put on the IL first (`ilFirst`) —
+ * with nobody day-to-day there's no spot to open, and no need.
+ *   → { game, short, needs: [{ key, side: 'hitter', pos: null, ilFirst, bats: true }] }
+ */
+export function batsShortFor(state, coming = 0, atMs = clockNow()) {
+  const u = state?.userTeam;
+  if (!u) return null;
+  const sched = state.schedule || [];
+  let game = null;
+  for (let i = state.currentGameIndex || 0; i < sched.length; i++) {
+    const g = sched[i];
+    if (!g || g._committed || g.cancelled || !Number.isFinite(g.gameTime)) continue;
+    const day = new Date(g.gameTime); day.setHours(0, 0, 0, 0);
+    if (day.getTime() > atMs) { game = g; break; }
+  }
+  if (!game) return null;
+  const T = game.gameTime, players = state.players || {};
+  let can = coming;
+  const dtd = [];
+  for (const id of u.rosterIds || []) {
+    const p = players[id];
+    if (!p || isPitcher(p) || p.group === PLAYER_GROUP.IL || p.group === PLAYER_GROUP.IN_TRANSIT) continue;
+    if (p.isInjured) {
+      if (p.injury?.status === 'dtd' && (p.injury.returnAt ?? Infinity) <= T) can++;
+      else if (p.injury?.status === 'dtd') dtd.push(p);
+      continue;
+    }
+    if (p.isSuspended || p.onPersonalLeave) continue;
+    const away = p.unavailable;
+    if (away && away.reason !== 'rest' && !(away.untilMs && away.untilMs <= T)) continue;   // (a count of games: misses this one)
+    can++;
+  }
+  for (const t of pendingArrivals(state, 'user')) if (!isPitcher(players[t.playerId]) && (t.effectiveAt ?? Infinity) <= T) can++;
+  const short = Math.max(0, 9 - can);
+  dtd.sort((a, b) => (b.injury.returnAt ?? 0) - (a.injury.returnAt ?? 0) || String(a.id).localeCompare(String(b.id)));
+  const needs = dtd.slice(0, short).map((p, i) => ({ key: `bats:${i}`, side: 'hitter', pos: null, ilFirst: p.id, bats: true }));
+  return { game, short, needs };
+}
+
+/** r196 the last moment a signing reaches that game: just before the midnight its day starts. */
+export function batsDeadline(game, atMs) {
+  const day = new Date(game.gameTime); day.setHours(0, 0, 0, 0);
+  return Math.max(atMs, day.getTime() - 10 * 60_000);
+}
+
+/**
  * getRosterNeeds(state, teamId = 'user')
  * @returns {{
  *   short: Number, surplus: Number,
@@ -164,7 +215,7 @@ export function vacancyDeadline(state, atMs) {
  *   arrivals: Object[], deadlineAt: Number|null, applies: Boolean
  * }}
  */
-export function getRosterNeeds(state, teamId = 'user') {
+export function getRosterNeeds(state, teamId = 'user', atMs = clockNow()) {
   const team = teamId === 'user' ? state.userTeam
     : (state.leagueTeams || []).find(t => t.id === teamId);
   const arrivals = pendingArrivals(state, teamId);
@@ -205,8 +256,13 @@ export function getRosterNeeds(state, teamId = 'user') {
     needs.push({ key: `need:${i}`, side, pos });
   }
 
+  // r196 §122.73 a full roster that can't field nine: hitters held day-to-day (the spot stays theirs)
+  // and away (leave, a program) can leave fewer than nine bats for a game. The fix is a real club's: one
+  // of the day-to-day bats goes on the IL and a signing takes the spot — in time to report.
+  const bats = teamId === 'user' ? batsShortFor(state, needs.filter(n => n.side === 'hitter').length, atMs) : null;
   return {
     short, surplus, needs, arrivals,
+    bats: bats?.needs || [], batsGame: bats?.game || null, batsShort: bats?.short || 0,
     deadlineAt: team.vacancyDeadlineAt ?? null,
     applies: true,
   };
@@ -553,6 +609,7 @@ export function applyDue(draft, clockMs, { reconcileAll = false } = {}) {
 
     // 4. The GM's decision deadline on open spots (user only — CPU GMs act at once).
     progressed = _runVacancyClock(draft, clockMs, events) || progressed;
+    progressed = _runBatsClock(draft, clockMs, events) || progressed;   // r196 §122.73
 
     if (!progressed) break;
   }
@@ -582,8 +639,11 @@ export function hasDue(state, clockMs) {
   // §122 the winter roster call is due (its flag is set by the vacancy clock).
   const os = state.offseason;
   if (state.phase === PHASE.OFFSEASON && os?.springAt && !os.campCall && clockMs >= campCallAt(os)) return true;
-  const needs = getRosterNeeds(state, 'user');
+  const needs = getRosterNeeds(state, 'user', clockMs);
   const dl    = state.userTeam?.vacancyDeadlineAt ?? null;
+  // r196 §122.73 a game we can't field nine for: its deadline opens, comes, or clears
+  const bdl   = state.userTeam?.batsDeadlineAt ?? null;
+  if (bdl != null ? (bdl <= clockMs || !needs.bats?.length) : needs.bats?.length) return true;
   if (!needs.applies || needs.short === 0) return dl != null;
   return dl == null ? vacancyDeadline(state, clockMs) != null : dl <= clockMs;
 }
@@ -838,6 +898,47 @@ function _arrive(draft, tx, events, touched) {
   tx.status = 'done';
   touched.add(tx.teamId);
   events.push({ type: 'ARRIVED', tx, playerId: player.id, teamId: tx.teamId, atMs: tx.effectiveAt });
+}
+
+/**
+ * _runBatsClock(draft, clockMs, events) — r196 §122.73 a full roster that can't field nine for a game a
+ * signing can still reach: a deadline (the night before that game's day, so a signing reports for it);
+ * the GM can make the move (the bats card); at the deadline the manager does — the day-to-day bat out
+ * longest to the IL, a free-agent bat signed into the spot — and the front office takes the same hit as
+ * any manager's signing. Clears itself when the club can field nine again.
+ */
+function _runBatsClock(draft, clockMs, events) {
+  const team = draft.userTeam;
+  const needs = CAP_PHASES.has(draft.phase) ? getRosterNeeds(draft, 'user', clockMs) : null;
+  const bats = needs?.bats || [];
+  const gameAt = needs?.batsGame?.gameTime ?? null;
+  if (!bats.length || (team.batsGameAt != null && team.batsGameAt !== gameAt)) {
+    if (team.batsDeadlineAt != null) { team.batsDeadlineAt = null; team.batsGameAt = null; events.push({ type: 'BATS_CLEARED' }); }
+    if (!bats.length) return false;
+  }
+  if (team.batsDeadlineAt == null) {
+    team.batsDeadlineAt = batsDeadline(needs.batsGame, clockMs);
+    team.batsGameAt = gameAt;
+    events.push({ type: 'BATS_OPENED', deadlineAt: team.batsDeadlineAt, count: bats.length, gameAt });
+  }
+  if (team.batsDeadlineAt > clockMs) return false;
+  // The deadline: the manager makes the move.
+  const at = team.batsDeadlineAt;
+  const picked = [], iled = [], taken = new Set();
+  for (const need of bats) {
+    const p = draft.players[need.ilFirst];
+    if (!p || p.injury?.status !== 'dtd' || p.group === PLAYER_GROUP.IL) continue;
+    const pick = managerPick(draft, 'user', { side: 'hitter', pos: null }, taken);
+    if (!pick) break;                     // nobody to sign: the spot stays the day-to-day bat's
+    Object.assign(p, placeOnILUpdate(p));
+    iled.push(p.id);
+    taken.add(pick.id);
+    if (signPickup(draft, pick.id, 'user', at, 'manager').ok) picked.push(pick.id);
+  }
+  if (picked.length) for (const [k, v] of Object.entries(MANAGER_FILL_PENALTY)) team[k] = Math.max(0, Math.min(100, (team[k] ?? 50) + v));
+  team.batsDeadlineAt = null; team.batsGameAt = null;
+  if (iled.length) events.push({ type: 'MANAGER_FILL', playerIds: picked, ilIds: iled, atMs: at, penalty: picked.length ? MANAGER_FILL_PENALTY : null });
+  return iled.length > 0;
 }
 
 /**

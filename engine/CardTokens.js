@@ -95,7 +95,6 @@ export function buildTokenMap(cardDef, context, state) {
   values.pitching_coach_name = staff.pitchingCoach?.name || 'The pitching coach';
   values.hitting_coach_name  = staff.hittingCoach?.name  || 'The hitting coach';
   values.bench_coach_name    = staff.benchCoach?.name    || 'The bench coach';
-  values.bullpen_coach_name  = staff.bullpenCoach?.name  || 'The bullpen coach';
   values.physician_name      = 'The team physician';
   values.cfo_name            = 'The CFO';
   values.owner_name          = userTeam.ownerName || 'Ownership';

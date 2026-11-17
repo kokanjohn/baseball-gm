@@ -1,5 +1,5 @@
 // r169 Compose on screen: the recipients (no Media Relations, Community Affairs or Facilities); the
-// Bullpen Coach's "A reliever's role" (pick a pitcher, pick a role); the Manager's batting order reply
+// the Pitching Coach's "A reliever's role" (r196: the bullpen coach's job folded in) (pick a pitcher, pick a role); the Manager's batting order reply
 // with its three choices (the recommended first), tapped; the Ticket Office's promotion.
 //   node tools/harness/test-compose-strategy-ui.mjs outDir [theme]
 // Needs a static server on :8765 serving the repo's parent (…/baseball-gm/).
@@ -50,20 +50,20 @@ const release = async (topic) => {
 await tap('.nav-item[data-tab="decisions"]');
 await tap('#itab-compose');
 const people = await page.$$eval('[data-channel]', els => els.map(e => e.dataset.channel));
-check(`recipients: ${people.join(', ')}`, !people.some(x => ['media_relations', 'community', 'facilities'].includes(x)) && people.includes('bullpen_coach'));
+check(`recipients: ${people.join(', ')}`, !people.some(x => ['media_relations', 'community', 'facilities'].includes(x)) && !people.includes('bullpen_coach') && people.includes('pitching_coach'));
 await page.screenshot({ path: `${out}/compose-recipients-${theme}.png` });
 
 // a reliever's role
-await tap('[data-channel="bullpen_coach"]');
-await tap('[data-topic="bpc_roles"]');
+await tap('[data-channel="pitching_coach"]');
+await tap('[data-topic="pc_roles"]');
 await page.selectOption('#compose-player', who.id);
 await page.waitForTimeout(400);
 const roles = await page.$$eval('.compose-skill', els => els.map(e => `${e.querySelector('.cs-name')?.textContent.trim()}${e.querySelector('.cs-val')?.textContent.trim() ? ' (' + e.querySelector('.cs-val').textContent.trim() + ')' : ''}`));
-check(`Bullpen Coach → a reliever's role → ${who.name}: ${roles.join(' · ')}`, roles.length === 3 && roles[0].startsWith('Closer') && roles.includes("Manager's call (now)"));
+check(`Pitching Coach → a reliever's role → ${who.name}: ${roles.join(' · ')}`, roles.length === 3 && roles[0].startsWith('Closer') && roles.includes("Manager's call (now)"));
 await tap('.compose-skill[data-skill="closer"]');
 await page.screenshot({ path: `${out}/compose-roles-${theme}.png` });
 await tap('#compose-send-btn');
-await release('bpc_roles');
+await release('pc_roles');
 const rr = await page.evaluate(() => ({ body: document.querySelector('.mr-body')?.innerText || '', btn: [...document.querySelectorAll('[data-resolve]')].map(b => b.textContent.trim()) }));
 check(`the reply: ${rr.btn.join(' / ')}`, rr.btn.includes(`Make ${who.name} the Closer`) && /manager would go with/i.test(rr.body));
 await tap(`[data-resolve][data-choice="yes"]`);

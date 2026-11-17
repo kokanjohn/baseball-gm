@@ -1110,10 +1110,8 @@ export function simulateAtBat(batter, pitcher, bases, outs, players, fieldMod = 
   const contact  = _effectiveSR(batter,  'contact',  sr.contact) + mb;
   const power    = _effectiveSR(batter,  'power',    sr.power) + mb;
   const speed    = _effectiveSR(batter,  'speed',    sr.speed);
-  // §112.2 a late-innings bullpen coach: our relievers from the eighth on.
-  const late     = _staff?.late && pitcher.teamId === 'user' && pitcher.pos === 'RP' && inning >= 8 ? _staff.late : 0;
-  const stuff    = _effectiveSR(pitcher, 'stuff',    psr.stuff) + late + mp + (context.relief?.stuff || 0);      // r167 short stint
-  const control  = _effectiveSR(pitcher, 'control',  psr.control) + late + mp + (context.relief?.control || 0);
+  const stuff    = _effectiveSR(pitcher, 'stuff',    psr.stuff) + mp + (context.relief?.stuff || 0);      // r167 short stint
+  const control  = _effectiveSR(pitcher, 'control',  psr.control) + mp + (context.relief?.control || 0);
 
   // ── Sacrifice bunt check ──────────────────────────────────────
   // Eligible when: low-power batter, runner(s) on, < 2 outs, late inning

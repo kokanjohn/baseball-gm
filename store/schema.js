@@ -412,19 +412,13 @@ export function createUserTeamObject(config = {}) {
       },
       pitchingCoach: {
         name:           '',
-        salary:         125,   // $125K
+        salary:         150,   // $150K (r196 the whole staff, the bullpen included)
         contractExpiry: 2,
         relationship:   50,
       },
       hittingCoach: {
         name:           '',
         salary:         125,   // $125K
-        contractExpiry: 2,
-        relationship:   50,
-      },
-      bullpenCoach: {
-        name:           '',
-        salary:         75,    // $75K
         contractExpiry: 2,
         relationship:   50,
       },
@@ -577,6 +571,22 @@ function _fillDefaults(state) {
   }
 
   ensureScoutingDirector(state);
+
+  // r196 §122.73 no bullpen coach: the pitching coach has the whole staff. A save from before
+  // drops the bullpen coach (and the salary with them) once; a message asked of the bullpen coach
+  // is the pitching coach's now; an offseason review or hire for the job is withdrawn.
+  if (state._bullpenCoachFolded !== true) {
+    if (state.userTeam?.coachingStaff) delete state.userTeam.coachingStaff.bullpenCoach;
+    const TOPIC = { bpc_health: 'pc_bullpen', bpc_roles: 'pc_roles' };
+    for (const list of [state.scheduledCards, state.inbox]) for (const c of list || []) {
+      if (TOPIC[c._composeTopic]) c._composeTopic = TOPIC[c._composeTopic];
+      if (c._composeChannel === 'bullpen_coach') c._composeChannel = 'pitching_coach';
+    }
+    const gone = (c) => c?._coachRole === 'bullpenCoach' && !c.resolved;
+    if (state.scheduledCards) state.scheduledCards = state.scheduledCards.filter(c => !gone(c));
+    if (state.inbox) state.inbox = state.inbox.filter(c => !gone(c));
+    state._bullpenCoachFolded = true;
+  }
 
   for (const key of Object.keys(defaults)) {
     if (state[key] === undefined) {

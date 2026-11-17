@@ -100,10 +100,10 @@ SM.mutate(s => {
   s.phase = PHASE.REGULAR_SEASON;
   const u = s.userTeam, Pl = (id) => s.players[id];
   const org = [...u.rosterIds, ...(s.freeAgentPool || []).filter(id => Pl(id)?.group === PLAYER_GROUP.FREE_AGENT && !Pl(id).isInjured)];
-  const lineup = u.lineupSlots.map(sl => sl.playerId), rot = u.rotation.order;
+  const lineup = u.lineupSlots.map(sl => sl.playerId).filter(Boolean), rot = u.rotation.order;   // (a spot can be open: it waits for the GM)
   const byOvr = (a, b) => Pl(b).ovr - Pl(a).ovr;
   const own = new Set(u.rosterIds);   // our own bench first (it covers the field's positions), free agents only to fill out
-  const benchBats = org.filter(id => !['SP', 'RP'].includes(Pl(id).pos) && !lineup.includes(id)).sort((a, b) => (own.has(b) - own.has(a)) || byOvr(a, b)).slice(0, 5);
+  const benchBats = org.filter(id => !['SP', 'RP'].includes(Pl(id).pos) && !lineup.includes(id)).sort((a, b) => (own.has(b) - own.has(a)) || byOvr(a, b)).slice(0, 14 - lineup.length);
   const spareSP = org.filter(id => Pl(id).pos === 'SP' && !rot.includes(id)).sort(byOvr).slice(0, 1);
   const rps = org.filter(id => Pl(id).pos === 'RP').sort(byOvr).slice(0, 8);
   const keep = [...lineup, ...benchBats, ...rot, ...spareSP, ...rps];
@@ -228,7 +228,7 @@ check(`a reserve arm doesn't close: ${P(roles.closer)?.name} (bullpen) closes, n
       roles.closer !== R && P(roles.closer)?.group === PLAYER_GROUP.BULLPEN && (closer0 === R || true));
 n = waitFor('lineup_return', R);
 console.log(`    ${n?.sender}: “${n?.body}”`);
-check(`the bullpen coach asks (${U().coachingStaff.bullpenCoach.name})`, n?.sender === U().coachingStaff.bullpenCoach.name);
+check(`the pitching coach asks (${U().coachingStaff.pitchingCoach.name}) — r196 there's no bullpen coach`, n?.sender === U().coachingStaff.pitchingCoach.name);
 resolve(n.instanceId, 'yes'); advanceClock(clock.get());
 check(`yes: ${P(R).name} back in the bullpen, the pen the same size (${pen().length})`, P(R).group === PLAYER_GROUP.BULLPEN && pen().length === pen0);
 check(`…and closing again (${P(bullpenRoles(U(), SM.get().players).closer)?.name})`, bullpenRoles(U(), SM.get().players).closer === R);

@@ -370,7 +370,7 @@ export async function startNewGame(config) {
       pitchingCoach: {
         ...s.userTeam.coachingStaff?.pitchingCoach,
         name:           pickStaffName(),
-        salary:         125,
+        salary:         150,
         contractExpiry: s.seasonNum + 2,
         relationship:   50,
       },
@@ -383,13 +383,6 @@ export async function startNewGame(config) {
       },
       benchCoach: {
         ...s.userTeam.coachingStaff?.benchCoach,
-        name:           pickStaffName(),
-        salary:         75,
-        contractExpiry: s.seasonNum + 2,
-        relationship:   50,
-      },
-      bullpenCoach: {
-        ...s.userTeam.coachingStaff?.bullpenCoach,
         name:           pickStaffName(),
         salary:         75,
         contractExpiry: s.seasonNum + 2,
@@ -411,7 +404,7 @@ export async function startNewGame(config) {
     const oneYear = [...Coach.COACH_ROLES].sort(() => eventRand() - 0.5).slice(0, 2);
     for (const role of Coach.COACH_ROLES) {
       const c = s.userTeam.coachingStaff[role];
-      c.salary = Coach.salaryFor(role, c.quality);
+      c.salary = Coach.salaryFor(role, c.quality, eventRand);   // r196 the market's say: no two the same
       if (oneYear.includes(role)) c.contractExpiry = s.seasonNum + 1;
     }
 
@@ -3236,6 +3229,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
   // (rather than replaying every due moment since the save began as a new event).
   if (state.rosterStepAt == null) StateManager.mutate(s => { s.rosterStepAt = clockMs; });
   if (state.faLookAt == null) StateManager.mutate(s => { s.faLookAt = clockMs; });   // §122 daily looks count from here
+  if (state.staffLookAt == null) StateManager.mutate(s => { s.staffLookAt = clockMs; });   // r196 the staff's looks count from here
   let overdueRun = false;
   for (let guard = 0; guard < 12000; guard++) {
     _wxReplanDue(clockMs);           // §122.51 a weather decision that changes our game
@@ -3262,7 +3256,10 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     // §122 each day, the CPU clubs look at the free agents.
     const lookAt = _nextFaLook(st, clockMs);
     const look = lookAt != null ? { kind: 'falook', at: lookAt } : null;
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look].filter(Boolean);
+    // r196 §122.73 the staff's look at the roster after each of our games: the rest and advice watches decide then.
+    const sAt = CardEngine.staffLookAt(st);
+    const staff = Number.isFinite(sAt) && sAt > (st.staffLookAt ?? -Infinity) && sAt <= clockMs ? { kind: 'staff', at: sAt } : null;
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look, staff].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     // r139 §121 the cards due by this moment arrive before it (a card the event withdraws, after it, never does).
@@ -3282,6 +3279,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'fin:payday') events.push(...(next.teamId === 'user' ? _payday(next.i, next.at) : _cpuPayday(next.teamId, next.i, next.at)));
     else if (next.kind === 'desk') { events.push(..._runTradeDesk(next.at)); _leaguePositions(next.at); _drainagePitch(next.at); }
     else if (next.kind === 'roster') { /* the roster step above was the event */ }
+    else if (next.kind === 'staff') StateManager.mutate(s => { s.staffLookAt = next.at; });   // (the roster step above looked)
     else if (next.kind === 'wxask') _wxUserCards(next.at);
     else if (next.kind === 'fieldask') _fieldPrepCards(next.at);
     else if (next.kind === 'wxtell') _wxStoryTell(next.at);
@@ -3732,6 +3730,7 @@ function _nextRosterDue(state, uptoMs, { overdue = true } = {}) {
   for (const x of state.teaching || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);   // r166
   for (const x of state.simGames || []) if (x.status === 'active') for (const st of x.steps || []) if (!st.done) take(st.atMs);   // r167
   take(state.userTeam?.vacancyDeadlineAt);
+  take(state.userTeam?.batsDeadlineAt);   // r196 §122.73 the manager's move when we can't field nine
   // r153 the manager fills what the GM left open, at the roster deadline — or at once when that has
   // already passed (the second game of a doubleheader: its deadline fell during the first).
   if (openSpots(state).any) { take(managerFillAt(state)); overdueAt(managerFillAt(state)); }

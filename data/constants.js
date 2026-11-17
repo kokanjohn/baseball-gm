@@ -1556,7 +1556,6 @@ export const CARD_DAY = Object.freeze({
 export const COMPOSE_REPLY = Object.freeze({
   windows: Object.freeze({
     groundskeeper:   [15, 90],
-    bullpen_coach:   [20, 120],
     pitching_coach:  [25, 150],
     hitting_coach:   [25, 150],
     manager:         [30, 180],
@@ -1568,7 +1567,7 @@ export const COMPOSE_REPLY = Object.freeze({
     scouting:        [90, 600],
   }),
   defaultWindow: Object.freeze([30, 240]),
-  gameWorkers: Object.freeze(['manager', 'pitching_coach', 'hitting_coach', 'bench_coach', 'bullpen_coach', 'groundskeeper']),
+  gameWorkers: Object.freeze(['manager', 'pitching_coach', 'hitting_coach', 'bench_coach', 'groundskeeper']),
   gameLengthMs: 3 * 60 * 60_000,   // a game not yet over is busy until about this long after first pitch
   // r150 a question about something with a deadline (a trade on the table) is answered this far ahead of it…
   beforeDeadlineMs: 2 * 60 * 60_000,

@@ -12634,3 +12634,99 @@ The sim attributes each date to the park the game was at then. The crew's word a
 - **test-trade-advice-ui:** in the shop reply, each player is a link once.
 
 **Fresh team:** needed for the new names. A saved league keeps the names it was founded with. The message changes need no fresh team.
+
+## §122.73 — r196: no bullpen coach; the pitching coach has the whole staff
+**The GM's call** (Nov 16 2026): the bullpen coach goes, and the job folds into the pitching coach's.
+- The pitching coach's pay goes up.
+- Coaches' pay varies, so it isn't always the same number.
+- The late-innings specialty is dropped.
+
+**The model** (CoachEngine, pure):
+- `COACH_ROLES` is pitching, hitting, bench and scouting director.
+- **The pitching coach's base is $150K** (it was $125K).
+- **Pay varies:** `salaryFor(role, q, rand)` adds the market's say, ±12%. Two coaches of the same quality don't ask the same.
+  - It's used for a new franchise's staff, a hiring card's candidates, and a chair the offseason fills on its own.
+  - Without `rand` it's the going rate, which is a renewal's base.
+- **In the sim** (`staffEffects`): the relievers get 1.5× the pitching coach's points, which is what half the pitching coach plus a bullpen coach of the same quality gave them.
+  - The late-innings boost is gone: `late` is out of staffEffects, and SimEngine no longer adds it.
+  - check-coaches compares the old and new formulas on the same league: elite vs poor is 2.7 wins a season with the bullpen coach and 2.2 without. The gap is the dropped late-innings specialty.
+- **The review** (`evaluate`): the pitching coach is judged on the whole staff.
+  - The weights: rotation ERA 0.4, relief ERA 0.2, blown-save rate 0.1, walks 0.15, strikeouts 0.15.
+  - The facts now include the relief ERA and the blown saves.
+- Two bullpen backgrounds moved into the pitching coach's pool.
+
+**Compose:**
+- The Bullpen Coach is gone from the recipients.
+- The Pitching Coach has **The bullpen** (`pc_bullpen`, was `bpc_health`) and **A reliever's role** (`pc_roles`, was `bpc_roles`), right after The rotation.
+- The pool's fallback card is `compose_pc_bullpen`, signed by the Pitching Coach.
+- A reply from the manager or a coach still waits until after one of our games (`gameWorkers`).
+
+**Also:**
+- **Team → Staff:** the Bullpen Coach row is gone.
+- **A healed reliever's return message** (`_deliverLineupNudge`) is the pitching coach's.
+- `{bullpen_coach_name}` is gone (nothing used it).
+- **A new franchise:** three coaches and the scouting director. Two of the four start on one-year deals, as before.
+
+**An existing save** (`schema._fillDefaults`, once, `_bullpenCoachFolded`):
+- the bullpen coach is dropped, and so is the salary, since payroll sums the staff;
+- a reply on its way from the bullpen coach becomes the pitching coach's (`bpc_*` → `pc_*`, channel `pitching_coach`);
+- an open offseason review or hiring card for the job is withdrawn.
+
+The pitching coach's current contract stands; the new pay applies at the next hire or renewal.
+
+**Checks:**
+- **check-coaches:**
+  - no bullpen coach;
+  - salary by quality, ±12%;
+  - the pitching coach's pay varies at the same quality;
+  - the old-save migration.
+- **check-il-return:** the pitching coach asks about the healed reliever. The test's roster fixture also allows a lineup spot left open for the GM.
+- **check-compose-strategy and test-compose-strategy-ui:** Pitching Coach → A reliever's role.
+
+**Found while testing: the staff's rest and roster-advice messages depended on when the clock looked.**
+- **The failures:** with this release's league (the rolls shift with one coach fewer), check-message-lookahead and check-game-pushes failed. The look-ahead foresaw a rest message ("A day for Santoro", 9:07), but with the app open a roster-advice message came instead ("Playing time for Banks", 6:46). A game's final changed with it.
+- **Old code or new?** The old code passes seeds 2 and 3, and so does the new; only this seed 1 world hits it. The cause is old.
+- **The cause:** `_restWatch` and `_adviceWatch` ran at every roster step, and their gates used that moment: the two-day spacing, "not within 12 hours of the other", wear.
+  - With the app open, the clock ran every 5 minutes, and the advice's spacing opened at 6:22.
+  - With the app closed, the next look was 9:24, after the rest watch had taken the slot.
+- **Now** the staff looks at a moment of its own. `CardEngine.staffLookAt` is 4 hours after our last game, or 3 after the takeover before there's been one.
+  - The roster clock makes that moment an event (GameEngine, `kind: 'staff'`, `staffLookAt`).
+  - Each watch decides once per look (`lookAt` in `restWatch` / `adviceWatch`, set by `_staffLooks`).
+  - The same messages come, open or closed.
+  - A message the spacing holds back waits for the next look, after the next game, rather than slipping in later that day.
+- check-rest-watch's "the staff looks now" puts the last game and the takeover far enough back.
+
+**Found in the extra seeds: a club that took the field with eight.** Seeds 3, 4 and 5 hit it in this release's worlds; r195 passed them in its own. Four faults, each fixed:
+- **A "no" the card doesn't offer.** The season test's GM answered "no" on cards with one button.
+  - On an injury report where day-to-day isn't allowed, that closed the report with no decision. The player stayed "being evaluated" for months, unavailable, and still held a roster spot.
+  - **Now** `CardEngine.resolve` ignores a "no" on a card with no `noLabel`, since Messages never shows that button. The test's GM answers "no" only where there's a second button.
+- **A player sitting a game for rest is the manager's last resort** (`reconcileRoster`). When a lineup spot is still open and nobody on the bench can take it, a hitter resting a day plays after all (`unavailable` cleared): in position first, otherwise out of position.
+- **Family leave for a player who's resting** (`personal_leave` feasibility): granted. Before, the card's "yes" did nothing, because the player wasn't "available".
+- **A full roster that can't field nine** (the GM's call, Nov 17):
+  - **When:** hitters held day-to-day keep their spots, and with others away a game can have fewer than nine bats. The fix is a real club's: the day-to-day bat out longest goes on the IL, and a signing takes the spot. It has to happen early enough for the signing to report.
+  - **How it's found:** `TransactionEngine.batsShortFor` looks at the next game a signing can still reach (one on a later day) and counts who can play it: available, resting, back from day-to-day or away by then, or reporting by then. `getRosterNeeds` returns `bats` (each with `ilFirst`), `batsGame` and `batsShort`.
+  - **The deadline:** `_runBatsClock` sets it to 11:50 PM the night before that game's day (`batsDeadline`; `batsDeadlineAt` / `batsGameAt`). The roster clock wakes for it.
+  - **The GM's message** (`bats_short`, the manager's, urgent): who's day-to-day and who's away. The choices are "IL ‹player›, Sign ‹free agent›" for the best three bats (`bats_fix`), or "I'll handle it in Team".
+  - **At the deadline** the manager makes the move: the IL (backdated) and the signing, with the same ownership hit as any manager's signing. A notice says so (`manager_fill_bats`).
+  - **When it clears:** once nine can play, the deadline and the message go away.
+  - With nobody day-to-day there's no spot to open, so there's no move.
+
+**check-bats-short** (new) sets up six bats out of fourteen:
+- the message arrives with the deadline the night before;
+- at the deadline the day-to-day bat out longest goes on the IL and a bat is signed;
+- the game is played with nine;
+- on the GM's path: the IL, the signing, the deadline cleared, and the other day-to-day bats keep their spots.
+
+**Two of the season test's own checks, corrected:**
+- **"Nobody plays after leaving":** a suspended game's first part is played when it began. The check took anyone with no play in the second part to have played at the resumption. A reliever who pitched in part one was traded the next day before the resumption, and the check flagged it. Such a player is now checked against when part one was played (`g.suspension`).
+- **"The All-Star Game moves no rotation":**
+  - The check compared clubs by their place in the list, which can change in the meantime. It now compares by club.
+  - A club whose rotation itself changed during the break is left out: Northhaven waived a starter during the break, and that, not the game, moved its turn.
+
+**Seeds:**
+- 1, 2, 3, 4, 6 and 7 pass.
+- **Open item 12:** seed 5 misses two league-wide ranges, both about CPU clubs, which nothing in this release touches:
+  - a CPU spare starter worked 123 relief innings, against a cap of 120;
+  - CPU clubs made 4 trades with each other in the season, against a floor of 5.
+
+**Fresh team:** not required. An existing save drops its bullpen coach once on load.

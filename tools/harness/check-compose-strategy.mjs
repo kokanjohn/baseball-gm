@@ -2,7 +2,7 @@
 //   - the batting order (Manager): three styles; the sim and the Manager's reply use the same order
 //   - the running game (Bench Coach): run more / less moves steal attempts, and who goes
 //   - the hook (Manager): a quick hook shortens starts, a long leash lengthens them
-//   - a reliever's role (Bullpen Coach): the GM's closer gets the ninth
+//   - a reliever's role (Pitching Coach): the GM's closer gets the ninth
 //   - a promotion (Ticket Office): starts the promotion, charges its cost, lifts the crowd
 //   - Media Relations, Community Affairs and Facilities are gone; the duplicate topics are merged
 //   node tools/harness/check-compose-strategy.mjs [games]
@@ -34,7 +34,7 @@ const GEN = /\b(he|him|his|she|her|hers|himself|herself)\b/i;
 console.log('The Compose menu');
 const gone = ['mgr_matchup', 'mgr_rotation', 'pc_reliever', 'hc_lineup', 'fac_status', 'tix_renewals', 'mr_narrative', 'ca_event', 'bc_morale'];
 check('the removed and merged topics are gone', gone.every(t => !COMPOSE_TOPICS.includes(t)));
-check('the new ones are there', ['mgr_hook', 'bc_tactics', 'bpc_roles', 'tix_promo'].every(t => COMPOSE_TOPICS.includes(t)));
+check('the new ones are there', ['mgr_hook', 'bc_tactics', 'pc_roles', 'tix_promo'].every(t => COMPOSE_TOPICS.includes(t)));
 const inbox = (await import('node:fs')).readFileSync(new URL('../../ui/screens/InboxScreen.js', import.meta.url), 'utf8');
 check('Media Relations, Community Affairs, Facilities: no longer recipients', !/id:\s+'(media_relations|community|facilities)'/.test(inbox));
 
@@ -120,10 +120,10 @@ check('a quick hook: shorter starts', hQ.spOuts < hN.spOuts * 0.93);
 check('a long leash: longer starts', hL.spOuts > hN.spOuts * 1.04);
 
 // ── A reliever's role ───────────────────────────────────────────
-console.log('A reliever\'s role (Bullpen Coach)');
+console.log('A reliever\'s role (Pitching Coach)');
 const auto = bullpenRoles(U(), S().players);
 const pick = U().rosterIds.map(P).filter(p => p.group === PLAYER_GROUP.BULLPEN && p.id !== auto.closer && p.pos === 'RP').sort((a, b) => a.ovr - b.ovr)[0];
-const roleCard = ask('bpc_roles', 'bullpen_coach', { playerId: pick.id, skill: 'closer', label: pick.name });
+const roleCard = ask('pc_roles', 'pitching_coach', { playerId: pick.id, skill: 'closer', label: pick.name });
 console.log(`    “${roleCard?.subject}” — ${roleCard?.body?.replace(/\n+/g, ' / ')}  [${roleCard?.yesLabel} / ${roleCard?.noLabel}]`);
 check('the coach\'s read (who closes now, who the manager would pick), a decision', !!roleCard && roleCard._raw?.onYes === 'pen_role' && /the manager would go with/i.test(roleCard.body) && voiceOk(roleCard));
 CE.resolve(roleCard.instanceId, 'yes');
@@ -132,7 +132,7 @@ check(`yes: ${pick.name} closes (the manager's pick, ${P(auto.closer)?.name}, go
 const sv = run(u => { u.penRoles = { closer: pick.id, setup: [] }; u.strategy = {}; }, 'closer');
 const sv0 = run(u => { u.penRoles = null; u.strategy = {}; }, 'closer', pick.id);
 check(`…and gets the saves in the sim (${sv.closerSv} of ${sv.saves}; ${sv0.closerSv} of ${sv0.saves} when the manager picks)`, sv.saves > 10 && sv.closerSv / sv.saves >= 0.5 && sv.closerSv / sv.saves > 3 * sv0.closerSv / Math.max(1, sv0.saves));
-const back = ask('bpc_roles', 'bullpen_coach', { playerId: pick.id, skill: 'auto', label: pick.name });
+const back = ask('pc_roles', 'pitching_coach', { playerId: pick.id, skill: 'auto', label: pick.name });
 CE.resolve(back.instanceId, 'yes');
 check('"Back to the Manager\'s Call": the manager picks again', bullpenRoles(U(), S().players).closer === auto.closer);
 

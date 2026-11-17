@@ -599,6 +599,22 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     const anyPick = benchPool()[0];
     if (anyPick) { slot.playerId = anyPick.id; slot.emergency = true; }
   }
+  // r196 §122.73 still a hole and nobody on the bench: a player sitting a game for rest plays after all
+  // (rest is the club's choice; nine on the field isn't). In position first, then anywhere.
+  if (!hold && slots.some(sl => !sl.playerId)) {
+    const resting = () => rosterIds.map(id => players[id])
+      .filter(p => p && p.unavailable?.reason === 'rest' && !(patch[p.id] && 'unavailable' in patch[p.id]) && !p.isInjured && !p.isSuspended && !p.onPersonalLeave
+                && groupOf(p.id) === PLAYER_GROUP.BENCH_HITTERS && !seatedIds().has(p.id))
+      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
+    for (const slot of slots) {
+      if (slot.playerId) continue;
+      const pick = resting().find(p => eligibleSlotsFor(p).includes(slot.slot)) || resting()[0];
+      if (!pick) break;
+      slot.playerId = pick.id;
+      if (!eligibleSlotsFor(pick).includes(slot.slot)) slot.emergency = true;
+      setPatch(pick.id, { unavailable: null });
+    }
+  }
   // The flag marks an out-of-position occupant only: cleared once the slot is empty or played in position.
   for (const slot of slots) if (slot.emergency && (!slot.playerId || eligibleSlotsFor(players[slot.playerId]).includes(slot.slot))) delete slot.emergency;
   // (r165 and the GM's mark, once the player is eligible there — ten starts — or the slot is empty)

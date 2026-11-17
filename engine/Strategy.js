@@ -1,7 +1,7 @@
 /**
  * engine/Strategy.js
  * r169 how the GM wants the club to play — set through Compose (the Manager, the Bench Coach, the
- * Bullpen Coach), used by the sim for our club. The CPU clubs play the defaults.
+ * Pitching Coach), used by the sim for our club. The CPU clubs play the defaults.
  *
  *   team.strategy = { order, run, hook }
  *     order  'classic'  speed and contact at the top, the best bat third, power fourth and fifth

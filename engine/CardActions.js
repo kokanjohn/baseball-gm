@@ -529,7 +529,9 @@ const signTarget = {
 
 /** Personal leave: he goes either way — the choice sets how long and how it lands. */
 const personalLeave = {
-  feasible: (st, c) => ours(st, c._targetPlayerId) && isAvailable(st.players[c._targetPlayerId]),
+  // (r196 a player sitting a game for rest can still be given the leave: the family comes first)
+  feasible: (st, c) => { const p = st.players[c._targetPlayerId];
+    return ours(st, c._targetPlayerId) && (isAvailable(p) || (p?.unavailable?.reason === 'rest' && !p.isInjured && !p.isSuspended && !p.onPersonalLeave)); },
   apply(d, c, atMs) {
     const raw = c._raw || {};
     const games = (c.choice === 'no' ? raw._leaveGamesNo : raw._leaveGamesYes) || raw.leaveGames || 3;

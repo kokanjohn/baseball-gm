@@ -86,6 +86,9 @@ const COMPOSE_CHANNELS = [
     priority: 'high',
     topics: [
       { id: 'pc_rotation',   label: 'The rotation',             desc: 'The next turns, and how each starter\'s arm is doing' },
+      // r196 §122.73 the bullpen coach's topics, now the pitching coach's
+      { id: 'pc_bullpen',    label: 'The bullpen',              desc: 'Who\'s available, the work they\'ve done, and the roles' },
+      { id: 'pc_roles',      label: 'A reliever\'s role',        desc: 'Pick a pitcher: name the closer or a setup arm, or leave it to the manager', player: 'relievers', skill: true, choices: 'roles' },
       { id: 'pc_prospect',   label: 'Young pitcher check-in',   desc: 'A report on a young arm — and a development plan if you want one' },
       { id: 'pc_work',       label: 'Work with a pitcher on…',  desc: 'Pick a pitcher and a skill: the coach decides how much work it takes', player: 'pitchers', skill: true },
       { id: 'pc_stretch',    label: 'Stretch a pitcher out',     desc: 'Pick a reliever: sim games to build the length to start', player: 'pitchers' },
@@ -125,17 +128,6 @@ const COMPOSE_CHANNELS = [
     topics: [
       { id: 'bc_tactics',    label: 'The running game',         desc: 'Close games, steals, and how much you want us to run' },
       { id: 'bc_teach',      label: 'Teach a player a position', desc: 'Pick a hitter and a position: extra reps there in practice', player: 'hitters', skill: true, choices: 'positions' },
-    ],
-  },
-  {
-    id:       'bullpen_coach',
-    label:    'Bullpen Coach',
-    icon:     '💪',
-    role:     'Field Staff',
-    priority: 'medium',
-    topics: [
-      { id: 'bpc_health',    label: 'The bullpen',              desc: 'Who\'s available, the work they\'ve done, and the roles' },
-      { id: 'bpc_roles',     label: 'A reliever\'s role',        desc: 'Pick a pitcher: name the closer or a setup arm, or leave it to the manager', player: 'relievers', skill: true, choices: 'roles' },
     ],
   },
   {
@@ -665,7 +657,7 @@ function _composeRecipients(state) {
         <span class="cw-what">${_escape(c._composeLabel || '')}${c._sentAtMs ? ` · sent ${_shortWhen(c._sentAtMs)}` : ''}</span></div>`;
     }).join('')}</div>` : '';
 
-  const STAFF_KEY = { pitching_coach: 'pitchingCoach', hitting_coach: 'hittingCoach', bench_coach: 'benchCoach', bullpen_coach: 'bullpenCoach', scouting: 'scoutingDirector' };
+  const STAFF_KEY = { pitching_coach: 'pitchingCoach', hitting_coach: 'hittingCoach', bench_coach: 'benchCoach', scouting: 'scoutingDirector' };
   const rows = COMPOSE_CHANNELS.map(ch => {
     // §112.2 an empty chair on the staff: nobody to write to until someone's hired.
     if (state.userTeam?.coachingStaff?.[STAFF_KEY[ch.id]]?.vacant) {
@@ -992,7 +984,7 @@ async function _sendCompose(topicId, channelId, state) {
   const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`,
                        sc_program: (p) => `A development program for ${p.name}`, mgr_rest: (p) => `A day off for ${p.name}`,
                        doc_health: (p) => `${p.name}'s health`, bc_teach: (p) => `Teach ${p.name} ${skill}`,
-                       pc_stretch: (p) => `Stretch ${p.name} out`, bpc_roles: (p) => `${p.name}'s role` };
+                       pc_stretch: (p) => `Stretch ${p.name} out`, pc_roles: (p) => `${p.name}'s role` };
 
   // Record cooldown immediately
   if (!topic?.deal && !topic?.player) StateManager.mutate(s => {
