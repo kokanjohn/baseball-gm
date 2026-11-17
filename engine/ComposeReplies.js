@@ -677,23 +677,34 @@ W.sc_prospect = (f, r, who) => {
 };
 
 /**
- * §122.9 the scouts look over the free agents: a few players a week (2–5, by the
- * director: scoutLooks), the ones they think are worth more than their ratings.
+ * §122.9 the scouts look over the free agents: 2–5 players a week (by the
+ * director: scoutLooks, faLooks), the ones they think are worth more than their ratings.
  * How sharp the eye is depends on the scouting director (§122.15: quality, and
  * the specialty that fits where the player comes from). An untested player: is he better than the
  * estimate? A proven one: does his role make him better than his rating? And
  * whether other clubs have caught on yet.
  */
+/**
+ * r199 §122.76 the scouts' looks at free agents: so many a week (scoutLooks, by the director), each
+ * player they report on one look, back seven days later. → { looks, used, left, nextAt, inDays, seen }
+ * (nextAt: when the first look comes back, once none are left).
+ */
+export function faLooks(state, atMs) {
+  const week = (state.composeLog || []).filter(x => x.topicId === 'sc_free_agents' && x.atMs < atMs && atMs - x.atMs < 7 * MS_DAY);
+  const seen = week.flatMap(x => x.memo?.playerIds || []);
+  const looks = scoutLooks(state.userTeam?.coachingStaff);
+  const left = Math.max(0, looks - seen.length);
+  const used = week.filter(x => x.memo?.playerIds?.length);
+  const nextAt = !left && used.length ? Math.min(...used.map(x => x.atMs)) + 7 * MS_DAY : null;
+  return { looks, used: seen.length, left, nextAt, inDays: nextAt ? Math.max(1, Math.ceil((nextAt - atMs) / MS_DAY)) : 0, seen };
+}
+
 W.sc_free_agents = (f, r, who) => {
   const st = f.state, level = st.leagueTalentOffset || 0;
-  const week = f.pastReplies('sc_free_agents').filter(x => f.atMs - x.atMs < 7 * MS_DAY);
-  const seenWeek = week.flatMap(x => x.memo?.playerIds || []);
-  const looks = scoutLooks(st.userTeam?.coachingStaff);
-  const left = looks - seenWeek.length;
+  const L = faLooks(st, f.atMs), looks = L.looks, left = L.left;
   if (left <= 0) {
-    const next = Math.min(...week.map(x => x.atMs)) + 7 * MS_DAY;
-    const names = seenWeek.map(f.P).filter(p => p && p.group === 'freeAgent').map(p => p.name);
-    return { body: [`We've already looked at our ${looks} this week${names.length ? ` (${list(names)}${names.length === 1 ? ' is' : ' are'} still out there)` : ''}. The next look is ${f.onWhen(next)}.`], memo: { playerIds: [] } };
+    const names = L.seen.map(f.P).filter(p => p && p.group === 'freeAgent').map(p => p.name);
+    return { body: [`We've already looked at our ${looks} this week${names.length ? ` (${list(names)}${names.length === 1 ? ' is' : ' are'} still out there)` : ''}. The next look comes in ${plural(L.inDays, 'day')}.`], memo: { playerIds: [] } };
   }
   const recent = new Set(f.pastReplies('sc_free_agents').filter(x => f.atMs - x.atMs < 30 * MS_DAY).flatMap(x => x.memo?.playerIds || []));
   const sigmaOf = (p) => 4 / scoutEye(f, p);

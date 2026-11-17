@@ -12789,3 +12789,28 @@ The compose, work, strategy, teaching and trade-advice UI tests pass in both the
   - Both themes.
 
 **Fresh team:** not required.
+
+## §122.76 — r199: Compose shows the scouts' free-agent looks as a count and days
+**The GM's call** (Nov 17 2026): the topic "Free agents worth a look" said "a few a week, by the director", which was vague. It should give the number. When none are left, it should say how many days until the next one, not a weekday.
+
+**The model** (`ComposeReplies.faLooks(state, atMs)`, pure): `{ looks, used, left, nextAt, inDays, seen }`.
+- The director's quality sets the week's looks (`scoutLooks`: 2 / 3 / 4 / 5).
+- Each player a reply reports uses one look, and it comes back seven days later. A reply that reports nobody uses none.
+- With none left, `nextAt` is when the first used look comes back. `inDays` rounds that up to whole days, at least 1.
+- `W.sc_free_agents` reads the same function. If none are left, the reply says "The next look comes in N days."
+
+**Compose** (InboxScreen):
+- **The topic description:** "The scouts look over the free agents. 2 of 3 looks left this week."
+- **With none left,** the topic is greyed out and reads "Next look in 5 days".
+- **No more 5-game wait** on this topic (`looks: true`). The week's looks are the only limit, so there's one number to watch.
+
+**Checks:**
+- **check-scouting-director:**
+  - none used: 3 of 3 left at a 60 director;
+  - two reported two days ago: 1 left;
+  - all used, the first coming back in 5 days (a reply that found nobody doesn't count);
+  - a week later they're back;
+  - an 85 director: 5 looks.
+- **test-compose-ui,** both themes: the count shows; with all used, the topic is greyed out and reads "Next look in 5 days".
+
+**Fresh team:** not required.

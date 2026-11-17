@@ -29,7 +29,7 @@ import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '..
 import { snapshotMetrics } from '../formatters.js';
 import * as When from '../../engine/When.js';
 import { dealsFor, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
-import { namedPlayers } from '../../engine/ComposeReplies.js';
+import { namedPlayers, faLooks } from '../../engine/ComposeReplies.js';
 import { workPlayers, skillsOf, teachablePositions } from '../../engine/PlayerWork.js';
 import { posLabel, startsAt, familiarity } from '../../engine/Positions.js';   // r163 §122.35
 import { penRoleOf } from '../../engine/Strategy.js';   // r169
@@ -149,7 +149,7 @@ const COMPOSE_CHANNELS = [
     role:     'Front Office',
     priority: 'medium',
     topics: [
-      { id: 'sc_free_agents', label: 'Free agents worth a look', desc: 'The scouts look over the free agents (a few a week, by the director)' },
+      { id: 'sc_free_agents', label: 'Free agents worth a look', desc: 'The scouts look over the free agents', looks: true },   // r199 the week's looks, not a cooldown
       { id: 'sc_prospect',   label: 'Young player report',      desc: 'A scouting report on one of our young players' },
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
       { id: 'sc_trade',      label: 'Is there a better deal?',  desc: 'The director\'s counter to a trade on the table, and what the deal does to payroll', deal: true },
@@ -644,6 +644,11 @@ function _topicState(t, state) {
   const gameIdx = state.currentGameIndex || 0, cd = state.composeCooldowns || {};
   const waiting = (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id);
   if (waiting) return { waiting };
+  // r199 §122.76 the scouts' looks at free agents: what's left this week, or how long until one comes back.
+  if (t.looks) {
+    const L = faLooks(state, Date.now());
+    return L.left ? { info: `${L.left} of ${L.looks} looks left this week` } : { none: `Next look in ${L.inDays} day${L.inDays === 1 ? '' : 's'}` };
+  }
   const span = t.cooldown || COMPOSE_COOLDOWN_GAMES;
   const left = cd[t.id] !== undefined ? Math.max(0, span - (gameIdx - cd[t.id])) : 0;
   return { left };
@@ -720,7 +725,7 @@ function _composeTopics(state, ch) {
     const send = isSel && !off ? _composeSendBtn(t) : '';
     return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
       <span>${_escape(t.label)}</span>
-      <span class="topic-desc">${_escape(note || t.desc)}</span>
+      <span class="topic-desc">${_escape(note || (st.info ? `${t.desc}. ${st.info}` : t.desc))}</span>
     </div>${deals}${players}${skills}${send}`;
   }).join('');
   return `
@@ -1014,7 +1019,7 @@ async function _sendCompose(topicId, channelId, state) {
                        pc_stretch: (p) => `Stretch ${p.name} out`, pc_roles: (p) => `${p.name}'s role` };
 
   // Record cooldown immediately
-  if (!topic?.deal && !topic?.player) StateManager.mutate(s => {
+  if (!topic?.deal && !topic?.player && !topic?.looks) StateManager.mutate(s => {
     s.composeCooldowns = { ...(s.composeCooldowns || {}), [topicId]: gameIdx };
   });
 

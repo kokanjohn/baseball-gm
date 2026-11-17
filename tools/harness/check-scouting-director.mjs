@@ -10,7 +10,7 @@ import { releaseDueCards, resolve, getInbox, deliverCoachHireCard, deliverCoachR
 import * as Coach from '../../engine/CoachEngine.js';
 import { ensureScoutingDirector } from '../../store/schema.js';
 import { isDiamond } from '../../engine/Diamonds.js';
-import { writeComposeReply } from '../../engine/ComposeReplies.js';
+import { writeComposeReply, faLooks } from '../../engine/ComposeReplies.js';
 import { PLAYER_ORIGIN } from '../../data/constants.js';
 
 let pass = 0, fail = 0;
@@ -62,6 +62,25 @@ setDirector({ quality: 85 });
 const rep = writeComposeReply(S(), { topicId: 'sc_free_agents', channelId: 'scouting', atMs: clock.get() });
 check(`the report is signed by the director (${rep?.sender})`, rep?.sender?.startsWith(staff().scoutingDirector.name));
 check(`a top director looks at up to 5 a week (${rep?.memo?.playerIds?.length})`, (rep?.memo?.playerIds?.length || 0) <= 5 && (rep?.memo?.playerIds?.length || 0) >= 3);
+
+// r199 §122.76 the week's looks, counted: what's left, and how many days until one comes back.
+{
+  const now = clock.get();
+  const at = (q, log) => SM.speculate(() => { setDirector({ quality: q }); SM.mutate(s => { s.composeLog = log; }); return faLooks(S(), now); });
+  const ids = Object.keys(S().players).slice(0, 5);
+  const none = at(60, []);
+  check(`none used: ${none.left} of ${none.looks} left (a 60 director)`, none.looks === 3 && none.left === 3 && none.nextAt === null);
+  const two = at(60, [{ topicId: 'sc_free_agents', atMs: now - 2 * DAY, memo: { playerIds: ids.slice(0, 2) } }]);
+  check(`two reported two days ago: ${two.left} of ${two.looks} left`, two.left === 1);
+  const all = at(60, [{ topicId: 'sc_free_agents', atMs: now - 2.5 * DAY, memo: { playerIds: ids.slice(0, 2) } },
+                      { topicId: 'sc_free_agents', atMs: now - DAY, memo: { playerIds: ids.slice(2, 3) } },
+                      { topicId: 'sc_free_agents', atMs: now - 3 * DAY, memo: { playerIds: [] } }]);
+  check(`all three used: the first comes back in ${all.inDays} days (a reply that found nobody doesn't count)`, all.left === 0 && all.inDays === 5);
+  const old = at(60, [{ topicId: 'sc_free_agents', atMs: now - 8 * DAY, memo: { playerIds: ids.slice(0, 3) } }]);
+  check('a week later they\'re back', old.left === 3);
+  const top = at(85, [{ topicId: 'sc_free_agents', atMs: now - DAY, memo: { playerIds: ids.slice(0, 3) } }]);
+  check(`a better director, more looks: ${top.left} of ${top.looks} left`, top.looks === 5 && top.left === 2);
+}
 
 // ── Tips ──────────────────────────────────────────────────────
 console.log('Tips on a diamond');

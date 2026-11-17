@@ -133,6 +133,23 @@ await page.click('#itab-todo'); await page.waitForTimeout(300);
 const shown = await page.evaluate(() => [...document.querySelectorAll('#inbox-content *')].some(e => e.children.length === 0 && /Re: Field conditions/.test(e.textContent)));
 check('the reply is in the inbox', shown);
 await page.screenshot({ path: `${out}/compose-reply-${theme}.png` });
+// r199 §122.76 the scouts' free-agent looks: what's left this week; none left, how many days until one comes back.
+await page.click('#itab-compose'); await page.waitForTimeout(300);
+const faDesc = async () => { await page.click('.compose-person[data-channel="scouting"]'); await page.waitForTimeout(300);
+  const d = await page.evaluate(() => { const b = [...document.querySelectorAll('.compose-topic-btn')].find(x => /Free agents worth a look/.test(x.textContent));
+    return { text: b?.querySelector('.topic-desc')?.textContent.trim(), off: b?.classList.contains('disabled') }; });
+  await page.click('#compose-back'); await page.waitForTimeout(200); return d; };
+const fa1 = await faDesc();
+check(`free agents: the week's looks left (“${fa1.text}”)`, /^The scouts look over the free agents\. \d of \d looks left this week$/.test(fa1.text || '') && !fa1.off);
+const looks = Number((fa1.text || '').match(/of (\d)/)?.[1] || 0);
+await page.evaluate(async (n) => {
+  const SM = await import('/baseball-gm/store/StateManager.js'); const ids = Object.keys(SM.get().players).slice(0, n);
+  SM.mutate(s => { s.composeLog = [...(s.composeLog || []), { topicId: 'sc_free_agents', atMs: Date.now() - 2 * 86_400_000 - 3600_000, memo: { playerIds: ids } }]; });
+}, looks);
+const fa2 = await faDesc();
+check(`…all used: the topic waits, saying how many days (“${fa2.text}”)`, fa2.text === 'Next look in 5 days' && fa2.off);
+await page.click('.compose-person[data-channel="scouting"]'); await page.waitForTimeout(200);
+await page.screenshot({ path: `${out}/compose-fa-looks-${theme}.png` });
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 console.log(ok ? 'ALL PASS' : 'SOME FAILED');
