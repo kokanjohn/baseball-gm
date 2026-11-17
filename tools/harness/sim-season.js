@@ -21,7 +21,7 @@ import { CARD_ACTIONS } from '../../engine/CardActions.js';
 import { cardRepeatRule, onRelease, HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation, playRuns } from '../../engine/SimEngine.js';
-import { voiceProblems, RULE_NAMES } from './voice-rules.mjs';
+import { voiceProblems, RULE_NAMES, namedTwice, dealPlayerIds } from './voice-rules.mjs';
 import * as Offseason from '../../engine/OffseasonEngine.js';
 import * as AllStar from '../../engine/AllStarEngine.js';
 import * as Pitching from '../../engine/PitchingEngine.js';
@@ -1494,6 +1494,13 @@ function checkMessageVoice(st) {
     check(`messages: ${name} (${mail.length} delivered, ${kinds} kinds)`, list.length === 0, list.slice(0, 6).join(', '));
   }
   if (process.env.VOICE_DUMP) for (const c of mail) console.log('  ✉', c.cardId, '|', c.sender, '|', c.body);
+  {
+    // r195 §122.72 a trade message names each player in its deal once (the first mention is the link).
+    const trade = mail.filter(c => c.tag === 'TRADE' && dealPlayerIds(c).length);
+    const twice = trade.map(c => [c, namedTwice(c.body, dealPlayerIds(c).map(id => st.players[id]))]).filter(([, ps]) => ps.length);
+    check(`messages: a trade message names each player in the deal once (${trade.length} with a deal)`, twice.length === 0,
+      twice.slice(0, 4).map(([c, ps]) => `${c.cardId} ${ps.map(p => p.name).join('/')}: ${c.body.slice(0, 160)}`).join(' || '));
+  }
 }
 
 /**

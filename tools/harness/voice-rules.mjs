@@ -49,3 +49,17 @@ export const RULE_NAMES = {
   relay:     'a relayed message names or quotes who it is from, and the sender is someone else',
   explainer: 'no notes about how the game works',
 };
+
+/**
+ * r195 §122.72 A trade message names each player in the deal once (each name is a link).
+ * The players (objects with a name) whose name the text uses more than once; "X's agent" doesn't count.
+ */
+export function namedTwice(text, players) {
+  const t = String(text || '');
+  return players.filter(p => p?.name).filter(p => (t.match(new RegExp(`(^|[^\\w'])${esc(p.name)}(?![\\w])(?!'s agent)`, 'g')) || []).length > 1);
+}
+/** The players a trade message is about: its offer, its package, the deal a counter or a revision carries. */
+export function dealPlayerIds(c) {
+  const offers = [c._tradeOffer, c._ideaOffer, c._reviseOffer?.offer].filter(Boolean);
+  return [...new Set(offers.flatMap(o => [...(o.incomingIds || []), ...(o.outgoingIds || [])]))];
+}

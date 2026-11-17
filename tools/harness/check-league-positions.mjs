@@ -120,7 +120,7 @@ CE.leaguePositionNews([{ type: 'LEAGUE_POS', kind: 'cpu', playerId: theirs.id, t
 let idea = [...(S().inbox || []), ...(S().scheduledCards || [])].find(c => c._rosterKey === `lp:${theirs.id}:2B`);
 if (idea) { CE.releaseDueCards(Math.max(clock.get(), idea.deliverAtMs + 1000)); idea = CE.getInbox().find(c => c.instanceId === idea.instanceId) || idea; }
 console.log(`    “${idea?.subject}” (${idea?.sender}) — ${idea?.body?.slice(0, 260)}…  [${idea?.yesLabel} / ${idea?.noLabel}]`);
-check('a trade idea from Pro Scouting, with a package', !!idea && idea.cardId === 'lt_offer' && /would start over/.test(idea.body) && !GEN.test(idea.body));
+check('a trade idea from Pro Scouting, with a package', !!idea && idea.cardId === 'lt_offer' && /: an upgrade on \w+ \(\d+\) there\./.test(idea.body) && !GEN.test(idea.body));
 // a second within the gap: Recent instead
 
 const other = club.rosterIds.map(P).filter(p => !Pos.isPitcher(p) && p.id !== theirs.id && !Pos.canPlay(p, '3B'))[0];

@@ -402,7 +402,8 @@ function _renderRow(card) {
 /** The body as paragraphs (a blank line, or a long run of sentences split near its middle). */
 function _paragraphs(text, players = []) {
   const blocks = String(text || '').split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
-  return blocks.map(b => `<p>${_linkPlayers(_escape(b), players).replace(/\n/g, '<br>')}</p>`).join('');
+  const linked = new Set();       // r195 a name is a link the first time only: once it's been tappable, the rest is plain text
+  return blocks.map(b => `<p>${_linkPlayers(_escape(b), players, linked).replace(/\n/g, '<br>')}</p>`).join('');
 }
 
 /**
@@ -427,14 +428,17 @@ function _messagePlayers(card, state) {
   return ps.filter(p => count[p.name] === 1);
 }
 
-function _linkPlayers(html, players) {
+function _linkPlayers(html, players, linked = new Set()) {
   if (!players.length) return html;
   const byName = new Map(players.map(p => [_escape(p.name), p.id]));
   const names = [...byName.keys()].sort((a, b) => b.length - a.length).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   // (with the punctuation right after it, so a line never starts with "." or ",")
   const re = new RegExp(`(?<![\\w'&#;-])(${names.join('|')})(?![\\w-])((?:&#39;s?|'s?)?[.,;:!?)]*)`, 'g');
   return html.replace(re, (m, name, tail) => {
-    const btn = `<button class="msg-player" data-msg-player="${byName.get(name)}">${name}</button>`;
+    const id = byName.get(name);
+    if (linked.has(id)) return m;
+    linked.add(id);
+    const btn = `<button class="msg-player" data-msg-player="${id}">${name}</button>`;
     return tail ? `<span class="msg-player-wrap">${btn}${tail}</span>` : btn;
   });
 }

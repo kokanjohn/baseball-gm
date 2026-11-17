@@ -170,6 +170,10 @@ if (shop.id) {
   await page.click(`[data-open="${shop.id}"]`); await page.waitForTimeout(400);
   const btns = await page.$$eval('[data-resolve], [data-revise]', bs => bs.map(b => b.textContent.trim()));
   check(`an offer to make (${btns.join(' · ')})`, !shop.offer || ['Make the Offer', 'Not Now', 'Adjust It First'].every(l => btns.includes(l)));
+  // r195 a name is a link the first time only (the payroll paragraph names the bids' players again).
+  const ids = await page.$$eval('.msg-player', bs => bs.map(b => b.dataset.msgPlayer));
+  const shown = await page.evaluate((names) => names.filter(n => (document.querySelector('.mr-body')?.innerText.match(new RegExp(`\\b${n}\\b`, 'g')) || []).length > 1), await page.$$eval('.msg-player', bs => bs.map(b => b.textContent)));
+  check(`each player is a link once (${ids.length} links; named again as text: ${shown.join(', ') || 'none'})`, ids.length > 0 && new Set(ids).size === ids.length);
   await page.screenshot({ path: `${out}/trade-shop-reply-${theme}.png` });
 }
 check('no page errors', errors.length === 0, errors.join(' | '));

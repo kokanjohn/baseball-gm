@@ -966,19 +966,25 @@ const seasonWord = (f) => (f.season === 'spring' ? 'this spring' : f.season === 
 const batLine = (f, p) => (S(p).ab >= 40 ? `hitting ${statLine(p)}${S(p).hr ? ` with ${plural(S(p).hr, 'homer')}` : ''} ${seasonWord(f)}` : '');
 const armLine = (f, p) => (S(p).ip >= 15 ? `a ${eraS(p).toFixed(2)} ERA in ${Math.round(S(p).ip)} innings ${seasonWord(f)}` : '');
 
-/** The deal in words: "we send Vega and get Ruiz and Ortiz, with $40K coming to us". */
-function dealWords(st, o, team) {
-  const N = (ids) => list((ids || []).map(id => st.players[id]?.name).filter(Boolean));
+/**
+ * The deal in words: "we send Vega and get Ruiz and Ortiz, with $40K coming to us".
+ * r195 §122.72 each player named once: what else there is to say about one (`detail[id]`, salary
+ * kept by the sending club) goes in a parenthetical after the name, not in a later clause.
+ */
+function dealWords(st, o, team, detail = {}) {
+  const keep = (id) => (o.retain?.[id] ? `${(o.incomingIds || []).includes(id) ? team : 'we'} keep paying ${Math.round(o.retain[id] * 100)}% of the salary this season` : '');
+  const N = (ids) => list((ids || []).map(id => {
+    const p = st.players[id];
+    if (!p?.name) return null;
+    const bits = [detail[id], keep(id)].filter(Boolean);
+    return bits.length ? `${p.name} (${bits.join('; ')})` : p.name;
+  }).filter(Boolean));
   const c = o.cashK || 0;
   let t = (o.outgoingIds || []).length
     ? `we send ${N(o.outgoingIds)} and get ${N(o.incomingIds) || 'nothing back but cash'}`
     : `we get ${N(o.incomingIds)}`;
   if (c > 0) t += `, with ${formatK(c)} coming to us`;
   if (c < 0) t += (o.outgoingIds || []).length ? `, and we send ${formatK(-c)}` : ` for ${formatK(-c)}`;
-  for (const [id, share] of Object.entries(o.retain || {})) {
-    const p = st.players[id];
-    if (p) t += `; ${(o.incomingIds || []).includes(id) ? team : 'we'} keep paying ${Math.round(share * 100)}% of ${p.name}'s salary this season`;
-  }
   return t;
 }
 
@@ -1018,28 +1024,32 @@ function payrollWords(f, o) {
   return parts.join(' ');
 }
 
-/** The coach who looks at a player coming in: pitchers to the pitching coach, hitters to the hitting coach. */
-function coachLook(f, ps, key, role) {
-  const c = f.state.userTeam?.coachingStaff?.[key];
-  if (!ps.length || !c || c.vacant || !c.name) return '';
-  const lines = ps.map(p => {
-    const sr = p.subRatings || {}, age = f.age(p), n = p.name, bits = [];
-    if (role === 'pitch') {
-      if (p.pos === 'SP' && (sr.stamina ?? 60) <= 45) bits.push(`${n} doesn't go deep into games, so the bullpen would cover more innings on those days.`);
-      else if (p.pos === 'SP' && (sr.stamina ?? 60) >= 65) bits.push(`${n} can go deep into games, which saves the bullpen.`);
-      else if (p.pos === 'SP') bits.push(`${n} gives us about the usual length from a starter.`);
-      else bits.push((sr.stuff ?? 0) >= (sr.control ?? 0) + 8 ? `${n} gets by on stuff more than control.` : (sr.control ?? 0) >= (sr.stuff ?? 0) + 8 ? `${n} throws strikes more than misses bats.` : `${n} has the stuff and the control in balance.`);
-      const a = armLine(f, p); if (a) bits.push(`${Cap(a)}.`);
-    } else {
-      const d = (sr.power ?? 0) - (sr.contact ?? 0);
-      bits.push(d >= 8 ? `${n} is a power bat: more homers, more strikeouts.` : d <= -8 ? `${n} is a contact hitter who puts the ball in play.` : `${n} is a balanced hitter.`);
-      const b = batLine(f, p); if (b) bits.push(`${Cap(b)}.`);
-    }
-    if (age >= 32) bits.push(`At ${age}, ${n} carries more injury risk than a younger player.`);
-    if (p._ratingGap) bits.push(`${n} is ${ORIGIN_WORDS[p.origin]?.split(',')[0] || 'new to the league'}, so the ratings are an estimate.`);
-    return bits.join(' ');
-  });
-  return `I asked ${c.name} about ${list(ps.map(p => p.name))}. ${lines.join(' ')}`;
+/**
+ * The coach's look at a player coming in (pitchers to the pitching coach, hitters to the hitting coach),
+ * r195 §122.72 written to follow the sentence that names the player, so the name isn't said again:
+ * "Ruiz (OVR 61) would take Cahill's spot in the rotation. Moreau says this one can go deep into games…"
+ */
+function coachNote(f, p) {
+  const pitch = ['SP', 'RP'].includes(p.pos);
+  const c = f.state.userTeam?.coachingStaff?.[pitch ? 'pitchingCoach' : 'hittingCoach'];
+  if (!c || c.vacant || !c.name) return '';
+  const sr = p.subRatings || {}, age = f.age(p), bits = [];
+  let what;
+  if (pitch) {
+    if (p.pos === 'SP' && (sr.stamina ?? 60) <= 45) what = 'doesn\'t go deep into games, so the bullpen would cover more innings on those days';
+    else if (p.pos === 'SP' && (sr.stamina ?? 60) >= 65) what = 'can go deep into games, which saves the bullpen';
+    else if (p.pos === 'SP') what = 'gives us about the usual length from a starter';
+    else what = (sr.stuff ?? 0) >= (sr.control ?? 0) + 8 ? 'gets by on stuff more than control' : (sr.control ?? 0) >= (sr.stuff ?? 0) + 8 ? 'throws strikes more than misses bats' : 'has the stuff and the control in balance';
+  } else {
+    const d = (sr.power ?? 0) - (sr.contact ?? 0);
+    what = d >= 8 ? 'is a power bat: more homers, more strikeouts' : d <= -8 ? 'is a contact hitter who puts the ball in play' : 'is a balanced hitter';
+  }
+  bits.push(`${c.name} says this one ${what}.`);
+  const line = pitch ? armLine(f, p) : batLine(f, p);
+  if (line) bits.push(`${Cap(line)}.`);
+  if (age >= 32) bits.push(`At ${age}, more injury risk than a younger player.`);
+  if (p._ratingGap) bits.push(`${Cap(ORIGIN_WORDS[p.origin]?.split(',')[0] || 'new to the league')}, so the ratings are an estimate.`);
+  return bits.join(' ');
 }
 
 W.mgr_trade = (f, r, who, arg) => {
@@ -1049,9 +1059,12 @@ W.mgr_trade = (f, r, who, arg) => {
   const { leaving, arriving, delta } = fieldRead(st, deal);
   const out = [];
   const coming = (q) => (deal.offer.incomingIds || []).includes(q.id);
+  // r195 each player named once: a player coming in gets the coach's look right where they're first named.
+  const told = new Set();
+  const note = (q) => { if (!coming(q) || told.has(q.id)) return ''; told.add(q.id); const n = coachNote(f, q); return n ? ` ${n}` : ''; };
   for (const l of leaving) {
     const { p, next } = l;
-    const nextWords = (where) => (next ? (coming(next) ? `${next.name} (${ovrOf(next)}), coming back in the deal, would take over ${where}.` : `${next.name} (${ovrOf(next)}) would take over ${where}.`) : '');
+    const nextWords = (where) => (next ? (coming(next) ? `${next.name} (${ovrOf(next)}), coming back in the deal, would take over ${where}.${note(next)}` : `${next.name} (${ovrOf(next)}) would take over ${where}.`) : '');
     if (l.role === 'lineup') {
       const b = batLine(f, p);
       out.push(`${p.name} (${ovrOf(p)}) plays ${SPOT_WORDS[l.slot] || l.slot} every day for us${b ? `, ${b}` : ''}. ${nextWords(`at ${SPOT_WORDS[l.slot] || l.slot}`) || `Nobody else on the roster plays ${SPOT_WORDS[l.slot] || l.slot}, so we'd need to find someone.`}`);
@@ -1059,7 +1072,7 @@ W.mgr_trade = (f, r, who, arg) => {
       const a = armLine(f, p);
       out.push(`${p.name} (${ovrOf(p)}) is in our rotation${a ? `, with ${a}` : ''}. ${nextWords('that turn') || 'We don\'t have a starter to take the turn, so we\'d need one.'}`);
     } else if (l.role === 'closer' || l.role === 'setup') {
-      out.push(`${p.name} (${ovrOf(p)}) ${l.role === 'closer' ? 'closes games for us' : 'is one of our late-inning arms'}. ${next ? `${next.name} (${ovrOf(next)}) would move up.` : 'The bullpen gets thinner behind it.'}`);
+      out.push(`${p.name} (${ovrOf(p)}) ${l.role === 'closer' ? 'closes games for us' : 'is one of our late-inning arms'}. ${next ? `${next.name} (${ovrOf(next)}) would move up.${note(next)}` : 'The bullpen gets thinner behind it.'}`);
     }
   }
   // The depth we'd send, together.
@@ -1067,23 +1080,35 @@ W.mgr_trade = (f, r, who, arg) => {
   if (spare.length) out.unshift(`${list(spare.map(p => p.name))} ${spare.length === 1 ? 'is depth' : 'are depth'} for us${spare.length === 1 ? ` (${spare[0].pos === 'RP' || spare[0].pos === 'SP' ? 'a reliever we don\'t lean on' : 'off the bench'})` : ''}. We won't miss much on the field.`);
   for (const a of arriving) {
     const q = a.p, pos = posLabel(q);
-    if (a.fills) continue;
-    if (a.role === 'lineup')        out.push(`${q.name} (${pos}, ${ovrOf(q)}) would play ${SPOT_WORDS[a.slot] || a.slot} over ${a.over.name} (${ovrOf(a.over)}).`);
-    else if (a.role === 'rotation') out.push(`${q.name} (${ovrOf(q)}) would take ${a.over.name}'s spot in the rotation.`);
-    else if (a.role === 'closer')   out.push(`${q.name} (${ovrOf(q)}) would close, and ${a.over.name} would move to setup.`);
-    else if (a.role === 'setup')    out.push(`${q.name} (${ovrOf(q)}) would pitch the late innings, ahead of ${a.over.name}.`);
-    else if (a.role === 'hurt')     out.push(`${q.name} is hurt right now, so nothing changes on the field until ${q.name} is back.`);
-    else                            out.push(`${q.name} (${pos}, ${ovrOf(q)}) would be depth for us — not a regular today.`);
+    if (a.fills) continue;          // (named above, taking over for the player we'd send)
+    if (a.role === 'lineup')   out.push(`${q.name} (${pos}, ${ovrOf(q)}) would play ${SPOT_WORDS[a.slot] || a.slot} over ${a.over.name} (${ovrOf(a.over)}).${note(q)}`);
+    else if (a.role === 'rotation') out.push(`${q.name} (${ovrOf(q)}) would take ${a.over.name}'s spot in the rotation.${note(q)}`);
+    else if (a.role === 'closer')   out.push(`${q.name} (${ovrOf(q)}) would close, and ${a.over.name} would move to setup.${note(q)}`);
+    else if (a.role === 'setup')    out.push(`${q.name} (${ovrOf(q)}) would pitch the late innings, ahead of ${a.over.name}.${note(q)}`);
+    else if (a.role === 'hurt')     out.push(`${q.name} (${pos}, ${ovrOf(q)}) is hurt right now, so nothing changes on the field until the injury heals.${note(q)}`);
+    else                            out.push(`${q.name} (${pos}, ${ovrOf(q)}) would be depth for us — not a regular today.${note(q)}`);
   }
-  const ins = (deal.offer.incomingIds || []).map(f.P).filter(Boolean);
-  out.push(coachLook(f, ins.filter(p => ['SP', 'RP'].includes(p.pos)), 'pitchingCoach', 'pitch'));
-  out.push(coachLook(f, ins.filter(p => !['SP', 'RP'].includes(p.pos)), 'hittingCoach', 'hit'));
+  // Anyone coming in the lines above didn't place (they still get the coach's look, named once).
+  for (const q of (deal.offer.incomingIds || []).map(f.P).filter(Boolean)) {
+    if (told.has(q.id)) continue;
+    const n = note(q);
+    if (n) out.push(`${q.name} (${posLabel(q)}, ${ovrOf(q)}) comes in too.${n}`);
+  }
   const bottom = delta >= 4 ? 'On the field today, this makes us better.' : delta >= 1 ? 'On the field today, this makes us a little better.'
     : delta <= -4 ? 'On the field today, this makes us worse.' : delta <= -1 ? 'On the field today, this makes us a little worse.' : 'On the field today, it\'s about a wash.';
   const dir = st.userTeam?.coachingStaff?.scoutingDirector;
   out.push(`${bottom} What it means past this season — value, contracts, whether there's a better deal — is ${dir && !dir.vacant && dir.name ? `${dir.name}'s` : 'the scouts\''} department.`);
   return { body: out, memo: { playerIds: [...(deal.offer.incomingIds || []), ...(deal.offer.outgoingIds || [])] }, topic: dealTopic(deal) };
 };
+
+/** r195 our read on a player whose ratings are an estimate, for a parenthetical: "by our read, better than the rating". */
+function gapRead(f, r, p, ours) {
+  if (!p?._ratingGap) return '';
+  const read = readOfUntested(p, r, 4 / scoutEye(f, p));
+  return read > 0 ? (ours ? 'by our read, better than the rating — they\'d be getting that' : 'by our read, better than the reports say')
+    : read < 0 ? (ours ? 'by our read, not as good as the rating — good to move' : 'by our read, not as good as the reports')
+    : 'the ratings are an estimate, and our read is about the same';
+}
 
 W.sc_trade = (f, r, who, arg) => {
   const st = f.state;
@@ -1102,17 +1127,27 @@ W.sc_trade = (f, r, who, arg) => {
   out.push(`${stand} ${room}${rel}`);
 
   const q = st.userTeam?.coachingStaff?.scoutingDirector?.quality ?? 50;
+  const readIn = new Set();       // players whose read went in the counter's deal line
   if (a.noRounds) {
     out.push('These talks are out of rounds: we can take it or leave it, but there\'s no counter left to make.');
   } else if (a.counter) {
     const c = a.change, P = (id) => st.players[id];
     const was = deal.offer.cashK || 0, now = was + (c.k || 0);
+    // (the player a change brings in is named once, in the deal line, with what the ask says about them)
+    const detail = {};
+    if (c.kind === 'add') detail[c.id] = `${posLabel(P(c.id))}, ${f.age(P(c.id))}, ${ovrOf(P(c.id))}${wouldStart(P(c.id), st, 'user') ? ', who would play for us' : ', a prospect'}`;
+    if (c.kind === 'swap') detail[c.id] = ovrOf(P(c.id));
     const ask = c.kind === 'cash' ? (was >= 0 ? `ask them to add ${formatK(c.k)}` : now <= 0 ? `pay ${formatK(c.k)} less` : `ask them to send ${formatK(now)} instead of us paying ${formatK(-was)}`)
       : c.kind === 'drop' ? `keep ${P(c.id).name} out of it`
-      : c.kind === 'add'  ? `ask them to include ${P(c.id).name} (${posLabel(P(c.id))}, ${f.age(P(c.id))}, ${ovrOf(P(c.id))}${wouldStart(P(c.id), st, 'user') ? ', who would play for us' : ', a prospect'})`
-      : `ask for ${P(c.id).name} (${ovrOf(P(c.id))}) instead of ${P(c.for).name} (${ovrOf(P(c.for))})`;
+      : c.kind === 'add'  ? (wouldStart(P(c.id), st, 'user') ? 'ask them to include a player who would play for us' : 'ask them to include a prospect')
+      : `swap ${P(c.for).name} (${ovrOf(P(c.for))}) for another of their players`;
     const sure = q >= 75 ? 'I\'m confident they\'ll take it.' : q >= 55 ? 'I think they\'ll take it.' : 'I think they\'ll take it, though I could be wrong about how far they\'ll go.';
-    out.push(`My counter: ${ask}. That makes the deal: ${dealWords(st, a.counter, team)}. ${sure} `
+    // Our read on a player whose ratings are an estimate goes with their name in the deal line.
+    for (const id of [...(a.counter.incomingIds || []), ...(a.counter.outgoingIds || [])]) {
+      const n = gapRead(f, r, st.players[id], (a.counter.outgoingIds || []).includes(id));
+      if (n) { detail[id] = [detail[id], n].filter(Boolean).join('; '); readIn.add(id); }
+    }
+    out.push(`My counter: ${ask}. That makes the deal: ${dealWords(st, a.counter, team, detail)}. ${sure} `
       + `If I've misread them, they'll come back with a counter of their own or turn it down — and sending this replaces their offer, so we can't go back and take it as it stands.`
       + (a.lastRound ? ' This would be the last round of talks: if they say no, the talks are over.' : ''));
   } else if (a.seen >= COUNTER_MARGIN + 1) {
@@ -1125,7 +1160,7 @@ W.sc_trade = (f, r, who, arg) => {
   const notes = [];
   for (const id of [...(deal.offer.incomingIds || []), ...(deal.offer.outgoingIds || [])]) {
     const p = st.players[id];
-    if (!p?._ratingGap) continue;
+    if (!p?._ratingGap || readIn.has(id)) continue;
     const read = readOfUntested(p, r, 4 / scoutEye(f, p));
     const ours = (deal.offer.outgoingIds || []).includes(id);
     if (read > 0) notes.push(ours ? `Careful with ${p.name}: our read is better than the rating, and they'd be getting that.` : `${p.name} is better than the reports say, by our read.`);
@@ -1147,7 +1182,7 @@ W.sc_trade = (f, r, who, arg) => {
 function needWords(st, need, p) {
   const inc = need?.incumbentId ? st.players[need.incumbentId] : null;
   const now = inc ? ` (${inc.name} is there now, ${ovrOf(inc)})` : '';
-  if (!need) return `would play ${p.name} every day`;
+  if (!need) return 'would play this one every day';
   if (need.kind === 'sp') return `need a starter${inc ? ` (${inc.name} is the weak end of the rotation, ${ovrOf(inc)})` : ''}`;
   if (need.kind === 'rp') return `need bullpen help${now}`;
   const noun = { C: 'catcher', '1B': 'first baseman', '2B': 'second baseman', '3B': 'third baseman', SS: 'shortstop', OF: 'outfielder', DH: 'bat at DH' }[need.slot] || 'regular';
@@ -1155,15 +1190,14 @@ function needWords(st, need, p) {
 }
 /** What a club would give: "Ruiz (SS, 26, OVR 61) and $50K". */
 function bidWords(f, o, team) {
-  const pieces = (o.incomingIds || []).map(f.P).filter(Boolean).map(q => `${q.name} (${posLabel(q)}, ${f.age(q)}, ${ovrOf(q)})`);
+  const keep = (q) => (o.retain?.[q.id] ? `; ${team} keep paying ${Math.round(o.retain[q.id] * 100)}% of the salary this season` : '');
+  const pieces = (o.incomingIds || []).map(f.P).filter(Boolean).map(q => `${q.name} (${posLabel(q)}, ${f.age(q)}, ${ovrOf(q)}${keep(q)})`);
   const c = o.cashK || 0;
   if (c > 0) pieces.push(`${formatK(c)}`);
   let t = pieces.length ? list(pieces) : 'nothing';
   if (c < 0) t += `, with us adding ${formatK(-c)}`;
-  for (const [id, share] of Object.entries(o.retain || {})) {
-    const q = f.P(id);
-    if (q) t += `, and ${(o.incomingIds || []).includes(id) ? team : 'we'} keep paying ${Math.round(share * 100)}% of ${poss(q.name)} salary this season`;
-  }
+  // (salary we'd keep paying on the player we shop: the reply already named them)
+  for (const [id, share] of Object.entries(o.retain || {})) if ((o.outgoingIds || []).includes(id)) t += `, and we keep paying ${Math.round(share * 100)}% of the salary this season`;
   return t;
 }
 
@@ -1176,27 +1210,27 @@ W.sc_shop = (f, r, who, arg) => {
   const topic = `what we could get for ${p.name}`;
   if (!shop.called) {
     out.push(shop.interested === 0 && !f.state.leagueTeams?.length ? 'There\'s nobody to call right now.'
-      : `I looked around the league, and nobody needs ${p.name} right now: no club has a hole that ${p.name} fills, and nobody would play ${p.name} over who they have.`);
+      : `I looked around the league, and nobody needs ${p.name} right now: no club has a hole there, and nobody would play this one over who they have.`);
     return { body: out, memo: { playerId: p.id, shopId: p.id }, topic };
   }
   out.push(`${shop.interested === 1 ? 'One club' : `${Cap(num(shop.interested))} clubs`} could use ${p.name}. I called ${shop.called === shop.interested ? (shop.called === 1 ? 'it' : `all ${num(shop.called)}`) : `the ${num(shop.called)} most likely to bite`}.`);
   if (!shop.bids.length) {
     out.push(shop.key
-      ? `Nobody would come close to what ${p.name} is worth to us. On a call like this, clubs offer the players they can spare, and for a regular like ${p.name} that isn't enough — it would take one of their own regulars, and that's a deal to build ourselves in the trade composer (Compose → Other GMs).`
-      : `Nobody would come close to what ${p.name} is worth to us right now. I'd keep ${p.name}, or ask again when a club's need gets worse.`);
+      ? `Nobody would come close to what this one is worth to us. On a call like this, clubs offer the players they can spare, and for a regular that isn't enough — it would take one of their own regulars, and that's a deal to build ourselves in the trade composer (Compose → Other GMs).`
+      : `Nobody would come close to what this one is worth to us right now. I'd hold on, or ask again when a club's need gets worse.`);
   } else {
     for (const b of shop.bids.slice(0, 3)) {
-      out.push(`${b.team} ${needWords(st, b.need, p)}. They'd give ${bidWords(f, b.offer, b.team)} — ${b.ourNet >= 10 ? 'more than fair for us' : b.ourNet >= 0 ? 'fair value for us' : `short of what ${p.name} is worth to us`}.`);
+      out.push(`${b.team} ${needWords(st, b.need, p)}. They'd give ${bidWords(f, b.offer, b.team)} — ${b.ourNet >= 10 ? 'more than fair for us' : b.ourNet >= 0 ? 'fair value for us' : 'short of full value for us'}.`);
     }
     const b = shop.best;
     out.push(b.ourNet >= 0
-      ? `If we're moving ${p.name}, ${poss(b.team)} offer is the one I'd take. I think they'd say yes to it as it stands; their GM answers on their own clock.`
-      : `Nobody would give full value. If we want to move ${p.name} anyway, ${poss(b.team)} offer comes closest, and I think they'd say yes to it as it stands.`);
+      ? `If we're making the move, ${poss(b.team)} offer is the one I'd take. I think they'd say yes to it as it stands; their GM answers on their own clock.`
+      : `Nobody would give full value. If we want to make the move anyway, ${poss(b.team)} offer comes closest, and I think they'd say yes to it as it stands.`);
   }
   if (p._ratingGap) {
     const read = readOfUntested(p, r, 4 / scoutEye(f, p));
-    if (read > 0) out.push(`Careful: our read on ${p.name} is better than the rating. The clubs are paying for the rating, so whoever gets ${p.name} gets a bargain.`);
-    else if (read < 0) out.push(`Our read on ${p.name} is not as good as the rating, so the clubs are paying for more than they'd get — a good time to move ${p.name}.`);
+    if (read > 0) out.push('Careful: our read on this one is better than the rating. The clubs are paying for the rating, so whoever makes the deal gets a bargain.');
+    else if (read < 0) out.push('Our read on this one is not as good as the rating, so the clubs are paying for more than they\'d get — a good time to move on.');
   }
   if (shop.best) out.push(`On payroll, with ${poss(shop.best.team)} offer: ${payrollWords(f, shop.best.offer)}`);
   return {

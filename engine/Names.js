@@ -4,7 +4,7 @@
  *
  * Nobody in the game has a first name. A player is known by a last name; a
  * player whose last name is already worn by someone in the league (anyone
- * not departed) gets a first initial — "E. Tejada" — the way a box score
+ * not departed) gets a first initial — "E. Torres" — the way a box score
  * tells two players apart. The name is fixed for the player's career, and no
  * two players in the league ever share one.
  */
@@ -24,7 +24,7 @@ export function namesInUse(players) {
   return set;
 }
 
-/** The last name inside a display name ("E. Tejada" → "Tejada"). */
+/** The last name inside a display name ("E. Torres" → "Torres"). */
 export function surnameOf(name) {
   return String(name || '').replace(/^[A-Z]\.\s+/, '');
 }

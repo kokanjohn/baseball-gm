@@ -13,6 +13,7 @@ import { writeComposeReply } from '../../engine/ComposeReplies.js';
 import { cpuRespond, evaluateForClub, clubBar } from '../../engine/TradeEngine.js';
 import { talkWith } from '../../engine/Negotiation.js';
 import { COMPOSE_REPLY } from '../../data/constants.js';
+import { namedTwice } from './voice-rules.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => {
@@ -50,7 +51,8 @@ const everyone = [...deal.offer.incomingIds, ...deal.offer.outgoingIds];
 check('the manager talks about every player in the deal', everyone.every(id => mgr.body.includes(S().players[id].name)));
 check('…and every player named is real (linked)', everyone.every(id => mgr.named.includes(id)) && mgr.named.every(id => S().players[id]));
 check('…ends with the bottom line on the field', /On the field today, (this makes us|it's about a wash)/.test(mgr.body));
-check('…with a coach on who is coming in', /I asked \w+ about/.test(mgr.body));
+check('…with a coach on who is coming in', /\w+ says this one /.test(mgr.body));
+check('…naming each player in the deal once (r195)', !namedTwice(mgr.body, everyone.map(id => S().players[id])).length, namedTwice(mgr.body, everyone.map(id => S().players[id])).map(p => p.name).join());
 check('…and no decision attached', !mgr.trade && !mgr.decision);
 check('gender-neutral, nothing missing', !GEN.test(mgr.body) && !BAD.test(mgr.body), (mgr.body.match(GEN) || mgr.body.match(BAD) || []).join());
 
@@ -61,6 +63,9 @@ const sc = writeComposeReply(S(), { topicId: 'sc_trade', channelId: 'scouting', 
 console.log(`    ${sc?.body.replace(/\n\n/g, '\n    ')}`);
 check(`signed by the director (${sc?.sender})`, sc?.sender?.startsWith(S().userTeam.coachingStaff.scoutingDirector.name));
 check('reads the deal as it stands, then counters or says why not', /^As it stands/m.test(sc.body) && /(My counter:|I wouldn't counter|nothing worth asking|out of rounds)/.test(sc.body));
+{ const before = sc.body.split('On payroll')[0];   // (the payroll paragraph names who's signed past this season)
+  const ps = [...new Set([...everyone, ...(sc.trade?.offer?.incomingIds || []), ...(sc.trade?.offer?.outgoingIds || [])])].map(id => S().players[id]);
+  check('…naming each player once before the payroll (r195)', !namedTwice(before, ps).length, namedTwice(before, ps).map(p => p.name).join()); }
 check('…with the payroll paragraph', /On payroll(, with the counter)?: /.test(sc.body) && /ownership's target/.test(sc.body));
 check('gender-neutral, nothing missing', !GEN.test(sc.body) && !BAD.test(sc.body), (sc.body.match(GEN) || sc.body.match(BAD) || []).join());
 if (sc.trade) check('a counter is a decision: the counter, its round, the deal it answers', sc.trade.round === 2 && sc.trade.dealKey === deal.key && sc.trade.teamId === deal.teamId);

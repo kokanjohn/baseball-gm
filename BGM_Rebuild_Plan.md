@@ -12598,3 +12598,39 @@ The sim attributes each date to the park the game was at then. The crew's word a
 **Fresh team:** not required.
 
 **Suite (r194):** every run passes, the new check-fa-heal included. Seeds 2–7 of the season sim pass too.
+
+## §122.72 — r195: names that point at real players; a trade message names each player once
+**The GM's report** (Nov 16 2026): "Puig" and "Paredes" turned up. Both are real players, and both are uncommon names. Also, trade messages named the same player two or three times, and with every name now a link (§122.24) that reads as clutter.
+
+**The name pool** (`data/player-names.js`):
+- **The rule:** no surname of a well-known real player unless it's a common name. Garcia, Smith, Kim and Tanaka stay; Puig and Altuve point at one person.
+- **68 player surnames taken out**, among them Puig, Paredes, Altuve, Ohtani, Acuna, Machado, Polanco, Encarnacion, Gourriel, Cespedes, Beltre, Tejada, Urshela and Zambrano. 68 others came in. Most are Hispanic, as most of the cut names were (Mendoza, Munoz, Silva, Quintero…), plus a few English, Japanese and Polish names. The pool stays at 1,201.
+- **Three staff names out:** Reardon, Westbrook and Garland (now Ravenscroft, Whitlatch and Gilchrest).
+- The header states the rule. **check-names** (new) lists every name taken out, so none can come back. It also checks that each pool's entries are distinct, that the three pools share nothing, and that every name is ASCII.
+
+**A name is a link the first time only** (`InboxScreen._paragraphs` / `_linkPlayers`). This applies to every message. Where a name has to appear again, the later mentions are plain text.
+
+**Trade messages name each player once.** Everything about a player goes in one parenthetical after the name: position, rating, Impact, and any salary the sending club keeps paying. The separate "By Impact, …" and "…% of X's salary" sentences are gone.
+- **Shared helpers** (Negotiation): `playerRef`, `impactPhrase`, `namedIn`, and `describeOffer(…, { impact, hand, known })` / `dealSentence`.
+  - A player the opening line already introduced (`known`) is left out of the deal line.
+  - When they asked for ours: "In return, we receive …".
+  - When we want theirs: "The price: … and $25K."
+- **A club's offer** (`deliverTradeOffer`): the opening line names the player the offer is about, with all of that player's details. The deal line names the rest.
+  - The club's own voice (`_directOffer`) works the same way.
+  - Callers' own intros take the player's reference as an argument: the All-Star suitor and a club cutting payroll.
+- **Pro Scouting's packages** (`_deliverIdea`): every opening line introduces the target with `_dealRef`, which includes Impact. This covers beaten, flipped, sold, surplus, working the phones, the winter meetings, a watch that found someone, and a club's player at a new position.
+  - The last of these ends with a noun phrase now (`_fitNoun`: "…working in relief as well: an upgrade on Munoz (54).").
+  - The winter meetings' free-agent comparison follows the package (`after`).
+- **The payroll cut order, and "no club can take the contract":** after the first mention, these say "the player" and "the contract".
+- **Replies:**
+  - **The manager's read** (`mgr_trade`): the coach's look at an arriving player follows the sentence that names them ("Landover says this one is a balanced hitter."). It no longer comes as a separate "I asked X about A and B" paragraph that named them again.
+  - **The director's counter** (`sc_trade`): the player the counter adds or swaps in is named once, in "That makes the deal…", with the details. Our read on a player whose ratings are an estimate goes into that player's parenthetical.
+  - **Shopping a player** (`sc_shop`): the player is named in the first line and called "this one" after that.
+  - **The payroll paragraph** still names who's signed past this season. That's a repeat, and the first-link rule covers it.
+
+**Checks:**
+- **sim-season:** "a trade message names each player in the deal once". In the run: 34 messages with a deal, all pass.
+- **check-trade-advice:** the manager's reply names each player once, the director's does too before the payroll paragraph, and the coach's look appears as "X says this one…".
+- **test-trade-advice-ui:** in the shop reply, each player is a link once.
+
+**Fresh team:** needed for the new names. A saved league keeps the names it was founded with. The message changes need no fresh team.

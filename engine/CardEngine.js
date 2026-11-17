@@ -1893,7 +1893,10 @@ function _needWords(need, whose = 'them') {
     : { a: _an(n), role: `play ${_SPOT[need.slot] || n} for ${whose} every day`, hole: `${_SPOT[need.slot] || 'one spot in the lineup'} has been a weak spot` };
 }
 
-/** The opening line, by kind, varied so the same situation doesn't read the same way twice. */
+/**
+ * The opening line, by kind, varied so the same situation doesn't read the same way twice.
+ * `ours` / `theirs` is the player's full reference (r195: the one place the message names them).
+ */
 function _offerIntro(kind, { team, ours, theirs, need, seed }) {
   const w = _needWords(need, kind === 'call' ? 'them' : 'us');
   if (kind === 'call') return _pick(seed ? [
@@ -1901,7 +1904,7 @@ function _offerIntro(kind, { team, ours, theirs, need, seed }) {
     `The phone was ringing before the nameplate went up. ${team} want ${ours} to ${w.role}.`,
     `${team} wasted no time testing the new front office: they're after ${ours}.`,
   ] : [
-    `${team} called about ${ours}. They need ${w.a} and see ${ours} as the answer.`,
+    `${team} called about ${ours}. They need ${w.a} and see a fit.`,
     `${team} have been shopping for ${w.a}, and ${ours} is the name they keep coming back to.`,
     `${_poss(team)} front office reached out: they want ${ours} to ${w.role}.`,
     `Word from ${team}: ${w.hole} for them, and they'd like ${ours} to fill it.`,
@@ -1911,7 +1914,7 @@ function _offerIntro(kind, { team, ours, theirs, need, seed }) {
     `The phone was ringing before the nameplate went up — ${team} want to move ${theirs}, and they think we're the fit.`,
     `${team} are testing the new front office with an offer for ${theirs}.`,
   ] : [
-    `${team} called: ${theirs} is available, and they think ${theirs} would start for us.`,
+    `${team} called: ${theirs} is available, and they think we'd have a starting job waiting.`,
     need ? `${team} know we could use ${w.a} and are offering ${theirs}.` : `${team} are shopping ${theirs} and think we're a fit.`,
     `${_poss(team)} GM is shopping ${theirs} and called us first.`,
   ]);
@@ -1934,37 +1937,49 @@ function _offerVoiceDirect(key) {
 }
 const _pickBy = (xs, key) => { let h = 7; for (const ch of String(key)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return xs[h % xs.length]; };
 
-/** The other club's front office, writing to us: the ask, the deal, no analysis. */
-function _directOffer({ kind, need, seed, key, ins, outs, inRef, outRef, cashK, retain }) {
-  const ours = outs[0]?.name, theirs = ins[0]?.name;
+/**
+ * The other club's front office, writing to us: the ask, the deal, no analysis.
+ * r195 each player named once: the one they ask about (or offer) in the opening
+ * line, the rest in the deal line, everything about a player in its parenthetical.
+ */
+function _directOffer({ kind, need, seed, key, ins, outs, cashK, retain, refOf }) {
+  const pct = (id) => Math.round((retain?.[id] || 0) * 100);
+  const keep = (p) => (!retain?.[p.id] ? '' : ins.includes(p) ? `we'll keep paying ${pct(p.id)}% of the salary this season`
+    : `you'd keep paying ${pct(p.id)}% of the salary this season`);
+  const ref = (p) => refOf(p, keep(p));
+  const and = (xs) => _and(xs.map(ref));
+  const target = kind === 'call' ? outs[0] : ins[0];
+  const who = target ? ref(target) : '';
   const w = _needWords(need, 'us');                     // their need, in their words ("our rotation")
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const lead = kind === 'call' ? _pickBy(seed ? [
-      `Welcome to the league. We'll get right to it: we need ${w.a}, and we want ${ours}.`,
-      `Congratulations on the new job. We've had our eye on ${ours} for a while, and we'd like ${ours} to ${w.role}.`,
+      `Welcome to the league. We'll get right to it: we need ${w.a}, and we want ${who}.`,
+      `Congratulations on the new job. We've had our eye on ${who} for a while, and we need ${w.a}.`,
     ] : [
-      `We're looking for ${w.a}, and ${ours} is the one we want.`,
-      `We'd like ${ours} to ${w.role}.`,
-      need ? `${cap(w.hole)} for us, and we think ${ours} fixes it.` : `We've been talking about ${ours} for a while now.`,
+      `We're looking for ${w.a}, and ${who} is the one we want.`,
+      `We'd like ${who} to ${w.role}.`,
+      need ? `${cap(w.hole)} for us, and we think ${who} fixes it.` : `We've been talking about ${who} for a while now.`,
     ], key)
-    : kind === 'sale' ? `We need to move salary, so ${theirs} is available.`
+    : kind === 'sale' ? `We need to move salary, so ${who} is available.`
     : _pickBy(seed ? [
-      `Welcome to the league. ${theirs} is available, and we think you're a fit.`,
+      `Welcome to the league. ${who} is available, and we think you're a fit.`,
     ] : [
-      `${theirs} is available, and we think ${theirs} would start for you.`,
-      need ? `We hear you could use ${w.a}. ${theirs} is available.` : `We're moving ${theirs}, and you were the first club we thought of.`,
+      `${who} is available, and we think you'd have a starting job waiting.`,
+      need ? `We hear you could use ${w.a}. ${who} is available.` : `We're moving ${who}, and you were the first club we thought of.`,
     ], key);
-  const deal = kind === 'sale' ? `${inRef} is yours for ${formatK(-cashK)}.` : `You send ${outRef}; we send ${inRef}.`;
-  const cash = kind === 'sale' ? '' : cashK > 0 ? ` We'll add ${formatK(cashK)} to make it work.` : cashK < 0 ? ` We'd need ${formatK(-cashK)} from you.` : '';
-  const keep = Object.entries(retain || {}).map(([id, pct]) => {
-    const p = [...ins, ...outs].find(x => x.id === id);
-    if (!p) return '';
-    return ins.includes(p) ? ` We'll keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`
-                           : ` We'd ask you to keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`;
-  }).join('');
+  // The rest of the deal: the side the opening line didn't name.
+  const restOut = outs.filter(p => p !== target), restIn = ins.filter(p => p !== target);
+  let deal;
+  if (kind === 'sale') deal = `The price is ${formatK(-cashK)}.${restIn.length ? ` ${and(restIn)} would come too.` : ''}`;
+  else if (kind === 'call') deal = `${restOut.length ? `We'd also want ${and(restOut)}. ` : ''}`
+    + (restIn.length ? `In return, we'd send ${and(restIn)}.` : cashK > 0 ? `In return, we'd send ${formatK(cashK)}.` : '')
+    + (restIn.length && cashK > 0 ? ` We'll add ${formatK(cashK)} to make it work.` : cashK < 0 ? ` We'd need ${formatK(-cashK)} from you as well.` : '');
+  else deal = `${restIn.length ? `${and(restIn)} would come too. ` : ''}`
+    + (restOut.length ? `For that, we'd want ${and(restOut)}.` : cashK < 0 ? `For that, we'd want ${formatK(-cashK)}.` : '')
+    + (restOut.length && cashK < 0 ? ` We'd need ${formatK(-cashK)} from you as well.` : cashK > 0 ? ` We'll add ${formatK(cashK)} to make it work.` : '');
   const close = _pickBy(['Let us know.', 'Let us know what you think.', 'We\'d like to get this done soon.', 'Call us if you want to talk it over.'], key + ':close');
-  const subject = kind === 'call' ? `Interested in ${ours}` : `${theirs} is available`;
-  return { body: `${lead} ${deal}${cash}${keep} ${close}`, subject };
+  const subject = kind === 'call' ? `Interested in ${target?.name}` : `${target?.name} is available`;
+  return { body: `${lead} ${deal.trim()} ${close}`.replace(/\s+/g, ' '), subject };
 }
 
 /** Pro Scouting's read, in words (never a meter). */
@@ -2009,7 +2024,8 @@ export function deliverTradeCall(deal, atMs, { seed = false } = {}) {
  * A CPU club's offer as an inbox card (offer in our terms: incomingIds = we
  * receive, cashK + = they pay us).
  *   opts: { kind: 'call'|'sell'|'sale', room, need, intro (a line of its own,
- *           replacing the varied one), subject, seed, atMs (exact delivery),
+ *           replacing the varied one; a function of the player's reference
+ *           when it names the player), subject, seed, atMs (exact delivery),
  *           openBy (how far under our value a caller opened) }
  */
 export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room = false, need = null, intro = null, subject = null, seed = false, atMs = null, openBy = 0 } = {}) {
@@ -2023,18 +2039,13 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
   const incoming = ins[0];
   if (!incoming && !outs.length) return null;
   // §85 up to three a side, plus cash and salary kept by the sending club.
-  const ref  = (p) => `${p.name}${['SP','RP'].includes(p.pos) ? ` ${PITCHER_HAND_DISPLAY[p.hand] || '(R)'}` : ''} (${p.pos}, OVR ${p.ovr})`;
-  const list = (ps) => ps.length <= 1 ? ps.map(ref).join('') : `${ps.slice(0, -1).map(ref).join(', ')} and ${ref(ps[ps.length - 1])}`;
-  const inRef = list(ins), outRef = list(outs);
+  // r195 §122.72 each player named once: the one the offer is about in the opening line (with
+  // everything about them), the rest in the deal line, which leaves out whoever the opening named.
   const cashK = offer.cashK || 0;
-  const cashNote = cashK > 0 ? ` They'll send ${formatK(cashK)} to complete it.`
-                 : cashK < 0 ? ` We'd send ${formatK(-cashK)}.` : '';
-  const keepNote = Object.entries(offer.retain || {}).map(([id, pct]) => {
-    const p = [...ins, ...outs].find(x => x.id === id);
-    if (!p) return '';
-    return ins.includes(p) ? ` They'll keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`
-                           : ` We'd keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season.`;
-  }).join('');
+  const refOf = (p, keep, impact) => Negotiation.playerRef(state, p, { hand: true, impact, keep });
+  const keepUs = (p) => (!offer.retain?.[p.id] ? '' : ins.includes(p)
+    ? `${teamName} keep paying ${Math.round(offer.retain[p.id] * 100)}% of the salary this season`
+    : `we'd keep paying ${Math.round(offer.retain[p.id] * 100)}% of the salary this season`);
 
   // Payroll against the owner's target: only what this deal changes.
   const payrollNote = evaluation.overTarget && evaluation.payrollDelta > 100
@@ -2051,12 +2062,15 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
   const target = kind === 'call' ? outs[0] : incoming;
   const when0 = atMs ?? clockNow();
   const direct = !intro && _offerVoiceDirect(`${proposingTeamId}:${when0}:${kind}`);
-  const own = direct ? _directOffer({ kind, need, seed, key: `${proposingTeamId}:${when0}`, ins, outs, inRef, outRef, cashK, retain: offer.retain }) : null;
-  const lead = intro || _offerIntro(kind, { team: teamName, ours: target?.name, theirs: target?.name, need, seed });
+  const own = direct ? _directOffer({ kind, need, seed, key: `${proposingTeamId}:${when0}`, ins, outs, cashK, retain: offer.retain,
+                                      refOf: (p, keep) => refOf(p, keep, false) }) : null;
+  const who = target ? refOf(target, keepUs(target), true) : '';
+  const lead = typeof intro === 'function' ? intro(who) : intro || (kind === 'sale' ? '' : _offerIntro(kind, { team: teamName, ours: who, theirs: who, need, seed }));
   const read = _offerRead(state, kind, offer, room);
+  const opts = { impact: true, hand: true, known: new Set([...Negotiation.namedIn(state, offer, lead)].filter(id => id === target?.id)) };
   const deal = kind === 'sale'
-    ? `${teamName} need to move salary and will sell ${inRef} to us outright.`
-    : `The deal: we send ${outRef} and get ${inRef}.`;
+    ? `${teamName} need to move salary and will sell ${_and(ins.map(p => refOf(p, keepUs(p), true)))} to us outright, for ${formatK(-cashK)}.`
+    : Negotiation.dealSentence(state, offer, teamName, 'The deal', opts);
   const when = atMs ?? clockNow();
 
   const instance = _rosterCard(state, {
@@ -2072,7 +2086,7 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
     preview:         kind === 'sale' ? `${incoming.name} for ${formatK(-cashK)}.`
                                      : `${_and(ins.map(p => p.name))} for ${_and(outs.map(p => p.name))}.`,
     body:            own ? own.body
-                         : `${lead ? lead + ' ' : ''}${deal}${cashNote}${keepNote}${Negotiation.impactNote(state, offer)} ${read}${payrollNote} We can take it, turn it down, or counter.`,
+                         : `${lead ? lead + ' ' : ''}${deal} ${read}${payrollNote} We can take it, turn it down, or counter.`,
     yesLabel:        'Accept the Trade',
     noLabel:         'Decline',
     autoResolve:     'roster',
@@ -3770,8 +3784,8 @@ export function deliverAllStarTradeOffer(context) {
     return !!deliverTradeOffer(offer, t.id, {
       kind: 'sell', room: a.room, subject: `${p.name} wants a move here`,
       intro: _pick([
-        `${p.name} spent All-Star week in our ballpark and has let ${t.name} know a move here would be welcome. ${t.name} are willing to listen.`,
-        `After a week in our ballpark at the All-Star Game, ${p.name} asked ${t.name} about a move here — and they called us.`,
+        (who) => `${who} spent All-Star week in our ballpark and has let ${t.name} know a move here would be welcome. ${t.name} are willing to listen.`,
+        (who) => `After a week in our ballpark at the All-Star Game, ${who} asked ${t.name} about a move here — and they called us.`,
       ]),
       atMs: atMs + (30 + eventRand() * 150) * 60_000,
     });
@@ -4257,8 +4271,8 @@ export function deliverOwnerCutOrder(playerId, amountK, atMs) {
     subject: `${owner} wants ${formatK(amountK)} off the payroll`,
     preview: `${owner} sent word: "${line}" Due ${due.startsWith('in ') ? due : `by ${due}`}.`,
     body: `${owner} sent word this morning: "${line}" Ownership wants ${formatK(amountK)} a year off the payroll by the payday ${due === 'today' || due === 'tomorrow' || due.startsWith('in ') ? due : `on ${due}`}. `
-        + `The obvious contract is ${_who(p)}, at ${formatK(p.contractSalary)} a year. We can find a club to take the contract — it's a salary dump, nothing much comes back but the savings — `
-        + `or release ${p.name}: waivers, and the salary comes off the payroll at once. Or tell ownership we're keeping ${p.name} and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
+        + `The obvious contract is ${_who(p)}, at ${formatK(p.contractSalary)} a year. We can find a club to take it — it's a salary dump, nothing much comes back but the savings — `
+        + `or release the player: waivers, and the salary comes off the payroll at once. Or tell ownership we're keeping that contract and take the hit with them. Missing the deadline costs their trust and shrinks next season's payroll target.`,
     _choices: [
       { key: 'dump', label: `Move ${p.name} to another club`, sub: 'A salary dump: the contract goes, nothing much comes back' },
       { key: 'release', label: `Release ${p.name}`, sub: `Waivers: ${formatK(p.contractSalary)} a year off at once; any club can claim` },
@@ -4313,7 +4327,7 @@ function _applyFinanceAction(action, instance, atMs) {
       subject: `No club can take ${p.name}'s contract`,
       preview: `We called around — nobody has ${formatK(p.contractSalary || 0)} of room right now. Release ${p.name}?`,
       body: `We called every club about ${p.name} (${formatK(p.contractSalary || 0)} a year). Nobody's owner has the payroll room for that contract right now. `
-          + `We can still release ${p.name}: waivers, and the salary comes off the payroll at once (any club can put in a claim over the next 72 hours). Or keep ${p.name}, and the payroll has to come down another way.`,
+          + `We can still release the player: waivers, and the salary comes off the payroll at once (any club can put in a claim over the next 72 hours). Or keep the contract, and the payroll has to come down another way.`,
       yesLabel: `Release ${p.name}`, noLabel: `Keep ${p.name}`,
       autoResolve: 'no', expiresAtMs: st.userTeam.finances?.owner?.order?.dueAt || atMs + 2 * 86_400_000,
       _raw: { onYes: 'fin_release', onNo: 'fin_dump_no', onAuto: 'fin_dump_no' },
@@ -4358,7 +4372,7 @@ function _salaryCallOffer(st, team, atMs, { intro = null } = {}) {
     if (!_offerCanGo(st, offer, team.id, atMs)) continue;
     deliverTradeOffer(offer, team.id, {
       kind: 'sell', room: a.room, subject: `${team.name}: ${p.name} is available`,
-      intro: intro || `${team.name} called back about the conversation we started: ${p.name} is available, and they need the payroll room.`,
+      intro: intro || ((who) => `${team.name} called back about the conversation we started: ${who} is available, and they need the payroll room.`),
       atMs: atMs + (2 + eventRand() * 3) * 3600_000,
     });
     return true;
@@ -4480,6 +4494,8 @@ const _IDEA_GAP_MS = 3 * 86_400_000;     // at most one "opportunity" card (sold
 
 /** One player's short reference: name (POS, OVR n). */
 const _ref = (p) => `${p.name} (${posLabel(p)}, OVR ${p.ovr})`;
+/** r195 the player a Pro Scouting offer is about, introduced once with everything (Impact too): the deal line won't name them again. */
+const _dealRef = (st, p) => Negotiation.playerRef(st, p, { impact: true });
 
 /** Same role: a pitcher of the same kind, or a hitter who can play the spot. */
 function _sameRole(p, target) {
@@ -4493,15 +4509,17 @@ function _sameRole(p, target) {
  * (their GM's answer comes on the clock), adjust it in the composer first,
  * or pass.
  */
-function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, atMs, sender = 'Pro Scouting', extra = {} }) {
+function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, after = '', atMs, sender = 'Pro Scouting', extra = {} }) {
   const team = (st.leagueTeams || []).find(t => t.id === teamId);
   if (!team || !deal) return null;
   const offer = LeagueTrades.userOffer(deal);
-  const what = Negotiation.describeOffer(st, offer, team.name);
+  // r195 §122.72 the player the opening line introduced (theirs, with _dealRef) isn't named again.
+  const known = new Set([...Negotiation.namedIn(st, offer, lead)].filter(id => (offer.incomingIds || []).includes(id)));
+  const what = Negotiation.dealSentence(st, offer, team.name, 'Our package', { impact: true, known });
   return _deliverAt(_rosterCard(st, {
     cardId: 'lt_offer', tag: 'TRADE', sender, avatar: '📞', type: 'normal',
     subject, preview,
-    body: `${lead} Our package: ${what}.${Negotiation.impactNote(st, offer)} `
+    body: `${lead} ${what} ${after ? `${after} ` : ''}`
         + `We can make the offer as it stands — ${team.name} answers on their own clock — adjust it first, or pass.`,
     yesLabel: 'Make the Offer', noLabel: 'Pass',
     autoResolve: 'roster', expiresAtMs: atMs + 2 * 86_400_000,
@@ -4550,7 +4568,7 @@ function _leagueTradeCards(tx, atMs) {
         key: `lt:beaten:${tx.id}`, teamId: next.teamId, deal: next.deal, atMs: atMs + 2 * 3600_000,
         subject: `${to.name} beat us to ${gone.name}`,
         preview: `The next-best option: ${_ref(np)} of ${nt.name}.`,
-        lead: `${lead} The next-best option we see is ${_ref(np)} of ${nt.name}.`,
+        lead: `${lead} The next-best option we see is ${_dealRef(StateManager.get(), np)} of ${nt.name}.`,
         extra: { _beatenTalkId: talk.id },
       }) ? 1 : 0;
     }
@@ -4575,7 +4593,7 @@ function _leagueTradeCards(tx, atMs) {
       key: `lt:flipped:${tx.id}`, teamId: now.id, deal, atMs: when,
       subject: `${flipped.name} can be moved again`,
       preview: `${from.name} sent our former player to ${now.name}; a reunion is possible.`,
-      lead: `${from.name} traded ${_ref(flipped)}, who played for us, to ${now.name}. A newly acquired player can't be moved for a few days; that window has passed, and ${flipped.name} would start for us.`,
+      lead: `${from.name} traded ${_dealRef(st, flipped)}, who played for us, to ${now.name}. A newly acquired player can't be moved for a few days; that window has passed, and there's a starting job here.`,
     }) ? 1 : 0;
   }
 
@@ -4622,7 +4640,7 @@ function _leagueTradeCards(tx, atMs) {
         key: `lt:sold:${tx.id}`, teamId: B.id, deal: opt.deal, atMs: atMs + 3 * 3600_000,
         subject: `${B.name} are selling`,
         preview: `They just moved ${aGot[0].name}. ${_ref(p)} is still there.`,
-        lead: `${B.name} just traded ${aGot.map(_ref).join(' and ')} to ${A.name} for younger pieces — they're selling. ${_ref(p)} is still there and would start for us.`,
+        lead: `${B.name} just traded ${aGot.map(_ref).join(' and ')} to ${A.name} for younger pieces — they're selling. ${_dealRef(st, p)} is still there and would start for us.`,
       })) { markIdea(); return 1; }
     }
   }
@@ -4635,7 +4653,7 @@ function _leagueTradeCards(tx, atMs) {
       key: `lt:surplus:${tx.id}`, teamId: A.id, deal, atMs: atMs + 3 * 3600_000,
       subject: `${A.name} have a player to spare`,
       preview: `${aGot[0].name} takes over for ${was.name}, who would start for us.`,
-      lead: `${A.name} traded for ${aGot.map(_ref).join(' and ')}, which leaves ${_ref(was)} without a regular spot there. ${was.name} would start for us.`,
+      lead: `${A.name} traded for ${aGot.map(_ref).join(' and ')}, which leaves ${_dealRef(st, was)} without a regular spot there, and with a starting one waiting here.`,
     })) { markIdea(); return 1; }
   }
   return 0;
@@ -4664,7 +4682,7 @@ function _workThePhones({ key, spec, what, atMs, sender = 'Pro Scouting', subjec
     key, teamId: opt.teamId, deal: opt.deal, atMs: at, sender,
     subject: `${what[0].toUpperCase()}${what.slice(1)}: ${p.name}`,
     preview: `${_ref(p)} of ${t.name} is the best fit we found.`,
-    lead: `We worked the phones for ${what}. The best fit is ${_ref(p)} of ${t.name}${isRental(p, st) ? ', in the last year of the contract' : ''}.`,
+    lead: `We worked the phones for ${what}. The best fit is ${_dealRef(st, p)} of ${t.name}${isRental(p, st) ? ', in the last year of the contract' : ''}.`,
   });
 }
 
@@ -4733,8 +4751,8 @@ export function deliverMeetingsTargets(atMs) {
       key: `os:meet:${cur.seasonNum}:${i}`, teamId: opt.teamId, deal: opt.deal, atMs: at, sender: 'Pro Scouting',
       subject: `Winter meetings: ${p.name} for ${words}`,
       preview: `${_ref(p)} of ${t.name}${i ? ', the second option' : ' is the best fit we found'}.`,
-      lead: `${why} We talked to every club here. ${i ? 'The second-best option' : 'The best fit'}: ${_ref(p)} of ${t.name}${isRental(p, cur) ? ', in the last year of the contract' : ''}. ${faLine}`,
-      extra: { _meetings: true },
+      lead: `${why} We talked to every club here. ${i ? 'The second-best option' : 'The best fit'}: ${_dealRef(cur, p)} of ${t.name}${isRental(p, cur) ? ', in the last year of the contract' : ''}.`,
+      after: faLine, extra: { _meetings: true },
     });
     if (c) { n++; deliveredIds.push(p.id); }
   }
@@ -4812,7 +4830,7 @@ export function runWatches(atMs) {
           key: `${w.key}:found`, teamId: opt.teamId, deal: opt.deal, atMs: atMs + Math.round((1 + eventRand() * 3) * 3600_000), sender: w.sender || 'Pro Scouting',
           subject: `Found: ${p.name}`,
           preview: `${_ref(p)} of ${t.name} — the fit we've been watching for.`,
-          lead: `We've been watching for ${w.what}. ${_ref(p)} of ${t.name} now fits${isRental(p, cur) ? ', in the last year of the contract' : ''}.`,
+          lead: `We've been watching for ${w.what}. ${_dealRef(cur, p)} of ${t.name} now fits${isRental(p, cur) ? ', in the last year of the contract' : ''}.`,
         });
       }
     }
@@ -5504,6 +5522,14 @@ function _fitClause(st, p, pos, fit) {
   return `would start over ${over?.name || 'our starter'}${over ? ` (${over.ovr})` : ''} there`;
 }
 
+/** r195 the same, as a noun phrase after the player's one mention ("…working in relief as well: an upgrade on Cahill (54)."). */
+function _fitNoun(st, pos, fit) {
+  const over = fit.over ? st.players[fit.over] : null;
+  if (pos === 'SP') return over ? `a starter for ${over.name}'s turn in our rotation (${over.ovr})` : 'a starter for our open turn in the rotation';
+  if (pos === 'RP') return over ? `an upgrade on ${over.name} (${over.ovr})` : 'an upgrade on the back of our bullpen';
+  return over ? `an upgrade on ${over.name} (${over.ovr}) there` : 'an upgrade on our starter there';
+}
+
 function _clubPosCard(st, p, ev, fit) {
   if (!tradeWindow(st).open) return false;
   const team = (st.leagueTeams || []).find(t => t.id === ev.teamId);
@@ -5514,7 +5540,7 @@ function _clubPosCard(st, p, ev, fit) {
     key: `lp:${p.id}:${ev.pos}`, teamId: team.id, deal, atMs: (ev.atMs ?? atMsNow()) + 2 * 3600_000,
     subject: `${p.name} is ${what} now`,
     preview: `${team.name} have ${p.name} at ${_posWord(ev.pos)} too.`,
-    lead: `${team.name} have ${_ref(p)} ${what} as well${fit.thin ? `, and ${_fitClause(st, p, ev.pos, fit)}` : `, and ${p.name} ${_fitClause(st, p, ev.pos, fit)}`}.`,
+    lead: `${team.name} have ${_dealRef(st, p)} ${what} as well${fit.thin ? `, and ${_fitClause(st, p, ev.pos, fit)}` : `: ${_fitNoun(st, ev.pos, fit)}`}.`,
   });
 }
 

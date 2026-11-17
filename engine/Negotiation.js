@@ -30,6 +30,7 @@ import { formatK } from './CardTokens.js';
 import { clockNow } from './Clock.js';
 import { eventRand } from './Dice.js';
 import { getImpLabel, lastSeasonIMP } from './IMPEngine.js';
+import { PITCHER_HAND_DISPLAY } from '../data/constants.js';
 
 const H = 3_600_000;
 
@@ -182,44 +183,89 @@ export function act(teamId, action, atMs = clockNow()) {
   }
 }
 
-/** A short summary of what an offer contains (for card text). */
 /**
- * impactNote(state, offer) — §30.6 / §122.9 how the players in a deal are playing,
- * in words (Impact's labels, never the number): this season's, or last
- * season's early on. '' when nobody has a sample.
+ * r195 §122.72 A trade message names each player once (each name is a link, and
+ * the same name again and again reads as clutter). Everything about a player in
+ * the deal goes in one place, the parenthetical after the name: position,
+ * rating, how they're playing (Impact), salary the sending club keeps paying.
+ * A player a message has already introduced (in its opening line) is left out
+ * of the deal line, which then names only the rest.
  */
-export function impactNote(state, offer) {
-  const ids = [...(offer?.incomingIds || []), ...(offer?.outgoingIds || [])];
-  const parts = [];
-  for (const id of ids) {
-    const p = state.players?.[id];
-    if (!p) continue;
-    const now = state.impScores?.[id]?.impS;
-    if (now != null) { parts.push(`${p.name} has been ${_article(getImpLabel(now))} this year`); continue; }
-    const last = lastSeasonIMP(p);
-    if (last != null) parts.push(`${p.name} was ${_article(getImpLabel(last))} last year`);
-  }
-  return parts.length ? ` By Impact, ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`}.` : '';
+
+/** How a player is playing, by Impact's label (never the number): "an average starter this year". */
+export function impactPhrase(state, p) {
+  const now = state.impScores?.[p.id]?.impS;
+  if (now != null) return `${_article(getImpLabel(now))} this year`;
+  const last = lastSeasonIMP(p);
+  return last != null ? `${_article(getImpLabel(last))} last year` : null;
 }
 const _article = (label) => (/^(elite|average)/.test(label) ? `an ${label}` : label === 'replacement level' ? 'at replacement level'
   : label === 'below replacement' ? 'below replacement level' : `a ${label}`);
 
-export function describeOffer(state, offer, teamName) {
+/**
+ * A player in a deal, introduced once: "Gaither (R) (SP, OVR 62, an average starter
+ * last year; Ridgecrest keep paying 50% of the salary this season)".
+ *   opts: { impact, hand (a pitcher's throwing hand), keep (the retained-salary words) }
+ */
+export function playerRef(state, p, { impact = false, hand = false, keep = '' } = {}) {
+  const h = hand && ['SP', 'RP'].includes(p.pos) ? ` ${PITCHER_HAND_DISPLAY[p.hand] || '(R)'}` : '';
+  const imp = impact ? impactPhrase(state, p) : null;
+  return `${p.name}${h} (${p.pos}, OVR ${p.ovr}${imp ? `, ${imp}` : ''}${keep ? `; ${keep}` : ''})`;
+}
+
+/** The players in a deal whose names a piece of text already uses (its opening line). */
+export function namedIn(state, offer, text) {
+  const t = String(text || '');
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new Set([...(offer?.incomingIds || []), ...(offer?.outgoingIds || [])]
+    .filter(id => state.players?.[id]?.name && new RegExp(`(^|[^\\w'])${esc(state.players[id].name)}(?![\\w])`).test(t)));
+}
+
+/**
+ * describeOffer(state, offer, teamName, opts) — the deal in our words, each player named once:
+ * "we send Haro (SP, OVR 61) and receive Gaither (SP, OVR 62), with $25K going to Ridgecrest".
+ *   opts: { impact, hand, known (ids the message has already introduced: left out here) }
+ * With a known player on a side, that side isn't restated: "we'd send Haro (SP, OVR 61) for them" reads
+ * wrong, so it becomes "in return, we receive …" (they want ours) or "the price: Haro (…)" (we want theirs)
+ * — the caller's opening line said who it's for.
+ */
+export function describeOffer(state, offer, teamName, { impact = false, hand = false, known = new Set() } = {}) {
   const P = (id) => state.players[id];
-  const ref = (p) => `${p.name} (${p.pos}, OVR ${p.ovr})`;
-  const list = (ids) => {
-    const ps = (ids || []).map(P).filter(Boolean).map(ref);
-    return ps.length <= 1 ? (ps[0] || 'no players') : `${ps.slice(0, -1).join(', ')} and ${ps[ps.length - 1]}`;
+  const keepOf = (id) => {
+    const pct = offer.retain?.[id];
+    if (!pct) return '';
+    return `${(offer.incomingIds || []).includes(id) ? teamName : 'we'} keep paying ${Math.round(pct * 100)}% of the salary this season`;
   };
-  let text = `we send ${list(offer.outgoingIds)} and receive ${list(offer.incomingIds)}`;
+  const ref = (p) => playerRef(state, p, { impact, hand, keep: keepOf(p.id) });
+  const side = (ids) => {
+    const ps = (ids || []).map(P).filter(Boolean);
+    return { known: ps.some(p => known.has(p.id)), rest: ps.filter(p => !known.has(p.id)).map(ref) };
+  };
+  const and = (xs) => (xs.length <= 1 ? (xs[0] || '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+  const out = side(offer.outgoingIds), inn = side(offer.incomingIds);
   const c = offer.cashK || 0;
-  if (c > 0) text += `, with ${formatK(c)} coming to us`;
-  if (c < 0) text += `, with ${formatK(-c)} going to ${teamName}`;
-  for (const [id, pct] of Object.entries(offer.retain || {})) {
-    const p = P(id);
-    if (!p) continue;
-    const payer = (offer.incomingIds || []).includes(id) ? teamName : 'we';
-    text += `; ${payer} keep paying ${Math.round(pct * 100)}% of ${p.name}'s salary this season`;
+  const cash = c > 0 ? `, with ${formatK(c)} coming to us` : c < 0 ? `, with ${formatK(-c)} going to ${teamName}` : '';
+  let text;
+  if (!out.known && !inn.known) {
+    text = `we send ${and(out.rest) || 'no players'} and receive ${and(inn.rest) || 'no players'}${cash}`;
+  } else if (out.known && !inn.known) {          // they asked for ours: what comes back
+    const also = out.rest.length ? `we'd also send ${and(out.rest)}, ` : '';
+    text = inn.rest.length ? `in return, ${also}we receive ${and(inn.rest)}${cash}`
+      : c > 0 ? `in return, ${also}we receive ${formatK(c)}` : `in return, ${also}we receive no players${cash}`;
+  } else if (inn.known && !out.known) {          // they have the one we want: what it costs
+    const price = [...out.rest, ...(c < 0 ? [formatK(-c)] : [])];
+    const also = inn.rest.length ? `; ${and(inn.rest)} would come too` : '';
+    text = price.length ? `the price: ${and(price)}${c > 0 ? `, with ${formatK(c)} coming to us` : ''}${also}`
+      : `the price: no players${c > 0 ? `, and ${formatK(c)} comes to us with it` : ''}${also}`;
+  } else {
+    const more = [out.rest.length ? `we'd also send ${and(out.rest)}` : '', inn.rest.length ? `we'd also receive ${and(inn.rest)}` : ''].filter(Boolean);
+    text = `${more.length ? more.join(', and ') : 'it\'s a straight swap'}${cash}`;
   }
   return text;
+}
+
+/** The deal as a sentence: "Our package: we send …." — or, when the opening line introduced a player, "The price: …." */
+export function dealSentence(state, offer, teamName, label, opts = {}) {
+  const t = describeOffer(state, offer, teamName, opts);
+  return opts.known?.size ? `${t.charAt(0).toUpperCase()}${t.slice(1)}.` : `${label}: ${t}.`;
 }
