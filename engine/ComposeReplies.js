@@ -1063,10 +1063,12 @@ function coachNote(f, p) {
   return bits.join(' ');
 }
 
-W.mgr_trade = (f, r, who, arg) => {
+/**
+ * The deal on the field today, in words (r150 the manager's; r202 §122.79 the director passes it on):
+ * { lines, bottom } — each player named once; a player coming in gets the coach's look where first named.
+ */
+function fieldWords(f, deal) {
   const st = f.state;
-  const deal = arg?.key ? dealByKey(st, arg.key, f.atMs) : null;
-  if (!deal) return dealGone(f, arg);
   const { leaving, arriving, delta } = fieldRead(st, deal);
   const out = [];
   const coming = (q) => (deal.offer.incomingIds || []).includes(q.id);
@@ -1107,9 +1109,19 @@ W.mgr_trade = (f, r, who, arg) => {
   }
   const bottom = delta >= 4 ? 'On the field today, this makes us better.' : delta >= 1 ? 'On the field today, this makes us a little better.'
     : delta <= -4 ? 'On the field today, this makes us worse.' : delta <= -1 ? 'On the field today, this makes us a little worse.' : 'On the field today, it\'s about a wash.';
+  return { lines: out, bottom };
+}
+
+// (r202 §122.79 no longer a Compose topic — the director's reply carries the field read. Kept for a
+//  question sent before the update, still waiting to be answered.)
+W.mgr_trade = (f, r, who, arg) => {
+  const st = f.state;
+  const deal = arg?.key ? dealByKey(st, arg.key, f.atMs) : null;
+  if (!deal) return dealGone(f, arg);
+  const { lines, bottom } = fieldWords(f, deal);
   const dir = st.userTeam?.coachingStaff?.scoutingDirector;
-  out.push(`${bottom} What it means past this season — value, contracts, whether there's a better deal — is ${dir && !dir.vacant && dir.name ? `${dir.name}'s` : 'the scouts\''} department.`);
-  return { body: out, memo: { playerIds: [...(deal.offer.incomingIds || []), ...(deal.offer.outgoingIds || [])] }, topic: dealTopic(deal) };
+  return { body: [...lines, `${bottom} What it means past this season — value, contracts, whether there's a better deal — is ${dir && !dir.vacant && dir.name ? `${dir.name}'s` : 'the scouts\''} department.`],
+           memo: { playerIds: [...(deal.offer.incomingIds || []), ...(deal.offer.outgoingIds || [])] }, topic: dealTopic(deal) };
 };
 
 /** r195 our read on a player whose ratings are an estimate, for a parenthetical: "by our read, better than the rating". */
@@ -1121,56 +1133,69 @@ function gapRead(f, r, p, ours) {
     : 'the ratings are an estimate, and our read is about the same';
 }
 
+/**
+ * r150 the director's read on a deal on the table; r202 §122.79 the one reply about a trade (the manager's
+ * topic folded in): the field read, passed on by name; the value and a counter (or, for a deal they've
+ * agreed to, make it official or walk away); our read on players whose ratings are an estimate; the payroll.
+ * Each player in the deal is named once before the payroll (the deal table, on the card, shows it all).
+ */
 W.sc_trade = (f, r, who, arg) => {
   const st = f.state;
   const deal = arg?.key ? dealByKey(st, arg.key, f.atMs) : null;
   if (!deal) return dealGone(f, arg);
-  const a = suggestCounter(st, deal, r, f.atMs);
   const team = deal.team;
   const out = [];
+  const P = (id) => st.players[id];
+
+  // 1. The field, as the manager reads it.
+  const mg = st.userTeam?.coachingStaff?.manager;
+  const { lines, bottom } = fieldWords(f, deal);
+  out.push(`${mg && !mg.vacant && mg.name ? `${poss(mg.name)} read on the field` : 'The coaches\' read on the field'}: ${[...lines, bottom].join(' ')}`);
+
+  // 2. The value, and a counter.
+  const agreed = deal.kind === 'agreed';
+  const a = suggestCounter(st, deal, r, f.atMs);
   const stand = a.ourNet >= 15 ? 'As it stands, this is a good deal for us.' : a.ourNet >= 0 ? 'As it stands, it\'s fair value for us.'
     : a.ourNet >= -15 ? 'As it stands, it\'s a little short for us.' : 'As it stands, we\'d be giving up more than we get.';
-  const room = a.seen >= COUNTER_MARGIN + 8 ? `My read is that ${team} have room to do more.`
-    : a.seen >= COUNTER_MARGIN + 1 ? `My read is that ${team} have a little room.`
-    : a.seen >= 0 ? `My read is that this is close to the most ${team} will do.` : `My read is that ${team} are already at their limit.`;
   const grade = rapportGrade(rapportOf(st, deal.teamId));
-  const rel = ['Cool', 'Strained'].includes(grade) ? ` Our relationship with their front office is ${grade.toLowerCase()}, which makes them harder to move.` : '';
-  out.push(`${stand} ${room}${rel}`);
-
   const q = st.userTeam?.coachingStaff?.scoutingDirector?.quality ?? 50;
-  const readIn = new Set();       // players whose read went in the counter's deal line
-  if (a.noRounds) {
-    out.push('These talks are out of rounds: we can take it or leave it, but there\'s no counter left to make.');
-  } else if (a.counter) {
-    const c = a.change, P = (id) => st.players[id];
-    const was = deal.offer.cashK || 0, now = was + (c.k || 0);
-    // (the player a change brings in is named once, in the deal line, with what the ask says about them)
-    const detail = {};
-    if (c.kind === 'add') detail[c.id] = `${posLabel(P(c.id))}, ${f.age(P(c.id))}, ${ovrOf(P(c.id))}${wouldStart(P(c.id), st, 'user') ? ', who would play for us' : ', a prospect'}`;
-    if (c.kind === 'swap') detail[c.id] = ovrOf(P(c.id));
-    const ask = c.kind === 'cash' ? (was >= 0 ? `ask them to add ${formatK(c.k)}` : now <= 0 ? `pay ${formatK(c.k)} less` : `ask them to send ${formatK(now)} instead of us paying ${formatK(-was)}`)
-      : c.kind === 'drop' ? `keep ${P(c.id).name} out of it`
-      : c.kind === 'add'  ? (wouldStart(P(c.id), st, 'user') ? 'ask them to include a player who would play for us' : 'ask them to include a prospect')
-      : `swap ${P(c.for).name} (${ovrOf(P(c.for))}) for another of their players`;
-    const sure = q >= 75 ? 'I\'m confident they\'ll take it.' : q >= 55 ? 'I think they\'ll take it.' : 'I think they\'ll take it, though I could be wrong about how far they\'ll go.';
-    // Our read on a player whose ratings are an estimate goes with their name in the deal line.
-    for (const id of [...(a.counter.incomingIds || []), ...(a.counter.outgoingIds || [])]) {
-      const n = gapRead(f, r, st.players[id], (a.counter.outgoingIds || []).includes(id));
-      if (n) { detail[id] = [detail[id], n].filter(Boolean).join('; '); readIn.add(id); }
-    }
-    out.push(`My counter: ${ask}. That makes the deal: ${dealWords(st, a.counter, team, detail)}. ${sure} `
-      + `If I've misread them, they'll come back with a counter of their own or turn it down — and sending this replaces their offer, so we can't go back and take it as it stands.`
-      + (a.lastRound ? ' This would be the last round of talks: if they say no, the talks are over.' : ''));
-  } else if (a.seen >= COUNTER_MARGIN + 1) {
-    out.push(`There's a little room, but nothing worth asking for that I think they'd do. ${a.ourNet >= 0 ? 'I\'d take it as it stands.' : 'I\'d pass.'}`);
+  const readIn = new Set();       // players whose read went with the counter
+  if (agreed) {
+    out.push(`${stand} ${team} have said yes, so there's nothing left to negotiate: we make it official or walk away. `
+      + `Walking away now would cost us with their front office (our relationship: ${grade.toLowerCase()}).`
+      + (a.ourNet >= 0 ? ' I\'d make it official.' : ' I\'d walk away.'));
   } else {
-    out.push(a.ourNet >= 0 ? 'I wouldn\'t counter. Pushing risks losing it — take it as it stands, or pass.' : 'I wouldn\'t counter, and I\'d pass on it as it stands.');
+    const room = a.seen >= COUNTER_MARGIN + 8 ? `My read is that ${team} have room to do more.`
+      : a.seen >= COUNTER_MARGIN + 1 ? `My read is that ${team} have a little room.`
+      : a.seen >= 0 ? `My read is that this is close to the most ${team} will do.` : `My read is that ${team} are already at their limit.`;
+    const rel = ['Cool', 'Strained'].includes(grade) ? ` Our relationship with their front office is ${grade.toLowerCase()}, which makes them harder to move.` : '';
+    out.push(`${stand} ${room}${rel}`);
+    if (a.noRounds) {
+      out.push('These talks are out of rounds: we can take it or leave it, but there\'s no counter left to make.');
+    } else if (a.counter) {
+      const c = a.change;
+      const was = deal.offer.cashK || 0, now = was + (c.k || 0);
+      // (a player the change brings in is named here, with what we'd be asking for; the rest were named above)
+      const est = (id) => { const n = gapRead(f, r, P(id), false); if (n) readIn.add(id); return n ? `; ${n}` : ''; };
+      const ask = c.kind === 'cash' ? (was >= 0 ? `ask them to add ${formatK(c.k)}` : now <= 0 ? `pay ${formatK(c.k)} less` : `ask them to send ${formatK(now)} instead of us paying ${formatK(-was)}`)
+        : c.kind === 'drop' ? `keep ${P(c.id).name} out of it`
+        : c.kind === 'add'  ? `ask them to include ${P(c.id).name} (${posLabel(P(c.id))}, ${f.age(P(c.id))}, ${ovrOf(P(c.id))}${wouldStart(P(c.id), st, 'user') ? ', who would play for us' : ', a prospect'}${est(c.id)})`
+        : `ask for ${P(c.id).name} (${posLabel(P(c.id))}, ${ovrOf(P(c.id))}${est(c.id)}) in place of ${P(c.for).name}`;
+      const sure = q >= 75 ? 'I\'m confident they\'ll take it.' : q >= 55 ? 'I think they\'ll take it.' : 'I think they\'ll take it, though I could be wrong about how far they\'ll go.';
+      out.push(`My counter: ${ask}. ${sure} `
+        + `If I've misread them, they'll come back with a counter of their own or turn it down — and sending this replaces their offer, so we can't go back and take it as it stands.`
+        + (a.lastRound ? ' This would be the last round of talks: if they say no, the talks are over.' : ''));
+    } else if (a.seen >= COUNTER_MARGIN + 1) {
+      out.push(`There's a little room, but nothing worth asking for that I think they'd do. ${a.ourNet >= 0 ? 'I\'d take it as it stands.' : 'I\'d pass.'}`);
+    } else {
+      out.push(a.ourNet >= 0 ? 'I wouldn\'t counter. Pushing risks losing it — take it as it stands, or pass.' : 'I wouldn\'t counter, and I\'d pass on it as it stands.');
+    }
   }
 
-  // Players in the deal whose ratings are an estimate: our read on them.
+  // 3. Players in the deal whose ratings are an estimate: our read on them.
   const notes = [];
   for (const id of [...(deal.offer.incomingIds || []), ...(deal.offer.outgoingIds || [])]) {
-    const p = st.players[id];
+    const p = P(id);
     if (!p?._ratingGap || readIn.has(id)) continue;
     const read = readOfUntested(p, r, 4 / scoutEye(f, p));
     const ours = (deal.offer.outgoingIds || []).includes(id);
@@ -1180,12 +1205,15 @@ W.sc_trade = (f, r, who, arg) => {
   }
   if (notes.length) out.push(notes.join(' '));
 
-  out.push(`${a.counter ? 'On payroll, with the counter: ' : 'On payroll: '}${payrollWords(f, a.counter || deal.offer)}`);
+  // 4. The payroll.
+  out.push(`${a.counter && !agreed ? 'On payroll, with the counter: ' : 'On payroll: '}${payrollWords(f, (!agreed && a.counter) || deal.offer)}`);
   return {
     body: out,
     memo: { playerIds: [...new Set([...(deal.offer.incomingIds || []), ...(deal.offer.outgoingIds || []), ...(a.counter?.incomingIds || [])])], dealKey: deal.key },
     topic: dealTopic(deal),
-    trade: a.counter ? { teamId: deal.teamId, offer: a.counter, round: deal.round, dealKey: deal.key, expiresAtMs: deal.expiresAtMs } : null,
+    sheet: { teamId: deal.teamId, offer: deal.offer },   // r202 the deal as it's on the table (the card's deal table)
+    trade: !agreed && a.counter ? { teamId: deal.teamId, offer: a.counter, round: deal.round, dealKey: deal.key, expiresAtMs: deal.expiresAtMs } : null,
+    agreed: agreed ? { teamId: deal.teamId, dealKey: deal.key, expiresAtMs: deal.expiresAtMs } : null,
   };
 };
 
@@ -1479,6 +1507,7 @@ export function writeComposeReply(state, { topicId, channelId, atMs, subject = n
   const body = [open, ...paras, _sign(who)].join('\n\n');
   return { sender: who.sender, subject: subject || `Re: ${Cap(TOPIC_LABELS[topicId] || 'your message')}`, body,
            preview: paras[0].split('\n')[0], memo: res.memo || {}, decision: res.decision || null, trade: res.trade || null,
+           sheet: res.sheet || null, agreed: res.agreed || null,   // r202 §122.79 the deal table; a deal they've agreed to
            named: namedPlayers(state, paras.join('\n'), [...(res.memo?.playerIds || []), res.memo?.playerId, res.decision?.playerId]) };
 }
 

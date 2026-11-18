@@ -4,6 +4,7 @@
  * A deal on the table is one waiting on our answer: a club's offer to us, a
  * club's counter to our offer, or a club's yes to our offer (dealsOnTable).
  * The GM can ask about one from the compose screen:
+ *   (r202 §122.79 one reply, the director's: the field read is passed on by name)
  *   - the Manager: what the deal does to the club on the field today — who
  *     takes each spot we'd give up, where each player coming in would play,
  *     and (from the pitching and hitting coaches) the arm or the bat coming in
@@ -87,10 +88,10 @@ export function dealByKey(state, key, atMs) {
   return dealsOnTable(state, atMs).find(d => d.key === key) || null;
 }
 
-/** Which deals each staff topic takes: the director only where a counter is still possible. */
+/** Which deals a staff topic takes: every deal on the table (r202 §122.79 the director's reply covers a
+ *  deal they've agreed to as well — make it official, or walk away). */
 export function dealsFor(topicId, state, atMs) {
-  const ds = dealsOnTable(state, atMs);
-  return topicId === 'sc_trade' ? ds.filter(d => d.kind !== 'agreed') : ds;
+  return dealsOnTable(state, atMs);
 }
 
 // ─────────────────────────────────────────────────────────────

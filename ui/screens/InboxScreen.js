@@ -28,7 +28,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../formatters.js';
 import * as When from '../../engine/When.js';
-import { dealsFor, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
+import { dealsFor, dealsOnTable, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
 import { namedPlayers, faLooks } from '../../engine/ComposeReplies.js';
 import { workPlayers, skillsOf, teachablePositions } from '../../engine/PlayerWork.js';
 import { posLabel, startsAt, familiarity } from '../../engine/Positions.js';   // r163 §122.35
@@ -75,7 +75,6 @@ const COMPOSE_CHANNELS = [
       { id: 'mgr_lineup',    label: 'The batting order',        desc: 'How the order is built, and how you want it built' },
       { id: 'mgr_morale',    label: 'Team morale check-in',     desc: 'Get a read on clubhouse atmosphere' },
       { id: 'mgr_hook',      label: 'When to go to the bullpen', desc: 'How long the starters stay in: a quick hook or a long leash' },
-      { id: 'mgr_trade',     label: 'A trade on the table',     desc: 'How a deal would change us on the field, with the coaches\' read on who\'s coming in', deal: true },
       { id: 'mgr_rest',      label: 'A day off for a hitter',   desc: 'Pick a hitter: how worn down they are, and a day off if you want one', player: 'hitters' },
     ],
   },
@@ -152,7 +151,7 @@ const COMPOSE_CHANNELS = [
       { id: 'sc_free_agents', label: 'Free agents worth a look', desc: 'The scouts look over the free agents', looks: true },   // r199 the week's looks, not a cooldown
       { id: 'sc_prospect',   label: 'Young player report',      desc: 'A scouting report on one of our young players' },
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
-      { id: 'sc_trade',      label: 'Is there a better deal?',  desc: 'The director\'s counter to a trade on the table, and what the deal does to payroll', deal: true },
+      { id: 'sc_trade',      label: 'A trade on the table',     desc: 'The director\'s read on a deal: on the field, the value, a counter, the payroll', deal: true },   // r202 §122.79 (the manager's folded in)
       { id: 'sc_shop',       label: 'What could we get for…?',  desc: 'Pick one of our players: the director calls the clubs that could use them', player: true },
       { id: 'sc_program',    label: 'A development program',    desc: 'Send a player to our complex for focused work on one skill', player: 'any', skill: true },
     ],
@@ -482,6 +481,7 @@ function _renderReading(card, inbox, state) {
       </div>
       <div class="mr-body">${_paragraphs(card.body || card.preview || '', _messagePlayers(card, state))}</div>
       ${dealOfCard(state, card) ? `<button class="btn-revise btn-deal" data-deal-sheet="${card.instanceId}">See the Deal</button>` : ''}
+      ${_askDirector(card, state)}
       <div class="mr-reply">
         <div class="mr-reply-h">
           <span>Your decision</span>
@@ -609,6 +609,22 @@ function _renderCompose(state) {
 }
 
 /** Topic state for one topic: awaiting a reply, cooling down (games left), or open. */
+/** r202 §122.79 the deal on the table this card is, while the director hasn't been asked about it yet. */
+function _directorDeal(card, state) {
+  const dir = state.userTeam?.coachingStaff?.scoutingDirector;
+  if (!dir || dir.vacant || card.resolved) return null;
+  const deal = dealsOnTable(state, Date.now()).find(d => d.instanceId === card.instanceId);
+  if (!deal) return null;
+  const asked = [...(state.scheduledCards || []), ...(state.inbox || [])]
+    .some(c => c.isCompose && c._composeTopic === 'sc_trade' && c._composeArg?.key === deal.key);
+  return asked ? null : deal;
+}
+
+/** The "Ask the Director" button on a trade message (or nothing). */
+function _askDirector(card, state) {
+  return _directorDeal(card, state) ? `<button class="btn-revise btn-deal" data-ask-director="${card.instanceId}">Ask the Director</button>` : '';
+}
+
 function _topicState(t, state) {
   // r150 a trade topic is about one deal on the table: open while a deal hasn't been asked about.
   if (t.deal) {
@@ -830,7 +846,26 @@ function _attachTabListeners(state) {
       const d = dealOfCard(st, getInbox().find(c => c.instanceId === btn.dataset.dealSheet));
       if (!d) return;
       const { openDealSheet } = await import('../components/DealSheet.js');
-      openDealSheet({ offer: d.offer, teamName: d.team });
+      openDealSheet({ offer: d.offer, teamName: d.team, versions: d.versions || null });
+    });
+  });
+
+  // r202 §122.79 ask the director about this deal (the Compose question, with the deal already picked)
+  document.querySelectorAll('[data-ask-director]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const st = StateManager.get();
+      const card = getInbox().find(c => c.instanceId === btn.dataset.askDirector);
+      const deal = card && _directorDeal(card, st);
+      if (!deal) { App.showToast('That deal is no longer waiting on us.', 'neutral', 2500); refresh(); return; }
+      try {
+        const { deliverComposeCard } = await import('../../engine/CardEngine.js');
+        deliverComposeCard('sc_trade', 'scouting', { topicLabel: deal.label, arg: { key: deal.key, label: deal.label, instanceId: deal.instanceId, expiresAtMs: deal.expiresAtMs } });
+        import('../PushClient.js').then(P => P.syncPushSchedule()).catch(() => {});
+      } catch (err) { console.error('InboxScreen ask director:', err); }
+      const dir = st.userTeam?.coachingStaff?.scoutingDirector;
+      App.showToast(`Sent to ${dir?.name || 'the director'}. You'll hear back.`, 'positive', 2500);
+      refresh();
     });
   });
 

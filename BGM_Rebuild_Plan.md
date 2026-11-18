@@ -12886,3 +12886,35 @@ The compose, work, strategy, teaching and trade-advice UI tests pass in both the
 sim-season (+1): at most one ask at the break and one at the season's end, each about a different player. Seeds 1–3: 0, 1 and 1 asks a season (all at the season's end).
 
 **Fresh team:** not required.
+
+## §122.79 — r202: one reply about a trade, from the director (trade review release 3)
+**The GM's call** (Nov 15–17 2026, built Nov 18): fold the manager's "A trade on the table" into the Scouting Director's reply; the topic stays in Compose under Scouting / Dev.
+
+**Compose:**
+- The manager no longer has a trade topic. The director's is now "A trade on the table": "The director's read on a deal: on the field, the value, a counter, the payroll".
+- It takes every deal on the table, including one they've agreed to (`TradeAdvice.dealsFor`).
+- A question sent to the manager before the update is still answered (`W.mgr_trade` kept, on `fieldWords`).
+
+**The reply** (`W.sc_trade`), in order:
+1. The field read, passed on by name: "[manager]'s read on the field: …", ending on the bottom line ("On the field today, …"). The coaches' look at who's coming in stays where each player is first named.
+2. The value as it stands, our read of their room, and a counter (or why not). The counter names only what it changes (a player it adds or asks for, a player it keeps out, the cash). The whole deal is in the table, so the reply no longer restates it.
+3. Our read on players whose ratings are an estimate.
+4. The payroll.
+- **A deal they've agreed to:** "they've said yes, so there's nothing left to negotiate", what walking away costs (the relationship), and the director's lean. The reply is the decision: **Make It Official / Walk Away**. These are the same actions as their yes; no answer means it goes through, as with their yes. Answering either message withdraws the other (`_applyTalkAction` withdraws the other cards for the same round of the talks).
+
+**The deal table on the reply:**
+- Every reply about a deal carries it ("See the Deal", `_dealOffer`).
+- With a counter, the table opens on **Our Counter** and switches to **As Offered** (`dealOfCard(...).versions`, `_adviceOffer`; DealSheet's switch).
+
+**Ask the Director:**
+- On a trade message that's on the table (an offer, their counter, their yes), while the director hasn't been asked about it and the job isn't vacant.
+- One tap sends the Compose question with that deal already picked. The button then goes, and Compose shows the topic as asked.
+
+**Checks:**
+- check-trade-advice (rewritten for one reply):
+  - the order (field read by the manager's name first, the value, the payroll last); names once before the payroll;
+  - the deal table goes with it; the counter card's table switches between the two;
+  - a deal they agreed to: Make It Official queues the trade, Walk Away closes the talks, and either message's answer withdraws the other.
+- test-trade-advice-ui: Ask the Director from the offer (the deal picked, the button gone); no manager topic; the reply's table opens on the counter and switches.
+
+**Fresh team:** not required.

@@ -868,5 +868,8 @@ export function dealOfCard(state, card) {
   }
   if (!offer || !teamId) return null;
   const team = (state.leagueTeams || []).find(t => t.id === teamId)?.name || 'They';
-  return { teamId, team, offer };
+  // r202 §122.79 the director's counter: the deal as offered beside it (the table switches between the two)
+  const versions = card._adviceOffer && card._ideaOffer
+    ? [{ key: 'offered', label: 'As Offered', offer: card._adviceOffer }, { key: 'counter', label: 'Our Counter', offer: card._ideaOffer }] : null;
+  return { teamId, team, offer, ...(versions ? { versions } : {}) };
 }

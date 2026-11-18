@@ -4,9 +4,11 @@
  * and the money under both — a year, the rest of this season, later seasons,
  * cash, and the payroll after the deal against ownership's target.
  *
- *   openDealSheet({ offer, teamName, title })
+ *   openDealSheet({ offer, teamName, title, versions, start })
  *     offer: our terms (incomingIds we get, outgoingIds we send, cashK + to us,
  *            retain { id: share the sending club keeps paying this season })
+ *     versions: r202 §122.79 [{ key, label, offer }] — a switch between them (the deal as
+ *            offered, and the director's counter); `start` the one shown first (default: the last)
  *
  * The numbers are TradeEngine.dealSheet's: the same totals the staff's words use.
  * A name opens the player.
@@ -20,23 +22,34 @@ import { posLabel } from '../../engine/Positions.js';
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const _e = (s) => String(s ?? '').replace(/[&<>"']/g, c => ESC[c]);
 
-export function openDealSheet({ offer, teamName = 'They', title = 'The Deal' } = {}) {
+export function openDealSheet({ offer, teamName = 'They', title = 'The Deal', versions = null, start = null } = {}) {
   const state = StateManager.get();
-  if (!state || !offer) return;
+  const vs = versions?.length > 1 ? versions : null;
+  if (!state || !(offer || vs)) return;
   _injectCSS();
   document.getElementById('ds-overlay')?.remove();
   const overlay = document.createElement('div');
   overlay.id = 'ds-overlay';
   overlay.className = 'modal-overlay';
-  overlay.innerHTML = `<div class="modal-sheet ds-sheet"><div class="modal-handle"></div>${_html(state, dealSheet(state, offer, { teamName }), title)}</div>`;
+  overlay.innerHTML = `<div class="modal-sheet ds-sheet"><div class="modal-handle"></div><div id="ds-body"></div></div>`;
   document.body.appendChild(overlay);
-  requestAnimationFrame(() => overlay.classList.add('open'));
   const close = () => overlay.remove();
+  let shown = 0;
+  if (vs) { const i = vs.findIndex(v => v.key === start); shown = i >= 0 ? i : vs.length - 1; }
+  const draw = () => {
+    const st = StateManager.get();
+    const o = vs ? vs[shown].offer : offer;
+    const sw = vs ? `<div class="ds-switch" role="tablist">${vs.map((v, i) => `<button type="button" role="tab" class="ds-sw${i === shown ? ' on' : ''}" data-ds-v="${i}" aria-selected="${i === shown}">${_e(v.label)}</button>`).join('')}</div>` : '';
+    overlay.querySelector('#ds-body').innerHTML = _html(st, dealSheet(st, o, { teamName }), title, sw);
+    overlay.querySelector('#ds-close')?.addEventListener('click', close);
+    overlay.querySelectorAll('[data-ds-v]').forEach(b => b.addEventListener('click', () => { shown = +b.dataset.dsV; draw(); }));
+    overlay.querySelectorAll('[data-ds-player]').forEach(b => b.addEventListener('click', () => {
+      import('./PlayerCard.js').then(PC => PC.openPlayerCard(b.dataset.dsPlayer, StateManager.get()));
+    }));
+  };
+  draw();
+  requestAnimationFrame(() => overlay.classList.add('open'));
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  overlay.querySelector('#ds-close')?.addEventListener('click', close);
-  overlay.querySelectorAll('[data-ds-player]').forEach(b => b.addEventListener('click', () => {
-    import('./PlayerCard.js').then(PC => PC.openPlayerCard(b.dataset.dsPlayer, StateManager.get()));
-  }));
 }
 
 /** "2 more seasons" / "final season" */
@@ -55,7 +68,7 @@ function _cell(state, r) {
   </div>`;
 }
 
-function _html(state, d, title) {
+function _html(state, d, title, sw = '') {
   const col = (rows) => (rows.length ? rows.map(r => _cell(state, r)).join('') : '<div class="ds-none">No players</div>');
   const k = (v) => formatK(Math.round(v));
   const cash = d.cashK > 0 ? `${formatK(d.cashK)} to us` : d.cashK < 0 ? `${formatK(-d.cashK)} from us` : null;
@@ -65,6 +78,7 @@ function _html(state, d, title) {
     <div class="ds-head">
       <div class="ds-titles"><div class="ds-title">${_e(title)}</div><div class="ds-sub">With ${_e(d.teamName)}</div></div>
     </div>
+    ${sw}
     <div class="ds-grid">
       <div class="ds-colh">We Get</div><div class="ds-colh">We Send</div>
       <div class="ds-col">${col(d.get)}</div><div class="ds-col">${col(d.send)}</div>
@@ -113,6 +127,9 @@ function _injectCSS() {
     .ds-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;color:var(--soft);}
     .ds-row span:last-child{color:var(--text);font-weight:600;text-align:right;font-variant-numeric:tabular-nums;}
     .ds-row span.ds-cost{color:var(--danger);}
+    .ds-switch{display:flex;gap:4px;padding:3px;margin:0 0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);}
+    .ds-sw{flex:1;padding:8px 6px;border:0;border-radius:8px;background:none;color:var(--soft);font:inherit;font-size:13px;font-weight:600;cursor:pointer;}
+    .ds-sw.on{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.18);}
     .ds-close{display:block;width:100%;margin-top:16px;padding:12px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font:inherit;font-size:14px;font-weight:600;cursor:pointer;}
   `;
   document.head.appendChild(st);

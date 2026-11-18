@@ -2523,12 +2523,29 @@ function _releaseDue(nowMs) {
     }
     // r150 the director's counter is a decision: send it as the next round of the talks, adjust it
     // first in the composer, or not now. It stands only while the deal it's about is on the table.
+    // r202 §122.79 the deal the reply is about, as it's on the table: the card's deal table (with the
+    // counter, a switch between the two).
+    if (reply.sheet) Object.assign(out, { _dealOffer: reply.sheet });
+    // r202 a deal they've agreed to: the reply is the decision too — make it official, or walk away
+    // (the same as their yes; whichever is answered first, the other goes away).
+    const ag = reply.agreed;
+    const agTalk = ag ? Negotiation.talkWith(state, ag.teamId) : null;
+    if (ag && agTalk?.status === 'agreed') {
+      Object.assign(out, {
+        tag: 'TRADE', yesLabel: 'Make It Official', noLabel: 'Walk Away', autoResolve: 'roster',   // (no answer: as their yes — it goes through)
+        expiresAtMs: ag.expiresAtMs ?? c.deliverAtMs + 24 * 3600_000,
+        _talkTeamId: ag.teamId, _talkId: agTalk.id, _talkRound: agTalk.round, _adviceDeal: ag.dealKey,
+        yesMsg: 'Deal done.', noMsg: 'We walked away.',
+        _raw: { ...(c._raw || {}), onYes: 'talk_finalize', onNo: 'talk_backout', onAuto: 'talk_finalize' },
+      });
+    }
     const t = reply.trade;
     if (t) {
       Object.assign(out, {
         tag: 'TRADE', yesLabel: t.yesLabel || 'Counter with This', noLabel: 'Not Now', autoResolve: 'no',
         expiresAtMs: t.expiresAtMs ?? c.deliverAtMs + 2 * 86_400_000,
         _ideaTeamId: t.teamId, _ideaOffer: t.offer, _ideaRound: t.round, ...(t.dealKey ? { _adviceDeal: t.dealKey } : {}),
+        ...(reply.sheet ? { _adviceOffer: reply.sheet.offer } : {}),   // r202 the deal as offered, beside our counter
         _reviseOffer: { teamId: t.teamId, offer: t.offer, round: t.round }, _reviseLabel: 'Adjust It First',
         yesMsg: t.yesMsg || 'Counter sent. Their answer comes on their clock.', noMsg: t.dealKey ? 'Holding off on a counter.' : 'Holding off.',
         _raw: { ...(c._raw || {}), onYes: 'lt_offer_send', onNo: 'lt_pass', onAuto: 'lt_pass' },
@@ -4544,6 +4561,8 @@ function _applyTalkAction(action, instance, atMs) {
   const talk = Negotiation.talkWith(StateManager.get(), teamId);
   if (!talk || talk.id !== instance._talkId || talk.round !== instance._talkRound) return;
   Negotiation.settle(teamId);   // their answer has reached us
+  // r202 §122.79 the same answer on another card (their yes, and the director's reply about it): one decision.
+  _withdraw(c => c.instanceId !== instance.instanceId && c._talkTeamId === teamId && c._talkId === instance._talkId && c._talkRound === instance._talkRound);
   const map = { talk_finalize: 'finalize', talk_backout: 'backout', talk_take_counter: 'take_counter',
                 talk_walk: 'walk', talk_ask: 'ask', talk_move_on: 'move_on' };
   if (action === 'talk_keep_open') {

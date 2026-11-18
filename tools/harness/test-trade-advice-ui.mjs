@@ -1,7 +1,8 @@
-// r150 In the real app: ask the Manager and the Scouting Director about a trade
-// on the table (Compose → the person → the topic → which deal → Send), the
-// replies come back before the deal is due, and the director's counter is a
-// decision: adjust it in the composer, or send it as the next round.
+// r150 In the real app: ask about a trade on the table; r202 §122.79 one person, the Scouting Director
+// (the manager's read of the field passed on by name): from the offer itself (Ask the Director) or from
+// Compose (the person → the topic → which deal → Send). The reply comes back before the deal is due; its
+// deal table switches between the deal as offered and our counter; the counter is a decision: adjust it
+// in the composer, or send it as the next round.
 //   node tools/harness/test-trade-advice-ui.mjs outDir [theme]
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
@@ -44,39 +45,34 @@ check('…and a tap opens the player', await page.evaluate(() => !!document.quer
 await page.screenshot({ path: `${out}/trade-offer-links-${theme}.png` });
 await page.keyboard.press('Escape'); await page.evaluate(() => document.querySelectorAll('.modal-overlay, .modal-backdrop').forEach(e => e.remove()));
 await page.click('#mr-back').catch(() => {}); await page.waitForTimeout(200);
+// r202 the offer itself: ask the director about it, in one tap.
+await page.click(`[data-open="${deal.instanceId}"]`); await page.waitForTimeout(300);
+const askBtn = await page.$(`[data-ask-director="${deal.instanceId}"]`);
+check('the offer has Ask the Director', !!askBtn);
+await page.$eval(`[data-ask-director="${deal.instanceId}"]`, el => el.scrollIntoView({ block: 'center' }));
+await page.screenshot({ path: `${out}/trade-ask-director-button-${theme}.png` });
+await askBtn.click(); await page.waitForTimeout(400);
+const asked = await page.evaluate(async (deal) => {
+  const SM = await import('/baseball-gm/store/StateManager.js');
+  const c = (SM.get().scheduledCards || []).find(x => x.isCompose && x._composeTopic === 'sc_trade');
+  return { key: c?._composeArg?.key, gone: !document.querySelector(`[data-ask-director="${deal.instanceId}"]`), toast: document.querySelector('.toast, #toast')?.textContent || '' };
+}, deal);
+check(`…which sends the question with the deal picked (${asked.key}), and the button goes`, asked.key === deal.key && asked.gone, JSON.stringify(asked));
+await page.click('#mr-back').catch(() => {}); await page.waitForTimeout(200);
 await page.click('#itab-compose');
 await page.waitForSelector('.compose-person', { timeout: 5000 });
 
-// The manager.
+// Compose: the manager no longer has a trade topic; the director's is “A trade on the table”.
 await page.click('.compose-person[data-channel="manager"]');
-await page.click('.compose-topic-btn[data-topic="mgr_trade"]');
-await page.waitForTimeout(200);
-const picker = await page.evaluate(() => ({
-  deals: [...document.querySelectorAll('.compose-deal')].map(b => ({ text: b.textContent.replace(/\s+/g, ' ').trim(), sel: b.classList.contains('selected') })),
-  send: document.getElementById('compose-send-btn')?.textContent.trim(),
-}));
-check(`the topic shows the deals on the table, with when each is due (${picker.deals.map(d => `“${d.text}”`).join(', ')})`,
-      picker.deals.length >= 1 && picker.deals.every(d => /Answer due/.test(d.text)) && picker.deals.some(d => d.text.includes(deal.label)));
-check(`one deal: picked already, ready to send (“${picker.send}”)`, picker.deals.length > 1 || (picker.deals[0].sel && picker.send === 'Send Message'));
-await page.screenshot({ path: `${out}/trade-ask-manager-${theme}.png` });
-await page.click('#compose-send-btn');
-await page.waitForTimeout(300);
-
-// The director.
+check('the manager has no trade topic', !(await page.$('.compose-topic-btn[data-topic="mgr_trade"]')));
+await page.click('#compose-back').catch(() => {}); await page.waitForTimeout(200);
 await page.click('.compose-person[data-channel="scouting"]');
-await page.click('.compose-topic-btn[data-topic="sc_trade"]');
-await page.waitForTimeout(200);
+const topic = await page.$$eval('.compose-topic-btn', els => els.map(el => el.textContent.replace(/\s+/g, ' ').trim()).find(t => /A trade on the table/.test(t)) || '');   // (asked: disabled, no data-topic)
+check(`the director's topic: “${topic}” — asked already`, /A trade on the table/.test(topic) && /awaiting reply|Already asked/.test(topic));
 await page.screenshot({ path: `${out}/trade-ask-director-${theme}.png` });
-await page.click('#compose-send-btn');
-await page.waitForTimeout(300);
-const waiting = await page.$eval('.compose-waiting', el => el.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
-check(`both wait under the deal's name (“${waiting}”)`, (waiting.match(new RegExp(deal.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length === 2);
-await page.click('.compose-person[data-channel="scouting"]');
-const note = await page.$eval('.compose-topic-btn.disabled[class*="compose-topic-btn"]', el => el.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
-check(`asked: the topic says so (“${note}”)`, /awaiting reply|Already asked/.test(note));
-await page.click('#compose-back');
+await page.click('#compose-back').catch(() => {});
 
-// The replies come back before the deal is due; the director's until it carries a counter.
+// The reply comes back before the deal is due; until it carries a counter.
 const got = await page.evaluate(async (deal) => {
   const CE = await import('/baseball-gm/engine/CardEngine.js'); const SM = await import('/baseball-gm/store/StateManager.js');
   const pend = (SM.get().scheduledCards || []).filter(c => c.isCompose);
@@ -91,22 +87,14 @@ const got = await page.evaluate(async (deal) => {
     CE.releaseDueCards(c.deliverAtMs);
     sc = find('sc_trade');
   }
-  const mgr = find('mgr_trade');
-  return { due, expires: deal.expiresAtMs, mgr: { id: mgr?.instanceId, body: mgr?.body, subject: mgr?.subject }, sc: { id: sc?.instanceId, body: sc?.body, counter: !!sc?._ideaOffer, offer: sc?._ideaOffer } };
+  return { due, expires: deal.expiresAtMs, sc: { id: sc?.instanceId, body: sc?.body, counter: !!sc?._ideaOffer, offer: sc?._ideaOffer } };
 }, deal);
-check('both replies came back before the deal is due', got.due.every(t => t < got.expires));
-check(`the manager's reply (“${got.mgr.subject}”) and the director's are in the inbox`, !!got.mgr.id && !!got.sc.id);
-check('gender-neutral', !GEN.test(got.mgr.body + got.sc.body), ((got.mgr.body + got.sc.body).match(GEN) || []).join());
+check('the reply came back before the deal is due', got.due.every(t => t < got.expires));
+check('gender-neutral', !GEN.test(got.sc.body || ''), ((got.sc.body || '').match(GEN) || []).join());
 check('the director has a counter for us', got.sc.counter);
-console.log('\n' + got.mgr.body + '\n\n' + got.sc.body + '\n');
-
-// The manager's reply, opened.
+check('…and passes on the manager\'s read of the field', /read on the field: /.test(got.sc.body || ''));
+console.log('\n' + got.sc.body + '\n');
 await page.click('#itab-todo'); await page.waitForTimeout(300);
-await page.click(`[data-open="${got.mgr.id}"]`); await page.waitForTimeout(400);
-const mgrView = await page.evaluate(() => ({ links: document.querySelectorAll('.msg-player').length, buttons: [...document.querySelectorAll('.msg-choice, [data-resolve]')].map(b => b.textContent.trim()) }));
-check(`the manager's reply links the players (${mgrView.links})`, mgrView.links >= 2);
-await page.screenshot({ path: `${out}/trade-reply-manager-${theme}.png`, fullPage: true });
-await page.click('#mr-back'); await page.waitForTimeout(300);
 
 // The director's, opened: the decision.
 if (got.sc.id) {
@@ -116,7 +104,20 @@ if (got.sc.id) {
     text: document.body.innerText,
   }));
   check(`the counter is a decision (${view.buttons.join(' · ')})`, ['Counter with This', 'Not Now', 'Adjust It First'].every(l => view.buttons.includes(l)));
-  await page.screenshot({ path: `${out}/trade-reply-director-${theme}.png` });
+  check('…with a link per player', await page.$$eval('.msg-player', bs => bs.length >= 2));
+  await page.screenshot({ path: `${out}/trade-reply-director-${theme}.png`, fullPage: true });
+  // r202 the deal table: the counter first, and a switch to the deal as offered.
+  await page.click(`[data-deal-sheet="${got.sc.id}"]`); await page.waitForTimeout(500);
+  const sheet = async () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('.ds-sw')].map(b => `${b.textContent.trim()}${b.classList.contains('on') ? '*' : ''}`),
+    names: [...document.querySelectorAll('.ds-name')].map(b => b.textContent.trim()), cash: [...document.querySelectorAll('.ds-row')].map(r => r.textContent.replace(/\s+/g, ' ').trim()).join(' | ') }));
+  const a = await sheet();
+  check(`the deal table opens on our counter (${a.tabs.join(' / ')})`, a.tabs.join() === 'As Offered,Our Counter*');
+  await page.screenshot({ path: `${out}/trade-sheet-counter-${theme}.png` });
+  await page.click('.ds-sw:not(.on)'); await page.waitForTimeout(300);
+  const b = await sheet();
+  check(`…and switches to the deal as offered (${b.tabs.join(' / ')})`, b.tabs.join() === 'As Offered*,Our Counter' && (JSON.stringify(a) !== JSON.stringify(b)));
+  await page.screenshot({ path: `${out}/trade-sheet-offered-${theme}.png` });
+  await page.click('#ds-close'); await page.waitForTimeout(300);
   await page.$eval('[data-revise]', el => el.scrollIntoView({ block: 'end' })); await page.waitForTimeout(200);
   await page.screenshot({ path: `${out}/trade-reply-director-decision-${theme}.png` });
   // Adjust it first: the composer, with the counter in it.
