@@ -50,7 +50,7 @@ const S = await page.evaluate(async ({ theme, now }) => {
     const r = FA.roomFor(SM.get(), SM.get().players[c.id]), d = r.candidates.find(x => !x.starter);
     if (!FA.signBlocker(SM.get(), c.id, r.needsDrop ? d?.player.id : null)) { fa = c; break; }
   }
-  SM.mutate(s => { Pos.grantPosition(s.players[fa.id], 'SS'); s.leaguePos = { lastMsgAt: -Infinity }; });
+  SM.mutate(s => { const p = s.players[fa.id], o = p.ovr; Pos.grantPosition(p, 'SS'); p.ovr = o; s.leaguePos = { lastMsgAt: -Infinity }; });   // (r205 granting recomputes OVR: keep the one set above)
   CE.leaguePositionNews([{ type: 'LEAGUE_POS', kind: 'fa', playerId: fa.id, teamId: null, pos: 'SS', atMs: now, text: 'x' }], now);
   const card = [...SM.get().inbox, ...(SM.get().scheduledCards || [])].find(c => c.cardId === 'fa_pos');
   return { club: club.name, theirs: theirs.name, fa: fa.name, deliverAt: card?.deliverAtMs, id: card?.instanceId };

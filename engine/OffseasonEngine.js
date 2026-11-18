@@ -73,7 +73,7 @@ import {
   DEV_REPS,
 } from '../data/constants.js';
 
-import { computeAge, computeOVR, createPlayer, baseballYear, _freshStats } from './PlayerFactory.js';
+import { computeAge, computeOVR, ovrFor, createPlayer, baseballYear, _freshStats } from './PlayerFactory.js';
 import { originForKind } from './LeagueHistory.js';
 import { giveUntestedGap, seedUpside, markAvailable, cpuView } from './Diamonds.js';
 import { clearInjuryUpdate } from './InjuryEngine.js';
@@ -595,7 +595,7 @@ function _develop(p, nextYear, seasonNum, staff = null, facility = 0, played = n
       const delta = Math.max(-5, Math.min(4, Math.round(change + variance)));
       sr[key] = Math.max(SUB_RATING_MIN, Math.min(SUB_RATING_MAX, sr[key] + delta));
     });
-    p.ovr = computeOVR(sr);
+    p.ovr = ovrFor(p, sr);
     p._ovrChange = (p.ovr || 0) - (before || 0);
     if (p.careerStats && p.ovr > (p.careerStats.peakOvr || 0)) {
       p.careerStats.peakOvr = p.ovr; p.careerStats.peakSeason = seasonNum + 1;

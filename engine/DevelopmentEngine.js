@@ -43,7 +43,7 @@ import {
   ARM_LOAD,
 } from '../data/constants.js';
 import { ageWearMult, armLoad } from './PitchingEngine.js';
-import { computeOVR, computeAge, baseballYear } from './PlayerFactory.js';
+import { computeOVR, ovrFor, computeAge, baseballYear } from './PlayerFactory.js';
 import { exposeRatings } from './Diamonds.js';
 import { devFactor } from './CoachEngine.js';
 import { trainingDevFactor } from './FrontOffice.js';
@@ -223,7 +223,7 @@ function _land(p, plan, amount) {
       plan.carry[k] -= whole;
     }
   }
-  p.ovr = computeOVR(sr);
+  p.ovr = ovrFor(p, sr);
   if (p.careerStats && p.ovr > (p.careerStats.peakOvr || 0)) p.careerStats.peakOvr = p.ovr;
 }
 

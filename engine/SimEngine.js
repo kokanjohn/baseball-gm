@@ -78,7 +78,8 @@ import {
   ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, armLoad, tireAfterBF, reliefInnings, springStarterInnings,
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
-import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost } from './Positions.js';
+import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost, exposure } from './Positions.js';
+import { DEFENSE_SIM as DS } from '../data/constants.js';   // r205 §122.83
 import { battingOrder, strategyOf, runStyle, hookStyle } from './Strategy.js';   // r169
 import { lateClosePoints } from './ManagerEngine.js';   // §122.64
 
@@ -513,6 +514,7 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     const userBats = isTop ? !userBatsBottom : userBatsBottom;
     _userFielding = userBats ? oppIsGM : userIsGM;
     _fieldDef = (userBats ? oppLineup : userLineup)?.defense || null;   // r165 the fielding side's defense
+    _fielders = _fieldersOf(userBats ? oppLineup : userLineup, players, gs.norms);   // r205 §122.83 who's where, and the gloves
     _runBat = (userBats ? userLineup : oppLineup)?.run || null;         // r169 the batting side's running game
     gs.halfIdx = (gs.inning - 1) * 2 + (isTop ? 0 : 1);
     gs.env = _envFor(gs.wx, gs.halfIdx);
@@ -718,7 +720,9 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
 
   const runner   = players[runnerId];
   const spd      = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
-  const success  = _roll() < (SIM_SB_BASE_SUCCESS + (spd / SIM_SB_SPEED_BONUS_DIVISOR) + POSITION_RULES.oop.sbSuccess * (_fieldDef?.catcher || 0) + (_runBat?.success || 0));   // r165, r169 the running game
+  const cat = _fielders?.byPos?.C || null;   // r205 §122.83 the catcher's throw
+  const success  = _roll() < (SIM_SB_BASE_SUCCESS + (spd / SIM_SB_SPEED_BONUS_DIVISOR) + POSITION_RULES.oop.sbSuccess * (_fieldDef?.catcher || 0) + (_runBat?.success || 0)
+    - DS.catcherSb * (cat?.d || 0));   // r165, r169 the running game
 
   const newBases = { ...bases };
 
@@ -748,7 +752,7 @@ function _attemptStolenBase(bases, players, outs, inning, gs) {
       batterId:     null,
       pitcherId:    null,
       type:         'caught_stealing',
-      description:  `${runner?.name || 'Runner'} caught stealing ${toBase}`,
+      description:  `${runner?.name || 'Runner'} caught stealing ${toBase}${cat && cat.d >= 0.5 ? ` — ${cat.name}'s throw beats the runner` : ''}`,
       rbi:          0,
       isScoring:    false,
       isBigPlay:    false,
@@ -903,8 +907,10 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     // fatigue check below, which reads the same throwing-pitcher counter.
     gs[isUserBatting ? 'oppPitchCount' : 'userPitchCount']++;
 
-    let { newBases, runsScored, runnerIds, extraOuts, playMod } =
-      _advanceBases(bases, atBat, activeBatter, players, outs);
+    // r205 §122.83 the ball in play goes to a fielder: hit or out, an error, the arms
+    const fieldedAB = _fielders ? _fieldPlay(atBat, isUserBatting) : atBat;
+    let { newBases, runsScored, runnerIds, extraOuts, playMod, thrownOut } =
+      _advanceBases(bases, fieldedAB, activeBatter, players, outs);
     bases = newBases;
 
     // Walk-off (home half, 9th+): the game ends the instant the winning run
@@ -920,7 +926,7 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     }
     halfRuns += runsScored;
 
-    const effectiveType = playMod || atBat.type;
+    const effectiveType = playMod || fieldedAB.type;
     // Runs that scored on the play vs the batter's official RBI: no RBI when
     // he grounds into a double play or the run scores on an error.
     const rbi           = (effectiveType === 'double_play' || effectiveType === 'error') ? 0 : runsScored;
@@ -933,13 +939,21 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     // Errors and fielder's choice: batter reaches safely (no out on batter)
     const batterIsOut = effectiveType !== 'error'
       && effectiveType !== 'fielders_choice'
-      && _isOut(atBat.type);
+      && _isOut(fieldedAB.type);
     const outsBefore = outs;
     if (batterIsOut) outs++;
     if (extraOuts > 0) outs = Math.min(3, outs + extraOuts);
 
-    const deltas = _buildStatDeltas(atBat, activeBatter, pitcher, rbi, runsScored,
+    const deltas = _buildStatDeltas(fieldedAB, activeBatter, pitcher, rbi, runsScored,
       runnerIds, effectiveType, outs - outsBefore);
+    // r205 §122.83 the fielder's record: an error, a hit taken away, a hit let through
+    const fd = fieldedAB.fielder;
+    if (fd) {
+      const add = (stat) => (deltas[fd.id] ||= []).push({ stat, delta: 1 });
+      if (effectiveType === 'error') add('e');
+      if (fieldedAB.conv === 'save') add('dSave');
+      if (fieldedAB.conv === 'cost') add('dCost');
+    }
 
     plays.push({
       playIndex:    0,
@@ -949,7 +963,8 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       batterId:     activeBatter.id,
       pitcherId:    pitcher.id,
       type:         effectiveType,
-      description:  _buildDescription(atBat, activeBatter, pitcher, playMod, { rbi, runs: runsScored }),
+      description:  _buildDescription(fieldedAB, activeBatter, pitcher, playMod, { rbi, runs: runsScored, thrownOut, players }),
+      ...(fd ? { _fielderId: fd.id } : {}),
       runs:         runsScored,
       rbi,
       isScoring,
@@ -1051,8 +1066,9 @@ const NORM_PITCHER_PRIOR_IP = Object.freeze({
 });
 
 export function leagueNorms(teams, players) {
-  const sum = { contact: 0, power: 0, speed: 0, stuff: 0, control: 0 };
-  let nh = 0, np = 0;
+  const sum = { contact: 0, power: 0, speed: 0, stuff: 0, control: 0, defense: 0 };
+  let nh = 0, np = 0, nd = 0;
+  const dBy = {}, nBy = {};   // r205 §122.83 the glove by position
   const ok = (p) => p && isAvailable(p);
   for (const t of teams || []) {
     for (const sl of t.lineupSlots || []) {
@@ -1062,6 +1078,12 @@ export function leagueNorms(teams, players) {
       sum.power   += _effectiveSR(p, 'power',   playingRating(p, 'power'), { coached: false });
       sum.speed   += _effectiveSR(p, 'speed',   playingRating(p, 'speed'), { coached: false });
       nh++;
+      // r205 §122.83 the league's glove: its fielders' (not the DHs'), at their own positions
+      if (sl.slot !== 'DH' && p.subRatings?.defense != null) {
+        const g = _effectiveSR(p, 'defense', playingRating(p, 'defense'), { coached: false });
+        sum.defense += g; nd++;
+        dBy[sl.slot] = (dBy[sl.slot] || 0) + g; nBy[sl.slot] = (nBy[sl.slot] || 0) + 1;
+      }
     }
     // Pitchers: the league average a batter FACES — weighted by the innings
     // each arm actually throws (§76: the manager's best relievers pitch more
@@ -1081,6 +1103,7 @@ export function leagueNorms(teams, players) {
   return {
     contact: sum.contact / nh, power: sum.power / nh, speed: sum.speed / nh,
     stuff:   sum.stuff / np,   control: sum.control / np,
+    ...(nd ? { defense: sum.defense / nd, defenseBy: Object.fromEntries(Object.keys(dBy).map(k => [k, dBy[k] / nBy[k]])) } : {}),
   };
 }
 
@@ -1259,9 +1282,11 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
   let extraOuts  = 0;
   let playMod    = null; // override play type if needed
 
-  // Helper: probability of being thrown out based on runner speed
+  // Helper: probability of being thrown out based on runner speed (r205 §122.83 and the fielder's arm)
+  const arm = atBat.armMult || 1;
   const throwoutProb = (baseProb, runnerSpeed) =>
-    Math.max(0.05, baseProb - (runnerSpeed / SIM_SPEED_THROWOUT_DIVISOR));
+    Math.max(0.05, baseProb - (runnerSpeed / SIM_SPEED_THROWOUT_DIVISOR)) * arm;
+  let thrownOut = null;   // r205 a runner thrown out on the play: { id, at }
 
   switch (atBat.type) {
 
@@ -1296,6 +1321,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
           if (_roll() < throwoutProb(SIM_THROWOUT_PLATE_BASE, rs)) {
             // Thrown out at plate — runner out, batter ends on second
             newBases = { first: null, second: batter.id, third: null };
+            thrownOut = { id: bases.first, at: 'home' };
             extraOuts++;
             playMod = 'double'; // still a double, just runner thrown out
           } else {
@@ -1324,6 +1350,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
         const rs     = _effectiveSR(runner, 'speed', playingRating(runner, 'speed')) || 50;
         if (_roll() < throwoutProb(SIM_THROWOUT_PLATE_BASE, rs)) {
           extraOuts++;         // thrown out at plate
+          thrownOut = { id: bases.second, at: 'home' };
           newBases.second = null;
         } else {
           runsScored++;
@@ -1340,6 +1367,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
           // Tries for third — throw-out check
           if (_roll() < throwoutProb(SIM_THROWOUT_EXTRA_BASE, rs)) {
             extraOuts++;         // thrown out at third
+            thrownOut = thrownOut || { id: bases.first, at: 'third' };
             newBases.first = batter.id;
           } else {
             newBases.third  = runner ? bases.first : null;
@@ -1382,8 +1410,8 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
 
       const hasFirst  = !!bases.first;
 
-      // Error check — before anything else
-      if (_roll() < SIM_ERROR_PROB * (_userFielding && _staff ? _staff.errorMult : 1) * (_fieldDef?.errorMult || 1)) {   // r165 fielders out of position
+      // Error check — before anything else (r205 §122.83 decided by the fielder, _fieldPlay; else the old rate)
+      if (atBat.fielded ? !!atBat.error : _roll() < SIM_ERROR_PROB * (_userFielding && _staff ? _staff.errorMult : 1) * (_fieldDef?.errorMult || 1)) {   // r165 fielders out of position
         playMod = 'error';
         // Batter reaches first (no out charged)
         // Runners advance one base
@@ -1398,7 +1426,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       }
 
       if (hasFirst && outs < 2) {
-        if (_roll() < SIM_DP_PROB) {
+        if (_roll() < SIM_DP_PROB * (atBat.dpMult || 1)) {   // r205 the middle infield turns it
           // Double play — batter out at first, lead runner out at second
           extraOuts = 1; // batter counts as primary out, this is the extra
           newBases = {
@@ -1448,6 +1476,13 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
 
     // ── FLYOUT ───────────────────────────────────────────────────
     case 'flyout': {
+      // r205 §122.83 dropped: the batter reaches, the runners move up a base
+      if (atBat.error) {
+        playMod = 'error';
+        if (bases.third) { runsScored++; runnerIds.push(bases.third); }
+        newBases = { first: batter.id, second: bases.first || null, third: bases.second || null };
+        break;
+      }
       // Tag-up logic: runners can advance after catch if fast enough
       // Third: tag-up to score (sac fly)
       if (bases.third) {
@@ -1468,6 +1503,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
         if (rs2 >= 60 && _roll() < 0.50) {
           if (_roll() < throwoutProb(SIM_THROWOUT_EXTRA_BASE, rs2)) {
             extraOuts++; // thrown out at third
+            thrownOut = { id: bases.second, at: 'third' };
             newBases.second = null;
           } else {
             newBases.third  = bases.second;
@@ -1506,7 +1542,7 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
       break;
   }
 
-  return { newBases, runsScored, runnerIds, extraOuts, playMod };
+  return { newBases, runsScored, runnerIds, extraOuts, playMod, thrownOut };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1645,7 +1681,10 @@ export function accumulateBox(plays, players, opts = {}) {
     const battingSide  = isTop ? away : home;   // TOP = away bats
     const fieldingSide = isTop ? home : away;
 
+    // r205 §122.83 an error counts against the side in the field (the fielder's own line isn't a hitter's)
+    if (play.type === 'error') fieldingSide.errors = (fieldingSide.errors || 0) + 1;
     for (const [pid, statList] of Object.entries(play._statDeltas)) {
+      if (play._fielderId === pid && pid !== play.batterId) continue;   // (the fielder's e / dSave / dCost: the season's stats, not the box)
       const isPitcher = (play.pitcherId && pid === play.pitcherId) || play.type === 'game_end';
 
       if (isPitcher) {
@@ -1705,7 +1744,7 @@ export function accumulateBox(plays, players, opts = {}) {
     return {
       runs:   hitters.reduce((a, h) => a + h.r, 0),
       hits:   hitters.reduce((a, h) => a + h.h, 0),
-      errors: 0,
+      errors: side.errors || 0,   // r205 §122.83 the errors this side made in the field
       hitters,
       pitchers,
     };
@@ -2606,6 +2645,7 @@ function _buildLineup(team, players, isCPU) {
     const ok = (id) => players[id] && isAvailable(players[id]);
     const subs = team.simSubs || {};
     return {
+      field:   _fieldMap(lineupSlots.length === 9 ? lineupSlots : [], orderedStarters),   // r205 §122.83
       slots:   orderedStarters.map(p => ({ id: p.id, subbed: false,
                                            subIn: subs[p.id]?.inId || null, subInning: subs[p.id]?.inning || null })),
       bench:   (team.simBench || []).filter(ok).map(id => ({ id, used: false })),
@@ -2640,6 +2680,7 @@ function _buildLineup(team, players, isCPU) {
     bullpen: bullpen.map(id => ({ id })),
     roles,
     defense: lineupSlots.length === 9 ? defenseOf(lineupSlots, players) : null,   // r165 §122.35 who's out of position
+    field: _fieldMap(lineupSlots, orderedStarters),   // r205 §122.83 who plays where
     run: runStyle(team), hook: hookStyle(team),   // r169 how the club plays (Strategy)
     mgr: lateClosePoints(team),                   // §122.64 the manager's edge in a late, close game
   };
@@ -2799,14 +2840,51 @@ const _HR_CALL = { 1: 'hits a solo home run', 2: 'hits a two-run home run',
  * home run named for how many it brought home, any other play followed by
  * its RBI (or, with none credited, that a run scored).
  */
-function _buildDescription(atBat, batter, pitcher, playMod = null, { rbi = 0, runs = 0 } = {}) {
+function _buildDescription(atBat, batter, pitcher, playMod = null, { rbi = 0, runs = 0, thrownOut = null, players = null } = {}) {
   const bn = batter?.name || 'Batter';
   const type = playMod || atBat.type;
   if (type === 'hr') return `${bn} ${_HR_CALL[runs] || 'homers'}`;
-  const base = _basePlayCall(atBat, batter, pitcher, type);
+  let base = (atBat.fielder && _fieldCall(atBat, batter, type)) || _basePlayCall(atBat, batter, pitcher, type);
+  // r205 §122.83 a runner thrown out on the play: by whom
+  if (thrownOut && players?.[thrownOut.id]) {
+    const f = atBat.fielder;
+    base += ` — ${players[thrownOut.id].name} thrown out at ${thrownOut.at}${f?.slot === 'OF' ? ` by ${f.name}` : ''}`;
+  }
   if (rbi > 0)  return `${base}, ${rbi === 1 ? 'RBI' : `${rbi} RBI`}`;
   if (runs > 0) return `${base}, ${runs === 1 ? 'a run scores' : `${runs} runs score`}`;
   return base;
+}
+
+/**
+ * r205 §122.83 a ball in play, called with its fielder: the out ("grounds out to Ramirez at short"), the
+ * error and whose, the double play's relay, and the standout plays — a hit taken away or let through.
+ */
+function _fieldCall(atBat, batter, type) {
+  const bn = batter?.name || 'Batter', f = atBat.fielder, fn = f.name, at = _atWords(f);
+  const mid = { SS: ['SS', '2B'], '2B': ['2B', 'SS'], '3B': ['3B', '2B'], '1B': ['1B', 'SS'] }[f.slot];
+  switch (type) {
+    case 'error': return `${bn} reaches on ${atBat.error === 'throwing' ? `a throwing error by ${fn}` : `an error by ${fn}`} ${at}`;
+    case 'groundout':
+      if (atBat.conv === 'save' && atBat.gem) return `${fn} ranges ${['far to the right', 'deep into the hole', 'to the left'][Math.floor(_roll() * 3)]} and throws out ${bn} — a hit taken away`;
+      return `${bn} grounds out to ${fn} ${at}`;
+    case 'flyout':
+      if (atBat.conv === 'save' && atBat.gem) return f.slot === 'OF'
+        ? (atBat.was === 'double' ? `${fn} runs it down at the wall — ${bn} robbed of extra bases` : `${fn} makes a diving catch ${at} to rob ${bn}`)
+        : `${fn} makes a leaping grab ${at} to rob ${bn}`;
+      return f.slot === 'OF' ? `${bn} flies out to ${fn} ${at}` : `${bn} pops out to ${fn} ${at}`;
+    case 'double_play': {
+      const relay = mid ? [_fielders?.byPos[mid[0]]?.name, _fielders?.byPos[mid[1]]?.name, _fielders?.byPos['1B']?.name] : null;
+      return relay && relay.every(Boolean) && new Set(relay).size === 3
+        ? `${bn} grounds into a double play — ${relay[0]} to ${relay[1]} to ${relay[2]}` : `${bn} grounds into a double play`;
+    }
+    case 'single':
+      if (atBat.conv === 'cost' && atBat.gem) return f.slot === 'OF' ? `${bn} singles — it drops in front of ${fn}` : `${bn} singles — it gets past a diving ${fn}`;
+      return null;
+    case 'double':
+      if (atBat.conv === 'cost' && atBat.gem) return `${bn} doubles — it gets over ${fn}'s head ${at}`;
+      return null;
+    default: return null;
+  }
 }
 
 function _basePlayCall(atBat, batter, pitcher, type) {
@@ -2836,6 +2914,128 @@ function _basePlayCall(atBat, batter, pitcher, type) {
 // ─────────────────────────────────────────────────────────────
 // TEAM OVR CALCULATORS
 // ─────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────
+// r205 §122.83 DEFENSE — who's where, and the ball in play
+// ─────────────────────────────────────────────────────────────
+
+const _OF_WHERE = ['left', 'center', 'right'];
+
+/**
+ * _fieldMap(lineupSlots, starters) — who plays where: { [playerId]: { slot, where } } (the outfielders
+ * left, center, right in the lineup's order). Without a lineup's slots (an All-Star squad), each
+ * starter takes a position by primary position, the rest DH.
+ */
+function _fieldMap(lineupSlots, starters) {
+  const map = {};
+  let of = 0;
+  const put = (id, slot) => { map[id] = { slot, where: slot === 'OF' ? _OF_WHERE[of++] || 'center' : null }; };
+  if ((lineupSlots || []).length === 9) {
+    for (const sl of lineupSlots) if (sl.playerId && sl.slot !== 'DH') put(sl.playerId, sl.slot);
+    return map;
+  }
+  const need = ['C', '1B', '2B', '3B', 'SS', 'OF', 'OF', 'OF'];
+  const left = [...(starters || [])];
+  for (const slot of need) {
+    const i = left.findIndex(p => primaryPos(p) === slot);
+    const j = i >= 0 ? i : left.findIndex(p => canPlay(p, slot));
+    if (j >= 0) { put(left[j].id, slot); left.splice(j, 1); }
+  }
+  return map;
+}
+
+/**
+ * _fieldersOf(lineup, players, norms) — the fielding side now: { byPos: { C, '1B', '2B', '3B', SS, OF: [] } }
+ * of { id, name, slot, where, x (exposure), d }. A player who came in for a starter takes the position
+ * left open. d = (glove − the league's) / scale, out of position the glove less oopDrop × exposure.
+ */
+function _fieldersOf(lineup, players, norms) {
+  const field = lineup?.field;
+  if (!field || !lineup.slots?.length) return null;
+  // (against the league's glove at that position: an average first baseman is average)
+  const avgAt = (slot) => norms?.defenseBy?.[slot] ?? norms?.defense ?? SIM_RATING_AVG;
+  const ids = lineup.slots.map(s => s.id);
+  const taken = new Set(), byPos = { OF: [] };
+  const place = (p, at) => {
+    const A = avgAt(at.slot);
+    const glove = _effectiveSR(p, 'defense', playingRating(p, 'defense') ?? A, { coached: false });
+    const x = exposure(p, at.slot);
+    const d = Math.max(-DS.dMax, Math.min(DS.dMax, (glove - DS.oopDrop * x - A) / DS.scale));
+    const f = { id: p.id, name: p.name, slot: at.slot, where: at.where, x, d };
+    if (at.slot === 'OF') byPos.OF.push(f); else byPos[at.slot] = f;
+  };
+  const open = Object.entries(field).filter(([id]) => !ids.includes(id)).map(([, at]) => at);
+  for (const id of ids) {
+    const p = players[id];
+    if (!p) continue;
+    if (field[id]) { place(p, field[id]); taken.add(id); }
+  }
+  for (const id of ids) {   // (in for a starter: the position the starter left)
+    const p = players[id];
+    if (!p || taken.has(id) || !open.length) continue;
+    // (a DH stays a DH: only someone who took a fielder's spot in the order fields)
+    const at = open.shift();
+    place(p, at);
+  }
+  return { byPos };
+}
+
+/** A fielder for a ball: the position by the weights (P: the pitcher — nobody's glove), an outfielder at random. */
+function _pickFielder(weights) {
+  let r = _roll();
+  for (const [pos, w] of Object.entries(weights)) {
+    if ((r -= w) > 0) continue;
+    if (pos === 'P') return null;
+    if (pos === 'OF') { const of = _fielders.byPos.OF; return of.length ? of[Math.floor(_roll() * of.length)] : null; }
+    return _fielders.byPos[pos] || null;
+  }
+  return null;
+}
+
+/**
+ * _fieldPlay(atBat, isUserBatting) — the ball in play goes to a fielder (DEFENSE_SIM): a good glove takes
+ * some hits away, a poor one lets some outs through; the outs to it may be errors; the middle infield
+ * turns double plays; an outfielder's arm holds or throws out runners. → the at-bat, with { fielder,
+ * fielded, error, conv ('save' a hit taken away, 'cost' one let through), gem, dpMult, armMult }.
+ */
+function _fieldPlay(atBat, isUserBatting) {
+  const t = atBat.type;
+  if (!['single', 'double', 'groundout', 'flyout'].includes(t)) {
+    if (t === 'triple') { const f = _pickFielder({ OF: 1 }); return f ? { ...atBat, fielder: f } : atBat; }
+    return atBat;
+  }
+  const ground = t === 'groundout' || (t === 'single' && _roll() < DS.groundSingle);
+  const f = t === 'groundout' ? _pickFielder(DS.grounder) : t === 'flyout' ? _pickFielder(DS.fly)
+    : t === 'double' ? _pickFielder(DS.double) : _pickFielder(ground ? DS.infieldSingle : { OF: 1 });
+  const out = { ...atBat, fielded: true, fielder: f };
+  const mid = [_fielders.byPos.SS, _fielders.byPos['2B']].filter(Boolean);
+  out.dpMult = mid.length ? Math.max(0.75, Math.min(1.25, 1 + DS.dp * mid.reduce((a, x) => a + x.d, 0) / mid.length)) : 1;
+  if (!f) return out;
+  if (f.slot === 'OF') out.armMult = Math.max(0.75, Math.min(1.3, 1 + DS.arm * f.d));   // (a good arm throws more runners out)
+  // Range: hits taken away, or let through.
+  if ((t === 'single' || t === 'double') && f.d > 0 && _roll() < DS.range[t] * f.d) {
+    out.type = ground && t === 'single' ? 'groundout' : 'flyout';
+    out.conv = 'save'; out.was = t; out.gem = _roll() < DS.gem;
+  } else if ((t === 'groundout' || t === 'flyout') && f.d < 0 && _roll() < DS.range.out * -f.d) {
+    out.type = t === 'flyout' && f.slot === 'OF' && _roll() < 0.25 ? 'double' : 'single';
+    out.conv = 'cost'; out.was = t; out.gem = _roll() < DS.gem;
+  }
+  // Errors: on the outs (the fielder's glove, out of position more, our bench coach).
+  if (out.type === 'groundout' || out.type === 'flyout') {
+    const k = Math.max(DS.errMin, Math.min(DS.errMax, 1 - DS.errPerD * f.d)) * (1 + DS.oopErr * f.x)
+      * (_userFielding && _staff ? _staff.errorMult : 1);   // (our bench coach, with our club in the field)
+    if (_roll() < DS.err[out.type] * k) {
+      out.error = out.type === 'groundout' && _roll() < 0.45 ? 'throwing' : 'fielding';
+      out.conv = null; out.gem = false;
+    }
+  }
+  return out;
+}
+
+/** Where a fielder plays, in words: "at short", "in center". */
+function _atWords(f) {
+  return f.slot === 'OF' ? `in ${f.where || 'the outfield'}` : ({ C: 'behind the plate', '1B': 'at first', '2B': 'at second', '3B': 'at third', SS: 'at short' })[f.slot] || '';
+}
 
 // ─────────────────────────────────────────────────────────────
 // TRAVEL FATIGUE (Section 8.13 — Geographic Region)
@@ -2934,6 +3134,7 @@ let _simAt = null;   // r161 the game's first pitch (a pitcher's workload is rea
 let _fieldDef = null;          // r165 §122.35 the fielding side's defense this half (defenseOf)
 let _runBat = null;            // r169 the batting side's running game this half (Strategy.runStyle)
 let _userFielding = false;   // our club is in the field this half (the bench coach's defense)
+let _fielders = null;        // r205 §122.83 the fielding side this half: { C: f, SS: f, …, OF: [f, f, f] } (_fieldersOf)
 function _coachPoints(player, key) {
   if (!_staff || player?.teamId !== 'user') return 0;
   if (key === 'contact' || key === 'power' || key === 'speed') return _staff.bat?.[key] || 0;

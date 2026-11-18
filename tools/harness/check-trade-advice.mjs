@@ -28,7 +28,7 @@ const S = () => SM.get();
 const setDirector = (q) => SM.mutate(s => { Object.assign(s.userTeam.coachingStaff.scoutingDirector, { quality: q, specialty: 'pro' }); });
 const lcg = (seed) => { let x = seed >>> 0 || 1; return () => ((x = (Math.imul(x, 1664525) + 1013904223) >>> 0) / 4294967296); };
 
-seedRandom(7);
+seedRandom(8);   // (r205 a world whose first offer has room for a counter)
 clock.set(clock.real());
 await startNewGame({ archetypeId: 'contender', gmName: 'Test GM', city: 'Testville', nickname: 'Testers',
                      abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: 'east' });
@@ -54,7 +54,7 @@ const paras = sc.body.split('\n\n').slice(1, -1);   // (between the greeting and
 const mgrName = S().userTeam.coachingStaff.manager?.name;
 check(`signed by the director (${sc?.sender})`, sc?.sender?.startsWith(S().userTeam.coachingStaff.scoutingDirector.name));
 check(`opens with the manager's read on the field, by name (${mgrName})`, paras[0].startsWith(`${mgrName}'`) && /read on the field: /.test(paras[0]));
-check('…about every player in the deal, ending on the bottom line', everyone.every(id => paras[0].includes(S().players[id].name)) && /On the field today, (this makes us|it's about a wash)\.$/.test(paras[0]));
+check('…about every player in the deal, ending on the bottom line', everyone.every(id => paras[0].includes(S().players[id].name)) && /On the field today, (this makes us( a little)? (better|worse)|it's about a wash)\.$/.test(paras[0]), JSON.stringify([everyone.map(id => S().players[id].name), paras[0].slice(-60)]));
 check('…with a coach on who is coming in', /\w+ says this one /.test(paras[0]));
 check('then the deal as it stands, and a counter or why not', /^As it stands/.test(paras[1]) && /(My counter:|I wouldn't counter|nothing worth asking|out of rounds)/.test(sc.body));
 { const before = sc.body.split('On payroll')[0];   // (the payroll paragraph names who's signed past this season)

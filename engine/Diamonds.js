@@ -21,7 +21,7 @@
  * Pure: players in, players mutated (drafts or freshly built objects).
  */
 
-import { computeOVR } from './PlayerFactory.js';
+import { ovrFor } from './PlayerFactory.js';
 import { DIAMOND, SUB_RATING_MIN, SUB_RATING_MAX, PLAYER_ORIGIN } from '../data/constants.js';
 
 const DAY_MS = 86_400_000;
@@ -44,19 +44,19 @@ export function trueRatings(p) {
   return sr;
 }
 
-export const trueOVR = (p) => computeOVR(trueRatings(p));
+export const trueOVR = (p) => ovrFor(p, trueRatings(p));
 
 /** What his role actually uses: a hitter's bat (speed a little), a reliever's stuff and control. A starter needs it all. */
 function _roleValue(sr, p) {
   if (!isPitcher(p)) return Math.round(0.5 * sr.contact + 0.45 * sr.power + 0.05 * sr.speed);
   if (p.pos === 'RP') return Math.round(0.53 * sr.stuff + 0.47 * sr.control);
-  return computeOVR(sr);
+  return ovrFor(p, sr);
 }
 
 /** What he's really worth to a club, on the OVR scale. */
 export function worthOf(p) {
   const sr = trueRatings(p);
-  return Math.max(computeOVR(sr), _roleValue(sr, p));
+  return Math.max(ovrFor(p, sr), _roleValue(sr, p));
 }
 
 export const isDiamond = (p, level = 0) => !!p && worthOf(p) - (p.ovr || 0) >= DIAMOND.edge
@@ -123,7 +123,7 @@ export function exposeRatings(p, n) {
   if (changed) {
     for (const k of Object.keys(p._ratingGap)) if (!p._ratingGap[k]) delete p._ratingGap[k];
     if (!Object.keys(p._ratingGap).length) { delete p._ratingGap; delete p._gap0; }
-    p.ovr = computeOVR(p.subRatings);
+    p.ovr = ovrFor(p);
   }
   return changed;
 }
@@ -160,7 +160,7 @@ export function makeRoleFit(p, level, rand) {
   const sr = p.subRatings;
   if (isPitcher(p)) { sr.stamina = low; sr.stuff = clampSR(Math.round(v + 4)); sr.control = clampSR(Math.round(v - 4.57)); }
   else              { sr.speed = low;   sr.power = clampSR(Math.round(v + 4)); sr.contact = clampSR(Math.round(v - 3.5)); }
-  p.ovr = computeOVR(sr);
+  p.ovr = ovrFor(p, sr);
   _setGap(p, {});
 }
 

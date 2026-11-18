@@ -12987,3 +12987,68 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 - test-fa-report-ui (new): the rows, Watch (1 of 3), Sign through the sheet, Done → Completed's summary.
 
 **Fresh team:** not required.
+
+## §122.83 — r205: Defense, phase 1 of 3 (the rating, and defense on the field)
+**The GM's calls** (Nov 18 2026):
+- One Defense rating for every position player.
+- It counts in OVR, weighted by the primary position, and is shown only on the player card (no new columns).
+- It counts in Impact, from plays made (phase 2).
+- The bench coach can work on it (phase 3).
+- Errors stay near baseball's unless a club plays fielders out of position.
+- It applies to every club the same way (the bench coach's help is ours only, as before).
+- The play-by-play names the fielders.
+
+**The rating:**
+- `subRatings.defense`, hitters only.
+- A new player's is drawn from the player's own stream (`PlayerFactory.defenseFor`, so nothing else about a new player changed): around the target OVR, by the primary position (`DEF_GEN.bias`: SS +5, C +3, 2B +3, 3B +1, OF 0, 1B −6, DH −12), ±10, pulled toward speed at SS, 2B, OF and 3B.
+- **OVR** (`computeOVR(sr, pen, pos)`, `ovrFor(p)`): the bat × (1 − w) + the glove × w, with w by the primary position (`OVR_DEF_WEIGHT`: C .30, SS .30, 2B .22, 3B .18, OF .15, 1B .06, DH 0).
+  - A new player's primary position decides it ("2B/SS" plays second).
+  - A new primary position recomputes it (`Positions._sync`).
+  - Every OVR recomputation goes through `ovrFor`: development, the winter, diamonds, league history.
+- **Older saves:** every hitter gets a glove once (`_defenseSeeded`), around the current OVR, and the OVR is recomputed. **A fresh team is needed** for the league to be built on it.
+- **Player card:** a Defense bar under Contact, Power, Speed.
+
+**On the field** (`SimEngine`, `DEFENSE_SIM`): each ball in play goes to a fielder (`_fieldPlay`).
+- **Where the ball goes:**
+  - grounders: SS .30, 2B .26, 3B .22, 1B .14, the pitcher .08;
+  - flies: the outfield .72, then the infield and catcher pop-ups;
+  - singles: half through the infield, half to the outfield;
+  - doubles: the outfield, or down the lines; triples: the outfield.
+- **Who's where** (`_fieldMap`, `_fieldersOf`): from the lineup's slots. The outfielders are left, center, right in the lineup's order. A substitute takes the position left open.
+- **d** = (glove − the league's average at that position) / 20, within ±1.5. Out of position, the glove counts 25 × exposure less. An average first baseman is average (`leagueNorms.defenseBy`).
+- **Range:** a good glove takes away 9% × d of the singles to it (6% of the doubles); a poor one lets through 4% × −d of the outs. About even across the league.
+- **Errors:** 5% of the grounders and 1.1% of the flies to a fielder, × (1 − 0.25 d) within 0.6–1.6, × (1 + 2.5 × exposure) out of position, × our bench coach's for our club. A dropped fly puts the batter on and moves the runners up a base.
+- **Double plays:** ×(1 + 0.12 × the middle infield's d). **Outfield arms:** throw-outs ×(1 + 0.15 × d). **A catcher's throw:** steals succeed 5 points × d less.
+- **Play-by-play:**
+  - "grounds out to Ramirez at short", "flies out to Ortiz in center", "pops out to …";
+  - "reaches on an error by Ramirez at short" / "on a throwing error by …";
+  - "grounds into a double play — Ramirez to Cole to Diaz";
+  - "— Lee thrown out at home by Ortiz";
+  - "caught stealing second — Diaz's throw beats the runner" (a good catcher);
+  - and, for 55% of the hits taken away or let through, the standout call: "ranges deep into the hole and throws out Lee — a hit taken away", "makes a diving catch in center to rob Lee", "runs it down at the wall — Lee robbed of extra bases", "singles — it gets past a diving Ramirez", "it drops in front of Ortiz", "doubles — it gets over Ortiz's head".
+- **Box score:** errors count against the side in the field (they were always 0).
+- **The fielder's season stats:** `e`, and `dSave` / `dCost` (hits taken away / let through), for Impact in phase 2.
+
+**Measured** (seed 1, a full season): 0.56 errors a side a game; 3.98 runs and 8.2 hits a team a game (4.07 before); about one standout play every three to four games. check-out-of-position: 0.59 errors a game with the club as built, 1.13 with the catcher and shortstop swapped with outfielders. check-defense: all gloves 85 vs all 42 means 5.9 vs 7.6 hits allowed a game.
+
+**Fixes found in testing (the new ratings build a different league from the same seeds):**
+- **The season sim's release check** expected the whole salary off our payroll. A player we traded for, with a share the other club still pays, was only partly ours. It now expects our share.
+- **The deal table's net salary** rounded each side before subtracting (off by 1K from the trade engine's). It now rounds once (`TradeEngine.dealSheet`).
+- **check-trade-advice:**
+  - its bottom-line test only matched "this makes us." and "about a wash", not "this makes us (a little) better/worse";
+  - its world's first offer had no room for a counter, so it moved to a seed whose offer does.
+- **check-league-positions / test-league-positions-ui** set a test OVR that granting a position now recomputes; it's kept. The check moved to a seed with a club's hitter who'd start at second.
+- **check-weather-decisions:** a held start whose plan had no first pitch at all (the rain would have washed it out) now counts any start after the call.
+
+**Season checks (+1):** errors 0.35–0.8 a team a game, and some hits taken away and let through. Seeds 1–3: 4.0–4.1 runs a team a game, all checks passing.
+
+**Checks:**
+- check-defense (new, 14):
+  - every hitter has a glove, no pitcher does; every OVR counts it; the position biases;
+  - the OVR weights; an older save's one-time seeding;
+  - the league's glove by position;
+  - errors 0.35–0.8 a side a game; the box score counts them; each names its fielder on the side in the field;
+  - outs name the fielder; double plays name the relay; standout plays now and then;
+  - great gloves allow fewer hits and errors than poor ones.
+
+**Next:** phase 2 (Impact, prices, the scouts' reads, lineup choices and advice), then phase 3 (the bench coach's work, aging, prospects).

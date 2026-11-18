@@ -175,6 +175,38 @@ export const OVR_H_CONTACT_WEIGHT = 0.40;
 export const OVR_H_POWER_WEIGHT   = 0.35;
 export const OVR_H_SPEED_WEIGHT   = 0.25;
 
+// r205 §122.83 Defense — a fourth hitter rating. OVR blends the bat (contact/power/speed, above) with
+// the glove by the player's primary position: a catcher's or shortstop's glove is a third of the player,
+// a first baseman's a sliver, a DH's nothing.
+export const OVR_DEF_WEIGHT = Object.freeze({ C: 0.30, SS: 0.30, '2B': 0.22, '3B': 0.18, OF: 0.15, '1B': 0.06, DH: 0 });
+// A new player's glove: around the target OVR, by position (shortstops and catchers field; DHs don't),
+// ± `spread`, pulled a little toward the player's speed where range matters.
+export const DEF_GEN = Object.freeze({
+  bias: Object.freeze({ C: 3, SS: 5, '2B': 3, '3B': 1, OF: 0, '1B': -6, DH: -12 }),
+  spread: 10, speedPull: Object.freeze({ SS: 0.25, '2B': 0.2, OF: 0.25, '3B': 0.1 }),
+});
+
+// r205 §122.83 Defense on the field (SimEngine): each ball in play goes to a fielder. The fielder's glove
+// against the league's at that position (d = (glove − average there) / scale, at most ±dMax; out of position: glove −
+// oopDrop × exposure) decides: hits taken away (a good glove: `range.single`/`double` × d of the hits
+// to it) or let through (a poor one: `range.out` × −d of the outs) — even across the league; errors
+// on the outs to it (`err`, × (1 − errPerD × d) within errMin–errMax, × (1 + oopErr × exposure) for a
+// fielder out of position, × the bench coach's for our club); double plays (± dp × the middle
+// infield's d); outfield arms (throw-outs ± arm × d); a catcher's throw on a steal (− catcherSb × d).
+// `gem`: the share of the hits taken away (and let through) the play-by-play calls out.
+export const DEFENSE_SIM = Object.freeze({
+  scale: 20, dMax: 1.5, oopDrop: 25,
+  range: Object.freeze({ single: 0.09, double: 0.06, out: 0.04 }),
+  err: Object.freeze({ groundout: 0.05, flyout: 0.011 }), errPerD: 0.25, errMin: 0.6, errMax: 1.6, oopErr: 2.5,
+  dp: 0.12, arm: 0.15, catcherSb: 0.05, gem: 0.55,
+  // Where the ball goes: a grounder, a fly, a single (`groundSingle` of them through the infield), a double.
+  grounder: Object.freeze({ SS: 0.30, '2B': 0.26, '3B': 0.22, '1B': 0.14, P: 0.08 }),
+  fly: Object.freeze({ OF: 0.72, SS: 0.08, '2B': 0.07, '3B': 0.07, '1B': 0.03, C: 0.03 }),
+  groundSingle: 0.5,
+  infieldSingle: Object.freeze({ SS: 0.3, '2B': 0.3, '3B': 0.2, '1B': 0.2 }),
+  double: Object.freeze({ OF: 0.85, '3B': 0.08, '1B': 0.07 }),
+});
+
 // OVR weights — pitchers
 export const OVR_P_STUFF_WEIGHT   = 0.40;
 export const OVR_P_CONTROL_WEIGHT = 0.35;

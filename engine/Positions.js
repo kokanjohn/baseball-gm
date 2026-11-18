@@ -22,6 +22,7 @@
  * (positions practiced or played this season), `lastStarts` (last season's).
  */
 import { POSITION_RULES as R } from '../data/constants.js';
+import { ovrFor } from './PlayerFactory.js';   // r205 §122.83 (a cycle: used only when called)
 
 export const FIELD_POSITIONS = Object.freeze(['C', '1B', '2B', '3B', 'SS', 'OF']);
 const OUTFIELD = /^(LF|CF|RF|OF)$/;
@@ -149,7 +150,11 @@ function _own(p) {
 }
 
 /** Keep the old label fields in step with the record (anything still reading them reads the truth). */
-function _sync(p) { p.pos = posLabel(p); p.nativePos = p.pos; }
+function _sync(p) {
+  p.pos = posLabel(p); p.nativePos = p.pos;
+  // r205 §122.83 the glove counts by the primary position: a new primary, a new OVR
+  if (!isPitcher(p) && p.subRatings?.defense != null) p.ovr = ovrFor(p);
+}
 
 /** How hard a position is for this player to pick up: 'easy' (down the spectrum, or 1B), 'hard' (up it), 'C'. */
 export function difficulty(p, pos) {

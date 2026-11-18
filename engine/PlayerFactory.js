@@ -25,8 +25,11 @@ import {
   GM_RELATIONSHIP_DEFAULT,
   PLAYER_GROUP,
   SALARY_BY_OVR,
+  OVR_DEF_WEIGHT,
+  DEF_GEN,
 } from '../data/constants.js';
 import { seedPositions } from './Positions.js';
+import { dice } from './Dice.js';   // r205 §122.83 a new player's glove (its own stream)
 
 // ─────────────────────────────────────────────────────────────
 // OVR COMPUTATION — single source of truth
@@ -43,7 +46,7 @@ import { seedPositions } from './Positions.js';
  * @param {Object|null} injuryPenalty — { subRating: String, amount: Number } or null
  * @returns {Number} OVR clamped to SUB_RATING_MIN–SUB_RATING_MAX
  */
-export function computeOVR(subRatings, injuryPenalty = null) {
+export function computeOVR(subRatings, injuryPenalty = null, pos = null) {
   // Apply injury penalty to a working copy
   const sr = { ...subRatings };
   if (injuryPenalty && injuryPenalty.subRating && injuryPenalty.amount) {
@@ -64,9 +67,28 @@ export function computeOVR(subRatings, injuryPenalty = null) {
     raw = (sr.contact * OVR_H_CONTACT_WEIGHT)
         + (sr.power   * OVR_H_POWER_WEIGHT)
         + (sr.speed   * OVR_H_SPEED_WEIGHT);
+    // r205 §122.83 the glove, by the primary position (none without one: a DH, or no position known)
+    const w = sr.defense != null ? (OVR_DEF_WEIGHT[pos] || 0) : 0;
+    if (w) raw = raw * (1 - w) + sr.defense * w;
   }
 
   return clamp(Math.round(raw), SUB_RATING_MIN, SUB_RATING_MAX);
+}
+
+/** r205 §122.83 a player's OVR from these sub-ratings (default: the player's own), at the primary position. */
+export function ovrFor(p, sr = p?.subRatings, injuryPenalty = null) {
+  return computeOVR(sr, injuryPenalty, p?.positions?.primary || p?.pos || null);
+}
+
+/**
+ * r205 §122.83 defenseFor(id, pos, target, speed) — a hitter's glove, drawn from the player's own stream
+ * (so adding it changed nothing else about a new player): around the target, by position, ± the spread,
+ * pulled toward the speed where range matters.
+ */
+export function defenseFor(id, pos, target, speed) {
+  const r = dice(`def:${id}`)();
+  const pull = (DEF_GEN.speedPull[pos] || 0) * ((speed ?? target) - target);
+  return clamp(Math.round(target + (DEF_GEN.bias[pos] ?? 0) + pull + (r * 2 - 1) * DEF_GEN.spread), SUB_RATING_MIN, SUB_RATING_MAX);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -137,9 +159,12 @@ function _createPlayer(config) {
 
   // Generate sub-ratings around targetOvr
   const subRatings = _generateSubRatings(targetOvr, isPitcher);
+  // r205 §122.83 the glove, and the OVR counting it, by the primary position ("2B/SS" plays second)
+  const primary = isPitcher ? pos : (seedPositions({ pos, nativePos: pos }).primary || pos);
+  if (!isPitcher) subRatings.defense = defenseFor(id, primary, targetOvr, subRatings.speed);
 
   // OVR derived from sub-ratings — never set directly
-  const ovr = computeOVR(subRatings);
+  const ovr = computeOVR(subRatings, null, primary);
 
   const contractLength = contractLengthOverride ?? _generateContractLength(ovr - leagueLevel, group);
   const contractSalary = _generateSalary(ovr);

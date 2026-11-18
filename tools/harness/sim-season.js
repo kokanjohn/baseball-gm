@@ -314,7 +314,9 @@ function gmActs() {
     }
     if (c.cardId === 'os_release' && !gm.released) {
       const p0 = SM.get().players[c._targetPlayerId];
-      gm.released = { id: c._targetPlayerId, salary: p0.contractSalary, expiry: p0.contractExpiry, season: SM.get().seasonNum, room0: Finance.payrollRoom(SM.get()), pay0: Finance.payrollOf(SM.get(), 'user') };
+      // (§85 a share another club still pays this season was never on our payroll: what comes off is ours)
+      const kept = p0.retained && p0.retained.season === SM.get().seasonNum && p0.retained.payerId !== 'user' ? p0.retained.pct : 0;
+      gm.released = { id: c._targetPlayerId, salary: Math.round(p0.contractSalary * (1 - kept)), expiry: p0.contractExpiry, season: SM.get().seasonNum, room0: Finance.payrollRoom(SM.get()), pay0: Finance.payrollOf(SM.get(), 'user') };
       const ros0 = new Map((SM.get().userTeam.rosterIds || []).map(id => [id, SM.get().players[id]?.contractSalary || 0]));
       resolveCard(c.instanceId, 'no'); gm.acted++;
       // (§122.71 measured as the release lands: the clock run after it can sign someone for the open spot)
@@ -623,7 +625,7 @@ async function runOffseasonChecks() {
     if (gm.released) {
       const R = gm.released, q = st.players[R.id];
       // §122 no dead money: a released player's salary leaves our payroll the moment he goes.
-      check(`contracts: a release takes the whole salary off our books (${q?.name}, ${R.salary}K through ${R.expiry - 1}; payroll ${Math.round(R.pay0)}K → ${Math.round(R.pay1)}K)`,
+      check(`contracts: a release takes the whole salary off our books (${q?.name}, ${R.salary}K of it ours, through ${R.expiry - 1}; payroll ${Math.round(R.pay0)}K → ${Math.round(R.pay1)}K)`,
             q && q.teamId !== 'user' && Math.round(R.pay0 - R.pay1) === Math.round(R.salary) && !('dead' in st.userTeam.finances),
             `now ${q?.teamId}/${q?.group} ${q?.contractSalary}K exp ${q?.contractExpiry}; dead ${'dead' in st.userTeam.finances}`);
       check(`contracts: and the room opens by as much (room ${Math.round(R.room0)}K → ${Math.round(R.room1)}K)`, R.room1 - R.room0 >= R.salary * 0.99);
@@ -2262,6 +2264,12 @@ async function main() {
     check(`run environment realistic: league ${lgRpg.toFixed(2)} R / team / game (3.8–5.2); our games ${rpg.toFixed(2)} (3.2–6.0)`,
           lgRpg >= 3.8 && lgRpg <= 5.2 && rpg >= 3.2 && rpg <= 6.0);
     check(`hit environment realistic: ${hpg.toFixed(2)} H / team / game (6.5–10.5)`, hpg >= 6.5 && hpg <= 10.5);
+    // r205 §122.83 errors near baseball's (about half a game a side): every regular-season box, the league's and ours
+    const boxes = [...lg.filter(g => g.boxScore), ...SM.get().schedule.filter(g => g._committed && !g.isSpring && !g.isPlayoff && g.boxScore)];
+    const epg = boxes.reduce((a, g) => a + (g.boxScore.away?.errors || 0) + (g.boxScore.home?.errors || 0), 0) / Math.max(1, boxes.length) / 2;
+    const fielded = Object.values(SM.get().players).reduce((a, p) => ({ e: a.e + (p.stats?.e || 0), save: a.save + (p.stats?.dSave || 0), cost: a.cost + (p.stats?.dCost || 0) }), { e: 0, save: 0, cost: 0 });
+    check(`errors realistic: ${epg.toFixed(2)} a team a game (0.35–0.8); hits taken away ${fielded.save}, let through ${fielded.cost}`,
+          epg >= 0.35 && epg <= 0.8 && fielded.save > 0 && fielded.cost > 0);
   }
 
   // ── §61: timed delivery ─────────────────────────────────────────────────────

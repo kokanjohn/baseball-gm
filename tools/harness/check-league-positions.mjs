@@ -34,7 +34,7 @@ const rp = mk('RP');
 check('a reliever given SP is stretched out', Pos.grantPosition(rp, 'SP') && Pos.stretchOf(rp) === 3);
 
 // ── A month of the season ───────────────────────────────────────
-seedRandom(168);
+seedRandom(169);   // (r205 a world with a club's hitter who'd start over our second baseman)
 clock.set(Date.UTC(2026, 10, 13, 15));
 await startNewGame({ archetypeId: 'contender', gmName: 'T', city: 'T', nickname: 'T', abbr: 'TST', icon: 'x', bannerColor: '#333', region: 'east' });
 const S = () => SM.get(), P = (id) => S().players[id];
@@ -88,7 +88,7 @@ SM.mutate(s => { s.players[worse.id].ovr = Math.min(s.players[worse.id].ovr, our
 check(`${worse.name} (${P(worse.id).ovr}) wouldn't`, !fitsUs(S(), P(worse.id), 'SS')?.start);
 
 console.log('A free agent at a spot we need');
-SM.mutate(s => { s.leaguePos.lastMsgAt = -Infinity; const p = s.players[better.id]; Pos.grantPosition(p, 'SS'); });
+SM.mutate(s => { s.leaguePos.lastMsgAt = -Infinity; const p = s.players[better.id]; const o = p.ovr; Pos.grantPosition(p, 'SS'); p.ovr = o; });   // (r205 granting recomputes OVR: keep the one set above)
 if (process.env.DBG) { const FA = await import('../../engine/FreeAgency.js'); const r = FA.roomFor(S(), P(better.id)); const d = r.candidates.find(c => !c.starter); console.log('    dbg fa', JSON.stringify(fitsUs(S(), P(better.id), 'SS')), r.needsDrop, d?.player.name, FA.signBlocker(S(), better.id, d?.player.id || null), JSON.stringify(FA.termsFor(S(), P(better.id)))); }
 CE.leaguePositionNews([{ type: 'LEAGUE_POS', kind: 'fa', playerId: better.id, teamId: null, pos: 'SS', atMs: clock.get(), text: 'x' }], clock.get());
 let card = [...(S().inbox || []), ...(S().scheduledCards || [])].find(c => c.cardId === 'fa_pos' && c._targetPlayerId === better.id);

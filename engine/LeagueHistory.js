@@ -18,7 +18,7 @@
 
 import { plateAppearanceRates } from './SimEngine.js';
 import { giveUntestedGap } from './Diamonds.js';
-import { computeOVR, computeAge, _freshStats } from './PlayerFactory.js';
+import { ovrFor, computeAge, _freshStats } from './PlayerFactory.js';
 import {
   HISTORY, PLAYER_ORIGIN, AGE_CURVES, AGE_DEVELOPMENT_WINDOWS,
   SUB_RATING_MIN, SUB_RATING_MAX, SIM_RATING_AVG, IMP_LEAGUE_AVG_ERA,
@@ -77,7 +77,7 @@ export function writeHistory(p, ctx) {
   let sr = { ...p.subRatings };
   for (let k = 1; age - k >= HISTORY.firstAge; k++) {
     sr = _backOneYear(sr, keys, age - k + 1, p.trait, rand);
-    const ovr = computeOVR(sr);
+    const ovr = ovrFor(p, sr);
     const rel = ovr - level;
     const pIn = 1 / (1 + Math.exp(-HISTORY.inLeagueSlope * (rel - HISTORY.inLeagueMid[role])));
     if (rand() >= pIn) {
@@ -92,7 +92,7 @@ export function writeHistory(p, ctx) {
       const k = (seasons.at(-1)?.k || 0) + 1;
       const s0 = seasons.at(-1)?.sr || p.subRatings;
       const s1 = _backOneYear({ ...s0 }, keys, age - k + 1, p.trait, rand);
-      seasons.push({ k, sr: s1, ovr: computeOVR(s1), rel: computeOVR(s1) - level, thin: true });
+      seasons.push({ k, sr: s1, ovr: ovrFor(p, s1), rel: ovrFor(p, s1) - level, thin: true });
     }
   }
   if (!seasons.length) {

@@ -833,8 +833,9 @@ export function dealSheet(state, offer, { teamName = 'They' } = {}) {
   // less what we keep paying (that share stays on our books this season).
   const yr = (rows) => Math.round(rows.reduce((s, r) => s + r.salary * (1 - r.kept), 0));
   const rem = remainingShare(state);
+  const yr0 = (rows) => rows.reduce((s, r) => s + r.salary * (1 - r.kept), 0);
   const salary = { get: yr(get), send: yr(send) };
-  salary.net = salary.get - salary.send;
+  salary.net = Math.round(yr0(get) - yr0(send));   // (r205 rounded once, as the trade engine does)
   const rest = { get: Math.round(salary.get * rem), send: Math.round(salary.send * rem) };
   rest.net = rest.get - rest.send;
   const cashK = offer?.cashK || 0;

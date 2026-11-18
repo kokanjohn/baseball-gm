@@ -127,8 +127,9 @@ if (found) {
     for (let t = atMs; t <= atMs + 4 * HOUR && !SM.get().schedule[i]?.plays?.some(p => !p._wx?.pre && p.type !== 'weather_delay' && p.type !== 'weather_resume' && p._timestamp <= t); t += 5 * MIN) { clock.set(t); advanceClock(t); tick(); }
     const g2 = SM.get().schedule[i];
     const firstReal = (g2.plays || []).find(p => !p._wx?.pre && p.type !== 'weather_delay' && p.type !== 'weather_resume');
-    check(`the game goes from the new plan: first pitch ${new Date(before).toISOString().slice(11, 16)} → ${new Date(g2.wx?.startAt).toISOString().slice(11, 16)} (never before the call)`,
-          g2.wx?.startAt < before && g2.wx.startAt >= atMs + 5 * MIN && firstReal?._timestamp >= g2.wx.startAt);
+    // (r205 the plan may have had no first pitch at all — the rain would have washed it out: then any start counts)
+    check(`the game goes from the new plan: first pitch ${before == null ? 'none' : new Date(before).toISOString().slice(11, 16)} → ${new Date(g2.wx?.startAt).toISOString().slice(11, 16)} (never before the call)`,
+          (before == null || g2.wx?.startAt < before) && g2.wx.startAt >= atMs + 5 * MIN && firstReal?._timestamp >= g2.wx.startAt);
     const crew = crewFor(g.gameTime), keys = crew.map(c => c._rosterKey);
     check(`the crew's word follows the new plan: nothing told twice (${crew.length} messages)`, new Set(keys).size === keys.length);
     if (kind === 'hands') check('extra hands are paid for', ledger('Extra grounds crew').length > 0);

@@ -16,6 +16,7 @@
 import { renameLeague, lastNameOnly } from '../engine/Names.js';
 import { ensureAbilities, startingDirector, salaryFor } from '../engine/CoachEngine.js';
 import { STAFF_NAMES } from '../data/player-names.js';
+import { defenseFor, ovrFor } from '../engine/PlayerFactory.js';   // r205 §122.83
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso } from '../engine/WeatherClimate.js';
 import {
   SCHEMA_VERSION,
@@ -600,6 +601,19 @@ function _fillDefaults(state) {
       for (const g of games || []) if (g?.played && g.boxScore && !g.plays) settle(g);
     }
     state._finishedGamesSettled = true;
+  }
+
+  // r205 §122.83 Defense: every hitter gets a glove (from the player's own stream, around the current OVR,
+  // by position), and the OVR counts it by the primary position. Once.
+  if (state._defenseSeeded !== true) {
+    for (const p of Object.values(state.players || {})) {
+      const sr = p?.subRatings;
+      if (!sr || sr.stuff != null || p.pos === 'SP' || p.pos === 'RP') continue;
+      const pos = p.positions?.primary || p.pos;
+      if (sr.defense == null) sr.defense = defenseFor(p.id, pos, p.ovr || 50, sr.speed);
+      p.ovr = ovrFor(p);
+    }
+    state._defenseSeeded = true;
   }
 
   for (const key of Object.keys(defaults)) {

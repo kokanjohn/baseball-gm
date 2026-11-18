@@ -296,6 +296,7 @@ function _renderSubRatings(player, isPitcher) {
         { label: 'Contact',  val: sub.contact  ?? 0 },
         { label: 'Power',    val: sub.power    ?? 0 },
         { label: 'Speed',    val: sub.speed    ?? 0 },
+        ...(sub.defense != null ? [{ label: 'Defense', val: sub.defense }] : []),   // r205 §122.83
       ];
 
   const bars = ratings.map(r => `
