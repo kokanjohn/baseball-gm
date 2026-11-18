@@ -123,6 +123,7 @@ import {
   SPRING_TRAINING_GAME_COUNT,
   FA_CPU_LOOK_HOUR,
   ALL_STAR_BREAK_AFTER_GAME,
+  AGENT_ASK,   // r201
   ALLSTAR_SELECTION_AFTER_GAME,
   ALLSTAR_POST_GLOW_GAMES,
   ALLSTAR_GAME_BREAK_DAY,
@@ -1087,6 +1088,8 @@ function _commitAt(gameIndex) {
 
   // ── All-Star Game (§75): host, rosters, the host's week ────
   if (game.status !== GAME_STATUS.POSTPONED) _allStarProgress(StateManager.get().schedule[gameIndex], endMs);
+  // r201 §122.78 an agent asks to redo a deal after a breakout (the All-Star break, the season's end)
+  if (game.status !== GAME_STATUS.POSTPONED) _agentAsks(StateManager.get().schedule[gameIndex], endMs);
 
   // ── Milestone check ───────────────────────────────────────
   const milestone = checkMilestone();
@@ -2793,6 +2796,27 @@ function _cpuPayday(teamId, i, atMs) {
 // ─────────────────────────────────────────────────────────────
 // THE ALL-STAR GAME (§75)
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * r201 §122.78 _agentAsks(game, endMs) — after our last game before the All-Star break, and after our
+ * last regular-season game: the agent of our biggest breakout under contract may ask to redo the deal.
+ */
+function _agentAsks(game, endMs) {
+  if (!game || game.isSpring || game.isPlayoff || game.isAllStar || game.regularSeasonIndex == null) return;
+  const st = StateManager.get();
+  const season = st.seasonNum || 1;
+  const done = st._agentAskMoments?.season === season ? st._agentAskMoments : { season };
+  const played = game.regularSeasonIndex + 1;
+  const last = !(st.schedule || []).some(g => g.regularSeasonIndex != null && !g.isSpring && !g.isPlayoff
+    && g.regularSeasonIndex > game.regularSeasonIndex);
+  const moment = last && !done.end ? 'end' : played >= ALL_STAR_BREAK_AFTER_GAME && !done.break && !last ? 'break' : null;
+  if (!moment) return;
+  StateManager.mutate(s => { s._agentAskMoments = { ...done, [moment]: true, ...(moment === 'end' ? { break: true } : {}) }; });
+  const r = dice(diceSeed(st), 'agent-ask', season, moment);
+  for (const c of Offseason.breakoutAsks(StateManager.get(), 1)) {
+    CardEngine.deliverAgentAsk(c, endMs + (AGENT_ASK.waitHours * 60 + Math.floor(r() * 120)) * 60_000, moment);
+  }
+}
 
 /**
  * _allStarProgress(game, endMs)

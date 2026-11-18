@@ -33,6 +33,7 @@ import {
 import {
   PHASE,
   REST_WATCH,
+  AGENT_ASK,   // r201
   ROSTER_ADVICE,
   POSITION_RULES,
   PLAYER_GROUP,
@@ -5135,7 +5136,7 @@ export function deliverResignCard(playerId, atMs, expiresAtMs) {
     preview: `${X.line ? `${X.line}. ` : ''}Asking ${formatK(terms.salary)} a year for ${_years(terms.years)}.`,
     body: `${_who(p)}, ${X.age} next season, becomes a free agent unless we re-sign. `
         + _contractSentences(state, p, X) + ' '
-        + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)} (${terms.salary > (p.contractSalary || 0) ? 'up' : terms.salary < (p.contractSalary || 0) ? 'down' : 'the same as'} ${terms.salary === (p.contractSalary || 0) ? 'now' : `from ${formatK(p.contractSalary || 0)}`})${why}${p._agentGrudge ? `, and the agent hasn't forgotten the bonus we turned down: about 10% more than the market` : ''}. `
+        + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)} (${terms.salary > (p.contractSalary || 0) ? 'up' : terms.salary < (p.contractSalary || 0) ? 'down' : 'the same as'} ${terms.salary === (p.contractSalary || 0) ? 'now' : `from ${formatK(p.contractSalary || 0)}`})${why}${p._agentGrudge ? `, and the agent hasn't forgotten ${p._agentGrudge === 'extension' ? 'the new deal we put off' : 'the bonus we turned down'}: about 10% more than the market` : ''}. `
         + `That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))}; payroll is ${formatK(payroll)} against ownership's ${formatK(target)} target. `
         + `If we let ${p.name} walk, every club gets a shot on the free-agent market. No answer by the time spring training opens means the same thing.`,
     yesLabel: `Re-sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: `Let ${p.name} walk`,
@@ -5170,6 +5171,67 @@ export function deliverExtensionCard(cand, atMs, expiresAtMs) {
     yesLabel: `Extend (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Not now',
     expiresAtMs,
     _raw: { onYes: 'os_extend', onNo: 'os_extend_pass', onAuto: 'os_extend_pass' },
+    _autoLabel: 'No answer — not now',
+  });
+  return _deliverAt(card, atMs);
+}
+
+/**
+ * r201 §122.78 deliverAgentAsk(cand, atMs, moment) — after a breakout (the All-Star break, or the
+ * season's end), the agent asks to redo the deal now: the market price, starting next season and
+ * replacing the current deal. Extend at the ask, counter (less money, or fewer years), or not now.
+ */
+export function deliverAgentAsk(cand, atMs, moment = 'break') {
+  const state = StateManager.get();
+  const p = state.players[cand.player.id];
+  if (!p || p.teamId !== 'user') return null;
+  const { terms, counters } = cand;
+  const season = state.seasonNum || 1;
+  const cur = p.contractSalary || 0;
+  const through = (p.contractExpiry || season + 2) - 1;
+  const line = Offseason.lineWords(p, p.stats);
+  const again = (p._agentAsk?.declined || 0) >= 1;
+  const choices = [
+    { key: 'ask', label: `Extend (${_years(terms.years)}, ${formatK(terms.salary)})`, sub: `From next season: ${formatK(terms.salary - cur)} a year more` },
+    { key: 'money', label: `Counter: ${formatK(counters.money.salary)} a year`, sub: _years(counters.money.years) },
+    ...(counters.years ? [{ key: 'years', label: `Counter: ${_years(counters.years.years)}`, sub: `At ${formatK(counters.years.salary)}` }] : []),
+  ];
+  const card = _rosterCard(state, {
+    cardId: 'agent_ask', tag: 'CONTRACT', sender: `${p.name}'s agent`, avatar: '✍️', type: 'urgent',
+    _rosterKey: `agent:ask:${p.id}:${season}`, _targetPlayerId: p.id, _agentTerms: terms, _agentCounters: counters,
+    subject: `${p.name} — a new deal`,
+    preview: `My client has outplayed the contract, and I'd like to fix that now.`,
+    body: `${_who(p)} has outplayed the contract${moment === 'break' ? ' in the first half' : ' this season'}${line ? `: ${line}` : ''}. `
+        + `The current deal runs through season ${through} at ${formatK(cur)} a year, well short of what that's worth. `
+        + `I'd like a new one in place now: ${_years(terms.years)} at ${formatK(terms.salary)} a year, starting next season and replacing it. `
+        + (again ? `This is the second time I've asked. Put it off again and my client plays out the deal and tests free agency. `
+                 : `Put it off, and it won't be forgotten, by my client or by me at the next negotiation. `)
+        + `I need an answer ${_day(atMs + AGENT_ASK.ttlDays * 86_400_000, atMs)}.`,
+    _choices: choices, _noRec: true,   // (the agent's message: no front-office pick)
+    yesLabel: choices[0].label, noLabel: 'Not now',
+    autoResolve: 'no', expiresAtMs: atMs + AGENT_ASK.ttlDays * 86_400_000,
+    _raw: { onYes: 'os_agent_yes', onNo: 'os_agent_no', onAuto: 'os_agent_no' },
+    _autoLabel: 'No answer — not now',
+  });
+  const out = _deliverAt(card, atMs);
+  if (out) StateManager.mutate(s => { const q = s.players[p.id]; if (q) q._agentAsk = { ...(q._agentAsk || {}), season }; });
+  return out;
+}
+
+/** r201 §122.78 the agent turned the counter down: the ask stands, for a day. */
+function _deliverAgentHold(p, terms, kind, atMs) {
+  const state = StateManager.get();
+  const season = state.seasonNum || 1;
+  const card = _rosterCard(state, {
+    cardId: 'agent_hold', tag: 'CONTRACT', sender: `${p.name}'s agent`, avatar: '✍️', type: 'urgent',
+    _rosterKey: `agent:hold:${p.id}:${season}`, _targetPlayerId: p.id, _agentTerms: terms,
+    subject: `Re: ${p.name} — a new deal`,
+    preview: kind === 'money' ? `The money isn't there. The ask stands.` : `My client wants the years. The ask stands.`,
+    body: `${kind === 'money' ? `We're not taking less money; my client has earned the raise.` : `My client wants the security of the full term, and we're not moving on it.`} `
+        + `The ask stands: ${_years(terms.years)} at ${formatK(terms.salary)} a year, starting next season. Yes or no ${_day(atMs + 86_400_000, atMs)}.`,
+    yesLabel: `Extend (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: 'Not now',
+    autoResolve: 'no', expiresAtMs: atMs + 86_400_000,
+    _raw: { onYes: 'os_agent_yes', onNo: 'os_agent_no', onAuto: 'os_agent_no' },
     _autoLabel: 'No answer — not now',
   });
   return _deliverAt(card, atMs);
@@ -5897,6 +5959,37 @@ function _applyOffseasonAction(action, instance, atMs) {
     // §112.3 extensions and releases
     case 'os_extend':       StateManager.mutate(s => { Offseason.applyExtension(s, id, instance._extTerms); s.userTeam.finances.payroll = computePayroll(s); }); return true;
     case 'os_extend_pass':  return true;
+    // r201 §122.78 the agent's ask after a breakout
+    case 'os_agent_yes': {
+      const p = StateManager.get().players[id];
+      if (!p || p.teamId !== 'user') return true;
+      const pick = instance._pick || 'ask';
+      if (pick === 'ask') {
+        StateManager.mutate(s => Offseason.answerAgentAsk(s, id, 'yes', instance._agentTerms));
+        _ourNews(`${p.name} signed a new deal: ${_years(instance._agentTerms.years)} at ${formatK(instance._agentTerms.salary)} a year from next season`, atMs);
+        return true;
+      }
+      const terms = instance._agentCounters?.[pick];
+      if (!terms) return true;
+      const st = StateManager.get();
+      const takes = dice(diceSeed(st), 'agent-counter', id, st.seasonNum || 1, pick)() < Offseason.counterOdds(p, pick);
+      const [lo, hi] = AGENT_ASK.replyMinutes;
+      const replyAt = atMs + (lo + Math.floor(dice(diceSeed(st), 'agent-reply', id, st.seasonNum || 1)() * (hi - lo))) * 60_000;
+      if (takes) {
+        StateManager.mutate(s => Offseason.answerAgentAsk(s, id, 'yes', terms));
+        _ourNews(`${p.name}'s agent took our counter: ${_years(terms.years)} at ${formatK(terms.salary)} a year from next season`, replyAt);
+      } else {
+        _deliverAgentHold(p, instance._agentTerms, pick, replyAt);
+      }
+      return true;
+    }
+    case 'os_agent_no': {
+      let r = null;
+      StateManager.mutate(s => { r = Offseason.answerAgentAsk(s, id, 'no'); });
+      const p = StateManager.get().players[id];
+      if (r?.walks && p) _ourNews(`${p.name} will play out the deal and test free agency`, atMs);
+      return true;
+    }
     case 'os_release_keep': return true;
     case 'os_release': {
       StateManager.mutate(s => {
@@ -6190,6 +6283,7 @@ export const HANDLED_CARD_ACTIONS = Object.freeze(new Set([
   'os_coach_renew', 'os_coach_keep', 'os_coach_letgo', 'os_coach_fire', 'os_hire_a', 'os_hire_b',
   'os_fa_sign', 'os_fa_pass',
   'os_extend', 'os_extend_pass', 'os_release', 'os_release_keep',
+  'os_agent_yes', 'os_agent_no',   // r201 §122.78
   'fo_tix_change', 'fo_tix_hold', 'fo_camp_run', 'fo_camp_skip', 'fo_fac_build', 'fo_fac_skip', 'fo_event_yes', 'fo_event_no',
   // §75 All-Star Game
   'as_lobby_yes', 'as_lobby_no',

@@ -2660,6 +2660,17 @@ async function main() {
           !!d?.name && rolled.length > 0 && (tipped || pNone >= 0.01), [...gm.cardIdsSeen].filter(x => /scout/.test(x)).join(','));
   }
 
+  // r201 §122.78 an agent's ask after a breakout: at most one at the break and one at the season's end, about
+  // a player of ours under contract past this season (check-agent-ask covers the terms and answers).
+  {
+    const st = SM.get();
+    const asks = (st.inbox || []).filter(c => c.cardId === 'agent_ask');
+    const ok = asks.length <= 2 && new Set(asks.map(c => c._targetPlayerId)).size === asks.length
+      && asks.every(c => c._choices?.length >= 2 && c.noLabel === 'Not now' && c._agentTerms?.salary > 0);
+    check(`agent asks after a breakout: ${asks.length}${asks.length ? ` (${asks.map(c => `${st.players[c._targetPlayerId]?.name} → ${c._pick || c.choice || 'open'}`).join(', ')})` : ''}`, ok,
+          asks.map(c => c.subject).join(' | '));
+  }
+
   if (process.env.DBG) {
     const st = SM.get();
     for (const t of [st.userTeam, ...st.leagueTeams]) {

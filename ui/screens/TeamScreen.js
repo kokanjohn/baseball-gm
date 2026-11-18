@@ -597,7 +597,7 @@ function _contractNote(player) {
   const st = StateManager.get();
   if (player.teamId !== 'user') return '';
   if (player.pendingContract) return ' · <span class="contract-note">extended</span>';
-  if (player._willWalk) return ' · <span class="contract-note">leaving after season</span>';
+  if (player._willWalk) return ` · <span class="contract-note">${contractIsUp(player, st?.seasonNum || 1) ? 'leaving after season' : 'leaving when the deal ends'}</span>`;   // (r201)
   if (!st?.offseason || !contractIsUp(player, st.seasonNum)) return '';
   return ' · <span class="contract-note">contract up</span>';
 }

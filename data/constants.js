@@ -1706,6 +1706,18 @@ export const FA_ASK = Object.freeze({
 // with OVR across the league (a season sim, r200: hitters and starters alike, ≈ 0.223 Impact per
 // OVR point above the league level, corr ~0.73): the season's Impact, read back as an OVR, pulls
 // the price's OVR toward it — by `weight` with a full season behind it, less on a part season.
+// r201 §122.78 an agent asks to redo a deal after a breakout (at the All-Star break and at season's end):
+// the player plays at least `minShift` OVR better than the rating and the market price is at least
+// `minRaise`× (and `minRaiseK` more than) the salary. The deal runs the market's length past the current
+// one (at most `maxYears`). A counter meets `moneyShare` of the raise, or cuts
+// `fewerYears` seasons; the agent takes it at `odds` ± the player's view of the GM. Put off twice, the
+// player plays out the deal and leaves.
+export const AGENT_ASK = Object.freeze({
+  minShift: 3, minRaise: 1.25, minRaiseK: 200, moneyShare: 0.6, fewerYears: 2, maxYears: 6,
+  odds: Object.freeze({ money: 0.45, years: 0.55 }), relSwing: 0.5, oddsMin: 0.15, oddsMax: 0.85,
+  relHit: 6, replyMinutes: Object.freeze([40, 180]), ttlDays: 3, waitHours: 2,
+});
+
 export const MARKET_PERF = Object.freeze({
   impAt0:   -11.9,   // Impact expected at OVR = the league level (leagueTalentOffset)…
   impPer:   0.223,   // …and per OVR point above it

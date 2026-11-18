@@ -12849,3 +12849,40 @@ The compose, work, strategy, teaching and trade-advice UI tests pass in both the
 - **A trade idea for a player now playing a new position:** when the player we'd upgrade on was also in the package, the message named that player twice. Now the line reads "an upgrade on the reliever they'd take back", and the price names the player once.
 
 **Fresh team:** not required.
+
+## §122.78 — r201: an agent asks for a new deal after a breakout (phase 2 of 2)
+**The GM's call** (Nov 17 2026, phase 2 of §122.77): when a player under contract outplays it, the agent asks to redo the deal, with Extend / Counter / Not now.
+
+**When:** after our last game before the All-Star break and after our last regular-season game (`GameEngine._agentAsks`; once each a season, `state._agentAskMoments`). The agent of our biggest breakout (by the raise) may ask, a couple of hours after the game; one ask per moment.
+
+**Who** (`OffseasonEngine.breakoutAsks`):
+- playing well past the rating: `performanceShift` ≥ 3;
+- the market price at least 1.25× the salary and $200K more;
+- at least next season left on the deal (a deal that's up gets the re-sign card);
+- not asked (or extended) this season, no deal pending, not already leaving.
+
+**The ask:** the market price, starting next season and replacing the current deal, for the market's length past the current deal (at most 6 years). Constants: `AGENT_ASK`.
+
+**The message** (from the agent, `agent_ask`; answer within 3 days):
+- **Extend:** the new deal waits for contract day (`pendingContract.replaces`), so no salary changes mid-contract. The player's view of the GM +8. A signed deal goes with the player in a trade.
+- **Counter, less money:** 60% of the raise, same length. **Counter, fewer years:** the same salary, up to 2 years shorter (never shorter than one season past the current deal).
+  - The agent takes a counter at 45% (money) or 55% (years), ±25 points by the player's view of the GM (15–85%). The odds aren't shown.
+  - The answer comes 40 minutes to 3 hours later. Taken: the countered deal (Recent says so). Turned down: "the ask stands" for a day, with Extend or Not now (`agent_hold`).
+- **Not now** (or no answer): the player's view of the GM −6, and the agent asks 10% more at the next deal (the re-sign card: "hasn't forgotten the new deal we put off"). The second time (a later season; the message says so), the player plays out the deal and leaves as a free agent: no re-sign card, no more asks, and Team shows "leaving when the deal ends".
+- **Not built:** the trade request floated in the phase 1 plan. There's no trade-request system, so a second "not now" means the player leaves at the deal's end.
+
+**Contract day:** a deal that replaces the current one is applied whether or not the current one is up, on our club or (after a trade) the new one.
+
+**Testing, from this release (the GM's call, Nov 18):** each release runs only what it touches (`tools/harness/quick.sh OUTDIR [--season] [--multi] names…`): the checks for the touched systems, the screen tests for changed screens, and the season sim (seed 1) for engine changes. Extra seeds only when the season shows a problem. The full suite runs every few releases. No overnight run.
+
+**Checks:** check-agent-ask (new):
+- who's asked (the breakout yes; at the rating, or a deal that's up, no); the terms and counters; once a season;
+- the message (from the agent, the choices, nothing recommended);
+- Extend waits for contract day, then replaces the deal;
+- both counters, taken and turned down (the ask stands for a day; Extend there signs at the ask); the odds' direction;
+- Not now: the relationship and the 10%; twice, the player leaves and isn't asked again;
+- a signed deal goes with the player in a trade.
+
+sim-season (+1): at most one ask at the break and one at the season's end, each about a different player. Seeds 1–3: 0, 1 and 1 asks a season (all at the season's end).
+
+**Fresh team:** not required.

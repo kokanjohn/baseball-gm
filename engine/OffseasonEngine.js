@@ -34,6 +34,7 @@ import {
   ROSTER_LIMITS,
   SALARY_BY_OVR,
   MARKET_PERF,
+  AGENT_ASK,
   SUB_RATING_MIN,
   SUB_RATING_MAX,
   AGE_DEVELOPMENT_WINDOWS,
@@ -702,7 +703,8 @@ export function contractDay(draft, atMs) {
   for (const id of [...(draft.userTeam.rosterIds || [])]) {
     const p = draft.players[id];
     if (!p) continue;
-    if (p.pendingContract && contractIsUp(p, season)) {
+    // (r201 §122.78 an agent's deal mid-contract replaces the current one from next season)
+    if (p.pendingContract && (contractIsUp(p, season) || p.pendingContract.replaces)) {
       applyContract(draft, id, p.pendingContract);
       p.pendingContract = null;
       events.push({ type: 'RESIGNED', playerId: id, teamId: 'user', atMs });
@@ -714,7 +716,10 @@ export function contractDay(draft, atMs) {
   for (const { player, terms } of userExpiring(draft)) player._ask = terms;
   // Anyone else carrying an in-season decision (traded away since) starts clean.
   for (const p of Object.values(draft.players || {})) {
-    if (p && (p.pendingContract || p._willWalk) && p.teamId !== 'user') { p.pendingContract = null; p._willWalk = false; }
+    if (!p || p.teamId === 'user') continue;
+    // (r201 a deal that replaces the current one is a signed contract: it goes with the player)
+    if (p.pendingContract?.replaces && p.teamId) { applyContract(draft, p.id, p.pendingContract); }
+    if (p.pendingContract || p._willWalk) { p.pendingContract = null; p._willWalk = false; }
   }
   return events.filter(Boolean);
 }
@@ -746,7 +751,11 @@ const _f3 = (x) => x.toFixed(3).replace(/^0/, '');
 
 /** His line for the season just finished (archived on day 1), in words. */
 export function seasonLineWords(p, season) {
-  const s = (p?.seasonLog || []).filter(x => x.season === season && x.stats).pop()?.stats;
+  return lineWords(p, (p?.seasonLog || []).filter(x => x.season === season && x.stats).pop()?.stats);
+}
+
+/** A stat line (a season's, or this season's so far — r201), in words. */
+export function lineWords(p, s) {
   if (!s || !(s.g > 0)) return null;
   if (isPitcher(p)) {
     if (!(s.ip >= 5)) return null;   // too little to say anything
@@ -821,7 +830,7 @@ export function extensionCandidates(draft, max = 2) {
   const ovrs = ids.map(id => draft.players[id].ovr || 0).sort((a, b) => a - b);
   const median = ovrs[Math.floor(ovrs.length / 2)] || 60;
   return ids.map(id => draft.players[id])
-    .filter(p => !contractIsUp(p, season) && !p.pendingContract && !p._extendedSeason
+    .filter(p => !contractIsUp(p, season) && !p.pendingContract && !p._willWalk && !p._extendedSeason
       && computeAge(p.dob, year) <= 27 && (p.ovr || 0) >= median + 4)
     .sort((a, b) => (b.ovr || 0) - (a.ovr || 0)).slice(0, max)
     .map(p => {
@@ -832,6 +841,67 @@ export function extensionCandidates(draft, max = 2) {
       const salary = Math.max(p.contractSalary || 0, Math.round(now * 0.92 / 5) * 5);
       return { player: p, terms: { salary, years }, future, left: yearsLeft(p, season) - 2 };   // seasons after next
     });
+}
+
+/**
+ * r201 §122.78 breakoutAsks(draft, max) — our players whose agents want to redo the deal now: playing
+ * well past the rating (performanceShift ≥ AGENT_ASK.minShift), worth well more than they're paid, with
+ * at least next season left on the deal, and not asked (or extended) already this season. The ask is the
+ * market price, for the market's length past the current deal (at most AGENT_ASK.maxYears). → [{ player, shift, terms, counters }]
+ */
+export function breakoutAsks(draft, max = 1) {
+  const season = draft.seasonNum || 1;
+  const A = AGENT_ASK;
+  return (draft.userTeam?.rosterIds || []).map(id => draft.players[id])
+    .filter(p => p && (p.contractSalary || 0) > 0 && !contractIsUp(p, season) && !p.pendingContract && !p._willWalk
+      && p._extendedSeason !== season && p._agentAsk?.season !== season)
+    .map(p => {
+      const shift = performanceShift(draft, p).shift;
+      const m = marketTerms(draft, p), cur = p.contractSalary || 0;
+      const after = yearsLeft(p, season) - 1;   // seasons left on the deal after this one
+      // (the market's length past the current deal: what the agent is after is security, and the raise)
+      const terms = { salary: m.salary, years: Math.max(after + 1, Math.min(AGENT_ASK.maxYears, after + m.years)) };
+      const counters = { money: { salary: Math.round((cur + A.moneyShare * (m.salary - cur)) / 5) * 5, years: terms.years } };
+      // (fewer years: up to `fewerYears` off, never shorter than one season past the current deal)
+      if (terms.years > after + 1) counters.years = { salary: m.salary, years: Math.max(after + 1, terms.years - A.fewerYears) };
+      return { player: p, shift, terms, counters };
+    })
+    .filter(x => x.shift >= A.minShift && x.terms.salary >= (x.player.contractSalary || 0) * A.minRaise
+      && x.terms.salary - (x.player.contractSalary || 0) >= A.minRaiseK)
+    .sort((a, b) => (b.terms.salary - b.player.contractSalary) - (a.terms.salary - a.player.contractSalary)
+      || String(a.player.id).localeCompare(String(b.player.id)))
+    .slice(0, max);
+}
+
+/** r201 §122.78 the odds the agent takes a counter: by how far it is from the ask, and how the player sees the GM. */
+export function counterOdds(p, kind) {
+  const A = AGENT_ASK;
+  return Math.max(A.oddsMin, Math.min(A.oddsMax, A.odds[kind] + ((p.gmRelationship ?? 50) - 50) / 100 * A.relSwing));
+}
+
+/**
+ * r201 §122.78 the agent's ask answered. 'yes' (with terms): a new deal from next season, replacing the
+ * current one (pendingContract, settled on contract day). 'no': the player's view of the GM drops and the
+ * agent asks more at the next deal; the second time, the player plays out the deal and leaves.
+ */
+export function answerAgentAsk(draft, playerId, answer, terms = null) {
+  const p = draft.players[playerId];
+  if (!p || p.teamId !== 'user') return null;
+  const season = draft.seasonNum || 1;
+  const prev = p._agentAsk || { n: 0 };
+  if (answer === 'yes') {
+    p.pendingContract = { salary: terms.salary, years: terms.years, signedSeason: season, replaces: true };
+    p._extendedSeason = season;
+    p._agentAsk = { ...prev, season, answer: 'yes' };
+    p.gmRelationship = Math.min(100, (p.gmRelationship ?? 50) + 8);
+    return { type: 'EXTENDED', playerId, teamId: 'user', terms };
+  }
+  const n = (prev.declined || 0) + 1;
+  p._agentAsk = { ...prev, season, answer: 'no', declined: n };
+  p.gmRelationship = Math.max(0, (p.gmRelationship ?? 50) - AGENT_ASK.relHit);
+  p._agentGrudge = 'extension';
+  if (n >= 2) p._willWalk = true;   // plays out the deal, then tests free agency
+  return { type: 'EXTENSION_REFUSED', playerId, teamId: 'user', walks: n >= 2 };
 }
 
 /** Extend him: the new deal replaces his current one from next season. */
