@@ -248,7 +248,16 @@ function _reach(s) {
  * activeSystems(ctx, t, bounds) — the systems alive at t that can touch the
  * box { x0, y0, x1, y1 } (km): [{ s, cx, cy, life }].
  */
+const _activeCache = new Map();
 export function activeSystems(ctx, t, bounds, cellBounds = bounds) {
+  // r203 §122.81 the same question again (the same moment and place, the same run) gets the same answer:
+  // a look-ahead asks it again every time it runs. (Callers only read the list.)
+  const run0 = ctx.run;
+  const ck = `${ctx.seed}|${ctx.region}|${run0 ? `${run0.issueMs}|${run0.member}` : ''}|${t}|${bounds.x0},${bounds.y0},${bounds.x1},${bounds.y1}`
+    + (cellBounds === bounds ? '' : `|${cellBounds.x0},${cellBounds.y0},${cellBounds.x1},${cellBounds.y1}`);
+  const hit = _activeCache.get(ck);
+  if (hit) return hit;
+  _cap(_activeCache, 20000);
   const out = [];
   const inBox = (b, s, cx, cy) => {
     const R = _reach(s);
@@ -285,6 +294,7 @@ export function activeSystems(ctx, t, bounds, cellBounds = bounds) {
       if (nearCell(s, cx, cy)) out.push({ s, cx, cy, life });
     }
   }
+  _activeCache.set(ck, out);
   return out;
 }
 

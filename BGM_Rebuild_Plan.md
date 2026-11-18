@@ -12927,3 +12927,31 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 **Agent asks across seeds 1–7:** 2, 1, 1, 2, 1, 1 and 2 a season, answered every way (yes, no, no answer).
 
 **Open:** item 10 (the look-ahead's ~340 ms in the worker, low priority).
+
+## §122.81 — r203: open item 10, the look-ahead made faster
+**Measured** (node, a season-1 save at game 138, the next game 27 hours out, `foresee` with the game and a day of messages):
+- r202: about **550 ms** warm (460–650), **1.5 s** cold.
+- r203: about **250 ms** warm (215–310), **1.1 s** cold.
+- The messages-only look-ahead: about 225 ms → 165 ms.
+
+**Where the time went:**
+- Copying the state for each look-ahead (two copies a run): 40 ms a copy, plus the garbage it leaves.
+- The weather of the league's games, worked out again on every run.
+- The save had grown to 11 MB by game 138. Most of it was finished games: the league's box scores (3 MB), the weather every 20 minutes of every game played (1.8 MB league, 0.4 MB ours), and the batting orders kept for a live box (1.1 MB). Then the players' game logs (1.3 MB) and season logs (0.7 MB).
+
+**Fixes:**
+- **A finished game keeps only what's read after it** (`GameEngine._settleFinished`): the box, the score, the weather's delays and ruling, and the conditions at first pitch (the gate's). It drops the batting orders and the rest of the weather. This runs at our commit, at a league game's final, and at the All-Star Game's.
+  - Older saves are trimmed once (`schema.migrate`, `_finishedGamesSettled`).
+  - The save is about 25% smaller (11.2 MB → 8.3 MB at game 138), so saving is quicker too.
+- **The look-ahead's copy shares what nothing changes once written** (`StateManager._speculativeCopy`): finished games' box scores, and each player's game log and season log. These are always replaced, never edited (`IMPEngine.appendGameLog`, the winter's archive). They're set aside while the rest is copied, then put back on both (even if the copy throws). Copying takes about half the time.
+- **The weather remembers its answers** (`WeatherSystems.activeSystems`): the same moment, place and forecast run gets the same list (callers only read it). A look-ahead asks the same questions every run; the weather's time per run roughly halves.
+
+**Checks:**
+- check-speculate (new):
+  - the copy shares the boxes and logs and copies the rest;
+  - the real state comes back exactly as it was, after changes and after a throw;
+  - two look-aheads give the same answer;
+  - a finished game's trim; an older save's one-time trim.
+- The look-ahead checks (check-lookahead, check-message-lookahead, check-game-pushes) still match the real run.
+
+**Fresh team:** not required.

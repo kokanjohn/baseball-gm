@@ -172,7 +172,7 @@ export function speculate(fn) {
   _assertLoaded();
   if (_speculating) throw new Error('StateManager.speculate: already speculating');
   const real = _state;
-  _state = structuredClone(real);
+  _state = _speculativeCopy(real);
   _speculating = true;
   try {
     const out = fn();
@@ -182,6 +182,43 @@ export function speculate(fn) {
     _state = real;
     _speculating = false;
   }
+}
+
+/**
+ * r203 §122.81 _speculativeCopy(real) — a deep copy, except what nothing changes once written, which the
+ * copy shares: the box scores of games already over (ours and the league's), and each player's game log
+ * and season log (always replaced, never edited — IMPEngine.appendGameLog, the winter's archive). Together
+ * about half a season's state, and every look-ahead copies it. (Each is set aside while the rest is copied,
+ * then put back on both, in the same places — even when the copy throws.)
+ */
+const _SHARED_PLAYER_KEYS = ['_impGameLog', 'seasonLog'];
+function _speculativeCopy(real) {
+  const parked = [], held = [];
+  for (const [id, p] of Object.entries(real.players || {})) {
+    for (const k of _SHARED_PLAYER_KEYS) if (p && Array.isArray(p[k]) && p[k].length) { held.push([id, k, p[k]]); p[k] = null; }
+  }
+  const park = (list) => {
+    for (let i = 0; i < (list?.length || 0); i++) {
+      const g = list[i];
+      if (g && g.boxScore && (g._committed || g.played) && !g.plays) { parked.push([list, i, g.boxScore]); g.boxScore = null; }
+    }
+  };
+  park(real.schedule);
+  for (const games of Object.values(real.leagueSchedule?.dayMap || {})) park(games);
+  let copy;
+  try {
+    copy = structuredClone(real);
+  } finally {
+    for (const [list, i, box] of parked) list[i].boxScore = box;
+    for (const [id, k, v] of held) real.players[id][k] = v;
+  }
+  for (const [id, k, v] of held) if (copy.players?.[id]) copy.players[id][k] = v;
+  // The copy's lists are in the same order: the same game at the same place.
+  const day = copy.leagueSchedule?.dayMap || {};
+  const realDay = real.leagueSchedule?.dayMap || {};
+  const twin = new Map([[real.schedule, copy.schedule], ...Object.keys(realDay).map(k => [realDay[k], day[k]])]);
+  for (const [list, i, box] of parked) { const g = twin.get(list)?.[i]; if (g) g.boxScore = box; }
+  return copy;
 }
 
 /** Is a look-ahead running? (engines don't need to ask; the app's guards do) */

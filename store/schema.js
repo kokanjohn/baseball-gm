@@ -588,6 +588,20 @@ function _fillDefaults(state) {
     state._bullpenCoachFolded = true;
   }
 
+  // r203 §122.81 games already over keep only what's read after them (GameEngine._settleFinished): no
+  // batting orders for a live box, and the weather's conditions at first pitch only. Once.
+  if (state._finishedGamesSettled !== true) {
+    const settle = (g) => {
+      delete g.liveLineups;
+      if (g.wxResult?.conditions?.length > 1) g.wxResult = { ...g.wxResult, conditions: g.wxResult.conditions.slice(0, 1) };
+    };
+    for (const g of state.schedule || []) if (g?._committed && g.boxScore) settle(g);
+    for (const games of Object.values(state.leagueSchedule?.dayMap || {})) {
+      for (const g of games || []) if (g?.played && g.boxScore && !g.plays) settle(g);
+    }
+    state._finishedGamesSettled = true;
+  }
+
   for (const key of Object.keys(defaults)) {
     if (state[key] === undefined) {
       state[key] = defaults[key];

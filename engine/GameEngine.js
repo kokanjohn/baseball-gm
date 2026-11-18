@@ -1023,7 +1023,7 @@ function _commitAt(gameIndex) {
     if (gCommitted && gCommitted.boxScore) {
       delete gCommitted.plays;
       delete gCommitted._precomputedBoxScore;
-      delete gCommitted.liveLineups;
+      _settleFinished(gCommitted);
     }
   });
 
@@ -1762,6 +1762,19 @@ function _wxResolve(s, ref) {
   return { g: null };
 }
 const _wxRefOf = (g, isUser) => (isUser ? { user: true, i: g.index } : { user: false, id: g.id });
+
+/**
+ * r203 §122.81 _settleFinished(g) — a game that's over keeps what's read after it: the box, the score, the
+ * weather's delays and ruling, and the conditions at first pitch (the gate's). The batting orders the live
+ * box was built from and the weather every 20 minutes of play go (about a third of a season's save), so
+ * every copy of the state — each look-ahead's, each save — is that much smaller.
+ */
+export function _settleFinished(g) {
+  if (!g) return g;
+  delete g.liveLineups;
+  if (g.wxResult?.conditions?.length > 1) g.wxResult = { ...g.wxResult, conditions: g.wxResult.conditions.slice(0, 1) };
+  return g;
+}
 
 /**
  * _gateWeather(state, g, isUser) — §110 the weather a home crowd decides on: the forecast fans saw on
@@ -2689,6 +2702,7 @@ function _finishLeagueGame(date, i) {
     delete g._precomputedBoxScore;
     delete g.resumePlays;
     delete g.resumeState;
+    _settleFinished(g);   // (the gate was read from the weather above)
     if (home && away) {
       const [w, l, ws, ls] = homeScore > awayScore ? [home, away, homeScore, awayScore] : [away, home, awayScore, homeScore];
       const tag = g.isPlayoff ? 'Playoffs: ' : g.isSpring ? 'Spring: ' : '';
@@ -2952,6 +2966,7 @@ function _finishAllStarGame(date, i) {
     g.boxScore  = g._precomputedBoxScore;
     delete g.plays;
     delete g._precomputedBoxScore;
+    _settleFinished(g);
     res = AllStar.recordResult(s, g);
     const name = (id) => AllStar.clubFor(s, id)?.name || id;
     const [w, l, ws, ls] = g.homeScore > g.awayScore ? [g.homeId, g.awayId, g.homeScore, g.awayScore]
