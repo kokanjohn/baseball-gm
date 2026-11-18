@@ -28,7 +28,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../formatters.js';
 import * as When from '../../engine/When.js';
-import { dealsFor, dealsOnTable, shoppable, SHOP_AGAIN_MS } from '../../engine/TradeAdvice.js';
+import { dealsFor, shoppable, SHOP_AGAIN_MS, scoutingAsked, scoutingDeal } from '../../engine/TradeAdvice.js';
 import { namedPlayers, faLooks } from '../../engine/ComposeReplies.js';
 import { workPlayers, skillsOf, teachablePositions } from '../../engine/PlayerWork.js';
 import { posLabel, startsAt, familiarity } from '../../engine/Positions.js';   // r163 §122.35
@@ -38,6 +38,7 @@ import * as FaWatch from '../../engine/FaWatch.js';   // r204 §122.82
 import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatK } from '../../engine/CardTokens.js';
 import { FA_WATCH } from '../../data/constants.js';
+import { askScoutingButton, askScouting } from '../components/AskScouting.js';   // r208 §122.86
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -487,7 +488,7 @@ function _renderReading(card, inbox, state) {
       </div>
       <div class="mr-body">${_paragraphs(card.body || card.preview || '', _messagePlayers(card, state))}</div>
       ${dealOfCard(state, card) ? `<button class="btn-revise btn-deal" data-deal-sheet="${card.instanceId}">See the Deal</button>` : ''}
-      ${_askDirector(card, state)}
+      ${card.resolved ? '' : askScoutingButton(state, { instanceId: card.instanceId })}
       <div class="mr-reply">
         <div class="mr-reply-h">
           <span>Your decision</span>
@@ -652,28 +653,11 @@ function _faRowsHtml(card, state) {
   return `<div class="fa-rows">${html}<div class="fa-limit">Watching ${watchingN} of ${FA_WATCH.max}</div></div>`;
 }
 
-/** r202 §122.79 the deal on the table this card is, while the director hasn't been asked about it yet. */
-function _directorDeal(card, state) {
-  const dir = state.userTeam?.coachingStaff?.scoutingDirector;
-  if (!dir || dir.vacant || card.resolved) return null;
-  const deal = dealsOnTable(state, Date.now()).find(d => d.instanceId === card.instanceId);
-  if (!deal) return null;
-  const asked = [...(state.scheduledCards || []), ...(state.inbox || [])]
-    .some(c => c.isCompose && c._composeTopic === 'sc_trade' && c._composeArg?.key === deal.key);
-  return asked ? null : deal;
-}
-
-/** The "Ask the Director" button on a trade message (or nothing). */
-function _askDirector(card, state) {
-  return _directorDeal(card, state) ? `<button class="btn-revise btn-deal" data-ask-director="${card.instanceId}">Ask the Director</button>` : '';
-}
-
 function _topicState(t, state) {
   // r150 a trade topic is about one deal on the table: open while a deal hasn't been asked about.
   if (t.deal) {
     const deals = dealsFor(t.id, state, Date.now());
-    const asked = (d) => [...(state.scheduledCards || []), ...(state.inbox || [])]
-      .some(c => c.isCompose && c._composeTopic === t.id && c._composeArg?.key === d.key);
+    const asked = (d) => scoutingAsked(state, d.key);   // r208 §122.86 one answer everywhere
     const open = deals.filter(d => !asked(d));
     if (!deals.length) return { none: 'No trade is waiting on our answer' };
     if (!open.length) {
@@ -915,21 +899,13 @@ function _attachTabListeners(state) {
     });
   });
 
-  // r202 §122.79 ask the director about this deal (the Compose question, with the deal already picked)
-  document.querySelectorAll('[data-ask-director]').forEach(btn => {
+  // r202 §122.79 / r208 §122.86 ask Scouting about this deal (the Compose question, with the deal already picked)
+  document.querySelectorAll('#inbox-content [data-ask-scouting]').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const st = StateManager.get();
-      const card = getInbox().find(c => c.instanceId === btn.dataset.askDirector);
-      const deal = card && _directorDeal(card, st);
-      if (!deal) { App.showToast('That deal is no longer waiting on us.', 'neutral', 2500); refresh(); return; }
-      try {
-        const { deliverComposeCard } = await import('../../engine/CardEngine.js');
-        deliverComposeCard('sc_trade', 'scouting', { topicLabel: deal.label, arg: { key: deal.key, label: deal.label, instanceId: deal.instanceId, expiresAtMs: deal.expiresAtMs } });
-        import('../PushClient.js').then(P => P.syncPushSchedule()).catch(() => {});
-      } catch (err) { console.error('InboxScreen ask director:', err); }
-      const dir = st.userTeam?.coachingStaff?.scoutingDirector;
-      App.showToast(`Sent to ${dir?.name || 'the director'}. You'll hear back.`, 'positive', 2500);
+      if (btn.disabled) return;
+      btn.disabled = true;
+      await askScouting(btn.dataset.askScouting);
       refresh();
     });
   });
@@ -942,8 +918,10 @@ function _attachTabListeners(state) {
       const r = card?._reviseOffer;
       if (!r) return;
       const { openTradeComposer } = await import('../components/TradeComposer.js');
+      // r208 §122.86 the deal on the table this counters (the message itself, or the one Scouting's reply is about)
+      const on = scoutingDeal(StateManager.get(), card._adviceDeal ? { key: card._adviceDeal } : { instanceId: card.instanceId }, Date.now());
       openTradeComposer({ teamId: r.teamId, theirIds: r.offer.incomingIds || [], ourIds: r.offer.outgoingIds || [],
-                          cashK: r.offer.cashK || 0, retain: r.offer.retain || {}, round: r.round });
+                          cashK: r.offer.cashK || 0, retain: r.offer.retain || {}, round: r.round, dealKey: on?.deal.key || null });
     });
   });
 

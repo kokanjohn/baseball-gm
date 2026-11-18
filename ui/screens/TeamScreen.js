@@ -329,7 +329,7 @@ function _renderPlayers(state) {
   const rotation  = ours.filter(p => p.group === PLAYER_GROUP.STARTING_PITCHERS).sort(byOvr);
   const nextSPId  = order.length ? order[(rot.currentIndex || 0) % order.length].id : null;
   const pen       = ours.filter(p => p.group === PLAYER_GROUP.BULLPEN).sort(byOvr);
-  const pBench    = ours.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort((a, b) => (a.pos === 'SP' ? 0 : 1) - (b.pos === 'SP' ? 0 : 1) || b.ovr - a.ovr);
+  const pBench    = ours.filter(p => p.group === PLAYER_GROUP.PITCHER_BENCH).sort((a, b) => b.ovr - a.ovr);   // r208 by OVR, like the hitters' bench
   const pitIL     = ours.filter(p => isP(p) && p.group === PLAYER_GROUP.IL);
   const comingP   = coming.filter(c => isP(c.p));
   const pitRows = [

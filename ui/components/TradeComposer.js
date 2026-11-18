@@ -21,14 +21,16 @@ import { proposeTrade, talkIsOpen, ourSideBlocker } from '../../engine/Negotiati
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatK } from '../../engine/CardTokens.js';
 import { posLabel } from '../../engine/Positions.js';   // r163 §122.35
+import { askScoutingButton, askScouting } from './AskScouting.js';   // r208 §122.86
 
 let _d = null;          // the deal being built
 let _view = 'deal';     // 'teams' | 'deal' | 'theirs' | 'ours'
 let _read = null;       // the scout's read (lines), when asked
 
-export function openTradeComposer({ teamId = null, theirIds = [], ourIds = [], cashK = 0, retain = {}, round = null } = {}) {
+export function openTradeComposer({ teamId = null, theirIds = [], ourIds = [], cashK = 0, retain = {}, round = null, dealKey = null } = {}) {
   _injectCSS();
-  _d = { teamId, theirIds: [...theirIds], ourIds: [...ourIds], cashK, retain: { ...retain }, round };
+  // dealKey: r208 §122.86 the deal on the table this counters — Scouting is asked about that deal, by message
+  _d = { teamId, theirIds: [...theirIds], ourIds: [...ourIds], cashK, retain: { ...retain }, round, dealKey };
   _view = teamId ? 'deal' : 'teams';
   _read = null;
   document.getElementById('tc-overlay')?.remove();
@@ -109,7 +111,7 @@ function _dealHtml(state) {
   const cashLabel = c > 0 ? `They send ${formatK(c)}` : c < 0 ? `We send ${formatK(-c)}` : 'No cash';
   const payAfter = Finance.payrollOf(state, 'user') + _payDelta(state);
   const target = Finance.seasonTarget(state.userTeam.finances);
-  const read = _read ? `<div class="tc-read"><div class="tc-read-from">Pro Scouting</div>${_read.map(l => `<p>${_esc(l)}</p>`).join('')}</div>` : '';
+  const read = _read ? `<div class="tc-read"><div class="tc-read-from">Scouting</div>${_read.map(l => `<p>${_esc(l)}</p>`).join('')}</div>` : '';
   const canSend = !blocked && !ours && (_d.theirIds.length || _d.ourIds.length);
   return `${_head(team?.name || 'Trade', sub, true)}
     ${blocked ? `<div class="tc-warn">Can't send right now: ${_esc(blocked)}.</div>` : ''}
@@ -125,9 +127,19 @@ function _dealHtml(state) {
     <div class="tc-pay${payAfter > target ? ' over' : ''}">Our payroll after the deal: ${formatK(payAfter)} — ownership's target ${formatK(target)}${ours ? `<br>${_esc(ours[0].toUpperCase() + ours.slice(1))}.` : ''}</div>
     ${read}
     <div class="tc-actions">
-      <button class="tc-btn" id="tc-scout" ${(_d.theirIds.length || _d.ourIds.length) ? '' : 'disabled'}>Ask Pro Scouting</button>
+      ${_scoutButton(state)}
       <button class="tc-btn primary" id="tc-send" ${canSend ? '' : 'disabled'}>Send Offer</button>
     </div>`;
+}
+
+/** r208 §122.86 a counter to a deal on the table: Ask Scouting sends the question (the same one the trade message
+ *  and Compose send, and it reads Scouting Asked once it's gone, wherever it was asked). A new offer: the scouts' read. */
+function _scoutButton(state) {
+  if (_d.dealKey) {
+    const b = askScoutingButton(state, { key: _d.dealKey }, 'tc-btn');
+    if (b) return b;
+  }
+  return `<button class="tc-btn" id="tc-scout" ${(_d.theirIds.length || _d.ourIds.length) ? '' : 'disabled'}>Ask Scouting</button>`;
 }
 
 function _payDelta(state) {
@@ -196,6 +208,13 @@ function _wire(body, state) {
   body.querySelector('#tc-scout')?.addEventListener('click', () => {
     const offer = _offer();
     _read = scoutRead(offer, state, _d.teamId, ourSideBlocker(state, offer));
+    _render();
+  });
+  body.querySelector('[data-ask-scouting]')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (btn.disabled) return;
+    btn.disabled = true;
+    await askScouting(btn.dataset.askScouting);
     _render();
   });
   body.querySelector('#tc-send')?.addEventListener('click', () => {

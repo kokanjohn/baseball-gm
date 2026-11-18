@@ -83,6 +83,22 @@ export function dealsOnTable(state, atMs) {
   return out.sort((a, b) => (a.expiresAtMs ?? Infinity) - (b.expiresAtMs ?? Infinity));
 }
 
+/** r208 §122.86 whether Scouting has been asked about this deal (the question sent, or answered). One answer for
+ *  every place the question can be asked: the trade message, the counter screen, Compose. */
+export function scoutingAsked(state, key) {
+  return [...(state.scheduledCards || []), ...(state.inbox || [])]
+    .some(c => c.isCompose && c._composeTopic === 'sc_trade' && c._composeArg?.key === key);
+}
+
+/** r208 §122.86 a deal Scouting could be asked about — by its key, or the message it came in — and whether it has
+ *  been: { deal, asked }, or null (no deal on the table, or no scouting director). */
+export function scoutingDeal(state, { key = null, instanceId = null } = {}, atMs) {
+  const dir = state.userTeam?.coachingStaff?.scoutingDirector;
+  if (!dir || dir.vacant || !(key || instanceId)) return null;
+  const deal = dealsOnTable(state, atMs).find(d => (key ? d.key === key : d.instanceId === instanceId));
+  return deal ? { deal, asked: scoutingAsked(state, deal.key) } : null;
+}
+
 /** The deal with this key, if it is still on the table. */
 export function dealByKey(state, key, atMs) {
   return dealsOnTable(state, atMs).find(d => d.key === key) || null;

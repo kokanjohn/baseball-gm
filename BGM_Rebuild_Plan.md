@@ -13095,3 +13095,21 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 **Checks:** check-defense (+12: age, young players, the bench coach through Compose); test-teaching-ui (+1: the topic).
 
 **Fresh team:** recommended (new players' gloves by age), not required.
+
+## §122.86 — r208: Ask Scouting everywhere, the deal sheet's cards, the pitcher bench by OVR
+**Ask Scouting** (was "Ask the Director" on the message, "Ask Pro Scouting" in the trade composer):
+- One question, wherever it's asked: the Compose question about a deal on the table (`sc_trade`, the deal already picked). The answer is a message on the staff's clock, never a read on the spot.
+- Asked from: the trade message (an offer, their counter, an agreed deal); the counter screen (the trade composer opened from that message's "Make a New Offer", or from Scouting's "Adjust It First": `openTradeComposer({ dealKey })`); Compose ("A trade on the table").
+- One answer to "asked yet?" for all of them (`TradeAdvice.scoutingAsked(state, key)`, `scoutingDeal(state, { key | instanceId }, atMs)`). Once asked, each button reads **Scouting Asked**, disabled; the Compose topic shows the deal as asked.
+- Shared UI: `ui/components/AskScouting.js` (`askScoutingButton`, `askScouting`).
+- A brand-new offer in the composer (no deal on the table yet) keeps the scouts' read on the spot, labeled "Ask Scouting".
+
+**The deal sheet** ("See the Deal"):
+- Every player card is the same height: one grid, a row per pair, `grid-auto-rows: 1fr`.
+- The whole card opens the player card. The player card now always opens on top of whatever is open (`openPlayerCard` re-appends its reused overlay), so closing it goes back to the deal sheet.
+
+**Team screen:** the pitcher bench is listed by OVR, like the hitters' bench (was starters first, then relievers).
+
+**Checks:** test-deal-sheet-ui (equal heights; a card opens the player on top, twice; closing returns to the sheet); test-trade-advice-ui (Ask Scouting on the message; from the counter screen it sends the message, then reads Scouting Asked there and on the message).
+
+**Fresh team:** not required.

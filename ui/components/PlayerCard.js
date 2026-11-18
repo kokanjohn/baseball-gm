@@ -60,8 +60,9 @@ export function openPlayerCard(playerId, state) {
     overlay = document.createElement('div');
     overlay.id = 'player-card-overlay';
     overlay.className = 'modal-overlay';
-    document.body.appendChild(overlay);
   }
+  // r208 on top of whatever is open (a deal sheet, the trade composer): closing it goes back there
+  document.body.appendChild(overlay);
 
   overlay.innerHTML = `
     <div class="modal-sheet" id="player-card-sheet">

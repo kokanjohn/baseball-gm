@@ -45,19 +45,28 @@ check('…and a tap opens the player', await page.evaluate(() => !!document.quer
 await page.screenshot({ path: `${out}/trade-offer-links-${theme}.png` });
 await page.keyboard.press('Escape'); await page.evaluate(() => document.querySelectorAll('.modal-overlay, .modal-backdrop').forEach(e => e.remove()));
 await page.click('#mr-back').catch(() => {}); await page.waitForTimeout(200);
-// r202 the offer itself: ask the director about it, in one tap.
+// r202 / r208 §122.86 the offer itself: Ask Scouting. Asked from the counter screen, it's asked everywhere.
 await page.click(`[data-open="${deal.instanceId}"]`); await page.waitForTimeout(300);
-const askBtn = await page.$(`[data-ask-director="${deal.instanceId}"]`);
-check('the offer has Ask the Director', !!askBtn);
-await page.$eval(`[data-ask-director="${deal.instanceId}"]`, el => el.scrollIntoView({ block: 'center' }));
+const btnOf = (sel) => page.evaluate((sel) => { const b = document.querySelector(sel); return b ? { text: b.textContent.trim(), off: b.disabled } : null; }, sel);
+const msgBtn = `#inbox-content [data-ask-scouting="${deal.key}"]`;
+check('the offer has Ask Scouting', JSON.stringify(await btnOf(msgBtn)) === JSON.stringify({ text: 'Ask Scouting', off: false }), JSON.stringify(await btnOf(msgBtn)));
+await page.$eval(msgBtn, el => el.scrollIntoView({ block: 'center' }));
 await page.screenshot({ path: `${out}/trade-ask-director-button-${theme}.png` });
-await askBtn.click(); await page.waitForTimeout(400);
-const asked = await page.evaluate(async (deal) => {
+// Counter: the trade composer's button is the same question about the same deal.
+await page.click(`[data-revise="${deal.instanceId}"]`); await page.waitForTimeout(500);
+const tcBtn = `#tc-overlay [data-ask-scouting="${deal.key}"]`;
+check('counter: the composer has Ask Scouting (about this deal)', JSON.stringify(await btnOf(tcBtn)) === JSON.stringify({ text: 'Ask Scouting', off: false }), JSON.stringify(await btnOf(tcBtn)));
+await page.click(tcBtn); await page.waitForTimeout(500);
+const asked = await page.evaluate(async () => {
   const SM = await import('/baseball-gm/store/StateManager.js');
   const c = (SM.get().scheduledCards || []).find(x => x.isCompose && x._composeTopic === 'sc_trade');
-  return { key: c?._composeArg?.key, gone: !document.querySelector(`[data-ask-director="${deal.instanceId}"]`), toast: document.querySelector('.toast, #toast')?.textContent || '' };
-}, deal);
-check(`…which sends the question with the deal picked (${asked.key}), and the button goes`, asked.key === deal.key && asked.gone, JSON.stringify(asked));
+  return { key: c?._composeArg?.key, read: !!document.querySelector('#tc-overlay .tc-read') };
+});
+check(`…which sends the question with the deal picked (${asked.key}), a message to come (no read on the spot)`, asked.key === deal.key && !asked.read, JSON.stringify(asked));
+check('…and reads Scouting Asked, disabled', JSON.stringify(await btnOf(tcBtn)) === JSON.stringify({ text: 'Scouting Asked', off: true }), JSON.stringify(await btnOf(tcBtn)));
+await page.screenshot({ path: `${out}/trade-ask-composer-${theme}.png` });
+await page.click('#tc-close'); await page.waitForTimeout(300);
+check('back on the message: Scouting Asked, disabled', JSON.stringify(await btnOf(msgBtn)) === JSON.stringify({ text: 'Scouting Asked', off: true }), JSON.stringify(await btnOf(msgBtn)));
 await page.click('#mr-back').catch(() => {}); await page.waitForTimeout(200);
 await page.click('#itab-compose');
 await page.waitForSelector('.compose-person', { timeout: 5000 });

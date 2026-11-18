@@ -11,7 +11,8 @@
  *            offered, and the director's counter); `start` the one shown first (default: the last)
  *
  * The numbers are TradeEngine.dealSheet's: the same totals the staff's words use.
- * A name opens the player.
+ * A player's card opens the player card, over the sheet (closing it comes back here). r208 §122.86 the cards
+ * are one height: rows across both sides, each as tall as the tallest card.
  */
 
 import * as StateManager from '../../store/StateManager.js';
@@ -57,19 +58,21 @@ const _years = (n) => (n > 0 ? `${n} more season${n === 1 ? '' : 's'}` : 'final 
 /** A sum that costs us (+) or saves us (−). */
 const _net = (k) => (Math.round(k) > 0 ? `Costs us ${formatK(Math.round(k))}` : Math.round(k) < 0 ? `Saves us ${formatK(-Math.round(k))}` : 'No change');
 
-function _cell(state, r) {
+function _cell(state, r, col, row) {
   const p = state.players[r.id];
-  const kept = r.kept ? `<div class="ds-kept">${r.keptBy === 'us' ? 'We keep' : 'They keep'} paying ${Math.round(r.kept * 100)}% this season</div>` : '';
-  return `<div class="ds-player">
-    <button type="button" class="ds-name" data-ds-player="${_e(r.id)}">${_e(r.name)}</button>
-    <div class="ds-meta">${_e(p ? posLabel(p) : r.pos)} · OVR ${r.ovr} · ${r.age}${r.injured ? ' · hurt' : ''}</div>
-    <div class="ds-pay">${r.salary > 0 ? `${formatK(r.salary)} a year` : 'No salary'} · ${_years(r.years)}</div>
+  const kept = r.kept ? `<span class="ds-kept">${r.keptBy === 'us' ? 'We keep' : 'They keep'} paying ${Math.round(r.kept * 100)}% this season</span>` : '';
+  return `<button type="button" class="ds-player" data-ds-player="${_e(r.id)}" style="grid-column:${col};grid-row:${row}">
+    <span class="ds-name">${_e(r.name)}</span>
+    <span class="ds-meta">${_e(p ? posLabel(p) : r.pos)} · OVR ${r.ovr} · ${r.age}${r.injured ? ' · hurt' : ''}</span>
+    <span class="ds-pay">${r.salary > 0 ? `${formatK(r.salary)} a year` : 'No salary'} · ${_years(r.years)}</span>
     ${kept}
-  </div>`;
+  </button>`;
 }
 
 function _html(state, d, title, sw = '') {
-  const col = (rows) => (rows.length ? rows.map(r => _cell(state, r)).join('') : '<div class="ds-none">No players</div>');
+  // one grid: a row per pair, so every card in it is the height of the tallest (grid-auto-rows: 1fr)
+  const col = (rows, c) => (rows.length ? rows.map((r, i) => _cell(state, r, c, i + 2)).join('')
+                                        : `<div class="ds-none" style="grid-column:${c};grid-row:2">No players</div>`);
   const k = (v) => formatK(Math.round(v));
   const cash = d.cashK > 0 ? `${formatK(d.cashK)} to us` : d.cashK < 0 ? `${formatK(-d.cashK)} from us` : null;
   const gap = d.payroll.target > 0 ? d.payroll.after - d.payroll.target : null;
@@ -80,8 +83,8 @@ function _html(state, d, title, sw = '') {
     </div>
     ${sw}
     <div class="ds-grid">
-      <div class="ds-colh">We Get</div><div class="ds-colh">We Send</div>
-      <div class="ds-col">${col(d.get)}</div><div class="ds-col">${col(d.send)}</div>
+      <div class="ds-colh" style="grid-column:1;grid-row:1">We Get</div><div class="ds-colh" style="grid-column:2;grid-row:1">We Send</div>
+      ${col(d.get, 1)}${col(d.send, 2)}
     </div>
     <table class="ds-money">
       <thead><tr><th></th><th>We Get</th><th>We Send</th></tr></thead>
@@ -109,13 +112,14 @@ function _injectCSS() {
     .ds-head{padding:10px 0 12px;border-bottom:1px solid var(--border);margin-bottom:10px;}
     .ds-title{font-size:17px;font-weight:700;color:var(--text);}
     .ds-sub{font-size:12px;color:var(--muted);margin-top:2px;}
-    .ds-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;}
+    .ds-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto;grid-auto-rows:1fr;gap:6px 8px;}
     .ds-colh{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);}
-    .ds-col{display:flex;flex-direction:column;gap:6px;min-width:0;}
-    .ds-player{border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface2);min-width:0;}
-    .ds-name{display:block;max-width:100%;background:none;border:0;padding:0;font:inherit;font-size:14px;font-weight:700;color:var(--text);text-align:left;cursor:pointer;
+    .ds-player{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;width:100%;height:100%;box-sizing:border-box;
+      border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface2);min-width:0;font:inherit;color:inherit;text-align:left;cursor:pointer;}
+    .ds-player:active{border-color:var(--text);}
+    .ds-name{display:block;max-width:100%;font-size:14px;font-weight:700;color:var(--text);
       text-decoration:underline;text-decoration-color:var(--border);text-underline-offset:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .ds-meta,.ds-pay{font-size:11px;color:var(--soft);margin-top:3px;}
+    .ds-meta,.ds-pay,.ds-kept{display:block;font-size:11px;color:var(--soft);margin-top:3px;}
     .ds-pay{color:var(--text);font-variant-numeric:tabular-nums;}
     .ds-kept{font-size:11px;color:var(--muted);margin-top:3px;}
     .ds-none{font-size:12px;color:var(--muted);padding:8px 2px;}

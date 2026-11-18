@@ -42,7 +42,7 @@ check('the offer has "See the Deal", above the decision', await page.evaluate(()
 await page.click('[data-deal-sheet]'); await page.waitForTimeout(500);
 const sheet = await page.evaluate(() => {
   const s = document.querySelector('.ds-sheet');
-  const names = (i) => [...s.querySelectorAll('.ds-col')[i].querySelectorAll('.ds-name')].map(b => b.textContent);
+  const names = (i) => [...s.querySelectorAll(`.ds-player[style*="grid-column:${i + 1}"] .ds-name`)].map(b => b.textContent);
   return { get: names(0), send: names(1), heads: [...s.querySelectorAll('.ds-colh')].map(h => h.textContent),
            rows: [...s.querySelectorAll('.ds-row')].map(r => [...r.children].map(c => c.textContent.trim()).join(' ')),
            money: [...s.querySelectorAll('.ds-money tbody tr')].map(r => [...r.children].map(c => c.textContent.trim()).join(' ')) };
@@ -54,8 +54,15 @@ check(`the table: We Get ${sheet.get.join(', ')} | We Send ${sheet.send.join(', 
 check(`the money: ${sheet.money.join(' · ')}`, sheet.money.some(r => /^Salary a year/.test(r)) && sheet.money.some(r => /^Later seasons/.test(r)));
 check(`the totals: ${sheet.rows.join(' · ')}`, sheet.rows.some(r => /^This season, net/.test(r)) && sheet.rows.some(r => /^Payroll after the deal .*target/.test(r)) && sheet.rows.some(r => /^Later seasons, net/.test(r)));
 await page.screenshot({ path: `${out}/deal-sheet-offer-${theme}.png` });
-await page.click('.ds-name'); await page.waitForTimeout(500);
-check('a name opens the player', await page.evaluate(() => document.querySelectorAll('.modal-overlay').length >= 2));
+// r208 §122.86 the whole card opens the player, over the sheet — even when the player card was opened before
+// (its overlay is reused) — and closing it comes back to the sheet.
+const onTop = () => page.evaluate(() => { const el = document.elementFromPoint(innerWidth / 2, innerHeight * 0.6); return el?.closest('#player-card-overlay') ? 'player' : el?.closest('#ds-overlay') ? 'deal' : el?.tagName; });
+for (const round of [1, 2]) {
+  await page.click('.ds-player .ds-meta'); await page.waitForTimeout(600);
+  check(`a card (not just the name) opens the player, on top (${round === 1 ? 'first time' : 'again'}: ${await onTop()})`, await onTop() === 'player');
+  await page.click('#player-card-close'); await page.waitForTimeout(500);
+  check('…closing it comes back to the deal', await onTop() === 'deal' && await page.evaluate(() => !!document.getElementById('ds-overlay')));
+}
 await page.evaluate(() => document.querySelectorAll('.modal-overlay').forEach(e => e.remove()));
 
 // Three a side, salary kept both ways, cash to us: fits at 390px.
@@ -77,6 +84,10 @@ const fit = await page.evaluate(() => {
            cash: [...s.querySelectorAll('.ds-row')].find(r => /^Cash/.test(r.textContent)) && [...[...s.querySelectorAll('.ds-row')].find(r => /^Cash/.test(r.textContent)).children].map(c => c.textContent.trim()).join(' ') };
 });
 check(`three a side fits: ${fit.cells} players, none spilling over (names cut: ${fit.cut.join(', ') || 'none'})`, fit.cells === 6 && fit.over === 0 && !fit.wide && fit.cut.length === 0);
+{ // r208 §122.86 one height for every card (two carry a kept-salary line, the rest don't)
+  const hs = await page.$$eval('.ds-sheet .ds-player', els => els.map(e => Math.round(e.getBoundingClientRect().height)));
+  check(`every card the same height (${hs.join(', ')})`, hs.length === 6 && Math.max(...hs) - Math.min(...hs) <= 1);
+}
 check(`kept salary on both sides (${fit.kept.join(' / ')}), cash (${fit.cash})`, fit.kept.length === 2 && fit.kept.some(k => /^They keep/.test(k)) && fit.kept.some(k => /^We keep/.test(k)) && /\$250K to us/.test(fit.cash || ''));
 await page.screenshot({ path: `${out}/deal-sheet-three-${theme}.png` });
 await page.evaluate(() => document.querySelector('.ds-sheet').scrollTo(0, 9999)); await page.waitForTimeout(200);
