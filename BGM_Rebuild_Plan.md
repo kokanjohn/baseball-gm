@@ -12814,3 +12814,38 @@ The compose, work, strategy, teaching and trade-advice UI tests pass in both the
 - **test-compose-ui,** both themes: the count shows; with all used, the topic is greyed out and reads "Next look in 5 days".
 
 **Fresh team:** not required.
+
+## §122.77 — r200: a contract's price counts how the player played (phase 1 of 2)
+**The GM's call** (Nov 17 2026): a player who has a big year should cost more at the next deal, and a slump should cost less. Phase 1 is the price. Phase 2 (r201, not built) is the agent asking for an extension mid-contract after a breakout, with Extend / Not now / Counter. A salary still never changes mid-contract.
+
+**The model** (`OffseasonEngine.performanceShift(state, p)`, pure): `{ shift, now, last }`.
+- Impact runs with OVR across the league. A season sim gave hitters ≈ −12.0 + 0.223 per OVR point above the league level (corr 0.73); starters ≈ the same; relievers ≈ the same line but noisier (corr 0.50). So a season's Impact reads back as an OVR: `(imp − impAt0) / impPer + leagueTalentOffset`.
+- **This season** counts by its sample share: plate appearances / 500 for hitters, innings / 150 for starters, / 55 for relievers.
+- **Last season** (`lastSeasonIMP`, from seasonLog) fills in what this one hasn't shown, at 0.6 weight. Once a season is logged and its scores cleared at the rollover, it is "last season", so the offseason asks use the season just played.
+- The price's OVR moves toward the played OVR by `weight` × the sample: half-way for hitters and starters, 0.3 for relievers. Never more than 8 points either way.
+- Constants: `MARKET_PERF` in data/constants.js.
+
+**Where it applies:** `marketTerms` (salary only; the length still comes from the rating and age). So every price built on it moves: re-sign asks, free agents, in-season signings, extensions, CPU signings.
+
+**A fix it needed:** `_salaryFor` only matched whole ratings (64.5 fell between tiers and priced at $30M). A rating between tiers now prices at the lower tier's top.
+
+**In a sim** (seed 1, days 100 and 138): about 2 OVR points of movement on average (sd ~2); the biggest moves roughly double or halve a price. League average +0.3, so payrolls barely drift.
+
+**The re-sign card:**
+- says "up from" or "down from" correctly (it always said "up from" before);
+- a move of 3 or more adds "the agent is pricing in the season X just had", or "a down season has taken some air out of it".
+
+**Checks:** check-market-perf (new):
+- no history, no move; at the rating, no move;
+- a full season 6 better moves 3 (relievers 1.8); half a season about half; a slump the same down; capped at 8;
+- no season yet: last season sets it, at its lower weight; a full season at the rating outweighs last season;
+- the ask rises steadily with the season (no tier gaps);
+- the re-sign card says "down from", "down season", "saves".
+
+**Fixes found in testing:**
+- **A doubleheader's bullpen game:** the long reliever named to start game two could pitch in relief in game one (and got hurt doing it in one run). Now a pitcher named to start a later game today counts as already used in the earlier one (`GameEngine._savedForLater` → `holdIds` → the sim's used set). check-weather-cards checks he didn't pitch in game one.
+- **No re-signing a player we cut:** with prices following performance, a seed released an overpaid player (2,798K) and signed the same player back days later at 1,525K. A release can't be a pay cut. Now a free agent a club let go (released, or waived and unclaimed) won't sign back with that club while still on the market from that release (`OffseasonEngine.cutBy(p, teamId)`). Gated in signFreeAgent and signToClub; left out of every list that offers players to that club (our free-agent cards, the scouts' looks and tips, the manager's signings, CPU looks); the sign button reads "we let this player go — no coming back". Other clubs can sign the player as usual. check-market-perf covers it.
+- **The season sim's tip check:** a tip that rolled but lost the race (another club signed the player before it landed) counts as a hit for the roll.
+- **A trade idea for a player now playing a new position:** when the player we'd upgrade on was also in the package, the message named that player twice. Now the line reads "an upgrade on the reliever they'd take back", and the price names the player once.
+
+**Fresh team:** not required.

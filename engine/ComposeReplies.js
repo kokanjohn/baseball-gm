@@ -28,6 +28,7 @@ import * as Managers from './ManagerEngine.js';   // §122.64
 import { bullpenRoles } from './PitchingEngine.js';   // r169
 import { PROMOTIONS, FIELD_CARE } from '../data/constants.js';   // r169, r170
 import { drainageAt, drainageLevel, prepCostK } from './FieldCare.js';   // r170
+import { cutBy } from './OffseasonEngine.js';   // r200
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -708,7 +709,7 @@ W.sc_free_agents = (f, r, who) => {
   }
   const recent = new Set(f.pastReplies('sc_free_agents').filter(x => f.atMs - x.atMs < 30 * MS_DAY).flatMap(x => x.memo?.playerIds || []));
   const sigmaOf = (p) => 4 / scoutEye(f, p);
-  const pool = (st.freeAgentPool || []).map(f.P).filter(p => p && p.group === 'freeAgent' && !p.isInjured && !recent.has(p.id));
+  const pool = (st.freeAgentPool || []).map(f.P).filter(p => p && p.group === 'freeAgent' && !p.isInjured && !recent.has(p.id) && !cutBy(p, 'user'));
   if (!pool.length) return { body: ['There\'s nobody new on the market worth the trip right now.'], memo: { playerIds: [] } };
   const seen = pool.map(p => ({ p, worth: worthOf(p) + gauss(r) * sigmaOf(p) }))
     .map(x => ({ ...x, edge: x.worth - (x.p.ovr || 0) }))

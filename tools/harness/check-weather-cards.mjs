@@ -99,6 +99,8 @@ console.log('\nDoubleheader — a bullpen game');
   CardEngine.resolve(card.instanceId, 'yes');
   check('game two is marked: the long man starts, the rotation keeps its turn', SM.get().schedule[i1 + 1].userStarterId === longId && SM.get().schedule[i1 + 1].keepRotation === true);
   await play(i1);
+  { const g1 = SM.get().schedule[i1], box = g1.boxScore ? (g1.isHome ? g1.boxScore.home : g1.boxScore.away) : null;
+    check(`r200 ${st.players[longId].name} was saved for game two (didn't pitch in game one)`, !!box && !box.pitchers.some(x => x.id === longId)); }
   const rotAfter1 = SM.get().userTeam.rotation.currentIndex;
   await play(i1 + 1);
   const g2 = SM.get().schedule[i1 + 1];

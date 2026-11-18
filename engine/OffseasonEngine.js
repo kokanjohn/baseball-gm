@@ -33,6 +33,7 @@ import {
   PLAYER_GROUP,
   ROSTER_LIMITS,
   SALARY_BY_OVR,
+  MARKET_PERF,
   SUB_RATING_MIN,
   SUB_RATING_MAX,
   AGE_DEVELOPMENT_WINDOWS,
@@ -75,6 +76,7 @@ import { computeAge, computeOVR, createPlayer, baseballYear, _freshStats } from 
 import { originForKind } from './LeagueHistory.js';
 import { giveUntestedGap, seedUpside, markAvailable, cpuView } from './Diamonds.js';
 import { clearInjuryUpdate } from './InjuryEngine.js';
+import { lastSeasonIMP } from './IMPEngine.js';   // r200 §122.77
 import {
   defaultActiveGroup,
   eligibleSlotsFor,
@@ -275,8 +277,9 @@ export function contractIsUp(player, seasonNum) {
 
 function _salaryFor(ovr) {
   for (const tier of Object.values(SALARY_BY_OVR)) {
-    if (ovr >= tier.ovrMin && ovr <= tier.ovrMax) {
-      return tier.salMin + (tier.salMax - tier.salMin) * (ovr - tier.ovrMin) / Math.max(1, tier.ovrMax - tier.ovrMin);
+    // (r200: a rating moved by performance can fall between tiers — 64.5 sits in the 60–64 tier, capped at its top)
+    if (ovr >= tier.ovrMin && ovr < tier.ovrMax + 1) {
+      return tier.salMin + (tier.salMax - tier.salMin) * Math.min(1, (ovr - tier.ovrMin) / Math.max(1, tier.ovrMax - tier.ovrMin));
     }
   }
   return ovr < 40 ? 20 : 30000;
@@ -285,11 +288,39 @@ function _salaryFor(ovr) {
 /**
  * marketTerms(draft, player)
  * What the player asks for on the open market for next season: salary on the
- * league-wide OVR scale, discounted with age; length by age and standing.
+ * league-wide OVR scale — the rating, moved by how the player played (r200,
+ * performanceShift) — discounted with age; length by age and standing.
  * @returns {{ salary: Number ($K), years: Number }}
  */
 /** r147 how much more an agent who was turned down asks of us (×). */
 export const AGENT_GRUDGE_MARKUP = 1.1;
+
+/**
+ * r200 §122.77 how the player has played, as OVR points on the price (MARKET_PERF): the season's
+ * Impact read back as an OVR, the price's OVR pulled toward it by how much of a season is behind
+ * it. This season counts first; last season fills in for the part of a season this one hasn't
+ * shown yet (and alone, between seasons, once the scores are cleared).
+ *   → { shift (OVR points, rounded to 0.1), now: { imp, sample }, last: { imp, sample } }
+ */
+export function performanceShift(state, p) {
+  const M = MARKET_PERF, L = state.leagueTalentOffset || 0;
+  const kind = p.pos === 'SP' ? 'SP' : p.pos === 'RP' ? 'RP' : 'hitter';
+  const share = (st) => Math.min(1, (kind === 'hitter' ? (st?.ab || 0) + (st?.bb || 0) : (st?.ip || 0)) / M.full[kind]);
+  const asOvr = (imp) => (imp - M.impAt0) / M.impPer + L;   // the OVR that plays like this
+  const nowImp = state.impScores?.[p.id]?.impS ?? null;
+  const now = { imp: nowImp, sample: nowImp == null ? 0 : share(p.stats) };
+  const lastLine = (p.seasonLog || []).filter(x => x?.stats).at(-1);
+  // (last season: the most recent one logged before this one — at the rollover this season is logged
+  //  and its scores cleared, so then it's the one that counts)
+  const lastImp = lastSeasonIMP(p);
+  const last = { imp: lastImp, sample: lastImp == null ? 0 : share(lastLine?.stats) };
+  const w = now.sample + (1 - now.sample) * last.sample * M.prevWeight;
+  if (w <= 0) return { shift: 0, now, last };
+  const target = (now.sample * (now.imp != null ? asOvr(now.imp) : 0) + (1 - now.sample) * last.sample * M.prevWeight * (last.imp != null ? asOvr(last.imp) : 0)) / w;
+  const pull = Math.min(1, w) * M.weight[kind];   // (relievers' lines are noisier)
+  const shift = Math.max(-M.maxShift, Math.min(M.maxShift, (target - (p.ovr || 50)) * pull));
+  return { shift: Math.round(shift * 10) / 10, now, last };
+}
 
 export function marketTerms(draft, player) {
   const age = computeAge(player.dob, baseballYear(draft) + 1);
@@ -297,7 +328,8 @@ export function marketTerms(draft, player) {
   const ageFactor = age >= 34 ? 0.7 : age >= 32 ? 0.85 : 1;
   // r147 an agent who was turned down (a bonus refused) asks us for more at the next negotiation.
   const grudge = player._agentGrudge && player.teamId === 'user' ? AGENT_GRUDGE_MARKUP : 1;
-  const salary = Math.max(20, Math.round(_salaryFor(player.ovr || 50) * ageFactor * grudge / 5) * 5);
+  // r200 §122.77 the price counts how the player played (the rating alone sets the length).
+  const salary = Math.max(20, Math.round(_salaryFor((player.ovr || 50) + performanceShift(draft, player).shift) * ageFactor * grudge / 5) * 5);
   const years = age >= 34 ? 1
     : age >= 31 ? (rel >= 60 ? 2 : 1)
     : age >= 28 ? (rel >= 60 ? 3 : 2)
@@ -362,7 +394,7 @@ export function departLeague(draft, playerId, atMs, reason = 'abroad') {
 export function signFreeAgent(draft, playerId, teamId, atMs, { displaceId = null } = {}) {
   const p = draft.players[playerId];
   const t = _team(draft, teamId);
-  if (!p || !t || p.group !== PLAYER_GROUP.FREE_AGENT) return null;
+  if (!p || !t || p.group !== PLAYER_GROUP.FREE_AGENT || cutBy(p, teamId)) return null;
   const events = [];
   if (displaceId && !hasRoomFor(draft, teamId, p)) {   // no spot on his side (§76)
     const d = draft.players[displaceId];
@@ -850,8 +882,15 @@ export function applyRelease(draft, playerId, atMs) {
 // FREE AGENCY
 // ─────────────────────────────────────────────────────────────
 
-export function freeAgents(draft) {
-  return (draft.freeAgentPool || []).map(id => draft.players[id]).filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT);
+export function freeAgents(draft, forTeam = null) {
+  return (draft.freeAgentPool || []).map(id => draft.players[id])
+    .filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT && !(forTeam && cutBy(p, forTeam)));
+}
+
+/** r200 §122.77 a free agent this club let go (released, or waived and unclaimed) won't sign back with it. */
+export function cutBy(p, teamId) {
+  return !!p && p.group === PLAYER_GROUP.FREE_AGENT && !!teamId && p._faFrom === teamId
+    && (p._faReason === 'released' || p._faReason === 'waivers');
 }
 
 /**
@@ -883,7 +922,7 @@ function _cpuSignOne(draft, t, atMs) {
   const events = [];
   {
     // §78.5 only the free agents this club's owner can pay for.
-    const pool = freeAgents(draft).filter(fa =>
+    const pool = freeAgents(draft, t.id).filter(fa =>
       Finance.canAddSalary(draft, (fa._ask || marketTerms(draft, fa)).salary, 0, t.id));
     if (activeCount(draft, t.id) >= ROSTER_LIMITS.ACTIVE_TOTAL) {
       // A full club still upgrades: the best free agent who beats its weakest
@@ -926,7 +965,7 @@ export function userFreeAgentTargets(draft, max, excludeIds = new Set()) {
   // §112 the winter's priority first: the free agents who fill it, then the rest.
   const pri = draft.offseason?.priority || null;
   const hits = (p) => (pri ? fillsNeed(p, pri) : false);
-  for (const p of freeAgents(draft).sort((a, b) => (hits(b) - hits(a)) || ((b.ovr || 0) - (a.ovr || 0)))) {
+  for (const p of freeAgents(draft, 'user').sort((a, b) => (hits(b) - hits(a)) || ((b.ovr || 0) - (a.ovr || 0)))) {
     if (out.length >= max) break;
     if (excludeIds.has(p.id)) continue;
     if (!full && need && _fits(p, need)) {

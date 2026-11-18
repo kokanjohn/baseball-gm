@@ -73,7 +73,7 @@ import { payrollRoom, contractToMove, cutOrderAmount, post as postFunds, retainS
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { markAvailable, cpuView } from './Diamonds.js';
 import { adjustRapport } from './TradeEngine.js';
-import { releaseToFreeAgency } from './OffseasonEngine.js';
+import { releaseToFreeAgency, cutBy } from './OffseasonEngine.js';
 import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate, placeOnILUpdate } from './InjuryEngine.js';
 import { computeAge, createPlayer, baseballYear } from './PlayerFactory.js';
 import { newPlayerName } from './Names.js';
@@ -333,7 +333,7 @@ export function managerPick(state, teamId, need, exclude = new Set()) {
 /** Free agents this club could sign today: healthy, and its owner would carry the salary. */
 function _signable(state, teamId) {
   return (state.freeAgentPool || []).map(id => state.players[id])
-    .filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT && !p.isInjured
+    .filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT && !p.isInjured && !cutBy(p, teamId)
               && canAddSalary(state, signingTerms(state, p).salary || 0, 0, teamId));
 }
 
@@ -462,6 +462,7 @@ export function cpuFreeAgentLook(draft, atMs) {
   for (const team of order) {
     let best = null;
     for (const fa of _healthyFreeAgents(draft)) {
+      if (cutBy(fa, team.id)) continue;   // r200 not back to the club that let the player go
       const weak = weakestPeer(team, fa, draft.players);
       const seen = cpuView(fa, atMs);   // §122.9 his rating — or his worth, once word has got around
       if (!weak || seen < (weak.ovr || 0) + FA_CPU_UPGRADE_MARGIN) continue;

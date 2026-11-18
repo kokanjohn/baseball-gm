@@ -21,7 +21,7 @@ import { markAvailable } from './Diamonds.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, MARKET_KINDS, FA_ASK } from '../data/constants.js';
 import { clockNow } from './Clock.js';
 import { createPlayer, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
-import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor } from './OffseasonEngine.js';
+import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor, cutBy } from './OffseasonEngine.js';
 import { defaultActiveGroup, eligibleSlotsFor, makeArrival } from './RosterEngine.js';
 import { rosterIsFull, sideOf, dropPlayer } from './TransactionEngine.js';
 import { newPlayerName } from './Names.js';
@@ -44,7 +44,7 @@ export function marketCandidate(state, { kind = 'depth', side = 'hitter', pos = 
   const level = state.leagueTalentOffset || 0;
   const prof = MARKET_KINDS[kind] || MARKET_KINDS.depth;
   const year = baseballYear(state);
-  const fits = (p) => p && p.group === PLAYER_GROUP.FREE_AGENT && !exclude.has(p.id)
+  const fits = (p) => p && p.group === PLAYER_GROUP.FREE_AGENT && !exclude.has(p.id) && !cutBy(p, 'user')   // (r200 offered to us)
     && isPitcher(p) === (side === 'pitcher')
     && (!pos || (side === 'pitcher' ? p.pos === pos : eligibleSlotsFor(p).includes(pos)))
     && computeAge(p.dob, year) >= prof.ageMin - 1 && computeAge(p.dob, year) <= prof.ageMax + 2
@@ -125,7 +125,7 @@ export function signingTerms(state, player) {
 export function signToClub(draft, playerId, teamId, atMs, { displaceId = null, terms = null, by = null } = {}) {
   const p = draft.players[playerId];
   let t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
-  if (!p || !t || p.group !== PLAYER_GROUP.FREE_AGENT) return [];
+  if (!p || !t || p.group !== PLAYER_GROUP.FREE_AGENT || cutBy(p, teamId)) return [];
   const events = [];
   const pull = () => { draft.freeAgentPool = (draft.freeAgentPool || []).filter(id => id !== playerId); };
   const k = terms || signingTerms(draft, p);

@@ -232,6 +232,7 @@ function _generatePlays(game, userTeam, opponentTeam, players, context) {
     players,
     { game, fieldMod, isHome: game.isHome, phase, isSpring, norms, atMs, scout, wx, staff: exhibition ? null : staff,
       injuryYear: exhibition ? null : context.injuryYear,
+      holdIds: exhibition ? [] : (context.holdIds || []),   // r200 saved to start a later game today
       // §75 All-Star Game: both starters work ALLSTAR_STARTER_INNINGS, every
       // other arm one inning; the reserves come in on the squads' plan.
       exhibition: exhibition ? { starterIds: new Set([userSP?.id, oppSP?.id].filter(Boolean)) } : null }
@@ -480,7 +481,8 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
     // current pitcher's role, batters before he tires, innings wanted, runs allowed.
     atMs,
     userRoles: userLineup.roles || null, oppRoles: oppLineup.roles || null,
-    userUsed:  new Set([userSP?.id].filter(Boolean)), oppUsed: new Set([oppSP?.id].filter(Boolean)),
+    // (r200 an arm named to start a later game today counts as used: never in relief before it)
+    userUsed:  new Set([userSP?.id, ...(ctx.holdIds || [])].filter(Boolean)), oppUsed: new Set([oppSP?.id].filter(Boolean)),
     userRole:  ROLE.STARTER, oppRole: ROLE.STARTER,
     // (r169 the hook moves a starter's innings and batters, never a spring build-up or the All-Star Game)
     userTireAt: exhibition ? Infinity : tireAfterBF(userSP && players[userSP.id], true) + (isSpring ? 0 : userLineup.hook?.bf || 0),

@@ -12,7 +12,7 @@
 import { PLAYER_GROUP, PHASE, ROSTER_LIMITS, WAIVER_CLAIM_WINDOW_MS } from '../data/constants.js';
 import * as Finance from './FinanceEngine.js';
 import { signingTerms, signToClub } from './MarketEngine.js';
-import { marketTerms, hasRoomFor, signFreeAgent } from './OffseasonEngine.js';
+import { marketTerms, hasRoomFor, signFreeAgent, cutBy } from './OffseasonEngine.js';
 import { rosterIsFull, sideOf } from './TransactionEngine.js';
 import { clockNow } from './Clock.js';
 
@@ -89,6 +89,7 @@ export function signBlocker(state, playerId, dropId = null) {
   const p = state.players[playerId];
   if (!p || p.group !== PLAYER_GROUP.FREE_AGENT) return 'not a free agent any more';
   if (POSTSEASON.has(state.phase)) return 'rosters are set for the postseason — signings open again in the offseason';
+  if (cutBy(p, 'user')) return 'we let this player go — no coming back';
   const t = termsFor(state, p);
   const room = roomFor(state, p);
   if (room.needsDrop && !dropId) return 'choose a player to let go to make room';

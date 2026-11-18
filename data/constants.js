@@ -1702,6 +1702,18 @@ export const FA_ASK = Object.freeze({
   floorShare:    0.5,     // …never below this share of it…
   minK:          50,      // …nor the league minimum ($K).
 });
+// r200 §122.77 a contract's price counts how the player played, not only the rating. Impact runs
+// with OVR across the league (a season sim, r200: hitters and starters alike, ≈ 0.223 Impact per
+// OVR point above the league level, corr ~0.73): the season's Impact, read back as an OVR, pulls
+// the price's OVR toward it — by `weight` with a full season behind it, less on a part season.
+export const MARKET_PERF = Object.freeze({
+  impAt0:   -11.9,   // Impact expected at OVR = the league level (leagueTalentOffset)…
+  impPer:   0.223,   // …and per OVR point above it
+  weight:   Object.freeze({ hitter: 0.5, SP: 0.5, RP: 0.3 }),   // a full season moves the price's OVR this share of the way to what it played like (relievers' lines are noisier, corr ~0.5)
+  maxShift: 8,       // never more than this many OVR points either way
+  prevWeight: 0.6,   // last season fills in for what this one hasn't shown yet, at this weight
+  full: Object.freeze({ hitter: 500, SP: 150, RP: 55 }),   // a full season: plate appearances / innings
+});
 export const FA_CPU_UPGRADE_MARGIN = 5;   // a CPU club signs a free agent this many OVR better than its weakest at the role
 export const FA_CPU_LOOK_HOUR      = 10;  // when each CPU club looks at the free agents, every day (local hour)
 export const FA_POOL_MAX          = 260; // the free-agent market's size at the new season (the least promising go home past it)

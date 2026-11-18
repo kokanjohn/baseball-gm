@@ -624,7 +624,8 @@ async function runOffseasonChecks() {
       const R = gm.released, q = st.players[R.id];
       // §122 no dead money: a released player's salary leaves our payroll the moment he goes.
       check(`contracts: a release takes the whole salary off our books (${q?.name}, ${R.salary}K through ${R.expiry - 1}; payroll ${Math.round(R.pay0)}K → ${Math.round(R.pay1)}K)`,
-            q && q.teamId !== 'user' && Math.round(R.pay0 - R.pay1) === Math.round(R.salary) && !('dead' in st.userTeam.finances));
+            q && q.teamId !== 'user' && Math.round(R.pay0 - R.pay1) === Math.round(R.salary) && !('dead' in st.userTeam.finances),
+            `now ${q?.teamId}/${q?.group} ${q?.contractSalary}K exp ${q?.contractExpiry}; dead ${'dead' in st.userTeam.finances}`);
       check(`contracts: and the room opens by as much (room ${Math.round(R.room0)}K → ${Math.round(R.room1)}K)`, R.room1 - R.room0 >= R.salary * 0.99);
     } else console.log('  contracts: no overpaid player to release this winter');
   }
@@ -2649,11 +2650,13 @@ async function main() {
     const { tipChance } = await import('../../engine/CoachEngine.js');
     const rolled = Object.values(st.players).filter(p => p._tipRolled === true);   // (§122.71 not the ones looked at too late to beat the word: no roll)
     const expected = rolled.reduce((a, p) => a + tipChance(st.userTeam.coachingStaff, p), 0);
-    const tipped = gm.cardIdsSeen.has('scout_tip');
+    // (r200 a tip that rolled but lost the race — a club signed the player before it landed — was still a hit for the roll)
+    const beaten = Object.values(st.players).filter(p => Number.isFinite(p._tipAt) && p.teamId && p.teamId !== 'user').length;
+    const tipped = gm.cardIdsSeen.has('scout_tip') || beaten > 0;
     // §122.71 none at all is a fail only when it would be a long shot: the chance of no tip, roll by roll, under 1%.
     // (Seed 5 rolled 8 with 2.8 expected and got none: about a 3% season — luck, not a fault.)
     const pNone = rolled.reduce((a, p) => a * (1 - tipChance(st.userTeam.coachingStaff, p)), 1);
-    check(`scouting director: on the staff (${d?.name}, rated ${d?.quality}, ${d?.specialty}); the daily look rolled ${rolled.length} diamonds (${expected.toFixed(1)} tips expected)${tipped ? ', and tips came through' : `, none came (a ${(pNone * 100).toFixed(1)}% chance)`}`,
+    check(`scouting director: on the staff (${d?.name}, rated ${d?.quality}, ${d?.specialty}); the daily look rolled ${rolled.length} diamonds (${expected.toFixed(1)} tips expected)${tipped ? (gm.cardIdsSeen.has('scout_tip') ? ', and tips came through' : `, ${beaten} rolled but a club signed the player first`) : `, none came (a ${(pNone * 100).toFixed(1)}% chance)`}`,
           !!d?.name && rolled.length > 0 && (tipped || pNone >= 0.01), [...gm.cardIdsSeen].filter(x => /scout/.test(x)).join(','));
   }
 

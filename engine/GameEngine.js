@@ -755,7 +755,8 @@ function _simOurGame(state, game) {
     players,
     { phase: state.phase, isSpring, winProb, scout: _scoutFor(state, game, opponentTeam, isSpring),
       norms: leagueNorms([userTeam, ...(state.leagueTeams || [])], players), weather: wx?.sim || null,
-      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true), injuryYear: baseballYear(state) }
+      staff: Coach.staffEffects(state.userTeam?.coachingStaff), rand: _gameDice(state, game, true), injuryYear: baseballYear(state),
+      holdIds: _savedForLater(state, game) }
   );
 
   return { wx, isSpring, ...out };
@@ -2531,6 +2532,14 @@ function _wxHoldForClubs(ref, atMs) {
     if (isUser) _wxSortSchedule(s);
   });
   return true;
+}
+
+/** r200 a pitcher named to start a later game today (a doubleheader's bullpen game) isn't used in relief before it. */
+function _savedForLater(state, game) {
+  return (state.schedule || [])
+    .filter(g => g !== game && g.date === game.date && (g.gameTime || 0) > (game.gameTime || 0)
+      && g.userStarterId && g.status !== GAME_STATUS.FINAL)
+    .map(g => g.userStarterId);
 }
 
 /**

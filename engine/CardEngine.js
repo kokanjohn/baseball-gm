@@ -4813,7 +4813,7 @@ export function deliverMeetingsTargets(atMs) {
   const inc = st.players[target.incumbentId];
   const fits = (p) => LeagueTrades.fillsNeed(p, target) && (p.ovr || 0) >= (target.ovr || 0) + LEAGUE_TRADES.upgradeMin;
   // The free-agent alternative, for comparison.
-  const fa = Offseason.freeAgents(st).filter(fits).sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+  const fa = Offseason.freeAgents(st, 'user').filter(fits).sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
   const faAsk = fa ? (fa._ask || Offseason.marketTerms(st, fa)).salary : 0;
   const faLine = fa ? `On the free-agent market, the best fit is ${_ref(fa)}, asking ${formatK(faAsk)} a year: no players out, but money on the books`
                       + `${Finance.canAddSalary(st, faAsk) ? '.' : ', more than ownership would approve right now.'}`
@@ -5124,6 +5124,10 @@ export function deliverResignCard(playerId, atMs, expiresAtMs) {
   const payroll = state.userTeam.finances?.payroll || 0;
   const target = Finance.seasonTarget(state.userTeam.finances);
   const delta = terms.salary - (p.contractSalary || 0);
+  // r200 §122.77 the price counts how the player played; say so when it moved it a lot
+  const perf = Offseason.performanceShift(state, p).shift;
+  const why = perf >= 3 ? `; the agent is pricing in the season ${p.name} just had`
+    : perf <= -3 ? `; a down season has taken some air out of it` : '';
   const card = _rosterCard(state, {
     cardId: 'os_resign', tag: 'CONTRACT', sender: `${p.name}'s agent`, avatar: '✍️', type: X.star || X.core ? 'urgent' : 'normal',
     _rosterKey: `os:resign:${playerId}:${state.seasonNum}`, _osGate: 'contracts', _targetPlayerId: playerId,
@@ -5131,7 +5135,7 @@ export function deliverResignCard(playerId, atMs, expiresAtMs) {
     preview: `${X.line ? `${X.line}. ` : ''}Asking ${formatK(terms.salary)} a year for ${_years(terms.years)}.`,
     body: `${_who(p)}, ${X.age} next season, becomes a free agent unless we re-sign. `
         + _contractSentences(state, p, X) + ' '
-        + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)} (up from ${formatK(p.contractSalary || 0)})${p._agentGrudge ? `, and the agent hasn't forgotten the bonus we turned down: about 10% more than the market` : ''}. `
+        + `The ask is ${formatK(terms.salary)} a year for ${_years(terms.years)} (${terms.salary > (p.contractSalary || 0) ? 'up' : terms.salary < (p.contractSalary || 0) ? 'down' : 'the same as'} ${terms.salary === (p.contractSalary || 0) ? 'now' : `from ${formatK(p.contractSalary || 0)}`})${why}${p._agentGrudge ? `, and the agent hasn't forgotten the bonus we turned down: about 10% more than the market` : ''}. `
         + `That ${delta >= 0 ? 'adds' : 'saves'} ${formatK(Math.abs(delta))}; payroll is ${formatK(payroll)} against ownership's ${formatK(target)} target. `
         + `If we let ${p.name} walk, every club gets a shot on the free-agent market. No answer by the time spring training opens means the same thing.`,
     yesLabel: `Re-sign (${_years(terms.years)}, ${formatK(terms.salary)})`, noLabel: `Let ${p.name} walk`,
@@ -5606,8 +5610,14 @@ function _fitClause(st, p, pos, fit) {
 }
 
 /** r195 the same, as a noun phrase after the player's one mention ("…working in relief as well: an upgrade on Cahill (54)."). */
-function _fitNoun(st, pos, fit) {
+function _fitNoun(st, pos, fit, sending = []) {
   const over = fit.over ? st.players[fit.over] : null;
+  // (r200: when the player we'd upgrade on is in the package, the price names that player — once)
+  if (over && sending.includes(over.id)) {
+    return pos === 'SP' ? 'a starter for the rotation turn of the arm they\'d take back'
+      : pos === 'RP' ? 'an upgrade on the reliever they\'d take back'
+      : 'an upgrade on the starter they\'d take back there';
+  }
   if (pos === 'SP') return over ? `a starter for ${over.name}'s turn in our rotation (${over.ovr})` : 'a starter for our open turn in the rotation';
   if (pos === 'RP') return over ? `an upgrade on ${over.name} (${over.ovr})` : 'an upgrade on the back of our bullpen';
   return over ? `an upgrade on ${over.name} (${over.ovr}) there` : 'an upgrade on our starter there';
@@ -5623,7 +5633,7 @@ function _clubPosCard(st, p, ev, fit) {
     key: `lp:${p.id}:${ev.pos}`, teamId: team.id, deal, atMs: (ev.atMs ?? atMsNow()) + 2 * 3600_000,
     subject: `${p.name} is ${what} now`,
     preview: `${team.name} have ${p.name} at ${_posWord(ev.pos)} too.`,
-    lead: `${team.name} have ${_dealRef(st, p)} ${what} as well${fit.thin ? `, and ${_fitClause(st, p, ev.pos, fit)}` : `: ${_fitNoun(st, ev.pos, fit)}`}.`,
+    lead: `${team.name} have ${_dealRef(st, p)} ${what} as well${fit.thin ? `, and ${_fitClause(st, p, ev.pos, fit)}` : `: ${_fitNoun(st, ev.pos, fit, deal.bGets || [])}`}.`,
   });
 }
 
@@ -6035,7 +6045,7 @@ export function directorTips(atMs) {
   if (open || atMs - (st.userTeam._lastTipAt ?? -Infinity) < TIP_GAP_MS) return 0;
   const level = st.leagueTalentOffset || 0;
   const cands = (st.freeAgentPool || []).map(id => st.players[id])
-    .filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT && !p._tipRolled && Number.isFinite(p._buzzAt) && p._buzzAt > atMs && isDiamond(p, level))
+    .filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT && !Offseason.cutBy(p, 'user') && !p._tipRolled && Number.isFinite(p._buzzAt) && p._buzzAt > atMs && isDiamond(p, level))
     .sort((a, b) => worthOf(b) - worthOf(a) || String(a.id).localeCompare(String(b.id)));
   const rolled = [], late = [];
   let pick = null;
