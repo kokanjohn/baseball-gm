@@ -22,7 +22,8 @@
  * (positions practiced or played this season), `lastStarts` (last season's).
  */
 import { POSITION_RULES as R } from '../data/constants.js';
-import { ovrFor } from './PlayerFactory.js';   // r205 §122.83 (a cycle: used only when called)
+import { ovrFor, computeOVR } from './PlayerFactory.js';   // r205 §122.83 (a cycle: used only when called)
+import { DEFENSE_SIM } from '../data/constants.js';   // r206
 
 export const FIELD_POSITIONS = Object.freeze(['C', '1B', '2B', '3B', 'SS', 'OF']);
 const OUTFIELD = /^(LF|CF|RF|OF)$/;
@@ -305,6 +306,22 @@ export function defenseOf(lineupSlots, players) {
     if (sl.slot === 'C') catcher = x;
   }
   return { errorMult: Math.round(errorMult * 1000) / 1000, catcher, out };
+}
+
+/**
+ * r206 §122.84 valueAt(p, slot) — what a hitter is worth at a lineup spot, on the OVR scale: the bat and
+ * the glove weighed as that position weighs them (a DH: the bat alone), the glove counting less where
+ * the player is out of position (DEFENSE_SIM.oopDrop × exposure). Lineup choices — ours by default, the
+ * manager's, every club's — and the staff's advice compare players at a spot with it. A pitcher: the OVR.
+ */
+export function valueAt(p, slot) {
+  if (!p) return 0;
+  const sr = p.subRatings;
+  if (isPitcher(p) || !sr || sr.defense == null) return p.ovr || 0;
+  const s = norm(slot);
+  const glove = Math.max(40, sr.defense - DEFENSE_SIM.oopDrop * exposure(p, s));
+  // (from the player's OVR: what moving from the primary position to this one changes)
+  return (p.ovr || 0) + computeOVR({ ...sr, defense: glove }, null, s) - computeOVR(sr, null, primaryPos(p));
 }
 
 // ─────────────────────────────────────────────────────────────

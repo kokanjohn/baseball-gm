@@ -22,7 +22,7 @@ import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from
 import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart } from './TradeEngine.js';
 import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teachRead, stretchRead } from './PlayerWork.js';
 import { PLAYER_WORK, POSITION_RULES } from '../data/constants.js';
-import { posLabel, pitchRoles } from './Positions.js';   // r163 §122.35
+import { posLabel, pitchRoles, primaryPos } from './Positions.js';   // r163 §122.35, r206
 import { strategyOf, battingOrder, recommendOrder, styleChoices, ORDER_STYLES, RUN_STYLES, HOOK_STYLES, penRolesOf } from './Strategy.js';   // r169
 import * as Managers from './ManagerEngine.js';   // §122.64
 import { bullpenRoles } from './PitchingEngine.js';   // r169
@@ -729,10 +729,17 @@ W.sc_free_agents = (f, r, who) => {
       lines.push(`${Cap(ORIGIN_WORDS[p.origin] || 'new to the league')}. ${read > 0 ? 'Our read: better than the reports — this could be a real find.' : read < 0 ? 'Our read: not as good as the reports.' : 'Our read: about what the reports say.'}`);
     } else if (p.pos === 'RP' && (sr.stamina ?? 99) <= 48 && edge >= 3) {
       lines.push(`The rating counts stamina (${sr.stamina}), and that's the weak spot. For an inning out of the bullpen, the stuff (${sr.stuff}) and control (${sr.control}) play better than the number.${last?.stats?.ip >= 20 ? ` Last year: a ${eraOf(last.stats.er, last.stats.ip).toFixed(2)} ERA in ${Math.round(last.stats.ip)} innings.` : ''}`);
+    } else if (!['SP', 'RP'].includes(p.pos) && (sr.defense ?? 99) <= 50 && edge >= 3) {
+      // r206 §122.84 a bat the glove drags down: worth more at DH or first
+      lines.push(`The rating counts the glove (defense ${sr.defense}), and that's the weak spot. At DH or first base the bat plays better than the number: contact ${sr.contact}, power ${sr.power}.${last?.stats?.ab >= 150 ? ` Last year: ${fmtAvg(avgOf(last.stats.h, last.stats.ab))} with ${plural(last.stats.hr || 0, 'homer')} in ${last.stats.ab} at-bats.` : ''}`);
     } else if (!['SP', 'RP'].includes(p.pos) && (sr.speed ?? 99) <= 48 && edge >= 3) {
       lines.push(`The rating is dragged down by the legs (speed ${sr.speed}). The bat is the real thing: contact ${sr.contact}, power ${sr.power}.${last?.stats?.ab >= 150 ? ` Last year: ${fmtAvg(avgOf(last.stats.h, last.stats.ab))} with ${plural(last.stats.hr || 0, 'homer')} in ${last.stats.ab} at-bats.` : ''}`);
     } else {
-      lines.push(edge >= 3 ? 'Better than the rating — more useful than the number suggests.' : 'About what the rating says: a useful depth piece, not more.');
+      // r206 §122.84 a glove at a position that prizes it carries the rating: say so
+      const glovePos = !['SP', 'RP'].includes(p.pos) && (sr.defense ?? 0) >= 75 && ['C', 'SS', '2B', 'OF'].includes(primaryPos(p));
+      lines.push(edge >= 3 ? 'Better than the rating — more useful than the number suggests.'
+        : glovePos ? `About what the rating says, and the glove carries it (defense ${sr.defense}): a player for the field more than the bat.`
+        : 'About what the rating says: a useful depth piece, not more.');
     }
     // Whether the rest of the league has caught on (the sharper our scouts, the surer we are).
     if (edge >= 4 && isDiamond(p, level)) {

@@ -31,7 +31,7 @@ import { isAvailable } from './PlayerFactory.js';
 import { reliefValue } from './PitchingEngine.js';
 import { payrollOf } from './FinanceEngine.js';
 import { clockNow } from './Clock.js';
-import { eligibleSlots, canPlay, startsAt, familiarity, pitchRoles, stretchOf } from './Positions.js';   // r163 §122.35
+import { eligibleSlots, canPlay, startsAt, familiarity, pitchRoles, stretchOf, valueAt } from './Positions.js';   // r163 §122.35, r206 §122.84
 
 // ─────────────────────────────────────────────────────────────
 // POSITIONS: who can play where is engine/Positions.js (r163 §122.35)
@@ -572,9 +572,12 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     .filter(Boolean)
     .sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
 
+  // (r206 §122.84 the best at that spot: the bat and the glove as the position weighs them)
+  const bestAt = (pool, slotName) => pool.filter(p => eligibleSlotsFor(p).includes(slotName))
+    .sort((a, b) => valueAt(b, slotName) - valueAt(a, slotName) || (b.ovr || 0) - (a.ovr || 0))[0];
   for (const slot of slots) {
     if (slot.playerId || hold) continue;
-    const benchPick = benchPool().find(p => eligibleSlotsFor(p).includes(slot.slot));
+    const benchPick = bestAt(benchPool(), slot.slot);
     if (benchPick) { slot.playerId = benchPick.id; delete slot.emergency; }
   }
   // A CPU manager plays his best nine (§76): a clearly better healthy bat on
@@ -585,8 +588,8 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     for (const slot of slots) {
       if (!slot.playerId || slot.emergency) continue;
       const cur = players[slot.playerId];
-      const better = benchPool().find(p => eligibleSlotsFor(p).includes(slot.slot)
-                                        && (p.ovr || 0) >= (cur?.ovr || 0) + CPU_LINEUP_UPGRADE_MARGIN);
+      const best = bestAt(benchPool(), slot.slot);
+      const better = best && valueAt(best, slot.slot) >= valueAt(cur, slot.slot) + CPU_LINEUP_UPGRADE_MARGIN ? best : null;
       if (better) slot.playerId = better.id;
     }
   }
@@ -596,7 +599,7 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
     if (slot.playerId) continue;
     if (hold) { if (!benchPool().some(p => eligibleSlotsFor(p).includes(slot.slot))) openPositions.push(slot.slot); continue; }
     openPositions.push(slot.slot);
-    const anyPick = benchPool()[0];
+    const anyPick = [...benchPool()].sort((a, b) => valueAt(b, slot.slot) - valueAt(a, slot.slot))[0];   // (r206 who'd do least harm there)
     if (anyPick) { slot.playerId = anyPick.id; slot.emergency = true; }
   }
   // r196 §122.73 still a hole and nobody on the bench: a player sitting a game for rest plays after all

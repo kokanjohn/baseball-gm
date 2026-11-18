@@ -15,7 +15,7 @@
  */
 
 import { LEAGUE_POSITIONS as L, PHASE, PLAYER_GROUP } from '../data/constants.js';
-import { FIELD_POSITIONS, isPitcher, canPlay, eligibleAt, difficulty, pitchRoles, grantPosition } from './Positions.js';
+import { FIELD_POSITIONS, isPitcher, canPlay, eligibleAt, difficulty, pitchRoles, grantPosition, valueAt } from './Positions.js';
 import { isAvailable } from './PlayerFactory.js';
 
 const DAY = 86_400_000;
@@ -129,8 +129,9 @@ export function fitsUs(state, p, pos) {
     const pen = (u.rosterIds || []).map(id => P[id]).filter(x => ok(x) && x.group === PLAYER_GROUP.BULLPEN).sort((a, b) => a.ovr - b.ovr);
     return pen.length && p.ovr >= pen[0].ovr + L.fitGap ? { start: true, thin: false, over: pen[0].id } : null;
   }
-  const sl = (u.lineupSlots || []).filter(s => s.slot === pos).map(s => P[s.playerId]).filter(ok).sort((a, b) => a.ovr - b.ovr)[0];
-  if (sl && p.ovr >= sl.ovr + L.fitGap) return { start: true, thin: false, over: sl.id };
+  // (r206 §122.84 at that spot: the bat and the glove as the position weighs them — the newcomer's glove there as if eligible)
+  const sl = (u.lineupSlots || []).filter(s => s.slot === pos).map(s => P[s.playerId]).filter(ok).sort((a, b) => valueAt(a, pos) - valueAt(b, pos))[0];
+  if (sl && valueAt({ ...p, positions: { ...(p.positions || {}), elig: [...new Set([...(p.positions?.elig || []), pos])] } }, pos) >= valueAt(sl, pos) + L.fitGap) return { start: true, thin: false, over: sl.id };
   const seated = new Set((u.lineupSlots || []).map(s => s.playerId));
   const bench = (u.rosterIds || []).map(id => P[id]).filter(x => ok(x) && !isPitcher(x) && !seated.has(x.id) && x.group === PLAYER_GROUP.BENCH_HITTERS);
   if (!bench.some(b => canPlay(b, pos)) && bench.length && p.ovr > Math.min(...bench.map(b => b.ovr))) return { start: false, thin: true, over: null };

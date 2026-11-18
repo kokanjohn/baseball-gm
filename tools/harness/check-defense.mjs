@@ -10,7 +10,10 @@ import { computeOVR, ovrFor, baseballYear } from '../../engine/PlayerFactory.js'
 import { generatePlays, leagueNorms } from '../../engine/SimEngine.js';
 import { migrate } from '../../store/schema.js';
 import { dice } from '../../engine/Dice.js';
-import { OVR_DEF_WEIGHT } from '../../data/constants.js';
+import { OVR_DEF_WEIGHT, DEF_IMP } from '../../data/constants.js';
+import { valueAt } from '../../engine/Positions.js';
+import { computePlayerIMP } from '../../engine/IMPEngine.js';
+import { adviceFor } from '../../engine/RosterAdvice.js';
 
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => {
@@ -95,6 +98,36 @@ seedRandom(9); const great = run(glove(85).players, glove(85).userTeam, 'gloves 
 seedRandom(9); const poor = run(glove(42).players, glove(42).userTeam, 'gloves 42');
 check(`great gloves allow fewer hits than poor ones (${(great.hitsAllowed / N).toFixed(2)} vs ${(poor.hitsAllowed / N).toFixed(2)})`, great.hitsAllowed < poor.hitsAllowed * 0.97);
 check(`…and make fewer errors (${(great.err / N).toFixed(2)} vs ${(poor.err / N).toFixed(2)} a game, both sides)`, great.err < poor.err);
+
+// ── r206 §122.84 phase 2: value at a spot, Impact ──────────────────
+console.log('\nValue at a spot');
+{
+  const bat = (c, d, pos) => ({ id: 'x' + c + d + pos, pos, positions: { primary: pos, elig: [pos], fam: {} }, subRatings: { contact: c, power: c, speed: c, defense: d } });
+  const mk = (c, d, pos) => { const p = bat(c, d, pos); p.ovr = computeOVR(p.subRatings, null, pos); return p; };
+  const glove = mk(55, 85, 'SS'), stick = mk(70, 45, 'SS');
+  check(`at short, the glove can outweigh the bat (${valueAt(glove, 'SS')} vs ${valueAt(stick, 'SS')})`, valueAt(glove, 'SS') >= valueAt(stick, 'SS') - 2);
+  check(`at DH, the bat alone (${valueAt(glove, 'DH')} vs ${valueAt(stick, 'DH')})`, valueAt(stick, 'DH') > valueAt(glove, 'DH') + 10);
+  const ofAtSS = mk(65, 70, 'OF');
+  check(`out of position, the glove counts less (${valueAt(ofAtSS, 'SS')} at SS vs ${valueAt({ ...ofAtSS, positions: { primary: 'OF', elig: ['OF', 'SS'], fam: {} } }, 'SS')} if eligible)`,
+        valueAt(ofAtSS, 'SS') < valueAt({ ...ofAtSS, positions: { primary: 'OF', elig: ['OF', 'SS'], fam: {} } }, 'SS'));
+  check('a player at the primary position: the OVR', valueAt(glove, 'SS') === glove.ovr && valueAt(stick, 'SS') === stick.ovr);
+}
+console.log('\nImpact');
+{
+  const line = { ab: 520, h: 140, tb: 210, hr: 15, rbi: 60, bb: 50, k: 100, sb: 5, cs: 2, g: 140 };
+  const p = (pos, field) => ({ id: 'imp' + pos, pos, positions: { primary: pos, elig: [pos], fam: {} }, subRatings: { contact: 60, power: 60, speed: 60, defense: 60 },
+    stats: { ...line, ...field }, careerStats: {}, _impGameLog: [] });
+  const imp = (q) => computePlayerIMP(q, 140)?.impS ?? computePlayerIMP(q, 140)?.imp_s ?? null;
+  const usual = (pos) => Math.round(DEF_IMP.eRate[pos] * 570);
+  const avg = imp(p('SS', { e: usual('SS'), dSave: 5, dCost: 5 }));
+  const gold = imp(p('SS', { e: usual('SS') - 6, dSave: 14, dCost: 3 }));
+  const iron = imp(p('SS', { e: usual('SS') + 8, dSave: 2, dCost: 13 }));
+  check(`a shortstop's glove counts: ${gold} (great) > ${avg} (average) > ${iron} (poor)`, gold > avg + 0.5 && avg > iron + 0.5, JSON.stringify(computePlayerIMP(p('SS', {}), 140)));
+  const dhA = imp(p('DH', { e: 0, dSave: 14, dCost: 3 })), dhB = imp(p('DH', { e: 0, dSave: 0, dCost: 0 }));
+  check(`a DH's doesn't (${dhA} = ${dhB})`, dhA === dhB);
+  const fbGold = imp(p('1B', { e: usual('1B') - 6, dSave: 14, dCost: 3 })), fbAvg = imp(p('1B', { e: usual('1B'), dSave: 5, dCost: 5 }));
+  check(`a first baseman's counts less than a shortstop's (${(fbGold - fbAvg).toFixed(1)} vs ${(gold - avg).toFixed(1)})`, fbGold - fbAvg < gold - avg && fbGold > fbAvg);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

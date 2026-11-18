@@ -207,6 +207,15 @@ export const DEFENSE_SIM = Object.freeze({
   double: Object.freeze({ OF: 0.85, '3B': 0.08, '1B': 0.07 }),
 });
 
+// r206 §122.84 Defense in Impact: the fielder's runs — a hit taken away `hitRuns`, one let through the
+// same, an error over the position's usual rate (errors a plate appearance, `eRate`) `errRuns` — a
+// rate per 600 PA, worth `k` × the position's OVR weight in Impact a run (so a glove is worth in Impact
+// about what it's worth in OVR: Impact runs 0.223 a rating point).
+export const DEF_IMP = Object.freeze({
+  hitRuns: 0.8, errRuns: 0.6, k: 0.25, shrinkPA: 200,   // (a glove's sample takes longer to mean something: × pa / (pa + shrinkPA))
+  eRate: Object.freeze({ C: 0.001, '1B': 0.017, '2B': 0.029, '3B': 0.021, SS: 0.034, OF: 0.005, DH: 0 }),
+});
+
 // OVR weights — pitchers
 export const OVR_P_STUFF_WEIGHT   = 0.40;
 export const OVR_P_CONTROL_WEIGHT = 0.35;

@@ -13052,3 +13052,29 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
   - great gloves allow fewer hits and errors than poor ones.
 
 **Next:** phase 2 (Impact, prices, the scouts' reads, lineup choices and advice), then phase 3 (the bench coach's work, aging, prospects).
+
+## §122.84 — r206: Defense, phase 2 of 3 (value: Impact, lineups, advice, the scouts)
+**Value at a spot** (`Positions.valueAt(p, slot)`): what a hitter is worth at a lineup spot, on the OVR scale. The bat and the glove are weighed as that position weighs them (a DH: the bat alone). Out of position, the glove counts `DEFENSE_SIM.oopDrop` × exposure less. It starts from the player's OVR, so at the primary position it is the OVR.
+- **Lineups** (`RosterEngine.reconcileRoster`, every club): an open spot is filled with the best at that spot. A CPU club's upgrade at a spot compares value there (by `CPU_LINEUP_UPGRADE_MARGIN`). With nobody eligible, the player who'd do least harm there plays out of position.
+- **The staff's advice** (`RosterAdvice`): "a better player sitting" and "a prospect behind the regular" compare value at the spot. So does a new club's starting lineup issues.
+- **"Would start for us"** (`LeaguePositions.fitsUs`, the league's position news and Pro Scouting's free agent at a spot we need): the newcomer's value at the spot (counted as if eligible there) against our starter's.
+
+**Impact** (`IMPEngine._hitterIMP`, `DEF_IMP`):
+- The fielder's runs: 0.8 a hit taken away, −0.8 one let through, −0.6 an error over the position's usual rate. The usual rates, errors a plate appearance from a season: C .001, 1B .017, 2B .029, 3B .021, SS .034, OF .005.
+- As a rate per 600 PA, × 0.25 × the position's OVR weight, shrunk by pa / (pa + 200) (a glove's sample takes longer to mean something).
+- So a glove is worth in Impact about what it's worth in OVR. In a season, runs come at about 0.9 a rating point a 600 PA; × 0.25 × .30 at short ≈ 0.07 Impact a point, against the 0.223 × .30 OVR's weight gives it.
+- A DH's glove counts nothing. The windows (7/15/30 days) count it too, heavily shrunk.
+- A shortstop with a great season in the field (−6 errors, +9 net hits taken away) is about +0.7 Impact over an average one; a first baseman's the same is +0.1.
+
+**Prices:** re-fit Impact against OVR on a full season with defense (seed 1, day 140): hitters −12.1 + 0.226 a point (corr .73), SP −10.8 + 0.211, RP −10.7 + 0.210. The hitters' line held (`MARKET_PERF` −11.9 + 0.223), so it stands. Prices already count the glove through OVR.
+
+**The scouts' reads** (`W.sc_free_agents`):
+- A bat the glove drags down (defense ≤ 50, better than the rating): "The rating counts the glove (defense 46), and that's the weak spot. At DH or first base the bat plays better than the number: contact …, power …".
+- A glove at a position that prizes it (defense ≥ 75 at C, SS, 2B, OF): "About what the rating says, and the glove carries it (defense 82): a player for the field more than the bat."
+- (`Diamonds.worthOf` already reads a hitter's worth as the bat, `_roleValue`, so a slugger with a poor glove can be worth more than the rating.)
+
+**Checks:** check-defense (+7):
+- value at a spot (the glove at short, the bat at DH, out of position less, the OVR at the primary);
+- Impact (a shortstop's great/average/poor glove; a DH's nothing; a first baseman's less than a shortstop's).
+
+**Fresh team:** not required (r205's is).

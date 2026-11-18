@@ -21,6 +21,7 @@
  * Section reference: Section 30 (Impact Rating — LOCKED)
  */
 
+import { DEF_IMP, OVR_DEF_WEIGHT } from '../data/constants.js';   // r206 §122.84
 import {
   IMP_WINDOW_7,
   IMP_WINDOW_15,
@@ -362,7 +363,14 @@ function _hitterIMP(stats, player) {
             - (kDelta     * IMP_H_STRIKEOUT_PENALTY)
             - babipAdj;
 
-  return _round(imp * IMP_H_SCALE * pa / (pa + IMP_SHRINK_PA));
+  // r206 §122.84 the glove: the fielder's runs (hits taken away and let through, errors over the position's
+  // usual), a rate per 600 PA, weighed as the position weighs the glove in OVR (a DH: nothing).
+  const dpos = (player && primaryPos(player)) || 'OF';
+  const fieldRuns = DEF_IMP.hitRuns * ((stats.dSave || 0) - (stats.dCost || 0))
+                  - DEF_IMP.errRuns * ((stats.e || 0) - (DEF_IMP.eRate[dpos] ?? 0.02) * pa);
+  const defImp = fieldRuns * 600 / pa * DEF_IMP.k * (OVR_DEF_WEIGHT[dpos] || 0) * pa / (pa + DEF_IMP.shrinkPA);
+
+  return _round((imp * IMP_H_SCALE + defImp) * pa / (pa + IMP_SHRINK_PA));
 }
 
 // ─────────────────────────────────────────────────────────────

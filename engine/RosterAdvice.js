@@ -19,7 +19,7 @@
  */
 
 import { PLAYER_GROUP, ROSTER_ADVICE, POSITION_RULES } from '../data/constants.js';
-import { canPlay, difficulty, familiarity, pitchRoles, stretchOf } from './Positions.js';
+import { canPlay, difficulty, familiarity, pitchRoles, stretchOf, valueAt } from './Positions.js';
 import { activeTeaching, teachablePositions, teachRead, startTeaching, activeSimGames, stretchRead, startSimGames } from './PlayerWork.js';
 import { isAvailable, computeAge, baseballYear } from './PlayerFactory.js';
 import { eligibleSlotsFor, moveOptions, applyMove, tradedAway } from './RosterEngine.js';
@@ -53,17 +53,19 @@ export function adviceFor(state, skip = null) {
     const o = sl.playerId ? players[sl.playerId] : null;
     if (!ok(o)) return;
     const fits = bench.filter(b => eligibleSlotsFor(b).includes(sl.slot));
-    const best = fits.sort((a, b) => b.ovr - a.ovr)[0];
-    if (best && best.ovr - o.ovr >= A.hitterGap && _can(state, best.id, `slot:${j}`)) {
-      out.push({ kind: 'bat', key: `bat:${best.id}:${o.id}`, inId: best.id, outId: o.id, slot: sl.slot, gap: best.ovr - o.ovr,
+    // (r206 §122.84 at that spot: the bat and the glove as the position weighs them)
+    const v = (p) => valueAt(p, sl.slot);
+    const best = fits.sort((a, b) => v(b) - v(a))[0];
+    if (best && v(best) - v(o) >= A.hitterGap && _can(state, best.id, `slot:${j}`)) {
+      out.push({ kind: 'bat', key: `bat:${best.id}:${o.id}`, inId: best.id, outId: o.id, slot: sl.slot, gap: v(best) - v(o),
                  move: { playerId: best.id, key: `slot:${j}` } });
       return;
     }
     // ── A prospect: young, behind the regular but not by much ──
-    const young = fits.filter(b => computeAge(b.dob, year) <= A.prospectAge && o.ovr - b.ovr <= A.prospectGap && o.ovr >= b.ovr)
-      .sort((a, b) => b.ovr - a.ovr)[0];
+    const young = fits.filter(b => computeAge(b.dob, year) <= A.prospectAge && v(o) - v(b) <= A.prospectGap && v(o) >= v(b))
+      .sort((a, b) => v(b) - v(a))[0];
     if (young && _can(state, o.id, `in:${young.id}`)) {
-      out.push({ kind: 'prospect', key: `prospect:${young.id}:${o.id}`, inId: young.id, outId: o.id, slot: sl.slot, gap: young.ovr - o.ovr,
+      out.push({ kind: 'prospect', key: `prospect:${young.id}:${o.id}`, inId: young.id, outId: o.id, slot: sl.slot, gap: v(young) - v(o),
                  move: { playerId: o.id, key: `in:${young.id}` } });
     }
   });
@@ -175,8 +177,8 @@ export function leaveIssues(draft, rand, n) {
     if (!ok(o) || sl.slot === 'DH') return;
     const seated = new Set(u.lineupSlots.map(x => x.playerId));
     const b = (u.rosterIds || []).map(id => players[id]).find(p => ok(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !['SP', 'RP'].includes(p.pos)
-      && !seated.has(p.id) && eligibleSlotsFor(p).includes(sl.slot) && o.ovr - p.ovr >= A.hitterGap && o.ovr - p.ovr <= START_MAX_GAP);
-    if (b) ops.push({ kind: 'bat', gap: o.ovr - b.ovr, run: () => _can(draft, b.id, `slot:${j}`) && applyMove(draft, b.id, `slot:${j}`) });
+      && !seated.has(p.id) && eligibleSlotsFor(p).includes(sl.slot) && valueAt(o, sl.slot) - valueAt(p, sl.slot) >= A.hitterGap && valueAt(o, sl.slot) - valueAt(p, sl.slot) <= START_MAX_GAP);
+    if (b) ops.push({ kind: 'bat', gap: valueAt(o, sl.slot) - valueAt(b, sl.slot), run: () => _can(draft, b.id, `slot:${j}`) && applyMove(draft, b.id, `slot:${j}`) });
   });
   // A rotation arm and a weaker pitcher-bench starter: they trade places.
   const order = u.rotation?.order || [];
