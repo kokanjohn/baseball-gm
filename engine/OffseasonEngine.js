@@ -39,6 +39,7 @@ import {
   SUB_RATING_MAX,
   AGE_DEVELOPMENT_WINDOWS,
   AGE_CURVES,
+  DEF_AGE_CURVE,
   FA_CLASS_INTL_AGE,
   DIAMOND,
   RETIREMENT_AGE_HARD,
@@ -595,6 +596,19 @@ function _develop(p, nextYear, seasonNum, staff = null, facility = 0, played = n
       const delta = Math.max(-5, Math.min(4, Math.round(change + variance)));
       sr[key] = Math.max(SUB_RATING_MIN, Math.min(SUB_RATING_MAX, sr[key] + delta));
     });
+    // r207 §122.85 the glove ages on its own curve (young players grow it with the games; our bench coach helps)
+    if (!isPitcher(p) && sr.defense != null) {
+      let change = DEF_AGE_CURVE[idx];
+      if (p.trait === 'youngGun' && age < 28) change += 1;
+      if (staff) change += Coach.winterBonus(staff, p, 'defense', age);
+      change += facility;
+      if (idx === 0 && played != null) {
+        if (played >= DEV_REPS.regular.hitter) change += DEV_REPS.regularBonus;
+        else if (played < DEV_REPS.sat.hitter) change -= DEV_REPS.satPenalty;
+      }
+      const variance = p.trait === 'consistent' ? _rng(-1, 1) : p.trait === 'volatile' ? _rng(-4, 4) : _rng(-2, 2);
+      sr.defense = Math.max(SUB_RATING_MIN, Math.min(SUB_RATING_MAX, sr.defense + Math.max(-5, Math.min(4, Math.round(change + variance)))));
+    }
     p.ovr = ovrFor(p, sr);
     p._ovrChange = (p.ovr || 0) - (before || 0);
     if (p.careerStats && p.ovr > (p.careerStats.peakOvr || 0)) {

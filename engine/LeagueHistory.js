@@ -20,7 +20,7 @@ import { plateAppearanceRates } from './SimEngine.js';
 import { giveUntestedGap } from './Diamonds.js';
 import { ovrFor, computeAge, _freshStats } from './PlayerFactory.js';
 import {
-  HISTORY, PLAYER_ORIGIN, AGE_CURVES, AGE_DEVELOPMENT_WINDOWS,
+  HISTORY, PLAYER_ORIGIN, AGE_CURVES, AGE_DEVELOPMENT_WINDOWS, DEF_AGE_CURVE,
   SUB_RATING_MIN, SUB_RATING_MAX, SIM_RATING_AVG, IMP_LEAGUE_AVG_ERA,
 } from '../data/constants.js';
 
@@ -138,6 +138,11 @@ function _backOneYear(sr, keys, ageAfter, trait, rand) {
     const delta = Math.max(-5, Math.min(4, Math.round(change + variance)));
     out[key] = Math.max(SUB_RATING_MIN, Math.min(SUB_RATING_MAX, out[key] - delta));
   });
+  // r207 §122.85 the glove on its own curve (no roll: the history's draws stay as they were)
+  if (out.defense != null) {
+    const change = DEF_AGE_CURVE[idx] + (trait === 'youngGun' && ageAfter < 28 ? 1 : 0);
+    out.defense = Math.max(SUB_RATING_MIN, Math.min(SUB_RATING_MAX, out.defense - Math.round(change)));
+  }
   return out;
 }
 

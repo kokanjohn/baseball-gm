@@ -85,10 +85,11 @@ export function ovrFor(p, sr = p?.subRatings, injuryPenalty = null) {
  * (so adding it changed nothing else about a new player): around the target, by position, ± the spread,
  * pulled toward the speed where range matters.
  */
-export function defenseFor(id, pos, target, speed) {
+export function defenseFor(id, pos, target, speed, age = null) {
   const r = dice(`def:${id}`)();
   const pull = (DEF_GEN.speedPull[pos] || 0) * ((speed ?? target) - target);
-  return clamp(Math.round(target + (DEF_GEN.bias[pos] ?? 0) + pull + (r * 2 - 1) * DEF_GEN.spread), SUB_RATING_MIN, SUB_RATING_MAX);
+  const aged = age == null ? 0 : (DEF_GEN.ageShift.find(([max]) => age <= max)?.[1] ?? 0);   // r207 §122.85
+  return clamp(Math.round(target + (DEF_GEN.bias[pos] ?? 0) + pull + aged + (r * 2 - 1) * DEF_GEN.spread), SUB_RATING_MIN, SUB_RATING_MAX);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -161,7 +162,7 @@ function _createPlayer(config) {
   const subRatings = _generateSubRatings(targetOvr, isPitcher);
   // r205 §122.83 the glove, and the OVR counting it, by the primary position ("2B/SS" plays second)
   const primary = isPitcher ? pos : (seedPositions({ pos, nativePos: pos }).primary || pos);
-  if (!isPitcher) subRatings.defense = defenseFor(id, primary, targetOvr, subRatings.speed);
+  if (!isPitcher) subRatings.defense = defenseFor(id, primary, targetOvr, subRatings.speed, age);
 
   // OVR derived from sub-ratings — never set directly
   const ovr = computeOVR(subRatings, null, primary);

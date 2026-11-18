@@ -131,6 +131,7 @@ const COMPOSE_CHANNELS = [
     priority: 'medium',
     topics: [
       { id: 'bc_tactics',    label: 'The running game',         desc: 'Close games, steals, and how much you want us to run' },
+      { id: 'bc_defense',    label: 'Work with a hitter on defense', desc: 'Pick a hitter: the coach decides how much work it takes', player: 'hitters' },
       { id: 'bc_teach',      label: 'Teach a player a position', desc: 'Pick a hitter and a position: extra reps there in practice', player: 'hitters', skill: true, choices: 'positions' },
     ],
   },
@@ -1115,7 +1116,7 @@ async function _sendCompose(topicId, channelId, state) {
   const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`,
                        sc_program: (p) => `A development program for ${p.name}`, mgr_rest: (p) => `A day off for ${p.name}`,
                        doc_health: (p) => `${p.name}'s health`, bc_teach: (p) => `Teach ${p.name} ${skill}`,
-                       pc_stretch: (p) => `Stretch ${p.name} out`, pc_roles: (p) => `${p.name}'s role` };
+                       pc_stretch: (p) => `Stretch ${p.name} out`, bc_defense: (p) => `Work with ${p.name} on defense`, pc_roles: (p) => `${p.name}'s role` };
 
   // Record cooldown immediately
   if (!topic?.deal && !topic?.player && !topic?.looks) StateManager.mutate(s => {

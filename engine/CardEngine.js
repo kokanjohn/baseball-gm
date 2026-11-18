@@ -6302,7 +6302,8 @@ function _deliverDevelopmentReport(ev, atMs) {
 function _deliverWorkReport(st, p, ev, atMs) {
   const staff = st.userTeam?.coachingStaff || {};
   const person = ev.owner === 'program' ? staff.scoutingDirector : staff[ev.owner];
-  const role = ev.owner === 'program' ? 'Scouting Director' : ev.owner === 'hittingCoach' ? 'Hitting Coach' : 'Pitching Coach';
+  const role = ev.owner === 'program' ? 'Scouting Director' : ev.owner === 'hittingCoach' ? 'Hitting Coach'
+             : ev.owner === 'benchCoach' ? 'Bench Coach' : 'Pitching Coach';
   const sender = person?.name && !person.vacant ? `${person.name}, ${role}` : role;
   const parts = ev.keys.map(k => `${k} from ${ev.from[k]} to ${ev.to[k]}`);
   const moved = ev.keys.some(k => ev.to[k] > ev.from[k]);

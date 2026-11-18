@@ -13078,3 +13078,20 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 - Impact (a shortstop's great/average/poor glove; a DH's nothing; a first baseman's less than a shortstop's).
 
 **Fresh team:** not required (r205's is).
+
+## §122.85 — r207: Defense, phase 3 of 3 (the bench coach, aging, young players)
+**The bench coach's glove work (Compose → Bench Coach → "Work with a hitter on defense"):** pick a hitter; the coach makes the call like the hitting and pitching coaches do (`PlayerWork.coachRead(…, 'defense')`, owner `benchCoach`):
+- tweaks before games (free), or focused days away with a cost ("the extra field and staff time");
+- one player at a time for the bench coach, separate from the hitting coach's player (position teaching is its own track);
+- a DH: "this only pays off if [name] plays the field";
+- pitchers have no glove to work on.
+- The plan lands in `defense` (`DevelopmentEngine.WEIGHT.defense` 0.25: a plan's gain in glove points, worth what the position weighs the glove: most at C/SS, little at 1B). The OVR follows (`ovrFor`).
+- The odds: `gainMultiplier(…, owner)` uses the bench coach's relationship; `CoachEngine.devFactor(…, 'defense')` the bench coach's quality, ×1.25 for a defense specialist. The report comes from the Bench Coach.
+
+**Aging** (`DEF_AGE_CURVE` [2, 0, −2, −3, −4.5] by window, GROWTH…STEEP): the glove grows faster than the bat young, holds at 25–27, and fades sooner and faster in the 30s. Every club alike (`OffseasonEngine._develop`), with the same traits, the training center and playing time a young player gets. Our bench coach adds winter work (`winterBonus(…, 'defense')`: quality, +0.5 with the defense specialty). The league history's backward walk undoes the same curve (no roll).
+
+**Young players / new players** (`DEF_GEN.ageShift`): a new player's glove is set against the bat by age, as the curves add up: 22 and under 0, 23–26 +2, 27–30 0, 31–33 −3, 34+ −6. Draft prospects, international signings and the free-agent class all come through `createPlayer`, so all have a glove and an OVR that counts it. The scouts read the glove as it is: no hidden gap.
+
+**Checks:** check-defense (+12: age, young players, the bench coach through Compose); test-teaching-ui (+1: the topic).
+
+**Fresh team:** recommended (new players' gloves by age), not required.

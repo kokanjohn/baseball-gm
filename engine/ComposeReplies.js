@@ -974,7 +974,7 @@ const TOPIC_LABELS = {
   bc_tactics: 'the running game', pc_bullpen: 'the bullpen', pc_roles: 'the bullpen roles', tix_attendance: 'attendance',
   tix_promo: 'a promotion', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
-  hc_work: 'the work', pc_work: 'the work', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
+  hc_work: 'the work', pc_work: 'the work', bc_defense: 'the glove work', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
 };
 
 
@@ -1342,11 +1342,13 @@ function coachWork(f, r, who, arg) {
   }
   if (read.already) return { body: [`${name} already has a plan on ${skill} running. Let it land first.`], memo: { playerId: p.id }, topic };
   const out = [`${name}'s ${skill} is ${value}. ${ROOM_WORDS[read.room]} ${ODDS_WORDS[read.odds](read.age)}`];
+  // r207 §122.85 a designated hitter's glove only counts when the glove is in the lineup
+  if (skill === 'defense' && primaryPos(p) === 'DH') out.push(`${name} is our DH, so this only pays off if ${name} plays the field.`);
   const spot = isArm(p) ? (p.pos === 'SP' ? 'between starts' : 'in the bullpen sessions') : 'before games';
   if (read.kind === 'tweaks') {
     out.push(`This doesn't need time away. I'll fold it into the work we already do ${spot}: extra reps and a couple of adjustments. ${name} stays available, and it costs us nothing.`);
   } else {
-    out.push(`This needs focused work: ${plural(read.days, 'day')} away from the club with me at the complex, about ${formatK(read.costK)} for the extra cage and staff time.`);
+    out.push(`This needs focused work: ${plural(read.days, 'day')} away from the club with me at the complex, about ${formatK(read.costK)} for the extra ${skill === 'defense' ? 'field' : 'cage'} and staff time.`);
     out.push(windowWords(f, name, read.window));
     out.push(`The offer stands for ${plural(PLAYER_WORK.offerDays, 'day')}, so you can pick the day.`);
   }
@@ -1355,7 +1357,7 @@ function coachWork(f, r, who, arg) {
     body: out, memo: { playerId: p.id }, topic,
     decision: {
       playerId: p.id, onYes: 'coach_work', yesLabel: read.kind === 'tweaks' ? 'Start the Work' : 'Start the Work Now', noLabel: 'Not Now',
-      work: { skill, owner: read.coach, days: read.days, gain: read.gain, source: read.coach === 'hittingCoach' ? 'hc_work' : 'pc_work' },
+      work: { skill, owner: read.coach, days: read.days, gain: read.gain, source: read.coach === 'hittingCoach' ? 'hc_work' : read.coach === 'benchCoach' ? 'bc_defense' : 'pc_work' },
       costK: read.costK || 0, expiresInMs: PLAYER_WORK.offerDays * 86_400_000,
       yesMsg: read.kind === 'tweaks' ? `I'll start with ${name} today.` : `${name} is with me for the next ${plural(read.days, 'day')}.`,
       noMsg: 'Understood. Another time.',
@@ -1364,6 +1366,7 @@ function coachWork(f, r, who, arg) {
 }
 W.hc_work = coachWork;
 W.pc_work = coachWork;
+W.bc_defense = (f, r, who, arg) => coachWork(f, r, who, { ...arg, skill: 'defense' });   // r207 §122.85
 
 /** r167 §122.35 the pitching coach on stretching one pitcher out (sim games). */
 W.pc_stretch = function pitchStretch(f, r, who, arg) {

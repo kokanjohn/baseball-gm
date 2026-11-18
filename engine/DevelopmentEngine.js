@@ -53,6 +53,7 @@ const DAY = 86_400_000;
 const WEIGHT = {
   contact: OVR_H_CONTACT_WEIGHT, power: OVR_H_POWER_WEIGHT, speed: OVR_H_SPEED_WEIGHT,
   stuff: OVR_P_STUFF_WEIGHT, control: OVR_P_CONTROL_WEIGHT, stamina: OVR_P_STAMINA_WEIGHT,
+  defense: 0.25,   // r207 §122.85 a plan's gain in glove points (what it's worth depends on the position)
 };
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 
@@ -76,15 +77,16 @@ export function defaultFocus(player) {
 }
 
 /** How much of a hoped-for gain this player can realistically take on. */
-export function gainMultiplier(draft, player) {
+export function gainMultiplier(draft, player, owner = null) {
   const age = computeAge(player.dob, baseballYear(draft));
   let m = age <= 24 ? 1.3 : age <= 29 ? 1.0 : age <= 33 ? 0.7 : 0.4;
   if (player.trait === 'youngGun' && age < 28) m *= 1.2;
-  const coach = draft.userTeam?.coachingStaff?.[isPitcher(player) ? 'pitchingCoach' : 'hittingCoach'];
+  const glove = owner === 'benchCoach';   // r207 §122.85 the bench coach's glove work
+  const coach = draft.userTeam?.coachingStaff?.[glove ? 'benchCoach' : isPitcher(player) ? 'pitchingCoach' : 'hittingCoach'];
   const rel = player.teamId === 'user' && Number.isFinite(coach?.relationship) ? coach.relationship : 50;
   m *= 0.85 + 0.3 * (rel / 100);
   // §112.2 the coach's quality, and a youth specialist with the young ones.
-  if (player.teamId === 'user') m *= devFactor(draft.userTeam?.coachingStaff, player, age) * trainingDevFactor(draft.userTeam);   // §112.4 the training center
+  if (player.teamId === 'user') m *= devFactor(draft.userTeam?.coachingStaff, player, age, glove ? 'defense' : null) * trainingDevFactor(draft.userTeam);   // §112.4 the training center
   return m;
 }
 
@@ -110,7 +112,7 @@ export function startPlan(draft, playerId, { gain, focus = null, source = 'card'
   const active = (draft.developmentPlans || []).filter(x => x.playerId === playerId && x.status === 'active'
     && x.keys.some(k => keys.includes(k)));
   // One plan per skill at a time: overlapping work has diminishing returns.
-  let planned = gain * gainMultiplier(draft, p) * (active.length ? 0.5 : 1);
+  let planned = gain * gainMultiplier(draft, p, owner) * (active.length ? 0.5 : 1);
   // r159 one skill, worked on purpose: the room left in it.
   if (keys.length === 1) planned *= roomLeft(p.subRatings[keys[0]]);
 

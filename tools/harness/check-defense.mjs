@@ -10,10 +10,17 @@ import { computeOVR, ovrFor, baseballYear } from '../../engine/PlayerFactory.js'
 import { generatePlays, leagueNorms } from '../../engine/SimEngine.js';
 import { migrate } from '../../store/schema.js';
 import { dice } from '../../engine/Dice.js';
-import { OVR_DEF_WEIGHT, DEF_IMP } from '../../data/constants.js';
+import { OVR_DEF_WEIGHT, DEF_IMP, DEF_GEN } from '../../data/constants.js';
 import { valueAt } from '../../engine/Positions.js';
 import { computePlayerIMP } from '../../engine/IMPEngine.js';
 import { adviceFor } from '../../engine/RosterAdvice.js';
+import * as CE from '../../engine/CardEngine.js';
+import * as Dev from '../../engine/DevelopmentEngine.js';
+import * as Coach from '../../engine/CoachEngine.js';
+import { coachRead } from '../../engine/PlayerWork.js';
+import { developForWinter } from '../../engine/OffseasonEngine.js';
+import { computeAge } from '../../engine/PlayerFactory.js';
+import { voiceProblems } from './voice-rules.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => {
@@ -127,6 +134,94 @@ console.log('\nImpact');
   check(`a DH's doesn't (${dhA} = ${dhB})`, dhA === dhB);
   const fbGold = imp(p('1B', { e: usual('1B') - 6, dSave: 14, dCost: 3 })), fbAvg = imp(p('1B', { e: usual('1B'), dSave: 5, dCost: 5 }));
   check(`a first baseman's counts less than a shortstop's (${(fbGold - fbAvg).toFixed(1)} vs ${(gold - avg).toFixed(1)})`, fbGold - fbAvg < gold - avg && fbGold > fbAvg);
+}
+
+// ── r207 §122.85 phase 3: aging, young players, the bench coach ─────────
+console.log('\nAge');
+{
+  const yr = baseballYear(S());
+  const ageOf = (p) => computeAge(p.dob, yr);
+  const lead = (lo, hi) => mean(hitters.filter(p => ageOf(p) >= lo && ageOf(p) <= hi).map(p => p.subRatings.defense - computeOVR({ ...p.subRatings, defense: 0 }, null, 'DH') - (DEF_GEN.bias[prim(p)] ?? 0)));
+  const [young, prime, old] = [lead(23, 26), lead(27, 30), lead(32, 45)];
+  check(`a veteran's glove is behind the bat, a younger player's isn't (23–26 ${young.toFixed(1)}, 27–30 ${prime.toFixed(1)}, 32+ ${old.toFixed(1)})`, young > old + 2 && prime > old + 2);
+  // A winter, many times over, at a given age (copies; nothing saved).
+  const base = hitters.find(p => (p.positions?.primary || p.pos) === 'SS');
+  const winter = (age) => {
+    let dDef = 0, dBat = 0, n = 0;
+    for (let i = 0; i < 300; i++) {
+      const p = structuredClone(base); p.trait = null;
+      p.subRatings = { contact: 60, power: 60, speed: 60, defense: 60 };
+      const by = Number(String(p.dob).slice(0, 4));
+      const nextYear = [by + age, by + age + 1].find(y => computeAge(p.dob, y) === age);
+      const b0 = { ...p.subRatings };
+      developForWinter(p, nextYear, 2, null, 0, null);
+      dDef += p.subRatings.defense - b0.defense; dBat += (p.subRatings.contact + p.subRatings.power + p.subRatings.speed - 180) / 3; n++;
+    }
+    return { def: dDef / n, bat: dBat / n, n };
+  };
+  const at = [21, 26, 29, 32, 35].map(winter);
+  check(`a winter: the glove grows young and fades sooner (glove/bat at 21 ${at[0].def.toFixed(1)}/${at[0].bat.toFixed(1)}, 26 ${at[1].def.toFixed(1)}/${at[1].bat.toFixed(1)}, 29 ${at[2].def.toFixed(1)}/${at[2].bat.toFixed(1)}, 32 ${at[3].def.toFixed(1)}/${at[3].bat.toFixed(1)}, 35 ${at[4].def.toFixed(1)}/${at[4].bat.toFixed(1)})`,
+        at.every(x => x.n > 50) && at[0].def > at[0].bat && at[0].def > 1 && at[2].def < at[2].bat && at[3].def < at[3].bat && at[4].def < -3);
+  const p0 = structuredClone(base); p0.subRatings.defense = 60;
+  const ny = Number(String(p0.dob).slice(0, 4)) + 30;
+  developForWinter(p0, ny, 2, null, 0, null);
+  check(`the OVR follows the glove after a winter (${p0.ovr} = ${ovrFor(p0)})`, p0.ovr === ovrFor(p0));
+  const staff = (spec, q) => ({ benchCoach: { name: 'B', quality: q, specialty: spec }, hittingCoach: { name: 'H', quality: 60, specialty: 'contact' } });
+  check(`our bench coach's winter work: the glove is the bench coach's (defense specialist 80: +${Coach.winterBonus(staff('defense', 80), base, 'defense', 28).toFixed(2)}, baserunning 80: +${Coach.winterBonus(staff('baserunning', 80), base, 'defense', 28).toFixed(2)}, the hitting coach's contact unchanged)`,
+        Coach.winterBonus(staff('defense', 80), base, 'defense', 28) > Coach.winterBonus(staff('baserunning', 80), base, 'defense', 28) + 0.4
+        && Coach.winterBonus(staff('defense', 40), base, 'defense', 28) < Coach.winterBonus(staff('defense', 80), base, 'defense', 28)
+        && Coach.winterBonus(staff('defense', 80), base, 'contact', 28) === Coach.winterBonus(staff('baserunning', 40), base, 'contact', 28));
+  check('in-season work: a defense specialist gets more out of it',
+        Coach.devFactor(staff('defense', 70), base, 28, 'defense') > Coach.devFactor(staff('baserunning', 70), base, 28, 'defense') * 1.2);
+}
+
+console.log('\nYoung players');
+{
+  const pool = (S().freeAgentPool || []).map(id => S().players[id]).filter(p => p && !['SP', 'RP'].includes(p.pos));
+  const farm = Object.values(S().players).filter(p => p && !['SP', 'RP'].includes(p.pos) && computeAge(p.dob, baseballYear(S())) <= 23);
+  check(`every young hitter has a glove, and an OVR that counts it (${farm.length} 23 and under, ${pool.length} free agents)`, farm.length > 20 && [...farm, ...pool].every(p => p.subRatings.defense >= 40 && p.ovr === ovrFor(p)));
+}
+
+console.log('\nThe bench coach on a hitter\'s glove (Compose)');
+{
+  const GEN = /\b(he|him|his|she|her|hers|himself|herself)\b/i;
+  const ask = (topicId, channelId, arg) => {
+    const at = clock.get();
+    CE.deliverComposeCard(topicId, channelId, { topicLabel: 'test', arg, nowMs: at });
+    const pending = (S().scheduledCards || []).filter(c => c.isCompose && c._composeTopic === topicId).sort((a, b) => b._sentAtMs - a._sentAtMs)[0];
+    clock.set(pending.deliverAtMs + 1000);
+    CE.releaseDueCards(clock.get());
+    return CE.getInbox().find(c => c.instanceId === pending.instanceId);
+  };
+  const ours = S().userTeam.lineupSlots.map(x => S().players[x.playerId]).filter(Boolean);
+  const ss = ours.find(p => (p.positions?.primary || p.pos) !== 'DH');
+  const arm = S().userTeam.rosterIds.map(id => S().players[id]).find(p => p?.pos === 'SP');
+  check('a pitcher has no glove to work on', coachRead(S(), arm.id, 'defense', clock.get()) == null);
+  SM.mutate(s => { const q = s.players[ss.id]; q.subRatings.defense = 46; q.ovr = ovrFor(q); });
+  const read = coachRead(S(), ss.id, 'defense', clock.get());
+  check(`${ss.name}'s glove (46) is the bench coach's call: focused work, ${read?.days} days`, read?.coach === 'benchCoach' && read.kind === 'focused' && read.days > 0);
+  // The hitting coach busy with someone else doesn't hold the bench coach up.
+  const other = ours.find(p => p.id !== ss.id);
+  SM.mutate(s => { Dev.startPlan(s, other.id, { gain: 1, focus: ['contact'], source: 'test', owner: 'hittingCoach' }, clock.get()); });
+  const c = ask('bc_defense', 'bench_coach', { playerId: ss.id });
+  console.log(`    “${c?.subject}” (${c?.sender}) — ${c?.body?.replace(/\n+/g, ' ')}`);
+  check('the reply: the glove where it stands, the days, the cost — a decision, the bench coach\'s', !!c && /defense is 46/.test(c.body) && /days away/.test(c.body)
+        && /field and staff time/.test(c.body) && c._raw?.onYes === 'coach_work' && c._raw._workOwner === 'benchCoach' && c._raw._workSkill === 'defense' && c._raw._workSource === 'bc_defense');
+  check('…in the coach\'s own voice, gender-neutral', !!c && voiceProblems(c, () => null).filter(([r]) => r !== 'deptSelf').length === 0 && !GEN.test(c.body), c?.body);
+  CE.resolve(c.instanceId, 'yes');
+  const plan = (S().developmentPlans || []).find(x => x.playerId === ss.id && x.status === 'active');
+  check('yes: a plan on the glove runs, the bench coach\'s', !!plan && plan.owner === 'benchCoach' && plan.keys.join() === 'defense' && plan.from.defense === 46);
+  check('…and the bench coach takes one player at a time', !!Dev.activeWork(S(), 'benchCoach') && !!Dev.activeWork(S(), 'hittingCoach'));
+  const ovr0 = S().players[ss.id].ovr;
+  SM.mutate(s => { const pl = s.developmentPlans.find(x => x.id === plan.id); for (const st of pl.steps) st.atMs = clock.get(); });
+  SM.mutate(s => { Dev.applyDevelopment(s, clock.get() + 1000); });
+  const after = S().players[ss.id];
+  check(`the work lands in the glove and the OVR (defense 46 → ${after.subRatings.defense}, OVR ${ovr0} → ${after.ovr})`,
+        after.subRatings.defense >= 46 && after.ovr === ovrFor(after) && (after.subRatings.defense === 46 || after.ovr >= ovr0));
+  const dh = { ...ss, positions: { primary: 'DH', elig: ['DH'], fam: {} }, pos: 'DH' };
+  SM.mutate(s => { s.players[ss.id].positions = { ...s.players[ss.id].positions, primary: 'DH' }; s.players[ss.id].pos = 'DH'; });
+  const r2 = ask('bc_defense', 'bench_coach', { playerId: ss.id });
+  check('a DH: the coach says it only pays off in the field', !!r2 && /only pays off if/.test(r2.body), r2?.body);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -154,21 +154,23 @@ export function staffEffects(staff) {
   };
 }
 
-const _coachFor = (staff, p) => staff?.[isPitcher(p) ? 'pitchingCoach' : 'hittingCoach'];
+// r207 §122.85 the glove is the bench coach's
+const _coachFor = (staff, p, key = null) => staff?.[key === 'defense' ? 'benchCoach' : isPitcher(p) ? 'pitchingCoach' : 'hittingCoach'];
 
 /** In-season development: how much of a plan's gain the coach gets out of the player (0.8–1.2; youth ×1.2 at 25 and under). */
-export function devFactor(staff, player, age) {
-  const c = _coachFor(staff, player);
+export function devFactor(staff, player, age, key = null) {
+  const c = _coachFor(staff, player, key);
   let m = 0.8 + 0.4 * clamp((qualityOf(c) - QUALITY_MIN) / (QUALITY_MAX - QUALITY_MIN), 0, 1);
   if (_spec(c, 'youth') && age <= 25) m *= 1.2;
+  if (key === 'defense' && _spec(c, 'defense')) m *= 1.25;
   return m;
 }
 
-const _KEY_SPEC = { control: 'command', stuff: 'power', contact: 'contact', power: 'power' };
+const _KEY_SPEC = { control: 'command', stuff: 'power', contact: 'contact', power: 'power', defense: 'defense' };
 
 /** The winter's growth: points added to one sub-rating's yearly change (about −0.4 to +1.1). */
 export function winterBonus(staff, player, key, age) {
-  const c = _coachFor(staff, player);
+  const c = _coachFor(staff, player, key);
   let b = _off(c) * 0.6;
   if (_KEY_SPEC[key] && _spec(c, _KEY_SPEC[key])) b += 0.5;
   if (_spec(c, 'youth') && age <= 25) b += 0.6;

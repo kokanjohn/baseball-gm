@@ -184,6 +184,9 @@ export const OVR_DEF_WEIGHT = Object.freeze({ C: 0.30, SS: 0.30, '2B': 0.22, '3B
 export const DEF_GEN = Object.freeze({
   bias: Object.freeze({ C: 3, SS: 5, '2B': 3, '3B': 1, OF: 0, '1B': -6, DH: -12 }),
   spread: 10, speedPull: Object.freeze({ SS: 0.25, '2B': 0.2, OF: 0.25, '3B': 0.1 }),
+  // r207 §122.85 where the glove stands against the bat by age (the curves above, summed): a young regular's
+  // is ahead of the bat, a veteran's behind. [age at most, shift]
+  ageShift: Object.freeze([[22, 0], [26, 2], [30, 0], [33, -3], [99, -6]]),
 });
 
 // r205 §122.83 Defense on the field (SimEngine): each ball in play goes to a fielder. The fielder's glove
@@ -1317,6 +1320,11 @@ export const AGE_CURVES = Object.freeze([
   Object.freeze([1.0, 0.5, -1.0, -2.0, -3.5]),
   Object.freeze([0.5, 0.0, -1.5, -2.5, -4.0]),
 ]);
+
+// r207 §122.85 the glove's yearly change by window (GROWTH…STEEP): it grows faster than the bat young,
+// holds at 25–27 and fades sooner and faster in the 30s (range goes first). Our bench coach's winter work
+// adds to it (CoachEngine.winterBonus 'defense': quality, +0.5 with the defense specialty).
+export const DEF_AGE_CURVE = Object.freeze([2.0, 0.0, -2.0, -3.0, -4.5]);
 
 // ─────────────────────────────────────────────────────────────
 // PLAYER RETIREMENT THRESHOLDS (Section 20.7 — LOCKED)

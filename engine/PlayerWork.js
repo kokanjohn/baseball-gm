@@ -130,17 +130,19 @@ function oddsWord(mult) {
  */
 export function coachRead(state, playerId, skill, atMs) {
   const p = state.players?.[playerId];
-  if (!workable(state, p) || !skillsOf(p).includes(skill)) return null;
+  // r207 §122.85 the glove is the bench coach's (hitters only)
+  const glove = skill === 'defense' && !isPitcher(p) && p?.subRatings?.defense != null;
+  if (!workable(state, p) || (!glove && !skillsOf(p).includes(skill))) return null;
   const C = PLAYER_WORK.coach, sr = p.subRatings || {};
   const value = sr[skill] ?? 50;
-  const coach = coachOf(p);
+  const coach = glove ? 'benchCoach' : coachOf(p);
   const busy = activeWork(state, coach);
   const already = (state.developmentPlans || []).some(x => x.status === 'active' && x.playerId === p.id && x.keys.includes(skill));
-  const best = Math.max(...skillsOf(p).map(k => sr[k] ?? 0));
+  const best = Math.max(...[...skillsOf(p), ...(glove ? ['defense'] : [])].map(k => sr[k] ?? 0));
   const focused = value < C.focusedBelow || (best - value >= C.focusedGap && value < C.focusedCap);
   const kind = focused ? 'focused' : 'tweaks';
   const days = focused ? (value < C.lowSkill ? C.focusedDaysLow : C.focusedDays) : 0;
-  const mult = gainMultiplier(state, p) * roomLeft(value);
+  const mult = gainMultiplier(state, p, coach) * roomLeft(value);
   return {
     p, skill, value, coach, busy, already,
     kind, days, costK: days * focusedDayK(p), gain: focused ? C.focusedGain : C.tweaksGain,
