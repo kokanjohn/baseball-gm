@@ -12924,6 +12924,6 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 
 **Open item 12** (seed 5's CPU ranges: one CPU long reliever at 123 relief innings, and 4 CPU trades against a floor of 5): it doesn't happen on r202. Seed 5 now has 8 CPU trades in season 1 and passes the relief-innings cap. These were a season's spread, not a fault. Closed.
 
-**Agent asks across seeds 1–7:** 0, 1, 1, 2, 1, 2 and 2 a season, answered every way (yes, no, no answer).
+**Agent asks across seeds 1–7:** 2, 1, 1, 2, 1, 1 and 2 a season, answered every way (yes, no, no answer).
 
 **Open:** item 10 (the look-ahead's ~340 ms in the worker, low priority).
