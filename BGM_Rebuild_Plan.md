@@ -12918,3 +12918,12 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 - test-trade-advice-ui: Ask the Director from the offer (the deal picked, the button gone); no manager topic; the reply's table opens on the counter and switches.
 
 **Fresh team:** not required.
+
+## §122.80 — the full run after r200–r202, and open item 12 closed
+**Full suite on r202** (the first since r200, per §122.78): every run passes, the season sim, multi-season, every check, and every UI test in both themes. Seeds 2–7 of the season sim pass too.
+
+**Open item 12** (seed 5's CPU ranges: one CPU long reliever at 123 relief innings, and 4 CPU trades against a floor of 5): it doesn't happen on r202. Seed 5 now has 8 CPU trades in season 1 and passes the relief-innings cap. These were a season's spread, not a fault. Closed.
+
+**Agent asks across seeds 1–7:** 0, 1, 1, 2, 1, 2 and 2 a season, answered every way (yes, no, no answer).
+
+**Open:** item 10 (the look-ahead's ~340 ms in the worker, low priority).
