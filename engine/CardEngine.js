@@ -107,6 +107,7 @@ import { rapportOf, rapportGrade, adjustRapport, wouldStart, clubMode, isRental,
 import * as LeagueTrades from './LeagueTrades.js';
 import * as LeaguePos from './LeaguePositions.js';   // r168 §122.35
 import * as FreeAgency from './FreeAgency.js';   // r168
+import * as FaWatch from './FaWatch.js';   // r204 §122.82
 import { buildActivityFeedEntry, pruneActivityFeed } from './SeasonEngine.js';
 const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 import { computeOVR } from './PlayerFactory.js';
@@ -1794,6 +1795,7 @@ function _rosterEventCards(ev, atMs) {
 
 function _rosterConditionCards(delivered, atMs) {
   _scoutFindsGone(atMs);
+  delivered += _faWatchSweep(atMs);   // r204 §122.82
   let state = StateManager.get();
 
   // IL clearances → decision cards (at the moment of clearance).
@@ -2526,6 +2528,15 @@ function _releaseDue(nowMs) {
     // r202 §122.79 the deal the reply is about, as it's on the table: the card's deal table (with the
     // counter, a switch between the two).
     if (reply.sheet) Object.assign(out, { _dealOffer: reply.sheet });
+    // r204 §122.82 the free-agent report: sign any of them, or watch one, from the message; it stays open
+    // (Done closes it, and it closes itself when nothing's left to decide or these looks come back).
+    if (reply.faReport?.ids?.length) {
+      Object.assign(out, {
+        _faRows: reply.faReport.ids, yesLabel: 'Done', noLabel: null, autoResolve: 'roster',
+        expiresAtMs: reply.faReport.closeAtMs, _autoLabel: null,
+        _raw: { ...(c._raw || {}), onYes: 'fa_report_close', onNo: null, onAuto: 'fa_report_close' },
+      });
+    }
     // r202 a deal they've agreed to: the reply is the decision too — make it official, or walk away
     // (the same as their yes; whichever is answered first, the other goes away).
     const ag = reply.agreed;
@@ -6073,6 +6084,60 @@ function _deliverFollowupDef(defId, preset, atMs) {
  * never joins the free-agent pool: once no card or scheduled card still names
  * him and he hasn't signed, he signs elsewhere or goes home (he leaves the league).
  */
+/**
+ * r204 §122.82 the free agents we watch, and the reports that offer them:
+ *   - watches over (signed anywhere, or 30 days) are dropped;
+ *   - a club moving to sign a player we watch → the director's message, at the moment of the move, with
+ *     half a day to sign first (no answer: the club signs) — withdrawn if the player signs before then;
+ *   - a report with nothing left to decide (each player signed, gone, or watched) closes itself.
+ */
+function _faWatchSweep(atMs) {
+  let delivered = 0;
+  let st = StateManager.get();
+  if (Object.keys(st.faWatch || {}).some(id => st.players[id]?.group !== PLAYER_GROUP.FREE_AGENT || st.faWatch[id].untilMs <= atMs)) {
+    StateManager.mutate(s => FaWatch.pruneWatches(s, atMs));
+    st = StateManager.get();
+  }
+  const cards = [...(st.inbox || []), ...(st.scheduledCards || [])];
+  for (const id of st.freeAgentPool || []) {
+    const p = st.players[id], c = p?._watchClaim;
+    if (!c || c.madeAtMs > atMs) continue;
+    if (cards.some(x => x._rosterKey === `watch:${id}:${c.madeAtMs}`)) continue;
+    if (_deliverWatchAlert(p, c)) delivered++;
+  }
+  _withdraw(x => x.cardId === 'watch_alert' && st.players[x._targetPlayerId]?.group !== PLAYER_GROUP.FREE_AGENT);
+  for (const card of (StateManager.get().inbox || []).filter(x => x._faRows && !x.resolved)) {
+    if (FaWatch.reportRows(StateManager.get(), card, atMs).every(r => r.status !== 'open')) {
+      StateManager.mutate(s => { const x = s.inbox.find(y => y.instanceId === card.instanceId); if (x) x._summary = FaWatch.reportSummary(s, x, atMs); });
+      resolve(card.instanceId, 'yes');
+    }
+  }
+  return delivered;
+}
+
+/** r204 §122.82 a club is moving to sign a player we watch: sign first, or let the club have the player. */
+function _deliverWatchAlert(p, claim) {
+  const state = StateManager.get();
+  const d = state.userTeam?.coachingStaff?.scoutingDirector;
+  const club = (state.leagueTeams || []).find(t => t.id === claim.teamId)?.name || 'Another club';
+  const t = FreeAgency.termsFor(state, p);
+  const ask = `${formatK(t.salary || 0)} a year${t.bonus ? ` and a ${formatK(t.bonus)} bonus` : ''}`;
+  const card = _rosterCard(state, {
+    cardId: 'watch_alert', tag: 'SCOUTING', sender: d && !d.vacant ? `${d.name}, Scouting Director` : 'Pro Scouting', avatar: '🔎', type: 'urgent',
+    _rosterKey: `watch:${p.id}:${claim.madeAtMs}`, _targetPlayerId: p.id,
+    subject: `${p.name} is drawing calls`,
+    preview: `${club} is moving to sign ${p.name}. We have until ${When.untilFull(claim.atMs, claim.madeAtMs)} to sign first.`,
+    body: `${club} is moving to sign ${_who(p)}, one of the free agents we've been watching. `
+        + `The ask is still ${ask}. We have until ${When.untilFull(claim.atMs, claim.madeAtMs)} to sign first; let it go, and ${club} signs.`,
+    yesLabel: `Sign ${p.name} (${formatK(t.salary || 0)})`, noLabel: 'Let Go',
+    autoResolve: 'roster', expiresAtMs: claim.atMs,
+    _raw: { onYes: 'watch_sign', onNo: 'watch_let_go', onAuto: 'watch_let_go' },
+    _autoLabel: `No answer — ${club} signed`,
+  });
+  _addDropChoices(state, card);
+  return _deliverAt(card, claim.madeAtMs);
+}
+
 function _scoutFindsGone(atMs) {
   const st = StateManager.get();
   const finds = (st.freeAgentPool || []).filter(id => st.players[id]?._scoutFind);
@@ -6097,7 +6162,7 @@ function _addDropChoices(state, instance) {
   const id = instance._targetPlayerId;
   const p = id && state.players[id];
   // (the signings whose action reads the pick — CardActions.dropFor)
-  const signs = /^(sign_acquire_pitcher|sign_prospect_pitcher|sign_intl_player|sign_intl_flyer|indie_sign|sp15_callup|scout_tip_sign)$/.test(instance._raw?.onYes || '');
+  const signs = /^(sign_acquire_pitcher|sign_prospect_pitcher|sign_intl_player|sign_intl_flyer|indie_sign|sp15_callup|scout_tip_sign|watch_sign)$/.test(instance._raw?.onYes || '');
   if (!p || p.group !== PLAYER_GROUP.FREE_AGENT || !signs) return;
   const side = sideOf(p);
   if (!rosterIsFull(state, 'user', side)) return;

@@ -73,7 +73,8 @@ import { payrollRoom, contractToMove, cutOrderAmount, post as postFunds, retainS
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { markAvailable, cpuView } from './Diamonds.js';
 import { adjustRapport } from './TradeEngine.js';
-import { releaseToFreeAgency, cutBy } from './OffseasonEngine.js';
+import { releaseToFreeAgency, cutBy, signFreeAgent as signFreeAgentOff } from './OffseasonEngine.js';
+import { held, claimInstead, endWatch } from './FaWatch.js';   // r204 §122.82
 import { clearInjuryUpdate, confirmDiagnosis, dayToDayUpdate, placeOnILUpdate } from './InjuryEngine.js';
 import { computeAge, createPlayer, baseballYear } from './PlayerFactory.js';
 import { newPlayerName } from './Names.js';
@@ -334,6 +335,8 @@ export function managerPick(state, teamId, need, exclude = new Set()) {
 function _signable(state, teamId) {
   return (state.freeAgentPool || []).map(id => state.players[id])
     .filter(p => p && p.group === PLAYER_GROUP.FREE_AGENT && !p.isInjured && !cutBy(p, teamId)
+              // r204 §122.82 a club filling a hole doesn't wait on a player we watch (or one already claimed)
+              && (teamId === 'user' || (!held(p) && !state.faWatch?.[p.id]))
               && canAddSalary(state, signingTerms(state, p).salary || 0, 0, teamId));
 }
 
@@ -463,6 +466,7 @@ export function cpuFreeAgentLook(draft, atMs) {
     let best = null;
     for (const fa of _healthyFreeAgents(draft)) {
       if (cutBy(fa, team.id)) continue;   // r200 not back to the club that let the player go
+      if (held(fa)) continue;             // r204 §122.82 a club has moved to sign this one: it waits on us
       const weak = weakestPeer(team, fa, draft.players);
       const seen = cpuView(fa, atMs);   // §122.9 his rating — or his worth, once word has got around
       if (!weak || seen < (weak.ovr || 0) + FA_CPU_UPGRADE_MARGIN) continue;
@@ -475,12 +479,47 @@ export function cpuFreeAgentLook(draft, atMs) {
       if (!best || gain > best.gain || (gain === best.gain && seen > cpuView(best.fa, atMs))) best = { fa, weak, gain };
     }
     if (!best) continue;
+    // r204 §122.82 a player we watch: the club moves to sign, and we hear first (it signs at the deadline)
+    if (claimInstead(draft, best.fa, team.id, atMs, { displaceId: best.weak.id })) continue;
     events.push(...signToClub(draft, best.fa.id, team.id, atMs, { displaceId: best.weak.id, by: 'cpu' }));
     // (a full side lets the weak one go inside signToClub; otherwise he goes now)
     if (draft.players[best.weak.id]?.teamId === team.id) events.push(dropPlayer(draft, best.weak.id, team.id, atMs, { reason: 'upgrade' }));
     events.push({ type: 'CPU_SIGNED', playerId: best.fa.id, teamId: team.id, atMs, reason: 'upgrade', replaces: best.weak.id });
     _reconcile(draft, team.id, atMs);   // the lineup / rotation without the man let go
   }
+  return events;
+}
+
+/**
+ * r204 §122.82 completeWatchClaim(draft, playerId, atMs) — the deadline on a club's move for a player we
+ * watched (we let the player go, or didn't answer): the club signs, as it would have — in season the
+ * upgrade (its weakest in the role on waivers), between seasons a free-agent signing. If the club no longer
+ * can (the money, the room), the move lapses. Either way the watch ends. → events
+ */
+const offseasonPhase = (st) => st.phase === PHASE.OFFSEASON || st.phase === PHASE.SEASON_SUMMARY;
+export function completeWatchClaim(draft, playerId, atMs) {
+  const p = draft.players[playerId];
+  const c = p?._watchClaim;
+  const events = [];
+  endWatch(draft, playerId);
+  if (!p || !c) return events;
+  delete p._watchClaim;
+  if (p.group !== PLAYER_GROUP.FREE_AGENT) return events;
+  const team = (draft.leagueTeams || []).find(t => t.id === c.teamId);
+  if (!team) return events;
+  if (offseasonPhase(draft)) {
+    const r = signFreeAgentOff(draft, playerId, c.teamId, atMs, { displaceId: c.displaceId });
+    if (r) events.push(...r, { type: 'CPU_SIGNED', playerId, teamId: c.teamId, atMs, reason: 'watch' });
+    return events;
+  }
+  const weak = c.displaceId && draft.players[c.displaceId]?.teamId === c.teamId ? draft.players[c.displaceId] : null;
+  const net = (signingTerms(draft, p).salary || 0) - (weak?.contractSalary || 0);
+  if (net > 0 && net > seasonTarget(team.finances || {}) - payrollOf(draft, team.id)) return events;   // (the money's gone)
+  events.push(...signToClub(draft, playerId, c.teamId, atMs, { displaceId: weak?.id || null, by: 'cpu' }));
+  if (draft.players[playerId]?.teamId !== c.teamId) return events;
+  if (weak && draft.players[weak.id]?.teamId === c.teamId) events.push(dropPlayer(draft, weak.id, c.teamId, atMs, { reason: 'upgrade' }));
+  events.push({ type: 'CPU_SIGNED', playerId, teamId: c.teamId, atMs, reason: 'upgrade', replaces: weak?.id || null });
+  _reconcile(draft, c.teamId, atMs);
   return events;
 }
 

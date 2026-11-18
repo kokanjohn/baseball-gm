@@ -1706,6 +1706,10 @@ export const FA_ASK = Object.freeze({
 // with OVR across the league (a season sim, r200: hitters and starters alike, ≈ 0.223 Impact per
 // OVR point above the league level, corr ~0.73): the season's Impact, read back as an OVR, pulls
 // the price's OVR toward it — by `weight` with a full season behind it, less on a part season.
+// r204 §122.82 free agents the scouting director watches for us: at most `max` at once, for `days`; a club
+// moving to sign one gives us `warnMs` (half a day) to sign first.
+export const FA_WATCH = Object.freeze({ max: 3, days: 30, warnMs: 12 * 3600_000 });
+
 // r201 §122.78 an agent asks to redo a deal after a breakout (at the All-Star break and at season's end):
 // the player plays at least `minShift` OVR better than the rating and the market price is at least
 // `minRaise`× (and `minRaiseK` more than) the salary. The deal runs the market's length past the current

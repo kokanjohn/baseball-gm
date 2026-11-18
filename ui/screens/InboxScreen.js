@@ -34,6 +34,10 @@ import { workPlayers, skillsOf, teachablePositions } from '../../engine/PlayerWo
 import { posLabel, startsAt, familiarity } from '../../engine/Positions.js';   // r163 §122.35
 import { penRoleOf } from '../../engine/Strategy.js';   // r169
 import { dealOfCard } from '../../engine/TradeEngine.js';   // r198 the deal table
+import * as FaWatch from '../../engine/FaWatch.js';   // r204 §122.82
+import * as FreeAgency from '../../engine/FreeAgency.js';
+import { formatK } from '../../engine/CardTokens.js';
+import { FA_WATCH } from '../../data/constants.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -207,6 +211,7 @@ export function mount() {
   wire('card:resolved',    () => refresh());
   wire('inbox:changed',    () => refresh());   // roster clock: new or withdrawn cards (§65)
   wire('nav:tabActivated', ({ tab }) => { if (tab === 'decisions') refresh(); });
+  wire('roster:changed',   () => { if (_activeTab === 'todo') refresh(); });   // r204 §122.82 a signing from the free-agent report's sheet
 
   refresh();
 }
@@ -487,6 +492,7 @@ function _renderReading(card, inbox, state) {
           <span>Your decision</span>
           ${due ? `<span class="ml-label ${due.soon ? 'lbl-red' : 'lbl-amber'}">${_escape(due.text)}</span>` : ''}
         </div>
+        ${card._faRows ? _faRowsHtml(card, state) : ''}
         ${reply}
         ${card._reviseOffer ? `<button class="btn-revise" data-revise="${card.instanceId}">${card._reviseLabel || (card._ideaOffer ? 'Adjust the Offer' : 'Make a New Offer')}</button>` : ''}
       </div>
@@ -500,6 +506,8 @@ function _renderReading(card, inbox, state) {
 /** What the GM decided, in words (and whether it was by default). */
 function _decision(card) {
   const auto = card.choice === 'auto';
+  // r204 §122.82 the free-agent report, closed: what came of each player
+  if (card._summary && card.resolved) return { text: card._summary, outcome: null, auto: false, read: false };
   const autoPick = card.autoChoice || null;
   const text = card.choice === 'yes' ? (card.yesLabel || 'Accepted')
              : card.choice === 'no'  ? (card.noLabel  || 'Declined')
@@ -609,6 +617,40 @@ function _renderCompose(state) {
 }
 
 /** Topic state for one topic: awaiting a reply, cooling down (games left), or open. */
+/**
+ * r204 §122.82 the free-agent report's players: sign any of them (the sign sheet), or have the director
+ * watch one (up to FA_WATCH.max at once). Each row shows how it stands; the message stays open for the rest.
+ */
+function _faRowsHtml(card, state) {
+  const now = Date.now();
+  const rows = FaWatch.reportRows(state, card, now);
+  const watchingN = FaWatch.watching(state, now).length;
+  const html = rows.map(r => {
+    const p = r.p;
+    const price = FreeAgency.termsFor(state, p).salary || 0;
+    let acts;
+    if (r.status === 'signed') acts = `<span class="fa-state good">Signed</span>`;
+    else if (r.status === 'gone') acts = `<span class="fa-state">Signed with ${_escape(r.team)}</span>`;
+    else if (r.status === 'watching') acts = `<span class="fa-state">Watching</span>`;
+    else {
+      // (room on the roster and the money: the sign sheet's questions, with the choices; here only what no choice fixes)
+      const why = FreeAgency.signBlocker(state, p.id, null);
+      const blocked = why && /postseason|no coming back|not a free agent/.test(why) ? why : null;
+      const wb = FaWatch.watchBlocker(state, p.id, now);
+      acts = `${blocked ? `<span class="fa-why">${_escape(blocked[0].toUpperCase() + blocked.slice(1))}</span>`
+                        : `<button class="fa-btn primary" data-fa-sign="${p.id}">Sign (${_escape(formatK(price))})</button>`}
+              ${wb ? `<span class="fa-why">${_escape(wb === 'already watching' ? 'Watching' : wb[0].toUpperCase() + wb.slice(1))}</span>`
+                   : `<button class="fa-btn" data-fa-watch="${p.id}">Watch</button>`}`;
+    }
+    return `<div class="fa-row">
+        <div class="fa-who"><button class="msg-player" data-msg-player="${p.id}">${_escape(p.name)}</button>
+          <span class="fa-meta">${_escape(posLabel(p))} · OVR ${p.ovr}</span></div>
+        <div class="fa-acts">${acts}</div>
+      </div>`;
+  }).join('');
+  return `<div class="fa-rows">${html}<div class="fa-limit">Watching ${watchingN} of ${FA_WATCH.max}</div></div>`;
+}
+
 /** r202 §122.79 the deal on the table this card is, while the director hasn't been asked about it yet. */
 function _directorDeal(card, state) {
   const dir = state.userTeam?.coachingStaff?.scoutingDirector;
@@ -847,6 +889,28 @@ function _attachTabListeners(state) {
       if (!d) return;
       const { openDealSheet } = await import('../components/DealSheet.js');
       openDealSheet({ offer: d.offer, teamName: d.team, versions: d.versions || null });
+    });
+  });
+
+  // r204 §122.82 the free-agent report: sign (the sign sheet), or watch
+  document.querySelectorAll('[data-fa-sign]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const { openSignSheet } = await import('../components/SignSheet.js');
+      openSignSheet(btn.dataset.faSign, 'sign');
+    });
+  });
+  document.querySelectorAll('[data-fa-watch]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.faWatch;
+      const { gmWatchFreeAgent } = await import('../../engine/GameEngine.js');
+      const res = gmWatchFreeAgent(id);
+      const st = StateManager.get();
+      if (!res.ok) { App.showToast(`Can't do that: ${res.reason}.`, 'negative', 3500); refresh(); return; }
+      const n = FaWatch.watching(st, Date.now()).length;
+      App.showToast(`Watching ${st.players[id]?.name}: we'll hear first if a club moves to sign (${n} of ${FA_WATCH.max}).`, 'positive', 3500);
+      refresh();
     });
   });
 

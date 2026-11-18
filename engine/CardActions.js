@@ -30,7 +30,9 @@ import { eventRand } from './Dice.js';
 import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeaching, teachablePositions, startSimGames, activeSimGames, stretchRead } from './PlayerWork.js';
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
 import { setPitchRole } from './Positions.js';   // r163
-import { signBlocker, sign as signFA, claimBlocker, claim as claimWaiver } from './FreeAgency.js';   // r168, §122.66
+import { signBlocker, sign as signFA, claimBlocker, claim as claimWaiver, roomFor } from './FreeAgency.js';   // r168, §122.66
+import { completeWatchClaim } from './TransactionEngine.js';   // r204 §122.82
+import { reportSummary } from './FaWatch.js';   // r204 §122.82
 import { setStrategy, setPenRole } from './Strategy.js';   // r169
 import { startPromo, post as postMoney, canSpend } from './FinanceEngine.js';   // r169
 import { PROMOTIONS } from '../data/constants.js';   // r169
@@ -523,6 +525,30 @@ const signTarget = {
   },
 };
 
+// r204 §122.82 a player we watch, and a club moving to sign: we sign first (the player the GM picked to make
+// room, else our weakest there), or let the club have the player. And the free-agent report, closed.
+const watchDrop = (st, c, p) => {
+  const room = roomFor(st, p);
+  if (!room.needsDrop) return null;
+  return (room.candidates.find(x => x.player.id === c._pick) || room.candidates[0])?.player.id || null;
+};
+const watchSign = {
+  feasible(st, c) {
+    const p = st.players[c._targetPlayerId];
+    return !!p && !signBlocker(st, p.id, watchDrop(st, c, p));
+  },
+  apply: (d, c, atMs) => signFA(d, c._targetPlayerId, atMs, watchDrop(d, c, d.players[c._targetPlayerId])),
+};
+const watchLetGo = { feasible: () => true, apply: (d, c, atMs) => completeWatchClaim(d, c._targetPlayerId, atMs) };
+const faReportClose = {
+  feasible: () => true,
+  apply(d, c, atMs) {
+    const card = (d.inbox || []).find(x => x.instanceId === c.instanceId);
+    if (card) card._summary = reportSummary(d, card, atMs);
+    return [];
+  },
+};
+
 // ─────────────────────────────────────────────────────────────
 // LIFE, THE BALLPARK AND THE FRONT OFFICE (§74)
 // ─────────────────────────────────────────────────────────────
@@ -588,6 +614,9 @@ export const CARD_ACTIONS = Object.freeze({
   indie_sign:            indieSign,
   sr2_shakeup:           signStarter,   // §122 the shake-up: a veteran free agent who'd start
   scout_tip_sign:        signTarget,    // §122.15 the scouting director's tip
+  watch_sign:            watchSign,     // r204 §122.82
+  watch_let_go:          watchLetGo,
+  fa_report_close:       faReportClose,
   personal_leave:        personalLeave,
   ill5a_crew:            staffShort('crew'),
   ill5b_mascot:          staffShort('mascot'),

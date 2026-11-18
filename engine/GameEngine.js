@@ -92,6 +92,7 @@ import * as Finance from './FinanceEngine.js';
 import { formatK } from './CardTokens.js';
 import * as Offseason from './OffseasonEngine.js';
 import * as FreeAgency from './FreeAgency.js';
+import * as FaWatch from './FaWatch.js';   // r204 §122.82
 import * as LeagueTrades from './LeagueTrades.js';
 import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
@@ -3866,6 +3867,20 @@ export function gmSignFreeAgent(playerId, dropId = null, nowMs = clockNow()) {
       text: `${_clubName(s, 'user')} sign free agent ${p.name} (${posLabel(p)}, OVR ${p.ovr})` }]);
   });
   advanceClock(nowMs);
+  return { ok: true };
+}
+
+/**
+ * r204 §122.82 gmWatchFreeAgent(playerId, nowMs) — the scouting director keeps an eye on a free agent for
+ * us (up to FA_WATCH.max at once): a club moving to sign the player, we hear first. → { ok, reason }
+ */
+export function gmWatchFreeAgent(playerId, nowMs = clockNow()) {
+  const st = StateManager.get();
+  if (!st?.userTeam) return { ok: false, reason: 'no team loaded' };
+  let r = null;
+  StateManager.mutate(s => { r = FaWatch.addWatch(s, playerId, nowMs); });
+  if (r !== true) return { ok: false, reason: r };
+  advanceClock(nowMs);   // (a report with nothing left to decide closes)
   return { ok: true };
 }
 

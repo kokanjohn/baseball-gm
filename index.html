@@ -323,6 +323,18 @@ body[data-turn] .tab-content,body[data-turn] .modal-sheet,body[data-turn] .leagu
 .btn-yes:active{opacity:.82;transform:scale(.97);}
 .btn-revise{display:block;width:100%;margin-top:8px;padding:10px;border-radius:10px;border:1px solid var(--border);background:none;color:var(--text);font:inherit;font-size:13px;font-weight:600;cursor:pointer;}
 .btn-deal{margin:4px 0 16px;}   /* r198 under the message, above the decision */
+/* r204 §122.82 the free-agent report: a row per player — sign, watch, or how it stands */
+.fa-rows{display:flex;flex-direction:column;gap:8px;margin:2px 0 12px;}
+.fa-row{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface2);}
+.fa-who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+.fa-meta{font-size:12px;font-weight:600;color:var(--muted);}
+.fa-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.fa-btn{flex:1;min-width:110px;padding:9px 10px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font:inherit;font-size:13px;font-weight:700;cursor:pointer;}
+.fa-btn.primary{background:var(--text);color:var(--bg);border-color:var(--text);}
+.fa-state{font-size:13px;font-weight:700;color:var(--soft);}
+.fa-state.good{color:var(--success,var(--text));}
+.fa-why{font-size:12px;font-weight:600;color:var(--muted);}
+.fa-limit{font-size:12px;font-weight:600;color:var(--muted);text-align:right;padding:0 2px;}
 .btn-no{flex:1;background:transparent;color:var(--danger);border:2px solid var(--danger);
   padding:13px;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;
   cursor:pointer;letter-spacing:.5px;transition:opacity .15s,transform .1s;}

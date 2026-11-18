@@ -78,6 +78,7 @@ import { originForKind } from './LeagueHistory.js';
 import { giveUntestedGap, seedUpside, markAvailable, cpuView } from './Diamonds.js';
 import { clearInjuryUpdate } from './InjuryEngine.js';
 import { lastSeasonIMP } from './IMPEngine.js';   // r200 §122.77
+import { held, claimInstead, endWatch } from './FaWatch.js';   // r204 §122.82
 import {
   defaultActiveGroup,
   eligibleSlotsFor,
@@ -410,6 +411,7 @@ export function signFreeAgent(draft, playerId, teamId, atMs, { displaceId = null
     teamId, group: defaultActiveGroup(p), tier: 'active',
     _faFrom: null, _faSince: null, _faReason: null,
   });
+  delete p._watchClaim; endWatch(draft, playerId);   // r204 §122.82 signed: any move or watch on the player is over
   applyContract(draft, playerId, terms);
   events.push({ type: 'FA_SIGNED', playerId, teamId, terms, atMs });
   return events;
@@ -992,7 +994,7 @@ function _cpuSignOne(draft, t, atMs) {
   const events = [];
   {
     // §78.5 only the free agents this club's owner can pay for.
-    const pool = freeAgents(draft, t.id).filter(fa =>
+    const pool = freeAgents(draft, t.id).filter(fa => !held(fa) &&   // r204 §122.82 claimed: waiting on us
       Finance.canAddSalary(draft, (fa._ask || marketTerms(draft, fa)).salary, 0, t.id));
     if (activeCount(draft, t.id) >= ROSTER_LIMITS.ACTIVE_TOTAL) {
       // A full club still upgrades: the best free agent who beats its weakest
@@ -1002,7 +1004,7 @@ function _cpuSignOne(draft, t, atMs) {
       for (const fa of [...pool].sort((a, b) => seen(b) - seen(a))) {
         const out = displacementFor(draft, t.id, fa);
         if (out && seen(fa) >= (out.ovr || 0) + FA_UPGRADE_MIN) {
-          events.push(...(signFreeAgent(draft, fa.id, t.id, atMs, { displaceId: out.id }) || []));
+          if (!claimInstead(draft, fa, t.id, atMs, { displaceId: out.id })) events.push(...(signFreeAgent(draft, fa.id, t.id, atMs, { displaceId: out.id }) || []));
           break;
         }
       }
@@ -1014,6 +1016,8 @@ function _cpuSignOne(draft, t, atMs) {
     const best = pool.filter(p => _fits(p, need)).sort(byOvr)[0]
       || pool.filter(p => _fits(p, { side: need.side, pos: null })).sort(byOvr)[0];
     if (!best) return events;
+    // r204 §122.82 a player we watch: the club moves to sign, and we hear first (it signs at the deadline)
+    if (claimInstead(draft, best, t.id, atMs)) return events;
     events.push(...(signFreeAgent(draft, best.id, t.id, atMs) || []));
   }
   return events;

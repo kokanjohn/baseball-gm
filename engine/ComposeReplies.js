@@ -26,9 +26,10 @@ import { posLabel, pitchRoles } from './Positions.js';   // r163 §122.35
 import { strategyOf, battingOrder, recommendOrder, styleChoices, ORDER_STYLES, RUN_STYLES, HOOK_STYLES, penRolesOf } from './Strategy.js';   // r169
 import * as Managers from './ManagerEngine.js';   // §122.64
 import { bullpenRoles } from './PitchingEngine.js';   // r169
-import { PROMOTIONS, FIELD_CARE } from '../data/constants.js';   // r169, r170
+import { PROMOTIONS, FIELD_CARE, FA_WATCH } from '../data/constants.js';   // r169, r170, r204
 import { drainageAt, drainageLevel, prepCostK } from './FieldCare.js';   // r170
 import { cutBy } from './OffseasonEngine.js';   // r200
+import { watching } from './FaWatch.js';   // r204 §122.82
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -741,7 +742,13 @@ W.sc_free_agents = (f, r, who) => {
     }
     out.push(lines.join(' '));
   }
-  return { body: out, memo: { playerIds: seen.map(x => x.p.id) } };
+  // r204 §122.82 the report is a decision: sign any of them, or have the director keep an eye on one (up to
+  // FA_WATCH.max at once, warned before another club signs). It stays open until these looks come back.
+  const w = watching(st, f.atMs).map(f.P).filter(Boolean);
+  out.push(`I can keep an eye on up to ${num(FA_WATCH.max)} free agents at a time and warn us before another club signs one`
+    + (w.length ? ` (watching ${list(w.map(p => p.name))} now).` : '.'));
+  return { body: out, memo: { playerIds: seen.map(x => x.p.id) },
+           faReport: { ids: seen.map(x => x.p.id), closeAtMs: f.atMs + 7 * MS_DAY } };
 };
 
 W.sc_opponent = (f, r, who) => {
@@ -1507,6 +1514,7 @@ export function writeComposeReply(state, { topicId, channelId, atMs, subject = n
   const body = [open, ...paras, _sign(who)].join('\n\n');
   return { sender: who.sender, subject: subject || `Re: ${Cap(TOPIC_LABELS[topicId] || 'your message')}`, body,
            preview: paras[0].split('\n')[0], memo: res.memo || {}, decision: res.decision || null, trade: res.trade || null,
+           faReport: res.faReport || null,   // r204 §122.82 the free agents the report offers
            sheet: res.sheet || null, agreed: res.agreed || null,   // r202 §122.79 the deal table; a deal they've agreed to
            named: namedPlayers(state, paras.join('\n'), [...(res.memo?.playerIds || []), res.memo?.playerId, res.decision?.playerId]) };
 }

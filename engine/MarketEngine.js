@@ -22,6 +22,7 @@ import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, MARKET_KINDS, FA_ASK } from '../dat
 import { clockNow } from './Clock.js';
 import { createPlayer, computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { marketTerms, applyContract, activeCount, displacementFor, hasRoomFor, cutBy } from './OffseasonEngine.js';
+import { endWatch } from './FaWatch.js';   // r204 §122.82
 import { defaultActiveGroup, eligibleSlotsFor, makeArrival } from './RosterEngine.js';
 import { rosterIsFull, sideOf, dropPlayer } from './TransactionEngine.js';
 import { newPlayerName } from './Names.js';
@@ -158,6 +159,7 @@ export function signToClub(draft, playerId, teamId, atMs, { displaceId = null, t
     Object.assign(p, { teamId, group: defaultActiveGroup(p), tier: 'active', _faFrom: null, _faSince: null });
   }
   applyContract(draft, playerId, k, { startNow: _inSeason(draft) });
+  delete p._watchClaim; endWatch(draft, playerId);   // r204 §122.82 signed: any move or watch on the player is over
   events.push({ type: 'SIGNED', playerId, teamId, atMs });
   return events;
 }

@@ -12955,3 +12955,35 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 - The look-ahead checks (check-lookahead, check-message-lookahead, check-game-pushes) still match the real run.
 
 **Fresh team:** not required.
+
+## §122.82 — r204: the free-agent report is a decision (sign, watch)
+**The GM's call** (Nov 18 2026): the scouts' "Free agents worth a look" reply was read-only. Now it offers: (1) sign any of the players straight from the message; (2) have the director watch one. A watched player isn't lost without warning. Separate buttons per player; the message stays open.
+- It closes when that report's looks come back (a week).
+- A watched player gets half a day's warning.
+- At most three watched at once, and the GM is told so.
+
+**The report** (`W.sc_free_agents` → `faReport`; the reply card's `_faRows`):
+- A row per player named: **Sign ($ask)** opens the sign sheet (making room and the payroll are its questions), and **Watch**.
+- The row then shows how it stands: Signed / Watching / "Signed with [club]" (another club got there) / why it can't be signed (the postseason, a player we let go). Watch is replaced by "Watching 3 already, the most at once" at the limit.
+- Under the rows: "Watching N of 3". The director's reply ends: "I can keep an eye on up to three free agents at a time and warn us before another club signs one (watching … now)."
+- **Closing:** Done (`fa_report_close`); by itself when nothing's left to decide (each signed, gone or watched — `CardEngine._faWatchSweep`); or when its looks come back, 7 days after the report (`autoResolve: 'roster'`).
+- Completed shows what came of each: "Signed Ortiz · Watching Vega · Lee signed with Boston · Passed on Ruiz" (`FaWatch.reportSummary`, `card._summary`).
+
+**Watching** (`engine/FaWatch.js`, pure; `state.faWatch`, `FA_WATCH` = 3 at once, 30 days, 12 hours' warning):
+- `gmWatchFreeAgent`. A watch ends when the player signs anywhere, we let the player go, or after 30 days. The Free Agents list tags a watched player "Watching".
+- **A club moving on a watched player** (the CPU's upgrade look in season, `cpuFreeAgentLook`; its winter signings, `_cpuSignOne`) puts in a claim instead (`claimInstead` → `p._watchClaim`). The club signs 12 hours later unless we sign first. Other clubs leave a claimed player alone (`held`). A club filling a hole (`_cpuFill`, `_signable`) doesn't wait: it skips watched and claimed players.
+- **The director's message** (`watch_alert`, at the moment of the move): "[club] is moving to sign [name]… We have until [time] to sign first".
+  - **Sign** (`watch_sign`: our signing, making room as the sign sheet would; the waiver choices when the side is full).
+  - **Let Go** (`watch_let_go` → `TransactionEngine.completeWatchClaim`: the club signs as it would have, or the move lapses if the money or the room is gone). No answer = Let Go.
+  - Signing the player anywhere first withdraws the message.
+- Any signing clears a claim and a watch (`signToClub`, `signFreeAgent`).
+
+**Checks:**
+- check-fa-watch (new, 22):
+  - the report (rows, Done, a week, the three-at-once line); watch and sign from it; Done's summary;
+  - the limit; closing itself (looks back; everything signed);
+  - the club's move: the message, held from other clubs, Let Go / Sign / no answer / signed elsewhere first;
+  - the CPU's upgrade look claims and waits; a club filling a hole skips a watched player.
+- test-fa-report-ui (new): the rows, Watch (1 of 3), Sign through the sheet, Done → Completed's summary.
+
+**Fresh team:** not required.

@@ -31,6 +31,7 @@ import {
 } from '../formatters.js';
 import { openPlayerCard } from '../components/PlayerCard.js';
 import * as FreeAgency from '../../engine/FreeAgency.js';
+import * as FaWatch from '../../engine/FaWatch.js';   // r204 §122.82
 import * as Roster from '../../engine/RosterEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { PHASE } from '../../data/constants.js';
@@ -577,7 +578,7 @@ function _renderPlayers(state) {
       <div class="lp-row ${isUser ? 'user-player-row' : ''}" data-player="${p.id}">
         <div class="lp-td-name">
           <div class="lp-name-block">
-            <div class="lp-name-line">${_escape(p.name)}${p.onWaivers ? ` <span class="lp-wv-left" title="Time left on waivers">${_waiverLeft(p)}</span>` : ''}</div>
+            <div class="lp-name-line">${_escape(p.name)}${p.onWaivers ? ` <span class="lp-wv-left" title="Time left on waivers">${_waiverLeft(p)}</span>` : ''}${p.group === 'freeAgent' && FaWatch.isWatched(state, p.id, Date.now()) ? ' <span class="lp-wv-left">Watching</span>' : ''}</div>
             <div class="lp-name-sub">${_escape(teamAbbr)} · ${posLabel(p)}${shown.year ? ` · <span class="lp-lyline">'${String(shown.year).slice(-2)} stats</span>` : ''}${dtd}</div>
           </div>
           <div class="lp-ovr"><span class="rating-num ${_lpOvrClass(p.ovr)}">${formatOVR(p.ovr)}</span></div>
