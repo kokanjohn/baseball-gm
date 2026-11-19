@@ -13113,3 +13113,24 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 **Checks:** test-deal-sheet-ui (equal heights; a card opens the player on top, twice; closing returns to the sheet); test-trade-advice-ui (Ask Scouting on the message; from the counter screen it sends the message, then reads Scouting Asked there and on the message).
 
 **Fresh team:** not required.
+
+## §122.87 — r209: Scouting's word always takes time (a new offer too)
+**Rule:** nothing from Scouting is on the spot. Every Ask Scouting is a question, and the answer is a message on the staff's clock.
+
+**A new offer in the trade composer** (no deal on the table yet; was an instant read):
+- Ask Scouting sends the offer as it stands (topic `sc_offer`, Scouting channel, not listed in Compose). It carries a snapshot (club, both sides, cash, salary kept) and a key, `TradeAdvice.draftKey`.
+- The key is the same offer in any order; any change makes it a new question. The button reads **Scouting Asked**, disabled, for that exact offer while the question is out or its answer hasn't been acted on (`draftAsked`). Change the offer and it's Ask Scouting again; change it back and it's Scouting Asked.
+- Disabled when the offer is empty or can't be made (the composer's blocker). Hidden with no scouting director, like the deal-on-the-table button.
+- **The answer** (`W.sc_offer`, written when it comes back, from the club as it stands then):
+  1. the manager's read on the field;
+  2. how the club will take it (the scouts' read: the club's mode, who'd play for them, their books, our side's limits, the relationship);
+  3. the payroll;
+  4. then Make the Offer / Not Now / Adjust It First (the trade-idea machinery: `lt_offer_send`).
+- An offer that can't be made by then (hurt, traded, window shut) says why, with no decision.
+- The composer's on-the-spot read (`scoutRead` in the UI, `_read`, `.tc-read`) is gone. `scoutRead` stays as the engine's words inside the reply.
+
+**Checks:**
+- check-trade-advice +9: the key, the reply, voice, the decision, blocked, takes time, comes back as a decision, Make the Offer starts talks.
+- test-trade-advice-ui +5: a new offer asks, nothing on the spot, Scouting Asked, a change re-opens it, changing back closes it.
+
+**Fresh team:** not required.

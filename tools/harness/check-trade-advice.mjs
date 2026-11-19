@@ -8,7 +8,7 @@ import { clock, seedRandom } from './shims.js';            // MUST be first (ins
 import * as SM from '../../store/StateManager.js';
 import { startNewGame, advanceClock } from '../../engine/GameEngine.js';
 import { releaseDueCards, resolve, getInbox, deliverComposeCard, syncRosterCards } from '../../engine/CardEngine.js';
-import { dealsOnTable, dealsFor, fieldRead, suggestCounter, readError, shopPlayer, shoppable, clubsCalled } from '../../engine/TradeAdvice.js';
+import { draftKey, draftAsked, dealsOnTable, dealsFor, fieldRead, suggestCounter, readError, shopPlayer, shoppable, clubsCalled } from '../../engine/TradeAdvice.js';
 import { writeComposeReply } from '../../engine/ComposeReplies.js';
 import { cpuRespond, evaluateForClub, clubBar, dealOfCard } from '../../engine/TradeEngine.js';
 import { talkWith } from '../../engine/Negotiation.js';
@@ -260,6 +260,41 @@ SM.speculate(() => {
   const gone = writeComposeReply(S(), { topicId: 'sc_shop', channelId: 'scouting', atMs: t0 + H, arg: shopArg });
   check('a player no longer ours: says so', /isn't ours anymore/.test(gone.body) && !gone.trade);
 });
+
+// ── r209 §122.87 an offer we're putting together: asked from the trade screen, answered later ──
+console.log('An offer we\'re putting together');
+{
+  const bid = one.bids[0];
+  const offer = { incomingIds: [...bid.offer.incomingIds], outgoingIds: [...bid.offer.outgoingIds], cashK: bid.offer.cashK || 0, retain: { ...(bid.offer.retain || {}) } };
+  const key = draftKey(bid.teamId, offer);
+  check('the same offer, the same key; any change, a new one',
+        key === draftKey(bid.teamId, { ...offer, incomingIds: [...offer.incomingIds].reverse() }) && key !== draftKey(bid.teamId, { ...offer, cashK: offer.cashK + 50 }));
+  const w = writeComposeReply(S(), { topicId: 'sc_offer', channelId: 'scouting', atMs: t0 + H, arg: { key, teamId: bid.teamId, offer } });
+  console.log(`    ${w.body.replace(/\n\n/g, '\n    ')}`);
+  check('the reply: the field, how they\'ll take it, the payroll, the choice',
+        /read on the field: /.test(w.body) && /our relationship with their front office/i.test(w.body) && /On payroll: /.test(w.body) && /We can make the offer as it stands/.test(w.body));
+  check('gender-neutral, nothing missing, nobody named twice in a paragraph', !GEN.test(w.body) && !BAD.test(w.body) && !w.body.split('\n\n').some(x => namedTwice(x, [...offer.incomingIds, ...offer.outgoingIds].map(id => S().players[id])).length), (w.body.match(GEN) || w.body.match(BAD) || []).join());
+  check('a decision: make the offer as it was put together', w.trade?.yesLabel === 'Make the Offer' && w.trade.round == null && JSON.stringify(w.trade.offer) === JSON.stringify(offer));
+  SM.speculate(() => {
+    SM.mutate(s => { s.players[offer.outgoingIds[0]].isInjured = true; });
+    const hurt = writeComposeReply(S(), { topicId: 'sc_offer', channelId: 'scouting', atMs: t0 + H, arg: { key, teamId: bid.teamId, offer } });
+    check('an offer that can\'t be made by then: says why, no decision', /can't be made now: .*hurt/.test(hurt.body) && !hurt.trade, hurt.body);
+  });
+  SM.speculate(() => {
+    const c = deliverComposeCard('sc_offer', 'scouting', { topicLabel: 'An offer', arg: { key, teamId: bid.teamId, offer }, nowMs: t0 });
+    check('asked: it takes time (not on the spot), and this offer reads as asked', c.deliverAtMs > t0 + 10 * 60_000 && draftAsked(S(), key) && !draftAsked(S(), draftKey(bid.teamId, { ...offer, cashK: 50 })));
+    releaseDueCards(c.deliverAtMs);
+    const card = getInbox().find(x => x.instanceId === c.instanceId);
+    check(`it comes back as a decision (“${card?.subject}”: ${card?.yesLabel} / ${card?.noLabel} / ${card?._reviseLabel})`,
+          card?.yesLabel === 'Make the Offer' && card?.noLabel === 'Not Now' && card?._reviseLabel === 'Adjust It First');
+    check('…still asked until it\'s answered', draftAsked(S(), key));
+    clock.set(c.deliverAtMs + 60_000);
+    resolve(card.instanceId, 'yes');
+    const talk = talkWith(S(), bid.teamId);
+    check(`Make the Offer starts talks (round ${talk?.round}); the offer can be asked about again`, talk?.round === 1 && !draftAsked(S(), key));
+    clock.set(t0);
+  });
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -99,6 +99,20 @@ export function scoutingDeal(state, { key = null, instanceId = null } = {}, atMs
   return deal ? { deal, asked: scoutingAsked(state, deal.key) } : null;
 }
 
+/** r209 §122.87 an offer we're putting together, as a key: the club, both sides, cash, salary kept. The same
+ *  offer, the same key — change any of it and it's a new question. */
+export function draftKey(teamId, offer) {
+  const ids = (a) => [...(a || [])].sort().join(',');
+  const ret = Object.entries(offer?.retain || {}).filter(([, v]) => v > 0).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(',');
+  return `draft:${teamId}:${ids(offer?.incomingIds)}|${ids(offer?.outgoingIds)}|${offer?.cashK || 0}|${ret}`;
+}
+
+/** r209 §122.87 whether Scouting has this offer: the question on its way, or the answer not yet acted on. */
+export function draftAsked(state, key) {
+  return (state.scheduledCards || []).some(c => c.isCompose && c._composeTopic === 'sc_offer' && c._composeArg?.key === key)
+    || (state.inbox || []).some(c => c.isCompose && c._composeTopic === 'sc_offer' && c._composeArg?.key === key && !c.resolved);
+}
+
 /** The deal with this key, if it is still on the table. */
 export function dealByKey(state, key, atMs) {
   return dealsOnTable(state, atMs).find(d => d.key === key) || null;

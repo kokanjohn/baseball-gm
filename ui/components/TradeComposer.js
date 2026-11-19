@@ -6,7 +6,7 @@
  *
  * Up to three players a side (either club's roster), cash either way,
  * and a share of a salary the sending club keeps paying this season. The GM
- * can run it by Pro Scouting (a read in words, never a number) and sees what
+ * can ask Scouting about it (r209: a message, later — never a read on the spot) and sees what
  * our owner would say about the payroll. Sending starts (or continues) the
  * talk; the other GM answers in the inbox, on the real clock.
  */
@@ -15,24 +15,22 @@ import * as StateManager from '../../store/StateManager.js';
 import * as App from '../App.js';
 import { TRADE } from '../../data/constants.js';
 import {
-  tradeBlockers, scoutRead, rapportOf, rapportGrade, clubMode, cooldownUntil, remainingShare,
+  tradeBlockers, rapportOf, rapportGrade, clubMode, cooldownUntil, remainingShare,
 } from '../../engine/TradeEngine.js';
 import { proposeTrade, talkIsOpen, ourSideBlocker } from '../../engine/Negotiation.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatK } from '../../engine/CardTokens.js';
 import { posLabel } from '../../engine/Positions.js';   // r163 §122.35
-import { askScoutingButton, askScouting } from './AskScouting.js';   // r208 §122.86
+import { askScoutingButton, askScouting, askDraftButton, askDraft } from './AskScouting.js';   // r208 §122.86, r209 §122.87
 
 let _d = null;          // the deal being built
 let _view = 'deal';     // 'teams' | 'deal' | 'theirs' | 'ours'
-let _read = null;       // the scout's read (lines), when asked
 
 export function openTradeComposer({ teamId = null, theirIds = [], ourIds = [], cashK = 0, retain = {}, round = null, dealKey = null } = {}) {
   _injectCSS();
   // dealKey: r208 §122.86 the deal on the table this counters — Scouting is asked about that deal, by message
   _d = { teamId, theirIds: [...theirIds], ourIds: [...ourIds], cashK, retain: { ...retain }, round, dealKey };
   _view = teamId ? 'deal' : 'teams';
-  _read = null;
   document.getElementById('tc-overlay')?.remove();
   const overlay = document.createElement('div');
   overlay.id = 'tc-overlay';
@@ -111,7 +109,6 @@ function _dealHtml(state) {
   const cashLabel = c > 0 ? `They send ${formatK(c)}` : c < 0 ? `We send ${formatK(-c)}` : 'No cash';
   const payAfter = Finance.payrollOf(state, 'user') + _payDelta(state);
   const target = Finance.seasonTarget(state.userTeam.finances);
-  const read = _read ? `<div class="tc-read"><div class="tc-read-from">Scouting</div>${_read.map(l => `<p>${_esc(l)}</p>`).join('')}</div>` : '';
   const canSend = !blocked && !ours && (_d.theirIds.length || _d.ourIds.length);
   return `${_head(team?.name || 'Trade', sub, true)}
     ${blocked ? `<div class="tc-warn">Can't send right now: ${_esc(blocked)}.</div>` : ''}
@@ -125,21 +122,21 @@ function _dealHtml(state) {
     <div class="tc-cash"><button class="tc-step" data-cash="-50">−</button><span>${cashLabel}</span><button class="tc-step" data-cash="50">+</button></div>
     <div class="tc-hint">Minus: we send cash. Plus: they send cash.</div>
     <div class="tc-pay${payAfter > target ? ' over' : ''}">Our payroll after the deal: ${formatK(payAfter)} — ownership's target ${formatK(target)}${ours ? `<br>${_esc(ours[0].toUpperCase() + ours.slice(1))}.` : ''}</div>
-    ${read}
     <div class="tc-actions">
-      ${_scoutButton(state)}
+      ${_scoutButton(state, blocked)}
       <button class="tc-btn primary" id="tc-send" ${canSend ? '' : 'disabled'}>Send Offer</button>
     </div>`;
 }
 
 /** r208 §122.86 a counter to a deal on the table: Ask Scouting sends the question (the same one the trade message
- *  and Compose send, and it reads Scouting Asked once it's gone, wherever it was asked). A new offer: the scouts' read. */
-function _scoutButton(state) {
+ *  and Compose send, and it reads Scouting Asked once it's gone, wherever it was asked). r209 §122.87 a new offer:
+ *  the offer as it stands goes to Scouting, and the answer comes later as a message. */
+function _scoutButton(state, blocked) {
   if (_d.dealKey) {
     const b = askScoutingButton(state, { key: _d.dealKey }, 'tc-btn');
     if (b) return b;
   }
-  return `<button class="tc-btn" id="tc-scout" ${(_d.theirIds.length || _d.ourIds.length) ? '' : 'disabled'}>Ask Scouting</button>`;
+  return askDraftButton(state, _d.teamId, _offer(), !!blocked || !(_d.theirIds.length || _d.ourIds.length));
 }
 
 function _payDelta(state) {
@@ -177,10 +174,10 @@ function _wire(body, state) {
   body.querySelector('#tc-close')?.addEventListener('click', _close);
   body.querySelector('#tc-back')?.addEventListener('click', () => { _view = 'deal'; _render(); });
   body.querySelectorAll('[data-team]').forEach(el => el.addEventListener('click', () => {
-    _d.teamId = el.dataset.team; _d.theirIds = []; _view = 'deal'; _read = null; _render();
+    _d.teamId = el.dataset.team; _d.theirIds = []; _view = 'deal'; _render();
   }));
   body.querySelectorAll('[data-pick]').forEach(el => el.addEventListener('click', () => { _view = el.dataset.pick; _render(); }));
-  body.querySelector('#tc-done')?.addEventListener('click', () => { _view = 'deal'; _read = null; _render(); });
+  body.querySelector('#tc-done')?.addEventListener('click', () => { _view = 'deal'; _render(); });
   body.querySelectorAll('[data-toggle]').forEach(el => el.addEventListener('click', () => {
     const list = _view === 'theirs' ? _d.theirIds : _d.ourIds;
     const id = el.dataset.toggle;
@@ -194,20 +191,22 @@ function _wire(body, state) {
     const i = list.indexOf(el.dataset.drop);
     if (i >= 0) list.splice(i, 1);
     delete _d.retain[el.dataset.drop];
-    _read = null; _render();
+    _render();
   }));
   body.querySelectorAll('[data-keep]').forEach(el => el.addEventListener('click', () => {
     const v = parseFloat(el.dataset.v);
     if (v > 0) _d.retain[el.dataset.keep] = v; else delete _d.retain[el.dataset.keep];
-    _read = null; _render();
+    _render();
   }));
   body.querySelectorAll('[data-cash]').forEach(el => el.addEventListener('click', () => {
     _d.cashK += parseInt(el.dataset.cash, 10);
-    _read = null; _render();
+    _render();
   }));
-  body.querySelector('#tc-scout')?.addEventListener('click', () => {
-    const offer = _offer();
-    _read = scoutRead(offer, state, _d.teamId, ourSideBlocker(state, offer));
+  body.querySelector('[data-ask-draft]')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (btn.disabled) return;
+    btn.disabled = true;
+    await askDraft(_d.teamId, _offer());
     _render();
   });
   body.querySelector('[data-ask-scouting]')?.addEventListener('click', async (e) => {
@@ -273,9 +272,6 @@ function _injectCSS() {
     .tc-pay{font-size:12px;color:var(--soft);margin-top:14px;line-height:1.5;}
     .tc-pay.over{color:var(--danger);}
     .tc-warn{font-size:12px;color:var(--danger);border:1px solid var(--danger);border-radius:10px;padding:8px 10px;margin:8px 0;}
-    .tc-read{margin-top:12px;border-left:2px solid var(--border);padding:4px 0 4px 12px;}
-    .tc-read-from{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
-    .tc-read p{font-size:13px;color:var(--text);line-height:1.45;margin:4px 0;}
     .tc-actions{display:flex;gap:8px;margin-top:16px;}
     .tc-btn{flex:1;padding:12px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font:inherit;font-size:14px;font-weight:600;cursor:pointer;}
     .tc-btn.primary{background:var(--text);color:var(--bg);border-color:var(--text);}

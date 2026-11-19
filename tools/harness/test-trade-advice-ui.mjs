@@ -186,6 +186,33 @@ if (shop.id) {
   check(`each player is a link once (${ids.length} links; named again as text: ${shown.join(', ') || 'none'})`, ids.length > 0 && new Set(ids).size === ids.length);
   await page.screenshot({ path: `${out}/trade-shop-reply-${theme}.png` });
 }
+// r209 §122.87 a new offer in the trade composer: Ask Scouting sends it; the answer comes later, as a message.
+await page.evaluate(() => document.querySelectorAll('.modal-overlay').forEach(e => e.remove()));
+await page.evaluate(async () => {
+  const SM = await import('/baseball-gm/store/StateManager.js'); const st = SM.get();
+  const them = st.leagueTeams[5];
+  const theirs = them.rosterIds.map(id => st.players[id]).find(p => p && !p.isInjured && p.pos === 'RP');
+  const { openTradeComposer } = await import('/baseball-gm/ui/components/TradeComposer.js');
+  openTradeComposer({ teamId: them.id, theirIds: [theirs.id] });
+});
+await page.waitForTimeout(500);
+const draftBtn = () => page.evaluate(() => { const b = document.querySelector('#tc-overlay [data-ask-draft]'); return b ? `${b.textContent.trim()}${b.disabled ? ' (off)' : ''}` : null; });
+check(`a new offer: Ask Scouting (${await draftBtn()})`, await draftBtn() === 'Ask Scouting');
+await page.click('#tc-overlay [data-ask-draft]'); await page.waitForTimeout(500);
+const sent = await page.evaluate(async () => {
+  const SM = await import('/baseball-gm/store/StateManager.js');
+  const c = (SM.get().scheduledCards || []).find(x => x.isCompose && x._composeTopic === 'sc_offer');
+  return { waits: c ? Math.round((c.deliverAtMs - Date.now()) / 60_000) : null, read: !!document.querySelector('#tc-overlay .tc-read') };
+});
+check(`…sends the offer to Scouting: an answer in about ${sent.waits} minutes, nothing on the spot`, sent.waits > 5 && !sent.read, JSON.stringify(sent));
+check(`…and reads Scouting Asked (${await draftBtn()})`, await draftBtn() === 'Scouting Asked (off)');
+await page.screenshot({ path: `${out}/trade-ask-draft-${theme}.png` });
+await page.click('#tc-overlay [data-cash="50"]'); await page.waitForTimeout(300);
+check(`a change to the offer is a new question (${await draftBtn()})`, await draftBtn() === 'Ask Scouting');
+await page.click('#tc-overlay [data-cash="-50"]'); await page.waitForTimeout(300);
+check(`…and back to the one asked about: Scouting Asked (${await draftBtn()})`, await draftBtn() === 'Scouting Asked (off)');
+await page.click('#tc-close'); await page.waitForTimeout(200);
+
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 console.log(ok ? 'ALL PASS' : 'SOME FAILED');

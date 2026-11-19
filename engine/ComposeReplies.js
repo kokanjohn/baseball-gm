@@ -19,7 +19,7 @@ import { signingTerms } from './MarketEngine.js';
 import { formatK } from './CardTokens.js';
 import { scoutEye as directorEye, scoutLooks } from './CoachEngine.js';
 import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from './TradeAdvice.js';
-import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart } from './TradeEngine.js';
+import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart, scoutRead, tradeBlockers, ourSideBlocker } from './TradeEngine.js';
 import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teachRead, stretchRead } from './PlayerWork.js';
 import { PLAYER_WORK, POSITION_RULES } from '../data/constants.js';
 import { posLabel, pitchRoles, primaryPos } from './Positions.js';   // r163 §122.35, r206
@@ -1228,6 +1228,36 @@ W.sc_trade = (f, r, who, arg) => {
     sheet: { teamId: deal.teamId, offer: deal.offer },   // r202 the deal as it's on the table (the card's deal table)
     trade: !agreed && a.counter ? { teamId: deal.teamId, offer: a.counter, round: deal.round, dealKey: deal.key, expiresAtMs: deal.expiresAtMs } : null,
     agreed: agreed ? { teamId: deal.teamId, dealKey: deal.key, expiresAtMs: deal.expiresAtMs } : null,
+  };
+};
+
+/** r209 §122.87 an offer we're putting together (asked from the trade screen): the field, how the club will take
+ *  it, the payroll — and the offer, ready to make, adjust, or leave. Written from the club as it stands now. */
+W.sc_offer = (f, r, who, arg) => {
+  const st = f.state;
+  const team = (st.leagueTeams || []).find(t => t.id === arg?.teamId);
+  const offer = arg?.offer;
+  if (!team || !offer) return { body: ['That offer never made it to my desk. Put it together again and send it over.'], memo: {}, topic: 'the offer' };
+  const ids = [...(offer.incomingIds || []), ...(offer.outgoingIds || [])];
+  const blocked = tradeBlockers(offer, st, f.atMs, team.id);
+  if (blocked) {
+    return { body: [`I looked at the offer to ${team.name}, but it can't be made now: ${blocked}. Put a new one together and I'll look again.`],
+             memo: { playerIds: ids }, topic: `the offer to ${team.name}` };
+  }
+  const deal = { offer, teamId: team.id, team: team.name, kind: 'draft' };
+  const out = [];
+  const mg = st.userTeam?.coachingStaff?.manager;
+  const { lines, bottom } = fieldWords(f, deal);
+  out.push(`${mg && !mg.vacant && mg.name ? `${poss(mg.name)} read on the field` : 'The coaches\' read on the field'}: ${[...lines, bottom].join(' ')}`);
+  // How they'll take it (the scouts' read), our side's limits in it.
+  out.push(scoutRead(offer, st, team.id, ourSideBlocker(st, offer)).join(' '));
+  out.push(`On payroll: ${payrollWords(f, offer)}`);
+  out.push(`We can make the offer as it stands — ${team.name} answers on their own clock — adjust it first, or leave it.`);
+  return {
+    body: out,
+    memo: { playerIds: ids },
+    topic: `the offer to ${team.name}`,
+    trade: { teamId: team.id, offer, round: null, yesLabel: 'Make the Offer', yesMsg: 'Offer sent. Their answer comes on their clock.' },
   };
 };
 

@@ -2728,6 +2728,15 @@ export const COMPOSE_RESPONSE_POOL = {
     yesLabel:'Noted', yesEffect:{}, yesMsg:'Noted.',
   },
 
+  // r209 §122.87 an offer we're putting together (from the trade screen): written as it comes back (ComposeReplies sc_offer)
+  sc_offer: {
+    id:'compose_sc_offer', autoResolve:'yes', type:'normal', tag:'TRADE',
+    sender:'Scouting Dept.', avatar:'🔭',
+    subject:'The offer we\'re putting together',
+    body:"We're looking over the offer and will report back.",
+    yesLabel:'Noted', yesEffect:{}, yesMsg:'Noted.',
+  },
+
   mr_narrative: {
     id:'compose_mr_narrative', autoResolve:'yes', type:'normal', tag:'OPERATIONS',
     sender:'Media Relations', avatar:'📰',
