@@ -101,6 +101,8 @@ import { writeComposeReply } from './ComposeReplies.js';
 import { dealByKey } from './TradeAdvice.js';
 import { reviewWords } from './SeasonReview.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
+import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS } from '../data/cards-first-day.js';   // r211 §122.89
+import { FIRST_DAY, CORE_SLOTS, firstDayTimes, gmHelloTimes, cpuGmName } from './FirstDay.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
 import { rapportOf, rapportGrade, adjustRapport, wouldStart, clubMode, isRental, playsSlot } from './TradeEngine.js';
@@ -2774,6 +2776,65 @@ export function deliverSeedTradeOffer(context) {
   };
   const order = eventRand() < 0.5 ? [tryCall, trySell] : [trySell, tryCall];
   return !!(order[0]() || order[1]());
+}
+
+/**
+ * r211 §122.89 A new team's first day: the first-day messages between now and the first pitch (the core,
+ * then more with more time, at random uneven staff-hours times) and three other clubs' GMs over the first
+ * spring (one the first day, with enough time). Parked on the schedule like any message, so they push.
+ * Versions are picked at random; a card that can't be written (no player for its tokens) is skipped.
+ * Returns the cards parked.
+ */
+export function scheduleFirstDay(context) {
+  const st = StateManager.get();
+  const now = clockNow();
+  const first = (st.schedule || [])[0];
+  if (!first?.gameTime) return [];
+  const r = dice(diceSeed(st), 'first-day');
+  const pick = (xs) => xs[Math.floor(r() * xs.length)];
+  const quiet = { quietStart: st.push?.quietStart, quietEnd: st.push?.quietEnd };
+  const plan = firstDayTimes(now, first.gameTime, quiet, r);
+  // Which cards: one version per core slot (in order of importance), then the secondary, shuffled.
+  const core = CORE_SLOTS.slice(0, plan.core).map(slot => pick(FIRST_DAY_CORE[slot]));
+  const second = [...FIRST_DAY_SECONDARY].map(c => ({ c, k: r() })).sort((a, b) => a.k - b.k).map(o => o.c);
+  // Other GMs: three clubs (not one already on the phone with us).
+  const busy = new Set((st.inbox || []).map(c => c.sender || ''));
+  const clubs = (st.leagueTeams || []).filter(t => ![...busy].some(s => s.includes(t.name)))
+    .map(t => ({ t, k: r() })).sort((a, b) => a.k - b.k).map(o => o.t).slice(0, FIRST_DAY.gmHellos);
+  const hellos = [...GM_HELLOS].map(c => ({ c, k: r() })).sort((a, b) => a.k - b.k).map(o => o.c);
+  const hello = (t, def) => {
+    const gm = cpuGmName(st, t.id);
+    const fill = (v) => (typeof v === 'string' ? v.replaceAll('{gm}', gm).replaceAll('{club}', t.name) : v);
+    const d = Object.fromEntries(Object.entries(def).map(([k, v]) => [k, fill(v)]));
+    return { ...d, onYes: 'gm_rapport_yes', onNo: 'gm_rapport_no', _gmTeamId: t.id };
+  };
+  const gmFirstDay = clubs.length && plan.hours >= FIRST_DAY.gmHelloFirstDayHours && plan.secondary > 0;
+  const fill = [];
+  if (gmFirstDay) fill.push(hello(clubs[0], hellos[0]));
+  fill.push(...second);
+  // Into the times: the core at their spread places, the rest in between.
+  const slots = new Map(plan.coreAt.map((ix, i) => [ix, core[i]]));
+  const parked = [];
+  let f = 0;
+  plan.times.forEach((at, ix) => {
+    const def = slots.get(ix) || fill[f++];
+    if (!def) return;
+    const inst = _createInstance(def, context || {}, StateManager.get());
+    if (!inst) return;
+    const extra = def._gmTeamId ? { _gmTeamId: def._gmTeamId } : {};
+    const card = _deliverAt({ ...inst, ...extra, _firstDay: true, _rosterKey: `firstday:${def.id}:${def._gmTeamId || ''}` }, at);
+    if (card) parked.push(card);
+  });
+  // The other GMs, through the rest of the spring.
+  const rest = clubs.slice(gmFirstDay ? 1 : 0);
+  gmHelloTimes(now, rest.length, quiet, r).forEach((at, i) => {
+    const def = hello(rest[i], hellos[(gmFirstDay ? 1 : 0) + i]);
+    const inst = _createInstance(def, context || {}, StateManager.get());
+    if (!inst) return;
+    const card = _deliverAt({ ...inst, _gmTeamId: def._gmTeamId, _firstDay: true, _rosterKey: `firstday:${def.id}:${def._gmTeamId}` }, at);
+    if (card) parked.push(card);
+  });
+  return parked;
 }
 
 /**
@@ -6059,6 +6120,7 @@ function _applyCardAction(action, instance, atMs, feasible = null) {
   for (const ev of events) {
     if (ev?.type === 'SCHEDULE_CARD') _deliverFollowupDef(ev.defId, ev.preset || {}, ev.atMs);
     if (ev?.type === 'SCHEDULE_INDIE') _deliverIndieReport(ev.playerId, ev.atMs);
+    if (ev?.type === 'SCHEDULE_COMPOSE') deliverComposeCard(ev.topic, ev.channel, { topicLabel: ev.label, arg: ev.arg || null, nowMs: ev.atMs });   // r211 §122.89
   }
 }
 

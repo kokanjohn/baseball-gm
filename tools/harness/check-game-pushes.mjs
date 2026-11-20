@@ -71,7 +71,8 @@ for (let n = 0; n < N; n++) {
     g = find();
     if (!g) break;
     if (g.plays?.length) plays = g.plays;
-    if (g.postponements?.some(p => p.gameTime === T0) || g.status === GAME_STATUS.SUSPENDED || g.status === GAME_STATUS.FINAL || g._committed) break;
+    // (suspended: stop here — unless this is the day it picks up again, r211: play the rest of it)
+    if (g.postponements?.some(p => p.gameTime === T0) || (g.status === GAME_STATUS.SUSPENDED && g.gameTime !== T0) || g.status === GAME_STATUS.FINAL || g._committed) break;
     if (g.status === GAME_STATUS.LIVE) { const np = g.plays?.[g.livePlayIndex]; clock.set(Math.max(clock.get() + 1000, np?._timestamp ? np._timestamp + 1000 : clock.get() + 60_000)); }
     else clock.set(Math.max(clock.get() + 10 * 60_000, Math.min(T0, clock.get() + 3 * 3600_000)));
     tick(); releaseDueCards();

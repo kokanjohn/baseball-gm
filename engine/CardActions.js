@@ -25,7 +25,7 @@ import { applyRosterMutation, eligibleSlotsFor, defaultActiveGroup } from './Ros
 import * as Finance from './FinanceEngine.js';
 import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
-import { queueTrade } from './TradeEngine.js';
+import { queueTrade, adjustRapport } from './TradeEngine.js';
 import { eventRand } from './Dice.js';
 import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeaching, teachablePositions, startSimGames, activeSimGames, stretchRead } from './PlayerWork.js';
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
@@ -595,7 +595,26 @@ const scoutingQuiet = (days, refund = false) => ({
   },
 });
 
+/** r211 §122.89 another club's GM said hello: our answer moves our standing with that front office. */
+const gmRapport = (choice) => ({
+  feasible: (st, c) => { const id = c._gmTeamId || c._raw?._gmTeamId; return !!id && (st.leagueTeams || []).some(t => t.id === id); },
+  apply(d, c) {
+    const delta = c._raw?._rapport?.[choice] || 0;
+    adjustRapport(d, c._gmTeamId || c._raw?._gmTeamId, delta);
+    return [];
+  },
+});
+
+/** r211 §122.89 the scouting director's first look at the market: the Compose answer, on Scouting's clock. */
+const faLook = {
+  feasible: (st) => { const dir = st.userTeam?.coachingStaff?.scoutingDirector; return !!dir && !dir.vacant; },
+  apply: (d, c, atMs) => [{ type: 'SCHEDULE_COMPOSE', topic: 'sc_free_agents', channel: 'scouting', label: 'Free agents worth a look', atMs }],
+};
+
 export const CARD_ACTIONS = Object.freeze({
+  gm_rapport_yes:        gmRapport('yes'),   // r211 §122.89
+  gm_rapport_no:         gmRapport('no'),
+  fd_fa_look:            faLook,
   sign_acquire_hitter:   signStarter,
   sign_veteran_hitter:   signStarter,
   sign_acquire_pitcher:  signProspect('acq_pitcher'),

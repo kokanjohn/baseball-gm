@@ -473,6 +473,8 @@ export async function startNewGame(config) {
     CardEngine.deliverSeedCards(NEW_TEAM_SEED_CARDS, ctx);
     // One real, engine-generated trade proposal (actual players from both rosters).
     CardEngine.deliverSeedTradeOffer(ctx);
+    // r211 §122.89 the first day: messages between now and the first pitch, other GMs through the spring.
+    CardEngine.scheduleFirstDay(ctx);
     // §86 the Recent list starts the day the club does.
     StateManager.mutate(s => {
       const at = clockNow();

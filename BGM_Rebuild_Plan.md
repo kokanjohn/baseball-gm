@@ -13160,3 +13160,45 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
    - Then callbacks: notable decisions come back weeks later, written from what happened since.
    - Then story arcs: multi-step threads from our roster and choices.
    - No narrator / columnist (the user's call).
+
+## §122.89 — r211: a new team's first day; other clubs' GMs through the first spring
+**What a new team gets:**
+- The four seed messages, the first trade call and the takeover moment are unchanged.
+- On top of them, first-day messages arrive between taking over and the first pitch (`CardEngine.scheduleFirstDay`, from `startNewGame`). They're parked on the schedule like any message, so they push.
+
+**When** (`engine/FirstDay.js`, pure):
+- Inside staff hours (the quiet-hours setting for now; Step 3 makes it fixed staff hours), from 4 minutes after taking over to 20 minutes before first pitch.
+- Random, uneven times, never two within 5 minutes.
+- **Core:** one per slot, in this order: trainer, scouting, tickets, manager, equipment. All five with 3+ staff hours, otherwise 2–4. They're spread across the times (the first, then evenly).
+- **Secondary** fills in with more time: about one message every 1.75 staff hours in all, capped at 10.
+- Measured:
+  - taking over at 7pm (game the next day): 5;
+  - 9am, game the same day: 5;
+  - 11:15am, game at 1:05: 2;
+  - 11pm: 5, all the next morning;
+  - 2pm the day before: 8, with the longest staff-hours wait 2.7h.
+
+**What** (`data/cards-first-day.js`):
+- **Core**, two versions a slot:
+  - Trainer: a knee cleaned up this winter, or a heavy reporter with a hamstring. Hold them out a game (`rest_active_hitter`) or play them (a `worn_down` promise).
+  - Equipment manager: the sponsor's uniforms (money) or the throwbacks (the crowd), or rush a bat order.
+  - Ticket office: half-price seats or a cap giveaway for the first home game.
+  - Scouting Director: a first look at the market. "Send it over" puts the `sc_free_agents` Compose answer on Scouting's clock (`fd_fa_look` → `SCHEDULE_COMPOSE`).
+  - Manager, a specific situation and never the lineup: a hitter unhappy about the batting order (back the manager / give it a look), or naming a captain.
+- **Secondary:** the pitching coach (a new pitch), the hitting coach (a swing rebuild), the radio pregame show, an open workout for season-ticket holders, a nutrition program.
+- Some introduce themselves (always with a task); others skip the introductions.
+- None repeats a seed or spring-pool subject: field prep, clubhouse upkeep, the standards review, the fan experience package, spring travel, media day, a player's role, arm soreness, the camp's intensity.
+
+**Other clubs' GMs** (`GM_HELLOS`, 7 versions):
+- Three clubs over the first spring, never the club already calling. One comes the first day when there are 8+ staff hours; the rest come on days 1–11, in staff hours.
+- Each GM has a last name (`cpuGmName`: a staff-style name, fixed per save, different per club, never one of our staff's). The sender reads "Morello (Gulfport Mullets GM)".
+- The answer moves our standing with that front office (`gm_rapport_yes` / `_no`, the card's `_rapport`), which carries into every trade talk with them. Unanswered counts as no.
+- Versions: coffee, dinner, golf on the off day (the manager runs the day), a heads-up about their veterans, a gripe about our PR, a notes swap, an old colleague of our manager.
+
+**Checks:**
+- check-first-day (new, 28): five takeover times; counts, staff hours, gaps, no repeats of the seeds; variety across teams; the GMs (three clubs, named, standing moves with yes and no); "send it over"; "hold them out".
+- check-message-voice now covers cards-first-day.js.
+- A GM never names themselves (the sender line does that); their outcomes are their own words. The season sim's voice check caught "{gm} here, …".
+- check-game-pushes: a suspended game is now followed into the day it picks up again. The harness had stopped at "suspended" on the resume day too, so the resumed game's final push (foreseen correctly) looked invented. Seed 1's world shifted with this release and hit the case.
+
+**Fresh team:** needed to see it (it's the new team's first day).
