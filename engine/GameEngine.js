@@ -1116,6 +1116,8 @@ function _commitAt(gameIndex) {
   }
   // r220 §122.99 now and then, a word back about a decision the GM made (spring and the season).
   if (game.status !== GAME_STATUS.POSTPONED && !game.isPlayoff) CardEngine.deliverCallback(endMs, buildCardContext());
+  // r221 §122.100 the story arcs: the next step of one running, or a new one when its situation is real.
+  if (game.status !== GAME_STATUS.POSTPONED && !game.isSpring && !game.isPlayoff) CardEngine.advanceArcs(endMs, buildCardContext());
   planCardsForNextGame();
 
   // (Rainouts are made up when they're called — §102.3 _postponeGame.)
@@ -3458,6 +3460,17 @@ function _runOffseasonStep(step, atMs) {
     for (const role of Coach.COACH_ROLES) {
       const c = st.userTeam.coachingStaff?.[role];
       if (!c || c.vacant) continue;
+      // r221 §122.100 a coach who took another club's manager job (the story arc) leaves now: the chair is open for day 3.
+      if (c._leaving?.season === (st.seasonNum || 1)) {
+        const club = (st.leagueTeams || []).find(t => t.id === c._leaving.clubId);
+        StateManager.mutate(s => {
+          Coach.vacate(s.userTeam.coachingStaff, role);
+          s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('coaching', s.userTeam.abbr,
+            `${c.name} leaves to manage the ${club?.name || 'another club'}. The ${Coach.ROLE_INFO[role].title.toLowerCase()} job is open.`, atMs)]);
+        });
+        st = StateManager.get();
+        continue;
+      }
       const ev = Coach.evaluate(role, U);
       const at = atMs + (25 + 40 * k + Math.floor(eventRand() * 20)) * 60_000;
       if (up.has(role) || ev.verdict === 'poor') {

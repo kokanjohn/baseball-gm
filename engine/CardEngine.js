@@ -37,6 +37,7 @@ import * as Winter from './WinterStory.js';   // r218 §122.97
 import * as Situations from './Situations.js';   // r218 §122.97
 import * as GMP from './GMProfile.js';   // r219 §122.98
 import * as Callbacks from './Callbacks.js';   // r220 §122.99
+import * as Arcs from './Arcs.js';   // r221 §122.100
 
 import {
   PHASE,
@@ -77,6 +78,7 @@ import {
   WINTER_STORY,
   PROFILE,
   CALLBACK,
+  ARC,
   REGULAR_SEASON_GAME_COUNT,
   EMERGENCY,
 } from '../data/constants.js';
@@ -2034,7 +2036,7 @@ export function expireDueRosterCards(atMs) {
     // not the wall clock, so an unanswered one never outlives its game).
     // (r217/r218: a card with a deadline of its own — an invitation for a time, the winter's, a situation's — on its clock too)
     .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency || c._deadlineStory || c._stretchStory
-                  || c._winterCard || c._situation || c._callback || c._raw?._expiresAfterMs)
+                  || c._winterCard || c._situation || c._callback || c._arc || c._raw?._expiresAfterMs)
                  && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   // r139 §121 what an unanswered card's deadline sets off draws from its own stream.
@@ -3106,6 +3108,88 @@ export function deliverCallback(atMs, context = {}) {
   if (!card) return null;
   StateManager.mutate(s => { s.callbacks = { used: { ...(s.callbacks?.used || {}), [key]: at, ...(pick.e.p ? { [Callbacks.playerKey(pick.cb, pick.e)]: at } : {}) } }; });
   return card;
+}
+
+/**
+ * r221 §122.100 The story arcs, after one of our regular-season games (`atMs`, its final): the next step of an arc
+ * that's running (its previous answer in, its time come, its people still here), or — with fewer than ARC.maxActive
+ * running — now and then a new one (Arcs.pickArc). One step a day, the next day 11:00–12:30. Returns the cards parked.
+ */
+export function advanceArcs(atMs, context = {}) {
+  let st = StateManager.get();
+  if (![PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK].includes(st.phase)) return [];
+  const season = st.seasonNum || 1;
+  const r = dice(diceSeed(st), 'arcs', atMs);
+  const day = new Date(atMs - 4 * 3_600_000); day.setDate(day.getDate() + 1); day.setHours(11, 0, 0, 0);
+  const at = day.getTime() + Math.floor(r() * 90) * 60_000;
+  const DAYMS = 86_400_000;
+  const setArcs = (fn) => StateManager.mutate(s => { s.arcs = s.arcs || { active: [], done: {} }; fn(s.arcs, s); });
+  // (a season's arcs end with it)
+  if ((st.arcs?.active || []).some(a => a.s !== season)) setArcs(A => { A.active = A.active.filter(a => a.s === season); });
+  if ([...(st.inbox || []), ...(st.scheduledCards || [])].some(c => c._arc && new Date(c.deliverAtMs ?? c.arrivedAtMs).toDateString() === new Date(at).toDateString())) return [];
+
+  const deliver = (arc, spec) => {
+    const stNow = StateManager.get();
+    const make = (sp) => _rosterCard(stNow, { type: 'normal', expiresAtMs: at + (sp._news ? 36 : 48) * 3_600_000, ...sp,
+      cardId: `arc_${arc.key}`, _arc: arc.key, _rosterKey: `arc:${arc.id}:${arc.step}`, _raw: sp._raw || {}, _fallback: undefined });
+    let used = spec, inst = make(spec);
+    if (!cardFeasible(stNow, inst)) {
+      if (!spec._fallback) return null;
+      used = spec._fallback; inst = make(used);
+      if (!cardFeasible(stNow, inst)) return null;
+    }
+    const card = _deliverAt(inst, at);
+    if (!card) return null;
+    const def = Arcs.ARCS.find(d => d.key === arc.key);
+    const next = def.steps[arc.step + 1];
+    const gap = next?.after ? next.after[0] + r() * (next.after[1] - next.after[0]) : 0;
+    setArcs((A, s) => {
+      const a = A.active.find(x => x.id === arc.id);
+      if (a) { a.at = { ...a.at, [arc.step]: at }; a.step = arc.step + 1; a.nextAt = at + gap * DAYMS; a.lastAt = at; a.maxAt = next?.after ? at + (next.within ?? next.after[1]) * DAYMS : null; }
+      // what the step itself set in motion: a coach who took the job leaves after the season; a veteran with no year left retires
+      if (used._arcCoachLeaves) { const c = s.userTeam.coachingStaff?.[arc.who.role]; if (c) c._leaving = { season: s.seasonNum || 1, clubId: arc.who.club }; }
+      if (used === spec._fallback && used._raw?.onYes === 'arc_retire' && s.players[inst._targetPlayerId]) s.players[inst._targetPlayerId]._retiringAfter = s.seasonNum || 1;
+    });
+    return card;
+  };
+
+  // 1. A running arc's next step.
+  for (const stored of [...(StateManager.get().arcs?.active || [])]) {
+    st = StateManager.get();
+    let arc = { ...stored, picks: { ...(stored.picks || {}) }, who: { ...stored.who } };   // (a copy: the save changes only in a mutate)
+    const def = Arcs.ARCS.find(d => d.key === arc.key);
+    const finish = () => setArcs(A => { A.active = A.active.filter(x => x.id !== arc.id); });
+    if (!def || !def.alive(st, arc)) { finish(); continue; }
+    const last = arc.step - 1;
+    if (last >= 0 && arc.picks?.[last] == null) {
+      const c = [...(st.inbox || []), ...(st.scheduledCards || [])].find(x => x._rosterKey === `arc:${arc.id}:${last}`);
+      if (c && !c.resolved) continue;   // (still waiting for an answer)
+      const pick = !c ? 'no' : !c.noLabel ? 'yes' : c.choice === 'auto' ? (c.autoChoice || 'no') : c.choice === 'skip' ? 'none' : c.choice;
+      setArcs(A => { const a = A.active.find(x => x.id === arc.id); if (a) a.picks = { ...(a.picks || {}), [last]: pick }; });
+      arc = { ...arc, picks: { ...arc.picks, [last]: pick } };
+    }
+    if (arc.step >= def.steps.length) { finish(); continue; }
+    if (at < arc.nextAt) continue;
+    const step = def.steps[arc.step];
+    if (step.when && !step.when(st, arc)) { if (arc.maxAt != null && at > arc.maxAt) finish(); continue; }
+    const spec = step.build(st, arc, r);
+    if (!spec) { finish(); continue; }
+    const card = deliver(arc, spec);
+    if (card) return [card];
+    finish();
+  }
+
+  // 2. A new arc.
+  st = StateManager.get();
+  if ((st.arcs?.active || []).length >= ARC.maxActive || r() >= ARC.startChance) return [];
+  const pick = Arcs.pickArc(st, at, r);
+  if (!pick) return [];
+  const arc = { id: diceId(r), key: pick.def.key, s: season, who: pick.who, step: 0, picks: {}, at: {}, nextAt: at, startedAt: at };
+  setArcs(A => { A.active.push(arc); A.done = { ...(A.done || {}), [pick.def.doneKey(st, pick.who)]: at }; });
+  const spec = pick.def.steps[0].build(StateManager.get(), arc, r);
+  const card = spec && deliver(arc, spec);
+  if (!card) setArcs(A => { A.active = A.active.filter(x => x.id !== arc.id); });
+  return card ? [card] : [];
 }
 
 /** A GM's hello, written for one club: its GM's name and the club's, the answer moving our standing with them. */

@@ -463,7 +463,8 @@ export function checkDepth(state, teamId) {
  *      there out of position (`emergency: true`) — a real team always fields
  *      nine. The open position is reported as a need.
  *   3. rotation.order = the rostered, healthy STARTING_PITCHERS; a short
- *      rotation is topped up from healthy PITCHER_BENCH starters.
+ *      rotation is topped up from healthy PITCHER_BENCH starters, then (r221)
+ *      from relievers who can start (pitchRoles has SP).
  *   4. Active-count invariant (GM domain, regular season and playoffs):
  *      active (non-IL) players + players already on their way (pending
  *      'arrival' transactions) == ACTIVE_TOTAL.
@@ -651,10 +652,17 @@ export function reconcileRoster(state, teamId = 'user', options = {}) {
                 && groupOf(p.id) === PLAYER_GROUP.PITCHER_BENCH
                 && !inOrder.has(p.id))
       .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
-    if (!pbSP) break;
-    setPatch(pbSP.id, { group: PLAYER_GROUP.STARTING_PITCHERS });
-    order.push(pbSP.id);
-    inOrder.add(pbSP.id);
+    // r221 no starter on the pitcher bench: a reliever who can start (a swingman) takes the turn — a manager fields
+    // five before leaving a turn open; the pen's spot is then filled like any other (or is open).
+    const penSP = pbSP ? null : rosterIds
+      .map(id => players[id])
+      .filter(p => p && isHealthy(p.id) && pitchRoles(p).includes('SP') && groupOf(p.id) === PLAYER_GROUP.BULLPEN && !inOrder.has(p.id))
+      .sort((a, b) => (b.ovr || 0) - (a.ovr || 0))[0];
+    const pick = pbSP || penSP;
+    if (!pick) break;
+    setPatch(pick.id, { group: PLAYER_GROUP.STARTING_PITCHERS });
+    order.push(pick.id);
+    inOrder.add(pick.id);
   }
   // A CPU manager starts the best five (§104.2), as it plays the best nine: a
   // clearly better healthy starter on the pitcher bench — an ace back from
@@ -877,7 +885,7 @@ export function managerFillAt(state) {
  * fill now: lineup slots (with an eligible healthy bat on the bench, or any
  * bat when nobody fits — the manager would play one out of position), an
  * out-of-position fill an eligible bench bat could take, rotation turns (a
- * healthy starter on the pitcher bench) and bullpen spots (a healthy
+ * healthy starter on the pitcher bench, or a reliever who can start) and bullpen spots (a healthy
  * reliever on the pitcher bench).
  * @returns {{ lineup: Object[], rotation: Number, bullpen: Number, any: Boolean }}
  */
@@ -895,7 +903,10 @@ export function openSpots(state) {
   });
   const inGroup = (g, pos) => ids.map(id => players[id]).filter(p => p && isAvailable(p) && p.group === g && (!pos || p.pos === pos));
   const order = (u?.rotation?.order || []).filter(id => players[id] && isAvailable(players[id]));
-  const rotation = Math.min(Math.max(0, REQUIRED_SP_COUNT - order.length), inGroup(PLAYER_GROUP.PITCHER_BENCH, 'SP').length);
+  // (r221 a turn someone could take: a starter on the pitcher bench, or a reliever who can start — as the manager fills it)
+  const canStart = ids.map(id => players[id]).filter(p => p && isAvailable(p) && pitchRoles(p).includes('SP') && !order.includes(p.id)
+    && [PLAYER_GROUP.PITCHER_BENCH, PLAYER_GROUP.BULLPEN].includes(p.group));
+  const rotation = Math.min(Math.max(0, REQUIRED_SP_COUNT - order.length), canStart.length);
   const bullpen = Math.min(Math.max(0, ROSTER_LIMITS.BULLPEN - inGroup(PLAYER_GROUP.BULLPEN).length), inGroup(PLAYER_GROUP.PITCHER_BENCH, 'RP').length);
   return { lineup, rotation, bullpen, any: lineup.length > 0 || rotation > 0 || bullpen > 0 };
 }

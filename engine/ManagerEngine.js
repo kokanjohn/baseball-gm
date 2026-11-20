@@ -209,7 +209,9 @@ const BACKGROUNDS = [
  */
 export function candidates(state, { rand = eventRand, taken = new Set() } = {}) {
   const ours = state.userTeam?.coachingStaff?.manager;
-  const market = (state.managerPool || []).filter(m => m.name !== ours?.name && !taken.has(m.name)).sort((a, b) => b.quality - a.quality);
+  // (r221 never one who shares a name with someone on our staff)
+  const staffNames = new Set(Object.values(state.userTeam?.coachingStaff || {}).map(c => c?.name).filter(Boolean));
+  const market = (state.managerPool || []).filter(m => m.name !== ours?.name && !taken.has(m.name) && !staffNames.has(m.name)).sort((a, b) => b.quality - a.quality);
   const bg = [...BACKGROUNDS];
   const bgOf = () => bg.splice(Math.floor(rand() * bg.length) % bg.length, 1)[0] || '';
   const free = _freeNames(state, new Set([...taken, ...market.map(m => m.name)]));

@@ -342,7 +342,11 @@ export function candidates(state, role, U, { rand = eventRand, taken = new Set()
   const info = ROLE_INFO[role];
   const need = neededSpecialty(role, U, state);
   const other = _pick(info.specialties.filter(s => s !== need), rand) || need;
-  const free = STAFF_NAMES.filter(n => !taken.has(n));
+  // r221 a name nobody in the league answers to already: our staff, the owner, every club's manager and GM, the managers
+  // on the market (a new coach sharing the manager's name read as the coach speaking of themselves).
+  const inUse = new Set([...taken, state?.userTeam?.ownerName, ...Object.values(state?.userTeam?.coachingStaff || {}).map(c => c?.name),
+    ...(state?.leagueTeams || []).flatMap(t => [t.manager?.name, t.gm?.name]), ...(state?.managerPool || []).map(m => m.name)].filter(Boolean));
+  const free = STAFF_NAMES.filter(n => !inUse.has(n));
   const names = [];
   while (names.length < 2 && free.length) names.push(free.splice(Math.floor(rand() * free.length) % free.length, 1)[0]);
   const bg = [...BACKGROUNDS[role]];

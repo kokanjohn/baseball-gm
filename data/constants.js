@@ -1350,6 +1350,16 @@ export const AWAY_DAY = Object.freeze({ offday: 0.8, offdayExtra: 0.2, road: 0.5
 // gets a message this often, a news one this share of the time.
 export const WINTER_STORY = Object.freeze({ busy: 2, chance: 0.9, newsShare: 0.35 });
 
+// r221 §122.100 story arcs: at most this many running; after one of our games, a new one starts this often (when a
+// situation fits); a step comes the next day, 11:00–12:30. The veteran's last question this many games from the end;
+// a prospect this young with this much more in them than the rating; the shuttles and the street cleanup (shares of
+// the payroll); a coach this good is asked about, and gets the job this often; a losing streak this long starts a feud,
+// which flares again this often if left alone.
+export const ARC = Object.freeze({
+  maxActive: 2, startChance: 0.06, veteranGamesLeft: 12, prospectAge: 24, prospectUpside: 3,
+  shuttleShare: 0.004, meetShare: 0.002, coachQuality: 65, coachGetsJob: 0.5, feudStreak: 4, feudFlares: 0.5,
+});
+
 // r220 §122.99 callbacks: after one of our games, this often a callback is looked for (for the next afternoon, 1–4pm);
 // a booking that comes back offers this share of what it paid last time; the same kind about the same player waits this long.
 export const CALLBACK = Object.freeze({ chance: 0.25, backShare: 1.2, samePlayerDays: 60 });

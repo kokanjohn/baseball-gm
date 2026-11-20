@@ -13632,3 +13632,67 @@ Each entry now also holds:
 check-callbacks (new, 18): the record names the player; each callback with its real numbers and month; not once the player is gone; not before its time; the still-cold decision; the booking's price; a trade's club; a player let go and where they went; the exit decision; work done (not while it's running); the hometown on the next visit only; the rate; the afternoon; one per decision; voice.
 
 **Fresh team:** not needed. Callbacks start from the decisions recorded since r219.
+
+## §122.100 — r221: story arcs (Release 8), and the rotation fills from the pen
+`engine/Arcs.js` is pure. After each of our regular-season games, `CardEngine.advanceArcs` either sends the next step of a running arc or, now and then, starts a new one. Rates are in `ARC`.
+
+### How arcs run
+- **Steps:**
+  - A step comes the next day, 11:00–12:30. At most one arc step a day.
+  - A step waits for the answer to the one before. An unanswered step counts as its default; `skip` counts as nothing chosen.
+  - Each step waits `after` days, and also waits for its `when` condition if it has one. If the condition isn't met within `within` days, the arc ends.
+  - Decisions expire after 48 hours, news after 36, on their own clock (`_arc` is in `expireDueRosterCards`).
+- **Ending an arc:** an arc ends when its people leave the club (`still`: on our roster; the IL counts as still here), when a step returns null, or when the season ends.
+- **Starting an arc:**
+  - At most 2 run at once, and never two of the same kind.
+  - A new one starts 6% of our games, and only when its situation is real (`trigger`).
+  - Each arc happens once per subject or season (`doneKey`).
+- **Feasibility:** a step whose action can't happen uses its `_fallback`, if it has one; otherwise the arc ends.
+- **State:** `s.arcs = { active: [{ id, key, s, who, step, picks, at, nextAt, maxAt }], done }`.
+
+### The arcs
+
+**veteran** — a player 35 or older on an expiring deal, after 15–70 games.
+1. The manager: it's probably their last season. A farewell tour (crowd +3, player +1) or keep it quiet (player +2).
+2. 24–34 days later: PR on the tour (the real last road city; crowd +2), or the manager on their real line this season.
+3. With 12 games left: one more year (`retain_*`, an extension at market terms) or let them go out on top (`arc_retire` sets `_retiringAfter`; `OffseasonEngine._retirements` retires them at the offseason). Left unanswered, nothing happens. If the extension can't be afforded, the fallback is the manager's word that they'll retire, and they do.
+
+**prospect** — a young (24 or under) bat not in the lineup (`lineupSlots`), with at least 3 points more true talent than the rating, after 20–100 games.
+1. The scouts' word (news).
+2. 5–9 days later: a week in the lineup in place of the weakest starter they could replace (`audition_promote`, a real lineup change).
+3. 7–10 days later:
+   - Not given the week: they asked what it takes (player −1).
+   - Played well, or too few at-bats to judge: they stay in the lineup.
+   - Played badly: put the regular back (`audition_promote` reversed) or give them another week.
+
+**neighbors** — 25–100 games in, before a home game.
+1. Shuttles from the downtown lots (≈0.4% of payroll, crowd +1) or "it comes with the ballpark" (crowd −1).
+2. 14–21 days later:
+   - Shuttles: a thank-you (crowd +2).
+   - No shuttles: it went to the council. Meet the neighbors and pay for street cleanup (≈0.2% of payroll, crowd +2), or let the council decide.
+3. 10–16 days later: the council drops the fee (crowd +1), or passes a game-night parking fee (crowd −3).
+
+**coach** — a coach rated 65 or better, 60–120 games in. Another club asks to interview them for its manager job.
+1. Give permission (that coach +2) or ask them to wait (−3).
+2. 10–18 days later: they took the job 50% of the time. Then `_leaving = { season, clubId }`; they finish the season, and at offseason day 2 the chair is vacated (`Coach.vacate`, with a line in the feed) so day 3's hiring fills it. Otherwise they didn't get it. If permission was refused: their word on it.
+
+**feud** — a losing streak of 4 or more, two of the regulars, 20–120 games in.
+1. Sit them down together (morale +1) or let them work it out.
+2. 5–9 days later:
+   - Talked: they're fine (morale +2).
+   - Left alone: half the time it flares. Sit the one who started it (`day_off`, a real game on the bench) or fine them both (morale −1). Otherwise it blew over.
+
+In the sims (2 seasons, seed 1) these ran from start to finish: a veteran's full arc, a prospect, the neighbors through to the fee, the coach (twice).
+
+### Fixes found along the way
+- **The rotation fills from the pen:** `reconcileRoster` tops up a short rotation from the pitcher bench, then (new) from a reliever who can start (`pitchRoles` has SP). `openSpots` counts both, so the GM's open-spot message and the manager's fill agree. This was the 4-man rotation at the season turn: a swingman sat in the pen while a turn stayed open. The ember seed-2 run now passes.
+- **Names:**
+  - New coaches' names (`Coach.candidates`) avoid every name in use: our staff, the owner, every club's manager and GM, the managers on the market.
+  - A manager on the market never shares a name with our staff (`Managers.candidates`).
+  - A new manager sharing the bench coach's name had made the coach's message read as speaking of themselves.
+
+### Checks
+- check-arcs (new, 29): the veteran both ways (an extension; retiring at the offseason); the prospect's real lineup change and the regular back; the neighbors to the fee (the crowd −3); the coach taking the job (`_leaving` set); the feud's flare-up and a real day off; one step a day at 11:00–12:30; an arc ends when its player leaves; arcs start only from real situations; no third arc; voice.
+- multi-season (3 seasons; ember seed 2) passes. check-coaches, check-managers, check-open-spots, check-pitcher-roles, check-manager-fill, check-il-return and check-roster-advice pass.
+
+**Fresh team:** not needed.

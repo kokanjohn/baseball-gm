@@ -633,7 +633,8 @@ function _retirements(draft, atMs, nextYear) {
     if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
     const age = computeAge(p.dob, nextYear);
     const rel = (p.ovr || 50) - level;
-    let retire = age >= RETIREMENT_AGE_HARD;
+    // (r221 §122.100 a veteran who chose to go out on top — the story arc — retires now)
+    let retire = age >= RETIREMENT_AGE_HARD || (p.teamId === 'user' && p._retiringAfter === (draft.seasonNum || 1));
     if (!retire && age >= RETIREMENT_AGE_SOFT && rel < RETIREMENT_OVR_SOFT) retire = eventRand() < 0.6;
     if (!retire) continue;
     const teamId = p.teamId || null;

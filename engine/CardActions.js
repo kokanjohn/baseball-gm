@@ -635,6 +635,12 @@ const parkEvent = {
   },
 };
 
+/** r221 §122.100 a veteran goes out on top: they retire when the season ends (OffseasonEngine._retirements). */
+const arcRetire = {
+  feasible: (st, c) => ours(st, c._targetPlayerId),
+  apply(d, c) { d.players[c._targetPlayerId]._retiringAfter = d.seasonNum || 1; return []; },
+};
+
 /** r219 §122.98 hold back the small asks for a month (fewer of them come: CardEngine._profileWeight). */
 const spendFreeze = {
   feasible: () => true,
@@ -668,6 +674,7 @@ export const CARD_ACTIONS = Object.freeze({
   offday_session:        offdaySession,   // r217 §122.96
   park_event:            parkEvent,       // r217 §122.96
   spend_freeze:          spendFreeze,     // r219 §122.98
+  arc_retire:            arcRetire,       // r221 §122.100
   sign_acquire_hitter:   signStarter,
   sign_veteran_hitter:   signStarter,
   sign_acquire_pitcher:  signProspect('acq_pitcher'),

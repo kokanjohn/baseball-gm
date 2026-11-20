@@ -27,7 +27,7 @@ const _fmt = (k) => (k >= 1000 ? `$${(k / 1000).toFixed(1).replace(/\.0$/, '')}M
 const _k = (k) => Math.max(5, Math.round(k / 5) * 5);
 
 /** A player's games since a moment (their log): { games, ab, h, hr, ip, er, … }. */
-function since(p, atMs) {
+export function since(p, atMs) {
   const sum = { games: 0 };
   for (const e of p?._impGameLog || []) {
     if (!(e.atMs > atMs)) continue;
@@ -38,10 +38,10 @@ function since(p, atMs) {
 }
 const line = (p, x) => (isP(p) ? `an ERA of ${era2(x.er || 0, x.ip)} in ${Math.round(x.ip)} innings` : `${avg3(x.h || 0, x.ab)} with ${x.hr || 0} home run${(x.hr || 0) === 1 ? '' : 's'} in ${x.ab} at-bats`);
 /** The same line, as a sentence's verb: "is hitting .312 with 9 home runs in 200 at-bats" / "has an ERA of 3.10 in 80 innings". */
-const doing = (p, x) => (isP(p) ? `has ${line(p, x)}` : `is hitting ${line(p, x)}`);
-const enough = (p, x) => (isP(p) ? (x.ip || 0) >= 15 : (x.ab || 0) >= 25);
-const good = (p, x) => (isP(p) ? (x.er || 0) * 9 / x.ip <= 3.5 : (x.h || 0) / x.ab >= 0.27);
-const bad = (p, x) => (isP(p) ? (x.er || 0) * 9 / x.ip >= 5.5 : (x.h || 0) / x.ab < 0.21);
+export const doing = (p, x) => (isP(p) ? `has ${line(p, x)}` : `is hitting ${line(p, x)}`);
+export const enough = (p, x) => (isP(p) ? (x.ip || 0) >= 15 : (x.ab || 0) >= 25);
+export const good = (p, x) => (isP(p) ? (x.er || 0) * 9 / x.ip <= 3.5 : (x.h || 0) / x.ab >= 0.27);
+export const bad = (p, x) => (isP(p) ? (x.er || 0) * 9 / x.ip >= 5.5 : (x.h || 0) / x.ab < 0.21);
 const club = (state, id) => (state.leagueTeams || []).find(t => t.id === id) || null;
 const mgr = (state) => { const m = state.userTeam?.coachingStaff?.manager; return m && !m.vacant && m.name ? `${m.name} (Manager)` : 'Manager'; };
 const coach = (state, role, title) => { const c = state.userTeam?.coachingStaff?.[role]; return c && !c.vacant && c.name ? `${c.name} (${title})` : title; };
