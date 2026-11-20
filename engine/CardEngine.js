@@ -109,6 +109,8 @@ import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS, NEW_GM_HELLOS, LATER_HELLOS } from '../data/cards-first-day.js';   // r211 §122.89, r212 §122.90
 import { stampSender, senderLabel } from './Senders.js';   // r212 §122.90
 import { pickEmergency, answerBy } from './Emergencies.js';   // r213 §122.91
+import { storyMoments, buildStep, buildAfter } from './DeadlineStory.js';   // r215 §122.94
+import { dealsOnTable } from './TradeAdvice.js';
 import { FIRST_DAY, CORE_SLOTS, firstDayTimes, gmHelloTimes, cpuGmName, newGms, tradedWith, GM_TURNOVER } from './FirstDay.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
@@ -2000,7 +2002,7 @@ export function expireDueRosterCards(atMs) {
     // Roster cards, pre-game cards (§74 — their question is moot at first pitch), and the
     // weather's questions (§104.2 — answered by first pitch or not at all; on the game clock,
     // not the wall clock, so an unanswered one never outlives its game).
-    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency)
+    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency || c._deadlineStory)
                  && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   // r139 §121 what an unanswered card's deadline sets off draws from its own stream.
@@ -2913,6 +2915,53 @@ export function deliverEmergency(atMs, context = {}) {
   const parked = _deliverAt(card, atMs);
   releaseDueCards(atMs);
   return parked;
+}
+
+/**
+ * r215 §122.94 The deadline story, one step at its moment (DeadlineStory): marks the step done, writes it from the
+ * club as it stands and what the GM has decided, and delivers it. Selling and ahead of the market: a buyer calls
+ * for one of our veterans instead of a shortlist. A step whose moment is long past (a save from before r215) is
+ * marked done and skipped. Returns the cards delivered.
+ */
+export function deliverDeadlineStep(atMs, context = {}) {
+  const st = StateManager.get();
+  const season = st.seasonNum || 1;
+  const m = storyMoments(st).find(x => x.atMs === atMs && !(st.deadline?.season === season && st.deadline.done?.[x.key]));
+  if (!m) return [];
+  StateManager.mutate(s => {
+    if (s.deadline?.season !== season) s.deadline = { season, stance: null, done: {} };
+    s.deadline.done = { ...(s.deadline.done || {}), [m.key]: true };
+  });
+  if (clockNow() - atMs > 36 * 3_600_000) return [];
+  const now = StateManager.get();
+  const ctx = { ...context, dealsOnTable: m.key === 'final' ? dealsOnTable(now, atMs) : [] };
+  const out = [];
+  if (m.key === 'shortlist' && now.deadline?.stance === 'sell' && now.deadline?.ahead) {
+    // A buyer calls for one of our veterans (the best whose deal is up, else our oldest regular).
+    const u = now.userTeam;
+    const regs = [...(u.lineupSlots || []).map(x => x.playerId), ...(u.rotation?.order || [])].map(id => now.players[id]).filter(p => p && isAvailable(p));
+    const year = baseballYear(now);
+    const vets = regs.sort((a, b) => computeAge(b.dob, year) - computeAge(a.dob, year)).slice(0, 3);
+    const buyers = (now.leagueTeams || []).filter(t => clubMode(now, t.id) === 'buyer');
+    for (const p of vets) {
+      let sent = false;
+      for (const b of buyers) {
+        const call = LeagueTrades.callOffer(now, b.id, p.id, atMs);
+        if (call && deliverTradeCall({ ...call.deal, room: call.room }, atMs)) { sent = true; break; }
+      }
+      if (sent) break;
+    }
+    return out;
+  }
+  const specs = m.key === 'after' ? buildAfter(now, ctx, atMs) : [buildStep(m.key, now, ctx, atMs)].filter(Boolean);
+  specs.forEach((spec, i) => {
+    const card = _rosterCard(StateManager.get(), { ...spec, _deadlineSeason: season });
+    const at = atMs + i * (20 + Math.floor(dice(diceSeed(now), 'deadline-after', season, i)() * 50)) * 60_000;
+    const parked = _deliverAt(card, at);
+    if (parked) out.push(parked);
+  });
+  releaseDueCards(atMs);
+  return out;
 }
 
 /** A GM's hello, written for one club: its GM's name and the club's, the answer moving our standing with them. */

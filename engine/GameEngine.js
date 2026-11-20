@@ -164,6 +164,7 @@ import { clockNow, runAt } from './Clock.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 import { gmTurnover } from './FirstDay.js';   // r212 §122.90
 import { planEmergencies, nextEmergencyAt } from './Emergencies.js';   // r213 §122.91
+import { nextStepAt as nextDeadlineStep } from './DeadlineStory.js';   // r215 §122.94
 import { GM_RELATIONSHIP_DEFAULT } from '../data/constants.js';
 import { naturalFor, seedSwingman } from './Positions.js';
 import * as Teaching from './PlayerWork.js';   // r166 the Bench Coach's position work
@@ -3320,7 +3321,10 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     // r213 §122.91 an emergency in the night, at its moment.
     const emAt = nextEmergencyAt(st, clockMs);
     const emergency = emAt != null ? { kind: 'emergency', at: emAt } : null;
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look, staff, emergency].filter(Boolean);
+    // r215 §122.94 the deadline story, a step at its moment.
+    const dlStep = nextDeadlineStep(st, clockMs);
+    const deadline = dlStep ? { kind: 'deadline', at: dlStep.atMs } : null;
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look, staff, emergency, deadline].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     // r139 §121 the cards due by this moment arrive before it (a card the event withdraws, after it, never does).
@@ -3344,6 +3348,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'wxask') _wxUserCards(next.at);
     else if (next.kind === 'fieldask') _fieldPrepCards(next.at);
     else if (next.kind === 'wxtell') _wxStoryTell(next.at);
+    else if (next.kind === 'deadline') CardEngine.deliverDeadlineStep(next.at, buildCardContext());
     else if (next.kind === 'emergency') {
       StateManager.mutate(s => { const p = (s.emergencies?.plan || []).find(x => !x.done && x.atMs === next.at); if (p) p.done = true; });
       CardEngine.deliverEmergency(next.at, buildCardContext());

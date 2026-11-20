@@ -26,7 +26,7 @@
  * keeps paying this season, by player.
  */
 
-import { PLAYER_GROUP, PHASE, TRADE, LEAGUE_TRADES, TRADE_DEADLINE_OPEN, TRADE_DEADLINE_CLOSE } from '../data/constants.js';
+import { PLAYER_GROUP, PHASE, TRADE, LEAGUE_TRADES, TRADE_DEADLINE_OPEN, TRADE_DEADLINE_CLOSE, DEADLINE_STORY } from '../data/constants.js';
 import {
   valueToClub, evaluateForClub, wouldStart, tradeWindow, regularIndex, clubMode, cashValue,
   remainingShare, clubBar, isKeyPiece, playsSlot, packageValue,
@@ -315,6 +315,9 @@ export function findLeagueTrades(state, atMs, rand) {
   const deals = [];
   const meet = !!state.offseason?.meetings;            // §112.5 the winter meetings: everyone's in one hotel
   let calls = meet ? LEAGUE_TRADES.meetings.calls : LEAGUE_TRADES.maxCallsPerDay;
+  // r215 §122.94 we said we're selling: in the deadline's run-up the buyers call us more.
+  const ri = regularIndex(state);
+  if (state.deadline?.season === (state.seasonNum || 1) && state.deadline?.stance === 'sell' && ri >= TRADE_DEADLINE_CLOSE - DEADLINE_STORY.gamesOut.owner && ri <= TRADE_DEADLINE_CLOSE) calls = Math.max(calls, DEADLINE_STORY.sellCalls);
   const maxDeals = meet ? LEAGUE_TRADES.meetings.maxPerDesk : LEAGUE_TRADES.maxPerDay;
   const order = [...clubs].sort(() => rand() - 0.5);
   for (const buyer of order) {

@@ -611,7 +611,20 @@ const faLook = {
   apply: (d, c, atMs) => [{ type: 'SCHEDULE_COMPOSE', topic: 'sc_free_agents', channel: 'scouting', label: 'Free agents worth a look', atMs }],
 };
 
+/** r215 §122.94 the deadline story: what the GM decided, for the steps after it. */
+const dlSet = (fn) => ({ feasible: () => true, apply(d, c) { d.deadline = { ...(d.deadline || {}) }; fn(d.deadline, c, d); return []; } });
+
 export const CARD_ACTIONS = Object.freeze({
+  dl_stance:     dlSet((dl, c) => { dl.stance = pickOf(c) === 'sell' ? 'sell' : 'buy'; }),
+  dl_hold:       dlSet((dl) => { dl.stance = 'hold'; }),
+  dl_ahead:      dlSet((dl) => { dl.ahead = true; }),
+  dl_reassure:   dlSet((dl, c) => { dl.reassured = c._targetPlayerId || null; }),
+  dl_focus:      dlSet((dl, c) => { dl.focus = pickOf(c) === 'arm' ? 'arm' : 'bat'; }),
+  dl_focus_none: dlSet((dl) => { dl.focus = 'none'; }),
+  dl_rival_back: dlSet((dl, c, d) => { dl.rival = 'back'; adjustRapport(d, c._dlTeamId, 5); }),
+  dl_rival_on:   dlSet((dl, c, d) => { dl.rival = 'on'; adjustRapport(d, c._dlTeamId, -4); }),
+  dl_room:       dlSet((dl, c, d) => { const k = c._dlMoneyK || 0; dl.room = k; if (d.userTeam.finances) d.userTeam.finances.payrollTarget = (d.userTeam.finances.payrollTarget || 0) + k; }),
+  dl_shed:       dlSet((dl) => { dl.shed = true; }),
   gm_rapport_yes:        gmRapport('yes'),   // r211 §122.89
   gm_rapport_no:         gmRapport('no'),
   fd_fa_look:            faLook,

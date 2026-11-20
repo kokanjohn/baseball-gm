@@ -1342,6 +1342,14 @@ export const MORNING = Object.freeze({ spreadMs: 90 * 60_000, dueAfterMs: 2 * 3_
 // share ÷ the games left); a card is drawn only on a whole credit. `cap`: credit never piles past it.
 export const STORY_PACE = Object.freeze({ cap: 2.5, share: 0.75 });
 
+// r215 §122.94 the trade deadline as a story: each step this many of our regular-season games before the deadline
+// game (TRADE_DEADLINE_CLOSE); "final" is deadline day, "after" the morning after. aheadK: the scouts' extra time
+// ("get ahead of it"); the owner's payroll room for a buyer: this share of the payroll (at least roomMinK).
+export const DEADLINE_STORY = Object.freeze({
+  gamesOut: Object.freeze({ owner: 14, market: 10, player: 7, manager: 5, shortlist: 4, rival: 3, money: 2 }),
+  aheadK: 20, roomShare: 0.05, roomMinK: 250, sellCalls: 2,
+});
+
 // r213 §122.91 after-hours emergencies: how many a season, when in the night (minutes from the midnight before
 // a game of ours), how long before that game at the least, and when an answer is due (hours after, and before
 // first pitch).

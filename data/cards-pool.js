@@ -188,7 +188,8 @@ export const COACHING_CONTRACT_POOL = [
 
 export const DECISIONS_POOL = [
   // ── Trade Deadline cards (games 65–72) ──────────────────────────────────
-  {id:'dl1',autoResolve:'no',_beforeDeadline:[6,12],_requiresRegular:true,_oncePerSeason:true,
+  {id:'dl1',_retired:true,   // r215 §122.94 the deadline story's owner step replaces it
+   autoResolve:'no',_beforeDeadline:[6,12],_requiresRegular:true,_oncePerSeason:true,
    type:'normal',tag:'TRADE',sender:'{owner_name}',avatar:'💼',
    subject:'Trade deadline approaching — what is the plan?',
    preview:'{owner_name} wants a clear direction before the window closes…',
@@ -197,7 +198,8 @@ export const DECISIONS_POOL = [
    noMsg:'Stand pat confirmed. Ownership accepted the call.',
   },
 
-  {id:'dl2',autoResolve:'no',autoResolveTax:{morale:-1},_beforeDeadline:[3,9],_requiresRegular:true,_oncePerSeason:true,_requiresBelowFifty:true,
+  {id:'dl2',_retired:true,   // r215 §122.94 (the owner's buy / sell / stand pat)
+   autoResolve:'no',autoResolveTax:{morale:-1},_beforeDeadline:[3,9],_requiresRegular:true,_oncePerSeason:true,_requiresBelowFifty:true,
    type:'normal',tag:'TRADE',sender:'Analytics',avatar:'📋',
    subject:"Deadline — the case for selling",
    preview:"The numbers are clear: {dl2_rationale}…",

@@ -13341,3 +13341,30 @@ Spring and the first days hold up.
 **Checks:** check-pace-morning (new: the night's messages); the audit re-run. check-il-return waits up to 90 hours for the manager's second nudge (written in the night, it now comes in the morning).
 
 **Fresh team:** not needed.
+
+## §122.94 — r215: the trade deadline as a story (Release 2 of the message plan)
+`engine/DeadlineStory.js` (pure builders), `CardEngine.deliverDeadlineStep`, a clock event (`deadline`) at each step's moment, so the look-ahead foresees it and it pushes.
+
+**Moments:** the day of the regular-season game that many games before the deadline game (`TRADE_DEADLINE_CLOSE`), 10am–12:30 (their own dice). "Final" is deadline day 9–10:30; "after" is the morning after, 9:30–11:30. State: `s.deadline = { season, stance, done, ahead, reassured, focus, rival, room, shed }`. A step long past (a save from before r215) is marked done and skipped.
+
+| Step | Games out | From | What |
+|---|---|---|---|
+| owner | 14 | the owner | Buy / Sell / Stand pat (`_choices` + no). No answer: stand pat. The stance shapes every step after it. |
+| market | 10 | Scouting Director | Clubs selling and buying (`clubMode`), the two best expiring players on sellers, where prices are headed. "Get Ahead of It" costs `aheadK` and unlocks the shortlist (buy) or a buyer's call (sell). |
+| player | 7 | the manager, relaying | Our best regular on an expiring deal asks. The truth, or "you're staying" (remembered: `reassured`). |
+| manager | 5 | the manager | A bat or an arm (the softer spot first), or "this group is enough" (`focus`). |
+| shortlist | 4 | Scouting Director | Buy + ahead: a rental fitting the focus from a club out of it, an upgrade over our weakest there, for a young reserve (`shortlistDeal`). An offer ready to make: Make the Offer / Not Now / Adjust It First. Sell + ahead: a buyer calls for one of our veterans instead (`LeagueTrades.callOffer` → `deliverTradeCall`). |
+| rival | 3 | another buyer's GM | Buy: "we're both after X". Back off (+5 standing with them) or Game On (−4). |
+| money | 2 | the owner | Buy: payroll room this season (5% of payroll, at least $250K: `payrollTarget` up). Sell: "move salary" (a promise). Stand pat: nothing. |
+| final | deadline day | Pro Scouting | News: the deals on the table, or "the phones are quiet"; done before today's game ends. |
+| after | the morning after | several | The clubhouse (who came, who left, how the room took it; a decision: talk to the team or let the games talk). The owner's verdict on what we said vs. did (news, owner trust −3…+2). The new arrival's hello and the departed player's goodbye (news). The paper's grade (a decision: a quote or no comment). A regular told "you're staying" and then traded is in all of it (morale). |
+
+**Also:**
+- Selling, the buyers call us more in the run-up (`DEADLINE_STORY.sellCalls` 2 a day in the desk, from the owner's step to the deadline).
+- dl1 and dl2 retired (the owner's step replaces them).
+
+**In the season sim** (2 runs × 2 seasons): every season's story ran from the owner's question to the paper's grade (the sim's GM leaves the owner unanswered, so it stood pat).
+
+**Checks:** check-deadline-story (new, 23): the moments; buying end to end (each step, the actions, the morning after with a broken promise); selling (a buyer's call, the owner on salary); standing pat (no shortlist, rival, or money); voice.
+
+**Fresh team:** not needed. A current season's later steps run if the deadline hasn't passed.
