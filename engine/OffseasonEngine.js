@@ -29,6 +29,7 @@
  */
 
 import { dice, diceId, diceSeed, eventRand, inEvent } from './Dice.js';
+import { profile as gmProfile } from './GMProfile.js';   // r219 §122.98
 import {
   PLAYER_GROUP,
   ROSTER_LIMITS,
@@ -54,6 +55,7 @@ import {
   WIN_TARGET_ADJ_MISS_10_PLUS,
   OFFSEASON_DAYS,
   OFFSEASON_STEP_HOURS,
+  PROFILE,
   CPU_RESIGN_ODDS,
   CPU_RESIGN_AGE_34_MULT,
   WALK_ABROAD_PROB_31_PLUS,
@@ -331,8 +333,10 @@ export function marketTerms(draft, player) {
   const ageFactor = age >= 34 ? 0.7 : age >= 32 ? 0.85 : 1;
   // r147 an agent who was turned down (a bonus refused) asks us for more at the next negotiation.
   const grudge = player._agentGrudge && player.teamId === 'user' ? AGENT_GRUDGE_MARKUP : 1;
+  // r219 §122.98 our own players remember how this GM treats them: a loyal GM's ask a little lower, a transactional one's higher.
+  const rep = player.teamId === 'user' ? 1 - PROFILE.loyalAsk * gmProfile(draft).loyal : 1;
   // r200 §122.77 the price counts how the player played (the rating alone sets the length).
-  const salary = Math.max(20, Math.round(_salaryFor((player.ovr || 50) + performanceShift(draft, player).shift) * ageFactor * grudge / 5) * 5);
+  const salary = Math.max(20, Math.round(_salaryFor((player.ovr || 50) + performanceShift(draft, player).shift) * ageFactor * grudge * rep / 5) * 5);
   const years = age >= 34 ? 1
     : age >= 31 ? (rel >= 60 ? 2 : 1)
     : age >= 28 ? (rel >= 60 ? 3 : 2)

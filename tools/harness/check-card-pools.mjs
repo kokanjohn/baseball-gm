@@ -12,6 +12,7 @@ const Mn = await import('../../data/cards-money.js');
 const Mo = await import('../../data/cards-moments.js');
 const Aw = await import('../../data/cards-away.js');   // r217 §122.96 off days and the road
 const Wi = await import('../../data/cards-winter.js');   // r218 §122.97 the winter
+const Pf = await import('../../data/cards-profile.js');   // r219 §122.98 the GM's reputation
 const CE = await import('../../engine/CardEngine.js');
 
 const results = [];
@@ -32,7 +33,7 @@ const MARKERS = {
 };
 
 const all = [];
-for (const [name, v] of Object.entries({ ...P, ...Mn, ...Aw, ...Wi })) {
+for (const [name, v] of Object.entries({ ...P, ...Mn, ...Aw, ...Wi, ...Pf })) {
   if (!Array.isArray(v) || name === 'COMPOSE_RESPONSE_POOL') continue;
   // (how a ballpark booking went: follow-ups, led to by the booking's `_outcomes`)
   const pool = name === 'AWAY_FOLLOWUPS' ? 'FOLLOWUP_POOL' : name;

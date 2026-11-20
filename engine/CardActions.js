@@ -35,7 +35,7 @@ import { completeWatchClaim } from './TransactionEngine.js';   // r204 §122.82
 import { reportSummary } from './FaWatch.js';   // r204 §122.82
 import { setStrategy, setPenRole } from './Strategy.js';   // r169
 import { startPromo, post as postMoney, canSpend } from './FinanceEngine.js';   // r169
-import { PROMOTIONS } from '../data/constants.js';   // r169
+import { PROMOTIONS, PROFILE } from '../data/constants.js';   // r169, r219
 import { drainageLevel, startDrainage } from './FieldCare.js';   // r170
 import { homeMorning } from './AwayDays.js';   // r217 §122.96
 
@@ -635,6 +635,12 @@ const parkEvent = {
   },
 };
 
+/** r219 §122.98 hold back the small asks for a month (fewer of them come: CardEngine._profileWeight). */
+const spendFreeze = {
+  feasible: () => true,
+  apply(d, c, atMs) { d.userTeam.spendFreezeUntil = atMs + PROFILE.freezeDays * 86_400_000; return []; },
+};
+
 /** r211 §122.89 the scouting director's first look at the market: the Compose answer, on Scouting's clock. */
 const faLook = {
   feasible: (st) => { const dir = st.userTeam?.coachingStaff?.scoutingDirector; return !!dir && !dir.vacant; },
@@ -661,6 +667,7 @@ export const CARD_ACTIONS = Object.freeze({
   fd_fa_look:            faLook,
   offday_session:        offdaySession,   // r217 §122.96
   park_event:            parkEvent,       // r217 §122.96
+  spend_freeze:          spendFreeze,     // r219 §122.98
   sign_acquire_hitter:   signStarter,
   sign_veteran_hitter:   signStarter,
   sign_acquire_pitcher:  signProspect('acq_pitcher'),

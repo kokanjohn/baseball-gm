@@ -43,6 +43,7 @@ import { eventRand, dice, diceSeed } from './Dice.js';
 import { posLabel, primaryPos } from './Positions.js';   // r163 §122.35
 import { hometownPlayer, parkQuirk } from './AwayDays.js';   // r217 §122.96
 import { cpuGmName } from './FirstDay.js';   // r217 §122.96
+import { seasonTotals } from './GMProfile.js';   // r219 §122.98
 
 // Matches any {token}. Digits are allowed (e.g. {sp2_items}, {bg11_team}).
 export const TOKEN_PATTERN = /\{([a-z0-9_]+)\}/gi;
@@ -158,6 +159,11 @@ export function buildTokenMap(cardDef, context, state) {
     values._otherGmTeamId = otherClub.id;
   }
   values.div_race_line    = _raceLine(state);
+  // r219 §122.98 this season's record of the GM's answers (the club's people quote it)
+  const tot = seasonTotals(state);
+  values.spent_count  = String(tot.spentCount);
+  values.spent_total  = formatK(tot.spentK);
+  values.community_no = String(tot.communityNo);
 
   // ── Season / streak context ────────────────────────────────────────────
   values.streak_context_clause       = _streakClause(userTeam.streak || 0);

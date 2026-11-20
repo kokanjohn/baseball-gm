@@ -24,6 +24,7 @@ import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { baseballDateIso, springStartIso } from '../../engine/WeatherClimate.js';
 import { writeFileSync } from 'node:fs';
 import { voiceProblems, RULE_NAMES } from './voice-rules.mjs';
+import { profile as gmProfile } from '../../engine/GMProfile.js';   // r219 §122.98
 import { runAt, setClock } from '../../engine/Clock.js';
 import { GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP, OFFSEASON_DAYS } from '../../data/constants.js';
 
@@ -364,6 +365,7 @@ noteMail();
   const kinds = new Set([...mail.values()].map(c => c.cardId)).size;
   for (const [rule, name] of Object.entries(RULE_NAMES)) check(`messages over ${SEASONS} seasons: ${name} (${mail.size} delivered, ${kinds} kinds)`, !bad[rule], [...(bad[rule] || [])].slice(0, 6).join(', '));
 }
+say(`  the GM's profile (felt, not shown): ${Object.entries(gmProfile(SM.get())).map(([k, v]) => `${k} ${v}`).join(', ')}`);
 say(`  card answers: ${Object.entries(tally).filter(([k]) => /^(os_|fo_|il_return|lineup_return)/.test(k)).map(([k, v]) => `${k} ${v.yes}/${v.no}/${v.left}`).join(', ')}`);
 say(`\n${pass}/${pass + fail} checks passed${fail ? ` — FAILED: ${[...new Set(fails)].join(' | ')}` : ''}`);
 process.exit(fail ? 1 : 0);

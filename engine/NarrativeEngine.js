@@ -19,6 +19,8 @@
  * Section references: Section 34 (Narrative Engine — LOCKED)
  */
 
+import { profile as gmProfile } from './GMProfile.js';   // r219 §122.98
+
 // ─────────────────────────────────────────────────────────────
 // FLAG QUERIES
 // ─────────────────────────────────────────────────────────────
@@ -126,14 +128,10 @@ export function setFlag(state, flagEntry) {
 export function getGMProfile(state) {
   const flags   = state.narrativeFlags || [];
   const seasons = state.seasonNum      || 1;
-
+  // r219 §122.98 the dimensions come from every decision the GM has answered (GMProfile — the flags were set by
+  // too few cards to say anything); the flags' own history is still read by the variants that name them.
   return {
-    spender:          _deriveSpender(flags, state),
-    loyal:            _deriveLoyalty(flags),
-    aggressive:       _deriveAggression(flags),
-    communityFocused: _deriveCommunity(flags),
-    handsOn:          _deriveHandsOn(flags),
-    processDriven:    _deriveProcess(flags, state),
+    ...gmProfile(state),
     // Metadata — used by selectCardVariant condition checks
     _seasons:         seasons,
     _totalFlags:      flags.length,

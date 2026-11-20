@@ -32,8 +32,10 @@ import {
 import { OFFDAY_POOL, ROAD_POOL, AWAY_FOLLOWUPS } from '../data/cards-away.js';   // r217 §122.96
 import { offDayWindow, hometownPlayer, PARK_EVENT_IDS } from './AwayDays.js';   // r217 §122.96
 import { WINTER_POOL } from '../data/cards-winter.js';   // r218 §122.97
+import { PROFILE_POOL } from '../data/cards-profile.js';   // r219 §122.98
 import * as Winter from './WinterStory.js';   // r218 §122.97
 import * as Situations from './Situations.js';   // r218 §122.97
+import * as GMP from './GMProfile.js';   // r219 §122.98
 
 import {
   PHASE,
@@ -72,6 +74,7 @@ import {
   STORY_PACE,
   AWAY_DAY,
   WINTER_STORY,
+  PROFILE,
   REGULAR_SEASON_GAME_COUNT,
   EMERGENCY,
 } from '../data/constants.js';
@@ -142,7 +145,7 @@ import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, starts
 
 const ALL_POOLS = {
   // §83 the Club Funds families join the moments they belong to.
-  DECISIONS_POOL: [...DECISIONS_POOL, ...MONEY_BETWEEN],
+  DECISIONS_POOL: [...DECISIONS_POOL, ...MONEY_BETWEEN, ...PROFILE_POOL],   // (r219 the GM's reputation, said)
   // §122.57 r182 the half hour before first pitch joins the pre-game moment (it had never been wired).
   PREGAME_POOL:   [...PREGAME_POOL, ...PREGAME30_POOL, ...MONEY_PREGAME],
   INGAME_POOL,
@@ -346,6 +349,7 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
       card.resolvedAtMs = clockNow();   // §95 when the decision was made (Completed tab)
     }
     _logChoice(s, instance, choice);   // §122.57
+    GMP.recordDecision(s, instance, choice, clockNow());   // r219 §122.98 the GM's profile
 
     // Apply soft metric effects
     _applySoftEffects(s, effects, choice, instance);
@@ -559,6 +563,8 @@ export function expire(instanceId, atMs = clockNow()) {
     instance = state.inbox.find(c => c.instanceId === instanceId);
   }
   if (!instance || instance.resolved) return;
+  // r219 §122.98 a decision left to lapse: the staff decided (the profile notes it).
+  StateManager.mutate(s => { GMP.recordDecision(s, instance, 'auto', atMs); });
 
   if (instance.autoResolve === 'roster') {
     StateManager.mutate(s => {
@@ -3183,6 +3189,7 @@ export function deliverCardById(cardId, context = {}) {
     ...Object.values(MOMENT_CARDS),               // and the moments, too
     OFFDAY_POOL, ROAD_POOL, AWAY_FOLLOWUPS,       // r217 §122.96 off days and the road
     WINTER_POOL,                                  // r218 §122.97 the winter
+    PROFILE_POOL,                                 // r219 §122.98 the GM's reputation
   ];
 
   let cardDef = null;
@@ -3655,6 +3662,7 @@ function _filterEligible(pool, context, state, poolName = null) {
   const nowMs = clockNow();
   const u = state.userTeam || {};
   const stretch = _stretch(state, context.nextGame);
+  let prof = null;   // r219 (read once, when a card asks)
   const healthy = (u.rosterIds || []).map(id => state.players?.[id]).filter(p => p && isAvailable(p) && p.group !== PLAYER_GROUP.IL);
   const onIL = (u.rosterIds || []).filter(id => state.players?.[id]?.group === PLAYER_GROUP.IL).length;
   const startingIds = new Set((u.lineupSlots || []).map(x => x?.playerId).filter(Boolean));
@@ -3700,6 +3708,8 @@ function _filterEligible(pool, context, state, poolName = null) {
     if (card._oncePerSeries && dealtSince(card.id, stretch.seriesStartMs)) return false;
     // r217 §122.96 one booking of the ballpark a road trip; a player's hometown series needs a player from there.
     if (card._parkEvent && stretch.tripStartMs != null && PARK_EVENT_IDS.some(id => dealtSince(id, stretch.tripStartMs))) return false;
+    // r219 §122.98 a card about what the club has come to expect of the GM: only when the profile leans that far.
+    if (card._profile && !_profileFits(card._profile, prof ||= GMP.profile(state))) return false;
     if (card._requiresHometown && !(context.nextGame && !context.nextGame.isHome && hometownPlayer(state, context.nextGame.opponent))) return false;
     if (card._oncePerRoadTrip && dealtSince(card.id, stretch.tripStartMs)) return false;
 
@@ -3782,11 +3792,37 @@ function _timely(card) {
   return card._maxGames != null && card._maxGames - (card._minGames || 0) <= 20;
 }
 
+/** r219 §122.98 Does the profile lean as far as the card needs ({ dim: { min } | { max } })? */
+function _profileFits(need, prof) {
+  return Object.entries(need).every(([k, r]) => (r.min == null || (prof[k] ?? 0) >= r.min) && (r.max == null || (prof[k] ?? 0) <= r.max));
+}
+
+/**
+ * r219 §122.98 How the GM's profile weighs a pool card: an ask with a price (spender; and a month of holding back the
+ * small asks, `spendFreezeUntil`), a community ask (communityFocused), a trade or a signing (aggressive), a player's
+ * development (processDriven).
+ */
+const _DEV_ACTIONS = new Set(['train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'offday_session', 'coach_work', 'dev_program', 'teach_position', 'sim_games']);
+export const profileWeightForChecks = (card, state) => _profileWeight(card, GMP.profile(state), state);
+function _profileWeight(card, prof, state) {
+  const W = PROFILE.weight;
+  let m = 1;
+  if (card._budgetCost != null && !card._revenueToken) {
+    m *= 1 + W.spender * prof.spender;
+    if ((state.userTeam?.spendFreezeUntil || 0) > clockNow()) m *= PROFILE.freezeWeight;
+  }
+  if ((card.yesEffect?.atmo || 0) >= 2 && card.tag === 'MARKETING' && !card._revenueToken) m *= 1 + W.communityFocused * prof.communityFocused;
+  if (card.tag === 'TRADE' || card.tag === 'SIGNING') m *= 1 + W.aggressive * prof.aggressive;
+  if (card.tag === 'TRAINING' || _DEV_ACTIONS.has(card.onYes)) m *= 1 + W.processDriven * prof.processDriven;
+  return Math.max(0.2, m);
+}
+
 function _selectCards(eligible, context, state, maxCount) {
   if (eligible.length === 0) return [];
 
   const archetypeId = state.archetype;
   const weights     = ARCHETYPE_CARD_WEIGHTS[archetypeId] || {};
+  const prof        = GMP.profile(state);   // r219 §122.98
 
   // Score each card
   const scored = eligible.map(card => {
@@ -3808,6 +3844,9 @@ function _selectCards(eligible, context, state, maxCount) {
 
     // §122.56 season-ticket holders complain regardless, and more after poor weather calls at home.
     if (card._sth) weight *= 1 + STH_BOOST.perPoorCall * recentPoorCalls(state);
+
+    // r219 §122.98 what the club has come to expect of this GM: more of the asks they say yes to, fewer of the rest.
+    weight *= _profileWeight(card, prof, state);
 
     return { card, weight };
   });
@@ -3884,6 +3923,16 @@ function _createInstance(cardDef, context, state) {
   // §122.57 a notice with nothing to decide (both answers the same) reads like the other notices: one "Understood".
   const notice = !!cardDef._toastOnly || (!!cardDef.yesLabel && cardDef.yesLabel === cardDef.noLabel);
   if (notice) { text.yesLabel = 'Understood'; text.noLabel = null; }
+
+  // r219 §122.98 a GM who lets the staff decide is told what they'll do: the default, in the sender's voice.
+  if (!notice && cardDef.noLabel && ['yes', 'no'].includes(cardDef.autoResolve)) {
+    const prof = GMP.profile(state);
+    if (prof.handsOn <= PROFILE.delegateAt && prof._n >= 20) {
+      const label = cardDef.autoResolve === 'yes' ? text.yesLabel : text.noLabel;
+      const person = /^\{\w+_name\}/.test(cardDef.sender || '') || /\(.+\)$/.test(cardDef.sender || '') || cardDef.sender === '{owner_name}';
+      if (label && !cardDef.relay) text.body = `${text.body} If ${person ? 'I don\'t' : 'we don\'t'} hear back, ${person ? 'I\'ll' : 'we\'ll'} go with “${label}.”`;
+    }
+  }
 
   // Delivery guard: a card that would show a raw {token} is never delivered.
   const unresolved = Object.entries(text).filter(([, v]) => hasUnresolvedTokens(v));

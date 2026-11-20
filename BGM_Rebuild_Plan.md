@@ -13541,3 +13541,52 @@ Postseason game days still vary widely by run (a long series has its preview onl
 - check-message-voice and check-card-pools include cards-winter.js. Winter cards come back by `_winterMax`.
 
 **Fresh team:** not needed.
+
+## §122.98 — r219: the GM's profile, felt and never shown (Release 6)
+`engine/GMProfile.js` is pure. Rates are in `PROFILE`. `NarrativeEngine.getGMProfile` now reads it, keeping the same six dimensions: spender, loyal, aggressive, communityFocused, handsOn, processDriven. The narrative flags remain for the variants that name them.
+
+### The user's decisions
+- The profile fades slowly, but the history is carried over between seasons and kept intact.
+- The GM's own decisions (trades, contracts, the roster) count.
+
+### The record (`state.gmRecord`)
+- `CardEngine.resolve` and `expire` record every decision the GM answers or lets lapse. News is not recorded.
+- Each entry: `{ s, at, id, c, d: leans, k: money spent }`.
+- The last three seasons are kept entry by entry. Older seasons are folded into per-season totals `{ n, d, k, ids }`, so the history stays whole.
+
+### How an answer leans it (`decisionLean`)
+- **Money:** paying an optional cost → spender +1; turning a cost down → −1.
+- **Community vs business:** taking money over the fans → community −1; passing on it → +1. Saying yes to a community ask (MARKETING, crowd +2 or more) → +1; no → −1.
+- **Loyalty:**
+  - An answer that moves a player's relationship up → loyal +0.5; down → −0.5.
+  - Re-sign, extend, keep, activate → loyal +1.
+  - Walk, release, fire, waive → loyal −1.
+- **Bold vs cautious:** a trade made → aggressive +1 (loyal −0.5); a trade passed → −0.5. A signing, a hire, pushing the regulars, getting ahead of the deadline → +1; passing on them → −0.5.
+- **The long run vs tonight:** development or rest (training, an off-day session, coach work, teaching, sim games, a day off, arm rest, a call-up) → processDriven +1; declining one → −0.5. Taking the edge now at the cost of morale → −0.5.
+- **Answering:** answered → handsOn +0.2; lapsed → −0.2. The lean is effectively the share of decisions answered. A lapse says nothing else about the GM.
+
+### The profile (`profile`)
+- This season and last count fully; each season before that counts 0.6× the one after it.
+- A dimension = its leans ÷ (6 + 0.2 × decisions counted), clamped to −1…+1. It moves after a few weeks of answers.
+- In the multi-season sim, the simple GM stays near neutral. handsOn is −0.19 because that GM answers about half its messages.
+
+### What it changes
+1. **Which asks come** (`_profileWeight` in `_selectCards`):
+   - Priced asks × (1 + 0.6·spender).
+   - Community asks × (1 + 0.5·community).
+   - Trades and signings × (1 + 0.4·aggressive).
+   - Development asks × (1 + 0.4·processDriven).
+   - The minimum weight is ×0.2.
+2. **A GM who lets the staff decide** (handsOn ≤ −0.35, with 20 or more decisions recorded) is told the default in the sender's voice: "If I don't hear back, I'll go with “Everyone Rests.”" A department uses "we".
+3. **Our own players' contract asks** (`marketTerms`) × (1 − 0.05·loyal): a loyal GM's are a little lower, a transactional GM's a little higher. Other clubs' players are unchanged.
+4. **The reputation, said** (`data/cards-profile.js`, joined to the decisions pool, gated by `_profile`):
+   - **pf_spend:** Finance, when spender ≥ 0.45. It quotes the season's real count and total spent on the small asks. Holding back for a month (`spend_freeze`) puts priced asks at ×0.3 for 30 days.
+   - **pf_community:** Community Relations, when community ≤ −0.45. It quotes the real number of community asks turned down. A gift to the city's youth fund (cost, crowd +4) or hold the line (crowd −2).
+   - **pf_loyal / pf_transactional:** the manager's word on what the agents say (morale ±1). This is the in-world side of the contract effect.
+- No message names the profile.
+
+### Checks
+- check-gm-profile (new, 28): the leans; recording a tap, a lapse, and not news; the fold and the fade; the weighting; Finance's message, its numbers, and the month held back; no reputation messages without a lean; the default line (a person, a department, not for a hands-on GM); the contract asks; no message naming the profile.
+- multi-season prints the profile at the end.
+
+**Fresh team:** not needed. A save starts its record from now.

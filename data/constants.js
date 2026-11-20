@@ -1350,6 +1350,17 @@ export const AWAY_DAY = Object.freeze({ offday: 0.8, offdayExtra: 0.2, road: 0.5
 // gets a message this often, a news one this share of the time.
 export const WINTER_STORY = Object.freeze({ busy: 2, chance: 0.9, newsShare: 0.35 });
 
+// r219 §122.98 the GM's profile: each season before last counts `fade` as much as the one after it; a dimension is
+// (its leans) ÷ (base + perDecision × the decisions counted), so it moves after a few weeks of answers. What it changes:
+// how often a kind of ask comes (weight: ×(1 + this × the dimension)); a delegating GM (handsOn at or under
+// `delegateAt`) is told what the default will be; our own players' asks (× 1 − loyalAsk × loyal); the month the
+// small asks are held back (×freezeWeight).
+export const PROFILE = Object.freeze({
+  fade: 0.6, base: 6, perDecision: 0.2, handsOnLean: 0.2,
+  weight: Object.freeze({ spender: 0.6, communityFocused: 0.5, aggressive: 0.4, processDriven: 0.4 }),
+  delegateAt: -0.35, loyalAsk: 0.05, freezeWeight: 0.3, freezeDays: 30,
+});
+
 // r218 §122.97 messages from what's happening (Situations): none before this many regular-season games; a first-year
 // player (this age or younger) hitting this well over these games (at-bats at least), or pitching this well over
 // these outings (innings at least); this many on the IL with one this week (and the gap before it comes again); a
