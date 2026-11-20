@@ -13272,3 +13272,35 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 - test-push-settings-ui: no Quiet Hours row.
 
 **Fresh team:** not needed. A current save plans this season's remaining emergency nights on its first tick.
+
+## §122.92 — The message audit (Step 4, measure only)
+**Tool:**
+- `AUDIT=file.json node tools/harness/multi-season.mjs N seed` records every message that came, and each season's schedule.
+- `node tools/harness/audit-messages.mjs file.json … [--md out.md]` reports per kind of day: messages and decisions a day, days with no decision, the median longest wait in waking hours (8am–10pm), the senders, and decisions by source.
+
+**Run:** 2 seasons each, contender seed 1 and ember seed 2 (r213).
+
+| Kind of day | Days | Msgs/day | Decisions/day | No-decision days | Longest wait (median) |
+|---|---|---|---|---|---|
+| First 3 days | 6 | 3.3 | 2.8 | 17% | 8.6h |
+| Spring, home | 17 | 4.9 | 4.5 | 0% | 5.6h |
+| Spring, road | 14 | 2.4 | 2.3 | 7% | 9.9h |
+| Season, home game | 264 | 3.9 | 3.2 | 5% | 7.1h |
+| Season, road game | 256 | 2.7 | 2.4 | 8% | 9.0h |
+| Our game called off | 16 | 5.6 | 3.1 | 6% | 5.8h |
+| Off day (in season) | 158 | 1.4 | 1.2 | 32% | 11.6h |
+| Stretch run (last 30 days) | 103 | 2.7 | 1.8 | 21% | 9.9h |
+| Postseason | 26 | 1.7 | 0.9 | 46% | 12.5h |
+| Offseason | 48 | 1.8 | 1.7 | 58% | 14.0h |
+
+**Findings:**
+1. **The decisions pool runs dry.** Each card comes once a season, so the draw falls by fifths of the season: about 1.15 → 1.0 → 0.9 → 0.6 → 0.17 a day. All decisions fall from about 3 a day to about 1.5–2 in the last fifth, just when the race matters.
+2. Off days are thin: a third have no decision, with an 11.6h quiet stretch.
+3. Road game days carry about a quarter fewer decisions than home days (no grounds crew, no in-game home cards).
+4. The postseason is thin: under 1 decision a day, nearly half the days with none.
+5. The offseason is clumpy: 1.7 a day, but 58% of days have none (the cards come on set days).
+6. About 350 decisions over the 4 seasons arrived between 10pm and 7am. Most are the staff's look after a night game (the physician's rest ask, roster advice, open spots, the manager's fills). With no quiet hours since r213, these push around 11pm.
+
+Spring and the first days hold up.
+
+(Side note: ember seed 2's multi-season run flagged a 4-man rotation at the turn to season 2; not related to the messages.)

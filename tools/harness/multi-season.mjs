@@ -301,11 +301,16 @@ await SM.init();
 const story = [];
 // r158 §122.30 every message over the seasons and winters, and everyone who signed one (staff change).
 const mail = new Map(), persons = new Set();
+// r214 §122.92 the message audit (AUDIT=file.json): every message that came, and each season's schedule.
+const auditSched = new Map();
 const noteMail = () => {
   const st = SM.get();
+  if (process.env.AUDIT) auditSched.set(st.seasonNum, (st.schedule || []).map(g => ({ gameTime: g.gameTime, isHome: !!g.isHome, isSpring: !!g.isSpring, isPlayoff: !!g.isPlayoff,
+    status: g.status, postponed: (g.postponements || []).map(p => p.gameTime) })));
   for (const x of Object.values(st.userTeam?.coachingStaff || {})) if (x?.name && !x.vacant) persons.add(x.name);
   for (const c of st.inbox || []) if (c?.instanceId && c.body && !mail.has(c.instanceId)) mail.set(c.instanceId, { ...c });
 };
+const auditStart = clock.get();
 logStrength('start');
 for (let n = 1; n <= SEASONS; n++) {
   const games = await playSeason();
@@ -328,6 +333,17 @@ for (let n = 1; n <= SEASONS; n++) {
 }
 
 say(`\n${ARCH} seed ${SEED}, ${SEASONS} seasons`);
+if (process.env.AUDIT) {
+  noteMail();
+  const st = SM.get();
+  const cards = [...mail.values(), ...(st.inbox || []).filter(c => !mail.has(c.instanceId))].map(c => ({
+    id: c.instanceId, cardId: c.cardId, at: c.arrivedAtMs, sender: c.sender, subject: c.subject, pool: c._pool || null, seed: !!c._seed,
+    compose: !!c.isCompose, emergency: !!c._emergency, firstDay: !!c._firstDay, gm: !!c._gmTeamId,
+    decision: !c.autoResolved && !!((c.yesLabel && c.noLabel) || c._choices?.length || c._faRows?.length || c.onYes || c._raw?.onYes),
+    choice: c.choice || null, season: c._season || null }));
+  writeFileSync(process.env.AUDIT, JSON.stringify({ arch: ARCH, seed: SEED, createdAt: auditStart, schedules: Object.fromEntries(auditSched), cards }));
+  say(`audit: ${cards.length} messages → ${process.env.AUDIT}`);
+}
 for (const s of story) say(`  ${s}`);
 const st = SM.get();
 say(`  staff now: ${Coach.COACH_ROLES.map(r => `${st.userTeam.coachingStaff[r].name} ${st.userTeam.coachingStaff[r].quality}`).join(', ')}`);
