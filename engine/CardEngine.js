@@ -110,6 +110,7 @@ import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS, NEW_GM_HELLOS, LATER_HE
 import { stampSender, senderLabel } from './Senders.js';   // r212 §122.90
 import { pickEmergency, answerBy } from './Emergencies.js';   // r213 §122.91
 import { storyMoments, buildStep, buildAfter } from './DeadlineStory.js';   // r215 §122.94
+import * as Stretch from './StretchStory.js';   // r216 §122.95
 import { dealsOnTable } from './TradeAdvice.js';
 import { FIRST_DAY, CORE_SLOTS, firstDayTimes, gmHelloTimes, cpuGmName, newGms, tradedWith, GM_TURNOVER } from './FirstDay.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
@@ -2002,7 +2003,7 @@ export function expireDueRosterCards(atMs) {
     // Roster cards, pre-game cards (§74 — their question is moot at first pitch), and the
     // weather's questions (§104.2 — answered by first pitch or not at all; on the game clock,
     // not the wall clock, so an unanswered one never outlives its game).
-    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency || c._deadlineStory)
+    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency || c._deadlineStory || c._stretchStory)
                  && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   // r139 §121 what an unanswered card's deadline sets off draws from its own stream.
@@ -2958,6 +2959,33 @@ export function deliverDeadlineStep(atMs, context = {}) {
     const card = _rosterCard(StateManager.get(), { ...spec, _deadlineSeason: season });
     const at = atMs + i * (20 + Math.floor(dice(diceSeed(now), 'deadline-after', season, i)() * 50)) * 60_000;
     const parked = _deliverAt(card, at);
+    if (parked) out.push(parked);
+  });
+  releaseDueCards(atMs);
+  return out;
+}
+
+/**
+ * r216 §122.95 The stretch run and October, one step at its moment (StretchStory): marked done, written from the
+ * race (or the series) as it stands, delivered (a step with two messages, the second a little later). A step long
+ * past is skipped. Returns the cards delivered.
+ */
+export function deliverStretchStep(atMs, context = {}) {
+  const st = StateManager.get();
+  const season = st.seasonNum || 1;
+  const m = Stretch.storyMoments(st).find(x => x.atMs === atMs && !(st.stretch?.season === season && st.stretch.done?.[x.key]));
+  if (!m) return [];
+  StateManager.mutate(s => {
+    if (s.stretch?.season !== season) s.stretch = { season, done: {} };
+    s.stretch.done = { ...(s.stretch.done || {}), [m.key]: true };
+  });
+  if (clockNow() - atMs > 36 * 3_600_000) return [];
+  const built = Stretch.buildStep(m, StateManager.get(), context, atMs);
+  const specs = (Array.isArray(built) ? built : [built]).filter(Boolean);
+  const out = [];
+  specs.forEach((spec, i) => {
+    const at = atMs + i * (15 + Math.floor(dice(diceSeed(st), 'stretch-gap', season, m.key, i)() * 45)) * 60_000;
+    const parked = _deliverAt(_rosterCard(StateManager.get(), spec), at);
     if (parked) out.push(parked);
   });
   releaseDueCards(atMs);

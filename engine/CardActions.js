@@ -625,6 +625,7 @@ export const CARD_ACTIONS = Object.freeze({
   dl_rival_on:   dlSet((dl, c, d) => { dl.rival = 'on'; adjustRapport(d, c._dlTeamId, -4); }),
   dl_room:       dlSet((dl, c, d) => { const k = c._dlMoneyK || 0; dl.room = k; if (d.userTeam.finances) d.userTeam.finances.payrollTarget = (d.userTeam.finances.payrollTarget || 0) + k; }),
   dl_shed:       dlSet((dl) => { dl.shed = true; }),
+  st_push:       { feasible: () => true, apply(d) { d.stretch = { ...(d.stretch || {}), push: true }; return []; } },   // r216 §122.95
   gm_rapport_yes:        gmRapport('yes'),   // r211 §122.89
   gm_rapport_no:         gmRapport('no'),
   fd_fa_look:            faLook,

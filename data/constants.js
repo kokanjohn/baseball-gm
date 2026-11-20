@@ -1342,6 +1342,13 @@ export const MORNING = Object.freeze({ spreadMs: 90 * 60_000, dueAfterMs: 2 * 3_
 // share ÷ the games left); a card is drawn only on a whole credit. `cap`: credit never piles past it.
 export const STORY_PACE = Object.freeze({ cap: 2.5, share: 0.75 });
 
+// r216 §122.95 the stretch run and October as a story: each stretch step with this many regular-season games left;
+// money as a share of the payroll (at least minK): the ticket bump, the owner's bonus pool, a playoff gate, the parade.
+export const STRETCH_STORY = Object.freeze({
+  gamesLeft: Object.freeze({ race: 25, tickets: 18, toll: 12, lastweek: 6, lastday: 1 }),
+  minK: 40, ticketShare: 0.012, bonusShare: 0.01, playoffShare: 0.02, paradeShare: 0.015, celebrateK: 30,
+});
+
 // r215 §122.94 the trade deadline as a story: each step this many of our regular-season games before the deadline
 // game (TRADE_DEADLINE_CLOSE); "final" is deadline day, "after" the morning after. aheadK: the scouts' extra time
 // ("get ahead of it"); the owner's payroll room for a buyer: this share of the payroll (at least roomMinK).

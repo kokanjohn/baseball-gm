@@ -13368,3 +13368,31 @@ Spring and the first days hold up.
 **Checks:** check-deadline-story (new, 23): the moments; buying end to end (each step, the actions, the morning after with a broken promise); selling (a buyer's call, the owner on salary); standing pat (no shortlist, rival, or money); voice.
 
 **Fresh team:** not needed. A current season's later steps run if the deadline hasn't passed.
+
+## §122.95 — r216: the stretch run and October as a story (Release 3 of the message plan)
+`engine/StretchStory.js` (pure builders), `CardEngine.deliverStretchStep`, a clock event (`stretch`) at each moment. State: `s.stretch = { season, done, push }`. Each step can be two messages, the second 15–60 minutes later. A step long past is skipped.
+
+**The race is for the seeds:** every club plays in October. The top seed skips the wild-card game; seeds 2–3 play a short series; seeds 4–5 play the one-game wild card. `seeding(state)` gives our seed, the clubs either side, the gaps, the games left, and whether the seed is locked.
+
+| Step | When | From | What |
+|---|---|---|---|
+| race | 25 games left | the manager | Our seed and the gaps, in words. Push the regulars (morale +2, remembered) or keep the rest days (manager +1). |
+| tickets | 18 left | Ticket Office | Raise prices for the last homestands (money ≈1.2% of payroll, crowd −2/−3) or hold them (+2). The wording depends on how tight the race is. |
+| toll | 12 left | Team Physician | Pushed: the oldest regular is wearing down. A day off (`rest_active_hitter`, sits a game) or keep pushing (morale −2). Rested: news that the legs are fresh (morale +1). |
+| lastweek | 6 left | the manager / the owner | Seed locked: rest the regulars (manager +1, morale +1, crowd −1) or play to win (crowd +1). Still moving: the owner's bonus pool if they move up or hold (cost ≈1% of payroll, morale +3). |
+| lastday | morning of the last game | the manager | News: what today can change. |
+| preview:series | game 1's morning (game − 5h, not before 8am) | Scouting Director, plus Ticket Office or Travel Coordinator | The opponent (record, best bat, best arm, the format, where it's played; news). At home: playoff pricing (≈2% of payroll, crowd −1) or regular prices (crowd +3). On the road: bring the families (half that, morale +2). |
+| after:series | the morning after | the manager / the owner / Community Relations | Won: celebrate ($30K, morale +2) or one more round first (manager +1). Lost: the owner's word (news; trust +1 after a deep run, −1 out early) and a letter to the fans (crowd +2). Won the World Series: the full parade (≈1.5% of payroll, crowd +6, owner +1) or a rally at the ballpark (crowd +3). |
+
+**The audit after** (2 runs × 2 seasons; r214 → r216):
+
+| | Decisions a day | Days with none |
+|---|---|---|
+| Stretch | 1.9 → 2.2 | 19% → 16% |
+| Postseason | 0.8 → 1.1 | 50% → 13% |
+
+In the sims every season ran race → lastday, each of our series a preview and an after, and the parade/elimination messages.
+
+**Checks:** check-stretch-story (new, 19): the moments; the seeding words; push → the toll and a day off; rested news; locked → rest, moving → bonus; a series' preview (home gate), a won series, a lost World Series, a won one; voice.
+
+**Fresh team:** not needed.
