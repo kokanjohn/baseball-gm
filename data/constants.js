@@ -1342,6 +1342,10 @@ export const MORNING = Object.freeze({ spreadMs: 90 * 60_000, dueAfterMs: 2 * 3_
 // share ÷ the games left); a card is drawn only on a whole credit. `cap`: credit never piles past it.
 export const STORY_PACE = Object.freeze({ cap: 2.5, share: 0.75 });
 
+// r217 §122.96 off days and road trips: on the first whole day with no game before the next one, a message this often
+// (and a second this often); on a road game day, one more this often.
+export const AWAY_DAY = Object.freeze({ offday: 0.8, offdayExtra: 0.2, road: 0.55 });
+
 // r216 §122.95 the stretch run and October as a story: each stretch step with this many regular-season games left;
 // money as a share of the payroll (at least minK): the ticket bump, the owner's bonus pool, a playoff gate, the parade.
 export const STRETCH_STORY = Object.freeze({

@@ -571,58 +571,7 @@ export const DECISIONS_POOL = [
 
 
 
-  // ── ROAD TRIP BALLPARK UTILIZATION ─────────────────────────────────────────
-
-  // rv1: Concert/large event — can recur with cooldown, each resolves different tokens
-  {id:'rv1',autoResolve:'no',_weight:0.85,type:'good',tag:'REVENUE',sender:'Partnerships',relay:"{road_event_promoter}",avatar:'🎤',
-   _requiresRoadAhead:3,_requiresRegular:true,_requeueOnNo:false,_requeueCooldown:20,
-   subject:"{road_event_type} at the ballpark while we're on the road?",
-   preview:"{road_event_promoter} wants the ballpark for {road_event_type}…",
-   body:"{road_event_promoter} called us about using the ballpark for {road_event_type} while we're on the road. The revenue is real ({rev_amount}), and the event would put the ballpark at the center of town for a night. The catch: lighting towers in the outfield, and a teardown that runs right up to our first home game back. Passing protects the field, which the players will appreciate, but the people who wanted the event will be let down.",
-   yesLabel:'Book it — take the revenue',noLabel:'Protect the field — pass',
-   yesEffect:{atmo:5},noEffect:{atmo:-3,morale:2},
-   yesMsg:"Event booked. The grounds crew has its window. The first game back will be the test.",
-   noMsg:"Passed. The grounds crew appreciates it. The players quietly do too.",
-   _revenueToken:'rev_amount',
-   _followup:{on:'yes',chance:0.30,delayMin:2,delayMax:5},
-   _oncePerSeason:false},
-
-  // rv2: Youth tournament — once per season, full vs field-only access tradeoff
-  {id:'rv2',autoResolve:'yes',_weight:0.8,type:'good',tag:'REVENUE',sender:"{tournament_org}",avatar:'⚾',
-   _requiresRoadAhead:3,_requiresRegular:true,_oncePerSeason:true,
-   subject:"Using your ballpark while you're on the road",
-   preview:"We'd love to bring our tournament to your ballpark…",
-   body:"We'd love to bring {tournament_org} to your ballpark while you're on the road — with full access, including the home clubhouse. Seeing a real big-league locker room is the centerpiece for these kids; it's why families drive hours to come. We'd pay more for full access. Field-only would be a lower fee, but honestly, if it's field-only we'll look for another venue.",
-   yesLabel:'Full access including clubhouse',noLabel:'Field only — clubhouse stays closed',
-   yesEffect:{atmo:6,morale:3},noEffect:{atmo:3,morale:1},
-   yesMsg:"Thank you! The kids are going to remember this. We'll take good care of the place.",
-   noMsg:"Field-only, then. We're disappointed, but we understand.",
-   _revenueToken:'rev_amount',_rawBudgetCostNo:15,
-   _followup:{on:'yes',chance:0.20,delayMin:3,delayMax:6}},
-
-  // rv3: University/college game — once per season, revenue vs brand identity tradeoff
-  {id:'rv3', _promise:{yes:{kind:'college_look',when:'fa_opens'}},autoResolve:'no',_weight:0.75,type:'good',tag:'REVENUE',sender:'Community Relations',avatar:'🏫',
-   _requiresRoadAhead:3,_requiresRegular:true,_oncePerSeason:true,
-   subject:"{university_name} wants to host {university_game} here",
-   preview:"{university_name} has a capacity problem for {university_game}…",
-   body:"{university_name} has a capacity problem for {university_game} and wants to move it to our ballpark while we're on the road. The facility fee is fair. The complication: their athletic department wants full co-branding — their colors on every scoreboard surface and their signage for the day — and marketing is worried about diluting our identity. Hosting brings the revenue and the goodwill, and our scouts get an up-close look at the players: one of them will turn up in this winter's free-agent class, and we'll know that player better than anyone. Passing protects the brand.",
-   yesLabel:'Host the game — open the ballpark',noLabel:'Pass — protect the brand',
-   yesEffect:{atmo:4,morale:1},noEffect:{atmo:-2},
-   yesMsg:"Game confirmed, co-branding agreed. Our scouts will be watching.",
-   noMsg:"Passed. They'll find another venue; the scouts will track the player another way.",
-   _revenueToken:'rev_amount'},
-
-  // rv4: Corporate rental — requeues with cooldown, each resolves different corp/controversy
-  {id:'rv4',autoResolve:'no',_weight:0.8,type:'normal',tag:'REVENUE',sender:'Partnerships',avatar:'💼',
-   _requiresRoadAhead:3,_requiresRegular:true,_requeueCooldown:15,_oncePerSeason:false,
-   subject:"{corp_event_name} wants to rent the ballpark",
-   preview:"{corp_event_name} wants the venue for {corp_event_type}…",
-   body:"{corp_event_name} wants to rent the whole ballpark for {corp_event_type} while we're on the road. No field use, no risk to the playing surface, and the best revenue of any non-game event ({rev_amount}). The contract includes full scoreboard and signage branding for the day — and {corp_event_name} has been associated with {corp_controversy}. Taking it is pure revenue. Passing leaves the money on the table and earns a little respect from the fans and the clubhouse.",
-   yesLabel:'Take the rental — revenue is revenue',noLabel:'Pass — not the right partner',
-   yesEffect:{},noEffect:{atmo:2,morale:1},
-   yesMsg:"Rental confirmed. The ballpark is theirs for the day; the money's in the bank.",
-   noMsg:"Passed. Some partners are not worth it.",
-   _revenueToken:'rev_amount'},
+  // ── ROAD TRIP BALLPARK UTILIZATION: rv1–rv4 live in cards-away.js (r217 §122.96, their own moment) ──
 
   // rv5: Scheduling conflict — requires a postponed game (rainout extended road trip)
   {id:'rv5',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_weight:0.7,type:'urgent',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🏟️',

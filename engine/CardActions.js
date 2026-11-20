@@ -26,7 +26,7 @@ import * as Finance from './FinanceEngine.js';
 import { marketTerms, contractIsUp } from './OffseasonEngine.js';
 import { signToClub, signingTerms } from './MarketEngine.js';
 import { queueTrade, adjustRapport } from './TradeEngine.js';
-import { eventRand } from './Dice.js';
+import { eventRand, dice, diceSeed } from './Dice.js';
 import { startWork, workable, isPitcher as pitcherPos, startTeaching, activeTeaching, teachablePositions, startSimGames, activeSimGames, stretchRead } from './PlayerWork.js';
 import { activeWork, giveDayOff, givePitcherRest } from './DevelopmentEngine.js';
 import { setPitchRole } from './Positions.js';   // r163
@@ -37,6 +37,7 @@ import { setStrategy, setPenRole } from './Strategy.js';   // r169
 import { startPromo, post as postMoney, canSpend } from './FinanceEngine.js';   // r169
 import { PROMOTIONS } from '../data/constants.js';   // r169
 import { drainageLevel, startDrainage } from './FieldCare.js';   // r170
+import { homeMorning } from './AwayDays.js';   // r217 §122.96
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -605,6 +606,35 @@ const gmRapport = (choice) => ({
   },
 });
 
+/**
+ * r217 §122.96 an off-day session (a bullpen, an early workout): a little development work on the player the card
+ * names, with no games away — he's here and healthy.
+ */
+const offdaySession = {
+  feasible: (st, c) => { const p = st.players[c._targetPlayerId]; return workable(st, p) && isAvailable(p) && !p.isInjured; },
+  apply: (d, c, atMs) => [startPlan(d, c._targetPlayerId, { gain: c._raw?._trainGain || 1, source: c.cardId }, atMs)
+    && { type: 'DEV_STARTED', playerId: c._targetPlayerId }].filter(Boolean),
+};
+
+/**
+ * r217 §122.96 the ballpark booked while we're away: how it went comes the morning of our first home game back —
+ * one of the booking's outcomes (`_outcomes`: [[cardId, weight], …]), each a message of its own (a repair to
+ * approve, a bonus, a complaint).
+ */
+const parkEvent = {
+  feasible: () => true,
+  apply(d, c, atMs) {
+    const outs = c._raw?._outcomes || [];
+    const total = outs.reduce((a, [, w]) => a + w, 0);
+    const rand = dice(diceSeed(d), 'park-event', c.instanceId);   // (the booking's own draw: how it goes, and when we hear)
+    const at = homeMorning(d, atMs, rand);
+    if (!total || !Number.isFinite(at)) return [];
+    let r = rand() * total, pick = outs[outs.length - 1][0];
+    for (const [id, w] of outs) { if (r < w) { pick = id; break; } r -= w; }
+    return [{ type: 'SCHEDULE_CARD', defId: pick, preset: {}, atMs: at }];
+  },
+};
+
 /** r211 §122.89 the scouting director's first look at the market: the Compose answer, on Scouting's clock. */
 const faLook = {
   feasible: (st) => { const dir = st.userTeam?.coachingStaff?.scoutingDirector; return !!dir && !dir.vacant; },
@@ -629,6 +659,8 @@ export const CARD_ACTIONS = Object.freeze({
   gm_rapport_yes:        gmRapport('yes'),   // r211 §122.89
   gm_rapport_no:         gmRapport('no'),
   fd_fa_look:            faLook,
+  offday_session:        offdaySession,   // r217 §122.96
+  park_event:            parkEvent,       // r217 §122.96
   sign_acquire_hitter:   signStarter,
   sign_veteran_hitter:   signStarter,
   sign_acquire_pitcher:  signProspect('acq_pitcher'),

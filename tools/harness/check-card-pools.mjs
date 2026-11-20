@@ -10,6 +10,7 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../.
 const P  = await import('../../data/cards-pool.js');
 const Mn = await import('../../data/cards-money.js');
 const Mo = await import('../../data/cards-moments.js');
+const Aw = await import('../../data/cards-away.js');   // r217 §122.96 off days and the road
 const CE = await import('../../engine/CardEngine.js');
 
 const results = [];
@@ -30,9 +31,11 @@ const MARKERS = {
 };
 
 const all = [];
-for (const [name, v] of Object.entries({ ...P, ...Mn })) {
+for (const [name, v] of Object.entries({ ...P, ...Mn, ...Aw })) {
   if (!Array.isArray(v) || name === 'COMPOSE_RESPONSE_POOL') continue;
-  for (const e of v) { const d = e?.card || e; if (d?.id) all.push({ pool: name, d, type: e?.card ? e.type : null }); }
+  // (how a ballpark booking went: follow-ups, led to by the booking's `_outcomes`)
+  const pool = name === 'AWAY_FOLLOWUPS' ? 'FOLLOWUP_POOL' : name;
+  for (const e of v) { const d = e?.card || e; if (d?.id) all.push({ pool, d, type: e?.card ? e.type : null }); }
 }
 const live = all.filter(x => !x.d._retired);
 
@@ -59,7 +62,8 @@ check('no two live cards share an id', dup.length === 0, [...new Set(dup)].join(
 
 // 4. Every live follow-up hangs off a live card that chains it.
 const byId = new Map(live.filter(x => x.pool !== 'FOLLOWUP_POOL').map(x => [x.d.id, x.d]));
-const orphans = live.filter(x => x.pool === 'FOLLOWUP_POOL' && !(byId.get(x.type)?._followup) && !src.includes(`'${x.d.id}'`));
+const outcomeOf = new Set(live.flatMap(x => (x.d._outcomes || []).map(([id]) => id)));   // r217 a booking's outcomes (CardActions park_event)
+const orphans = live.filter(x => x.pool === 'FOLLOWUP_POOL' && !(byId.get(x.type)?._followup) && !src.includes(`'${x.d.id}'`) && !outcomeOf.has(x.d.id));
 check('every follow-up has a live card that leads to it', orphans.length === 0, orphans.map(x => `${x.d.id} (after ${x.type})`).join(', '));
 
 // 5. A notice (nothing to decide) reads like the other notices.

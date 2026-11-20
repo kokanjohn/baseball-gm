@@ -13396,3 +13396,74 @@ In the sims every season ran race → lastday, each of our series a preview and 
 **Checks:** check-stretch-story (new, 19): the moments; the seeding words; push → the toll and a day off; rested news; locked → rest, moving → bonus; a series' preview (home gate), a won series, a lost World Series, a won one; voice.
 
 **Fresh team:** not needed.
+
+## §122.96 — r217: off days and road trips (Release 4 of the message plan)
+Two new moments in the game day's plan (`CardEngine.checkAndDeliver`), each with its own pool in `data/cards-away.js`. Helpers live in `engine/AwayDays.js` (pure). Rates are set in `AWAY_DAY`.
+
+- **The off day** (`OFFDAY_POOL`, moment `offday`): `offDayWindow` finds the first whole day with no game of ours before the next game. That day gets a message 80% of the time, plus a second 20% of the time, each between 9am and 7pm.
+- **The road** (`ROAD_POOL`, moment `road`): when the next game is away, one more message 55% of the time, delivered with the other between-games messages.
+- Both moments run in REGULAR_SEASON and TRADE_DEADLINE. They are not paced by `STORY_PACE`. They repeat on the `ops` rule unless a card sets its own `_repeat`.
+
+**Off day messages**
+
+| id | From | What it changes |
+|---|---|---|
+| od1 | Manager | A player asks to fly home. Yes: $, morale +1, player +2. No: morale −1, player −2. |
+| od2 | Hitting coach | Open the cage for a hitter (`offday_session`: a development plan, no games away; morale −1). |
+| od3 | Pitching coach | A bullpen session for a reliever (`offday_session`). |
+| od4 | Community Relations | A community visit led by a clubhouse leader: crowd +3, morale −1. |
+| od5 | Scouting | Go see a college player yourself ($). Yes promises `college_look` (a known player in the winter class). Once a season. |
+| od6 | Another club's GM | Golf. `gm_rapport_yes` +4, no −1. The card carries `_gmTeamId`; the offer lapses after 4 hours. |
+| od7 | Head Trainer | A full day of rest (morale +2) or the usual schedule (performance +1). |
+| odn1–3 | Manager, PR, Equipment | News: where the race stands (`{div_race_line}`), letters from a school, the empty building. |
+
+**Road messages**
+
+| id | From | What it changes |
+|---|---|---|
+| rd1 | Bench coach | How the park plays (`parkQuirk`, the same every visit). Shade the lineup (performance +1, morale −1) or play our game. |
+| rd2 | PR | The local morning show. |
+| rd3 | Travel Coordinator | A player's hometown series. `hometownOf`: about one player in five grew up near a league city, the same every time. Seats for the family: $, player +3 (`_relYes.ht_pl`). Gated by `_requiresHometown`. |
+| rd4 | Travel Coordinator | A long trip (5+ road games): upgrade it ($, morale +3) or push through (morale −2). |
+| rd5 | Travel Coordinator | The hotel is loud: move hotels. |
+| rd6 | Equipment | The visitors' clubhouse: rent a cage. |
+| rd7 | Manager | A curfew. |
+| rd8 | Community Relations | A hospital visit in the city we're visiting. |
+| rdn1–2 | PR | News: our fans on the road, a profile in the local paper. |
+
+**The ballpark while we're away** (in `ROAD_POOL`, `_requiresRoadAhead:3`, `_parkEvent`)
+- At most one booking per road trip. `PARK_EVENT_IDS` are checked against the trip's start.
+- rv1–rv4 moved here from DECISIONS_POOL; in the old pool rv3 had never been drawn.
+- New bookings: rv6 music festival, rv7 high school championship, rv8 film shoot, rv9 charity run, rv10 fireworks, rv11 wedding at home plate.
+- A yes runs `park_event`:
+  1. The fee comes in.
+  2. One of the booking's `_outcomes` is drawn from its own dice (`park-event`, instanceId).
+  3. That outcome arrives the morning of our first home game back (`homeMorning`: 10:00–11:30, at least 2h before first pitch).
+- Outcomes (`AWAY_FOLLOWUPS`, joined to FOLLOWUP_POOL):
+  - Repairs from the Head Groundskeeper: festival turf, mound, film truck vs the wall, warning track, scorch marks, infield. Each is fix it (`repair_cost`) or play on it (performance −1/−2).
+  - Bonus news: extra money (`event_bonus`).
+  - Complaint news: the neighbors, a newspaper column (crowd −2).
+  - Good news: crowd +1/+2.
+  - rv1 and rv2 now reach their old follow-ups (field condition, clubhouse items) this way; their `_followup` is gone.
+
+**Tokens and fixes**
+- `{road_city}` was always "on the road", because clubs have no city field. It is now the club's name minus its nickname.
+- New tokens: `park_quirk`, `hometown_player_name`, `other_gm_name`, `other_gm_club`, `div_race_line`; money tokens `event_rev_sm`/`event_rev_lg`/`event_bonus`/`repair_cost`; phrase tokens `od_community_event` and `od_clubhouse_job`.
+- `road_event_type` no longer lists the festival and fireworks, which are their own bookings now.
+- `deliverCardById(id, context)` takes a context.
+
+**The audit after** (2 seasons, seed 1; r216 → r217)
+
+| | Messages a day | Decisions a day | Days with none |
+|---|---|---|---|
+| Off day | 1.4 → 2.4 | 1.3 → 2.0 | 33% → 25% |
+| Road game | 2.7 → 3.2 | 2.4 → 2.8 | 8% → 5% |
+
+Home game days are unchanged (4.1). Every new message appeared in the sims.
+
+**Checks**
+- check-away-days (new, 22): the off-day window, rate and timing; the road rate, never before a home game; all 49 messages with real tokens; hometown; golf rapport; an off-day session; a booking's fee, timing, outcomes and repair cost; one booking a trip.
+- check-message-voice now includes cards-away.js.
+- check-card-pools now reads cards-away.js and accepts follow-ups led to by `_outcomes`.
+
+**Fresh team:** not needed.

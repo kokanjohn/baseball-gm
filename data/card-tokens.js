@@ -24,6 +24,11 @@ export const CARD_TOKEN_MONEY = Object.freeze({
   pipe_repair_cost: { min:  15, max:  40 },
   captain_bonus:    { min:  25, max:  60 },
   plate_disc_cost:  { min:  10, max:  30 },   // §71 plate-discipline camp
+  // r217 §122.96 the ballpark's bookings while we're away, and what comes of them
+  event_rev_sm:     { min:  20, max:  60 },
+  event_rev_lg:     { min:  90, max: 240 },
+  event_bonus:      { min:  10, max:  35 },
+  repair_cost:      { min:   8, max:  30 },
 });
 
 // Broadcast renewal: full market value = rev_amount × this range
@@ -218,7 +223,15 @@ export const CARD_TOKEN_POOLS = Object.freeze({
     'a recent layoff controversy', 'a regulatory investigation', 'an environmental lawsuit', 'a data-privacy scandal',
   ],
   road_event_type: [
-    'an outdoor concert', 'a festival weekend', 'a live TV broadcast event', 'a fireworks show',
+    'an outdoor concert', 'a live TV broadcast event', 'a stadium concert tour stop',
+  ],
+  // r217 §122.96 the off day
+  od_community_event: [
+    'a visit to the children\u2019s hospital', 'a youth clinic at a city park', 'a reading morning at an elementary school',
+    'a meal service at the food bank',
+  ],
+  od_clubhouse_job: [
+    'regrip every bat in the rack', 'deep-clean the weight room', 'restock the training room', 'reorganize the video room',
   ],
   road_event_promoter: [
     'A regional concert promoter', 'A national festival company', 'A live-events producer',

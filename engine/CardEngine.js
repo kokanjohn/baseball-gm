@@ -29,6 +29,8 @@ import {
   BETWEEN_GAMES_POOL,
   COMPOSE_RESPONSE_POOL,
 } from '../data/cards-pool.js';
+import { OFFDAY_POOL, ROAD_POOL, AWAY_FOLLOWUPS } from '../data/cards-away.js';   // r217 §122.96
+import { offDayWindow, hometownPlayer, PARK_EVENT_IDS } from './AwayDays.js';   // r217 §122.96
 
 import {
   PHASE,
@@ -65,6 +67,7 @@ import {
   STAFF_QUIET,   // r213 §122.91
   MORNING,       // r214 §122.93
   STORY_PACE,
+  AWAY_DAY,
   REGULAR_SEASON_GAME_COUNT,
   EMERGENCY,
 } from '../data/constants.js';
@@ -140,8 +143,12 @@ const ALL_POOLS = {
   PREGAME_POOL:   [...PREGAME_POOL, ...PREGAME30_POOL, ...MONEY_PREGAME],
   INGAME_POOL,
   BETWEEN_GAMES_POOL,
-  FOLLOWUP_POOL,
+  // r217 §122.96 how a ballpark booking went (CardActions park_event) joins the follow-ups.
+  FOLLOWUP_POOL: [...FOLLOWUP_POOL, ...AWAY_FOLLOWUPS],
   PERSONAL_LEAVE_POOL,
+  // r217 §122.96 the off day and the road, each a moment of its own
+  OFFDAY_POOL,
+  ROAD_POOL,
   MANAGER_CONTRACT_POOL,
   COACHING_CONTRACT_POOL,
 };
@@ -152,9 +159,9 @@ const PHASE_POOLS = Object.freeze({
   // (media at the first spring game, a visiting bus, a TV crew in the tunnel).
   [PHASE.SPRING_TRAINING]:       ['DECISIONS_POOL', 'BETWEEN_GAMES_POOL', 'PREGAME_POOL', 'INGAME_POOL'],
   // §74 (D2): life happens — bereavement, paternity, family emergencies.
-  [PHASE.REGULAR_SEASON]:        ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL', 'BETWEEN_GAMES_POOL', 'PERSONAL_LEAVE_POOL'],
+  [PHASE.REGULAR_SEASON]:        ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL', 'BETWEEN_GAMES_POOL', 'PERSONAL_LEAVE_POOL', 'OFFDAY_POOL', 'ROAD_POOL'],
   [PHASE.ALL_STAR_BREAK]:        ['DECISIONS_POOL', 'BETWEEN_GAMES_POOL'],
-  [PHASE.TRADE_DEADLINE]:        ['DECISIONS_POOL', 'PREGAME_POOL'],
+  [PHASE.TRADE_DEADLINE]:        ['DECISIONS_POOL', 'PREGAME_POOL', 'OFFDAY_POOL', 'ROAD_POOL'],
   [PHASE.WILD_CARD]:             ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL'],
   [PHASE.FIRST_ROUND]:           ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL'],
   [PHASE.DIVISION_SERIES]:       ['DECISIONS_POOL', 'PREGAME_POOL', 'INGAME_POOL'],
@@ -174,6 +181,7 @@ const MAX_INBOX_SIZE       = 12;
 const POOL_MOMENT = Object.freeze({
   DECISIONS_POOL: 'between', BETWEEN_GAMES_POOL: 'between',
   PREGAME_POOL: 'pregame', INGAME_POOL: 'ingame', PERSONAL_LEAVE_POOL: 'leave',
+  OFFDAY_POOL: 'offday', ROAD_POOL: 'road',   // r217 §122.96
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -226,14 +234,23 @@ export function checkAndDeliver(context) {
     ingame:  eventRand() < CARD_DAY.ingameChance  ? 1 : 0,
     between: CARD_DAY.betweenMin + (eventRand() < CARD_DAY.betweenExtraChance ? 1 : 0),
     leave:   eventRand() < CARD_DAY.leaveChance   ? 1 : 0,
+    // r217 §122.96 a day with no game before the next one brings its own messages; a road game day, one more.
+    offday:  0,
+    road:    0,
   };
+  const nextT = Number.isFinite(context.nextGame?.gameTime) ? context.nextGame.gameTime : null;
+  const offDay = byMoment.offday ? offDayWindow(state, clockNow(), nextT) : null;
+  if (offDay) want.offday = (eventRand() < AWAY_DAY.offday ? 1 : 0) + (eventRand() < AWAY_DAY.offdayExtra ? 1 : 0);
+  if (byMoment.road && context.nextGame && !context.nextGame.isHome && !context.nextGame.isSpring && !context.nextGame.isPlayoff) {
+    want.road = eventRand() < AWAY_DAY.road ? 1 : 0;
+  }
   const delivered = [];
   const taken = new Set();
   // r214 §122.93 the once-a-season stories, paced over the regular season (so the last weeks aren't bare).
   const pace = _storyPace(state, context);
   const takenFamilies = new Set();   // §94 one version of a family a season — across today's moments too
   const takenStories = new Set();    // §122.60 and one card of a story (`_story`) a day: its log isn't written until it's scheduled
-  for (const moment of ['pregame', 'ingame', 'between', 'leave']) {
+  for (const moment of ['pregame', 'ingame', 'between', 'leave', 'road', 'offday']) {
     const pools = byMoment[moment];
     let n = Math.min(want[moment], room - delivered.length);
     if (!pools || (n <= 0 && !cardDebug.onEligible)) continue;
@@ -258,7 +275,7 @@ export function checkAndDeliver(context) {
       if (cardDef._story) takenStories.add(cardDef._story);
       const { _fromPool, ...def } = cardDef;
       const instance = _createInstance(def, context, state);
-      if (instance) { delivered.push({ ...instance, _pool: _fromPool, _moment: moment }); made++; if (story) pace.credit -= 1; }
+      if (instance) { delivered.push({ ...instance, _pool: _fromPool, _moment: moment, ...(moment === 'offday' ? { _offDay: offDay } : {}) }); made++; if (story) pace.credit -= 1; }
       else if (cardDebug.onDropped) cardDebug.onDropped(def.id);
     }
   }
@@ -2332,6 +2349,13 @@ function _scheduleCards(instances, state, game = null) {
     } else if (c._moment === 'pregame' || (!c._moment && c._pool === 'PREGAME_POOL')) {
       if (!Number.isFinite(T) || T - nowMs < lead + 15 * 60_000) continue;
       timed.push({ ...c, _gameTime: T, deliverAtMs: Math.max(nowMs + lead, T - (45 + eventRand() * 105) * 60_000), expiresAtMs: T });
+    } else if (c._moment === 'offday' && c._offDay) {
+      // r217 §122.96 the off day's messages: during that day's working hours.
+      const { startMs, endMs } = c._offDay;
+      const at = startMs + Math.floor(eventRand() * Math.max(0, endMs - startMs));
+      const { _offDay, ...card } = c;
+      const ttl = c._expiresAfterMs || c._raw?._expiresAfterMs;
+      timed.push({ ...card, deliverAtMs: at, ...(ttl ? { expiresAtMs: at + ttl } : {}) });
     } else if (c._moment === 'ingame' || (!c._moment && c._pool === 'INGAME_POOL')) {
       if (!Number.isFinite(T)) continue;
       const at = Math.max(nowMs + lead, T + (20 + eventRand() * 100) * 60_000);
@@ -3084,7 +3108,7 @@ export function deliverSeedCards(cardIds, context) {
  *
  * @param {String} cardId
  */
-export function deliverCardById(cardId) {
+export function deliverCardById(cardId, context = {}) {
   if (!cardId) return;
 
   // Search all pools for the card definition
@@ -3098,6 +3122,7 @@ export function deliverCardById(cardId) {
     PERSONAL_LEAVE_POOL,                          // §122.60 (a player's leave)
     MONEY_BETWEEN, MONEY_PREGAME,                 // r147 the money cards
     ...Object.values(MOMENT_CARDS),               // and the moments, too
+    OFFDAY_POOL, ROAD_POOL, AWAY_FOLLOWUPS,       // r217 §122.96 off days and the road
   ];
 
   let cardDef = null;
@@ -3121,7 +3146,7 @@ export function deliverCardById(cardId) {
   // Same instance builder as normal delivery (real tokens, expiry, costs),
   // just bypassing eligibility gates. Tagged so it is identifiable as injected.
   const state    = StateManager.get();
-  const instance = _createInstance(cardDef, {}, state);
+  const instance = _createInstance(cardDef, context || {}, state);
   if (!instance) return;
 
   StateManager.mutate(s => {
@@ -3443,7 +3468,7 @@ const REPEAT = Object.freeze({
   seasons: 3,                                         // seasons of counts kept
 });
 const HITTER_GROUPS_CARD = Object.freeze([PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS]);
-const _REPEAT_POOL = Object.freeze({ PREGAME_POOL: 'ops', INGAME_POOL: 'ops', BETWEEN_GAMES_POOL: 'ops', PERSONAL_LEAVE_POOL: 'leave' });
+const _REPEAT_POOL = Object.freeze({ PREGAME_POOL: 'ops', INGAME_POOL: 'ops', BETWEEN_GAMES_POOL: 'ops', PERSONAL_LEAVE_POOL: 'leave', OFFDAY_POOL: 'ops', ROAD_POOL: 'ops' });
 
 /** Is this a pool card (its definition travels with it) — not a roster, weather or notice card? */
 const _isPoolCard = (c) => !!c?.cardId && c._raw?.id === c.cardId;
@@ -3613,6 +3638,9 @@ function _filterEligible(pool, context, state, poolName = null) {
     // The ballpark is ours to rent: at least this many road games from the next one.
     if (card._requiresRoadAhead && stretch.roadAhead < card._requiresRoadAhead) return false;
     if (card._oncePerSeries && dealtSince(card.id, stretch.seriesStartMs)) return false;
+    // r217 §122.96 one booking of the ballpark a road trip; a player's hometown series needs a player from there.
+    if (card._parkEvent && stretch.tripStartMs != null && PARK_EVENT_IDS.some(id => dealtSince(id, stretch.tripStartMs))) return false;
+    if (card._requiresHometown && !(context.nextGame && !context.nextGame.isHome && hometownPlayer(state, context.nextGame.opponent))) return false;
     if (card._oncePerRoadTrip && dealtSince(card.id, stretch.tripStartMs)) return false;
 
     // Series / schedule context gates
@@ -3841,6 +3869,7 @@ function _createInstance(cardDef, context, state) {
     noEffect:         cardDef.noEffect   || {},
     _family:          cardDef._family || null,       // §83 one version of a family a season
     _aboutTeamId:     cardDef._aboutTroubledTeam ? (values._troubledTeamId || null) : null,
+    ...(cardDef._aboutOtherGm && values._otherGmTeamId ? { _gmTeamId: values._otherGmTeamId } : {}),   // r217 §122.96 another club's GM
     _season:          state.seasonNum || 1,
     autoResolve:      notice ? 'yes' : (cardDef.autoResolve || null),
     autoResolveTax:   notice ? null : (cardDef.autoResolveTax || null),
@@ -3952,7 +3981,7 @@ function _applySoftEffects(state, effects, choice, instance) {
  */
 const REL_UNIT = 3;
 const REL_STAFF = Object.freeze({ mgr_nm: 'manager', pc_nm: 'pitchingCoach', hc_nm: 'hittingCoach', bc_nm: 'benchCoach' });
-const REL_PLAYER = Object.freeze({ act_pi: 'active_pitcher', act_hi: 'active_hitter', ldr_nm: 'leader_player', pl_nm: 'pl_player' });
+const REL_PLAYER = Object.freeze({ act_pi: 'active_pitcher', act_hi: 'active_hitter', ldr_nm: 'leader_player', pl_nm: 'pl_player', ht_pl: 'hometown_player' });
 function _applyRelationships(state, instance, choice) {
   if (instance._playerRelationshipEffect) _applyPlayerRelationshipEffect(state, instance._playerRelationshipEffect, choice);
   const rel = choice === 'yes' ? instance._raw?._relYes : choice === 'no' ? instance._raw?._relNo : null;

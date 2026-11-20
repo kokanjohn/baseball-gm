@@ -41,6 +41,8 @@ import {
 } from '../data/card-tokens.js';
 import { eventRand, dice, diceSeed } from './Dice.js';
 import { posLabel, primaryPos } from './Positions.js';   // r163 §122.35
+import { hometownPlayer, parkQuirk } from './AwayDays.js';   // r217 §122.96
+import { cpuGmName } from './FirstDay.js';   // r217 §122.96
 
 // Matches any {token}. Digits are allowed (e.g. {sp2_items}, {bg11_team}).
 export const TOKEN_PATTERN = /\{([a-z0-9_]+)\}/gi;
@@ -144,6 +146,18 @@ export function buildTokenMap(cardDef, context, state) {
   values.bg11_team        = _teamName(_pick(teams)) || 'A division rival';
   values.next_home_opp    = _nextHomeOpponent(state) || values.next_opponent;
   values.road_city        = _nextRoadCity(state, nextGame) || 'on the road';
+  // r217 §122.96 the road and the off day: how the park we're visiting plays, a player who grew up near it,
+  // another club's GM (a round of golf), where the race stands.
+  values.park_quirk       = parkQuirk(state, nextGame && !nextGame.isHome ? nextGame.opponent : '');
+  const homeKid           = nextGame && !nextGame.isHome ? hometownPlayer(state, nextGame.opponent) : null;
+  if (homeKid) values.hometown_player_name = homeKid.name;
+  const otherClub         = _pick(teams);
+  if (otherClub) {
+    values.other_gm_name  = cpuGmName(state, otherClub.id);
+    values.other_gm_club  = otherClub.name;
+    values._otherGmTeamId = otherClub.id;
+  }
+  values.div_race_line    = _raceLine(state);
 
   // ── Season / streak context ────────────────────────────────────────────
   values.streak_context_clause       = _streakClause(userTeam.streak || 0);
@@ -235,7 +249,7 @@ export function buildTokenMap(cardDef, context, state) {
     active_pitcher: anyPitcher?.id || null, active_hitter: activeHitter?.id || null,
     active_catcher: activeCatcher?.id || null, farm_pitcher: farmPitcher?.id || null,
     farm_hitter: farmHitter?.id || null, leader_player: leader?.id || null,
-    pl_player: plPlayer?.id || null,
+    pl_player: plPlayer?.id || null, hometown_player: homeKid?.id || null,
     prospect_hitter: prospectHitter?.id || null, prospect_pitcher: prospectPitcher?.id || null,
     drop_hitter: dropHitter?.id || null, audition_hitter: auditionHitter?.id || null,
     ...outside.players,
@@ -327,6 +341,22 @@ function _nextHomeOpponent(state) {
   return null;
 }
 
+/** r217 §122.96 where the division race stands, in a sentence ("We're 41–35, two games behind the Herons."). */
+function _raceLine(state) {
+  const u = state.userTeam || {};
+  const div = u.divisionId === 'B' ? state.standings?.divB : state.standings?.divA;
+  const me = (div || []).find(t => t.id === 'user');
+  const rec = `${u.wins || 0}–${u.losses || 0}`;
+  if (!me || !div?.length) return `We're ${rec}.`;
+  const gb = parseFloat(me.gb);
+  const games = (n) => (n === 1 ? 'one game' : Number.isInteger(n) ? `${n} games` : `${n} games`);
+  if (me.seed === 1) {
+    const second = div[1], lead = second ? parseFloat(second.gb) : 0;
+    return lead > 0 ? `We're ${rec}, first in the division by ${games(lead)} over the ${second.name}.` : `We're ${rec}, tied for first in the division.`;
+  }
+  return gb > 0 ? `We're ${rec}, ${games(gb)} behind the ${div[0].name}.` : `We're ${rec}, tied with the ${div[0].name} for first.`;
+}
+
 function _nextRoadCity(state, nextGame) {
   const sched = state.schedule || [];
   let g = nextGame && !nextGame.isHome ? nextGame : null;
@@ -335,7 +365,8 @@ function _nextRoadCity(state, nextGame) {
   }
   if (!g) return null;
   const team = (state.leagueTeams || []).find(t => t.name === g.opponent);
-  return team?.city || null;
+  // r217 §122.96 a club's city is its name less the nickname (clubs carry no city of their own).
+  return team?.city || (team?.name || g.opponent || '').split(' ').slice(0, -1).join(' ') || null;
 }
 
 /**
