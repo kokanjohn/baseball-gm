@@ -36,6 +36,7 @@ import { PROFILE_POOL } from '../data/cards-profile.js';   // r219 §122.98
 import * as Winter from './WinterStory.js';   // r218 §122.97
 import * as Situations from './Situations.js';   // r218 §122.97
 import * as GMP from './GMProfile.js';   // r219 §122.98
+import * as Callbacks from './Callbacks.js';   // r220 §122.99
 
 import {
   PHASE,
@@ -75,6 +76,7 @@ import {
   AWAY_DAY,
   WINTER_STORY,
   PROFILE,
+  CALLBACK,
   REGULAR_SEASON_GAME_COUNT,
   EMERGENCY,
 } from '../data/constants.js';
@@ -2032,7 +2034,7 @@ export function expireDueRosterCards(atMs) {
     // not the wall clock, so an unanswered one never outlives its game).
     // (r217/r218: a card with a deadline of its own — an invitation for a time, the winter's, a situation's — on its clock too)
     .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency || c._deadlineStory || c._stretchStory
-                  || c._winterCard || c._situation || c._raw?._expiresAfterMs)
+                  || c._winterCard || c._situation || c._callback || c._raw?._expiresAfterMs)
                  && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   // r139 §121 what an unanswered card's deadline sets off draws from its own stream.
@@ -3079,6 +3081,31 @@ export function deliverSituation(atMs, context = {}) {
     return card;
   }
   return null;
+}
+
+/**
+ * r220 §122.99 After one of our games (`atMs`, its final), now and then: a callback to a decision the GM made
+ * (Callbacks), the next afternoon (1–4pm) — at most one a day. Returns the card parked, or null.
+ */
+export function deliverCallback(atMs, context = {}) {
+  const st = StateManager.get();
+  const r = dice(diceSeed(st), 'callback', atMs);
+  if (r() >= CALLBACK.chance) return null;
+  const day = new Date(atMs - 4 * 3_600_000); day.setDate(day.getDate() + 1); day.setHours(13, 0, 0, 0);
+  const at = day.getTime() + Math.floor(r() * 180) * 60_000;
+  const dayKey = new Date(at).toDateString();
+  if ([...(st.inbox || []), ...(st.scheduledCards || [])].some(c => c._callback && new Date(c.deliverAtMs ?? c.arrivedAtMs).toDateString() === dayKey)) return null;
+  const pick = Callbacks.pickCallback(st, at, r);
+  if (!pick) return null;
+  const key = Callbacks.useKey(pick.cb, pick.e);
+  const spec = pick.cb.build(st, pick.e, pick.ctx, at);
+  const inst = _rosterCard(st, { type: 'normal', ...spec, cardId: `cb_${pick.cb.key}`, _callback: pick.cb.key, _rosterKey: `cb:${key}`,
+    expiresAtMs: at + 24 * 3_600_000, _raw: spec._raw || {} });
+  if (!cardFeasible(st, inst)) return null;
+  const card = _deliverAt(inst, at);
+  if (!card) return null;
+  StateManager.mutate(s => { s.callbacks = { used: { ...(s.callbacks?.used || {}), [key]: at, ...(pick.e.p ? { [Callbacks.playerKey(pick.cb, pick.e)]: at } : {}) } }; });
+  return card;
 }
 
 /** A GM's hello, written for one club: its GM's name and the club's, the answer moving our standing with them. */

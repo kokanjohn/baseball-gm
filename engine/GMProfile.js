@@ -6,7 +6,8 @@
  * a player kept or let go, a trade made or passed, the community asked and answered, a player's development or
  * the win tonight, the staff left to decide. The record is kept in full (state.gmRecord):
  *
- *   log      every decision of the last three seasons: { s, at, id, c, d: { dim: lean }, k (money spent, K) }
+ *   log      every decision of the last three seasons: { s, at, id, c, d: { dim: lean }, k (money spent, K),
+ *            p (the player it was about), tm (the other club), r (money it brought, K), x (numbers it quoted) }
  *   seasons  older seasons, folded: { [s]: { n, d: { dim: sum }, k, ids: { cardId: n } } }
  *
  * The profile reads it all, each season counting less the further back it is (PROFILE.fade a season; this season
@@ -97,7 +98,14 @@ export function recordDecision(draft, card, choice, atMs) {
   const eff = auto ? (card.autoResolve === 'yes' ? 'yes' : 'no') : choice;
   const k = eff === 'yes' ? (card._budgetCost || 0) : (card._budgetCostNo || 0);
   const rec = (draft.gmRecord ||= { log: [], seasons: {} });
-  rec.log.push({ s, at: atMs, id: card.cardId || null, c: auto ? 'auto' : choice, d, ...(k > 0 ? { k } : {}) });
+  // r220 §122.99 what a callback needs later: who it was about, the club on the other side, the money it brought, the
+  // numbers it quoted.
+  const tp = card._tokenPlayers || {};
+  const pid = card._targetPlayerId || tp.hometown_player || tp.pl_player || card._tradeOffer?.incomingIds?.[0] || null;
+  const r = eff === 'yes' ? (card._revenueK || 0) : 0;
+  rec.log.push({ s, at: atMs, id: card.cardId || null, c: auto ? 'auto' : choice, d, ...(k > 0 ? { k } : {}),
+    ...(pid ? { p: pid } : {}), ...(card._proposingTeamId ? { tm: card._proposingTeamId } : {}), ...(r > 0 ? { r } : {}),
+    ...(card._cbData ? { x: card._cbData } : {}) });
   const cur = draft.seasonNum || 1;
   if (rec.log.some(e => e.s < cur - 2)) {
     const keep = [];

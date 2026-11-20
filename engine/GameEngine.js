@@ -1114,6 +1114,8 @@ function _commitAt(gameIndex) {
   if (game.status !== GAME_STATUS.POSTPONED && !game.isSpring && !game.isPlayoff) {
     withDice(dice(diceSeed(StateManager.get()), 'situation', game.index ?? gameIndex, endMs), () => CardEngine.deliverSituation(endMs, buildCardContext()));
   }
+  // r220 §122.99 now and then, a word back about a decision the GM made (spring and the season).
+  if (game.status !== GAME_STATUS.POSTPONED && !game.isPlayoff) CardEngine.deliverCallback(endMs, buildCardContext());
   planCardsForNextGame();
 
   // (Rainouts are made up when they're called — §102.3 _postponeGame.)

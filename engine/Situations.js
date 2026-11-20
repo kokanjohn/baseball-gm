@@ -179,7 +179,7 @@ export function buildCard(sit, state, atMs) {
 
   if (sit.kind === 'slump') {
     const next = nextGame(state);
-    return { ...base, sender: nm('hittingCoach', 'Hitting Coach'), avatar: '🎯', _targetPlayerId: p.id,
+    return { ...base, sender: nm('hittingCoach', 'Hitting Coach'), avatar: '🎯', _targetPlayerId: p.id, _cbData: { h: sit.h, ab: sit.ab },
       subject: `${p.name} is ${sit.h}-for-${sit.ab}`,
       preview: `${p.name} is ${sit.h}-for-${sit.ab} over the last ${sit.games} games…`,
       body: `${p.name} is ${sit.h}-for-${sit.ab} over the last ${sit.games} games. The swing is long, and they know it — they've been in the cage before everyone and after. I'd sit them tonight; a day away does more than another round of swings. Or we leave them in and let them hit out of it. Regulars usually do.`,

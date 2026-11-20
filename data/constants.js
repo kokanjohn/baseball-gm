@@ -1350,6 +1350,10 @@ export const AWAY_DAY = Object.freeze({ offday: 0.8, offdayExtra: 0.2, road: 0.5
 // gets a message this often, a news one this share of the time.
 export const WINTER_STORY = Object.freeze({ busy: 2, chance: 0.9, newsShare: 0.35 });
 
+// r220 §122.99 callbacks: after one of our games, this often a callback is looked for (for the next afternoon, 1–4pm);
+// a booking that comes back offers this share of what it paid last time; the same kind about the same player waits this long.
+export const CALLBACK = Object.freeze({ chance: 0.25, backShare: 1.2, samePlayerDays: 60 });
+
 // r219 §122.98 the GM's profile: each season before last counts `fade` as much as the one after it; a dimension is
 // (its leans) ÷ (base + perDecision × the decisions counted), so it moves after a few weeks of answers. What it changes:
 // how often a kind of ask comes (weight: ×(1 + this × the dimension)); a delegating GM (handsOn at or under

@@ -13590,3 +13590,45 @@ Postseason game days still vary widely by run (a long series has its preview onl
 - multi-season prints the profile at the end.
 
 **Fresh team:** not needed. A save starts its record from now.
+
+## §122.99 — r220: callbacks (Release 7)
+`engine/Callbacks.js` is pure. After each of our games in spring or the regular season (not a postponement, not the postseason), `CardEngine.deliverCallback` sometimes sends a callback the next afternoon (1–4pm). Rates are in `CALLBACK`; state is `s.callbacks.used`.
+- 25% of our games, on the game's own dice.
+- At most one a day.
+- One per decision.
+- The same kind about the same player doesn't come back within 60 days.
+- Never sent if its action can't happen.
+- Answered within a day, on its own clock (`_callback` is in `expireDueRosterCards`).
+
+### The record carries more (GMProfile)
+Each entry now also holds:
+- `p`: the player it was about. The target, the hometown player, the `pl_player`, or a trade's first incoming player.
+- `tm`: the other club.
+- `r`: the money it brought, in K.
+- `x`: numbers it quoted. The slump card stores `{h, ab}`.
+
+### The callbacks (each from a real entry, in its window, while its people are still around)
+
+| Key | From | Window (days) | What |
+|---|---|---|---|
+| flight | od1 yes | 20–70 | The manager: the player hasn't forgotten the flight home in (month). News; player +1. |
+| slump | sit_slump yes or no | 12–35 | The hitting coach: "You sat X when they were 3-for-40. Since then: (real line)." Still cold: a decision to start cage work (`offday_session`). |
+| event_back | rv1/2/4/6–11 yes | 150–420, in season | Partnerships: they asked to come back, offering 1.2× last time's fee. A decision (money, crowd +1). |
+| hometown | rd3 yes | 20+ | The next series opener in that city (`hometownPlayer` is the same player): the same seats at the same price. A decision; player ±. |
+| trade | trade_* yes | 25–45 | Pro Scouting: the player who came over from (club) in (month), and their real line since. News. |
+| gone | os_resign no or lapsed | 40–200, in season | Pro Scouting: the player we let go, where they are now and their real line. News. |
+| kept | os_resign yes | 40–200, in season | The deal we gave them: their real line. News. |
+| signed | os_free_agent yes | 40–200, in season | The free agent we signed: their real line. News. |
+| work | any yes about a player that started a development plan (same source and moment) | 20–120 | The coach, once the plan is done: it took (player +1), or it didn't. News. |
+| exit | wt_exit yes | 40–220, regular season | They got the bigger role (real games of our games: news), or not: a decision ("It's Still Coming" / "Tell Them Where They Stand"). |
+| winterball | wt_winterball yes | 40–200, in season | Did it carry over: the plan's real gain, and their line. News. |
+
+"Real line" means the player's games since the decision (their game log), or their season stats.
+
+### The audit (2 seasons, a sim GM that answers at random)
+17 callbacks: slump 8, work 3, gone 2, trade 1, exit 1, signed 1, kept 1. That's about two a month in season. A GM who answers more of the asks, especially with yeses, will see more.
+
+### Checks
+check-callbacks (new, 18): the record names the player; each callback with its real numbers and month; not once the player is gone; not before its time; the still-cold decision; the booking's price; a trade's club; a player let go and where they went; the exit decision; work done (not while it's running); the hometown on the next visit only; the rate; the afternoon; one per decision; voice.
+
+**Fresh team:** not needed. Callbacks start from the decisions recorded since r219.
