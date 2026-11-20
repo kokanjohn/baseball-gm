@@ -13134,3 +13134,29 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 - test-trade-advice-ui +5: a new offer asks, nothing on the spot, Scouting Asked, a change re-opens it, changing back closes it.
 
 **Fresh team:** not required.
+
+## §122.88 — r210: our first spring game is at home; the first-day / engagement plan (decided)
+**Shipped (r210):** our first spring game is at home, for every new team and every spring (`SeasonEngine.generateLeagueCalendar`, spring round 0: the 'user' pair's coin is overridden; the draw is still taken, so the rest of the league's schedule is unchanged). The second game and the rest of spring fall home or away as they fall. Why: a home day is full whatever the weather does (the grounds crew, the weather calls, the gate). On the road all we hear is the home club's word, and a road rainout is a dead first day. Check: check-home-opener (new). test-weather-ui's called-game case now puts its game on the road (it plants a weather plan on our first game, and at home a crew call plans the weather again).
+
+**The plan, decided with the user (each step its own release, tried before the next):**
+1. ✅ The home opener (this release).
+2. **The first day.**
+   - The four seed messages stay. On top of them, messages arrive between creation and the first pitch at random, uneven times (sometimes two or three in an hour, sometimes a long gap), inside staff hours.
+   - A **core** set always comes, spread through the time there is. With more time (a team made the day before), **secondary** messages fill in, so something new comes at least every couple of hours. That makes up to about 10.
+   - Drawn from a pool big enough (~20–25) that two new teams don't see the same day.
+   - Two kinds: a few staff introduce themselves, always with a real task; others skip the introductions and go straight to a decision.
+   - The manager never asks us to set the lineup (the lineup is the manager's call). The manager only reaches out about a specific situation.
+   - Every one has a real consequence.
+3. **Staff hours replace quiet hours.**
+   - The Quiet Hours setting is removed (the phone handles silencing). Messages arrive about 8am–10pm local, because that's when staff work; game messages still come with the game.
+   - 2–4 after-hours emergencies a season, at any hour, only when the situation warrants it (a starter's partner in labor overnight; storm damage before a home game; a player sick or in a minor accident; a road flight cancelled).
+   - Each needs a decision before morning. Slept through, the staff handle it as best they can, and sometimes that goes badly (a real GM finds out some things after the fact).
+   - The bank must be large and flexible enough (names, situations, outcomes) that they never feel repeated.
+4. **The audit** (measure only):
+   - Decisions per waking day, by kind of day: home / road / off / rainout / the first three days / stretch / postseason / offseason.
+   - Where it's thin and why. Then decide together how to fill it.
+5. **Messages that answer to the GM:**
+   - The GM profile (NarrativeEngine: spender, loyal, aggressive, community, hands-on, process) is built from more decisions. It decides which kinds of messages come, not only their wording. **Never shown anywhere:** it's felt through the messages.
+   - Then callbacks: notable decisions come back weeks later, written from what happened since.
+   - Then story arcs: multi-step threads from our roster and choices.
+   - No narrator / columnist (the user's call).

@@ -125,12 +125,12 @@ const tickNow = (page) => page.evaluate(async () => { const GE = await import('/
 {
   const { page, errors, ctx } = await fresh();
   // A regular-season-like game: called at 130 playing minutes (the 7th), the call 2½ hours later.
-  await page.evaluate(async () => { const SM = await import('/baseball-gm/store/StateManager.js'); SM.mutate(s => { const g = s.schedule[s.currentGameIndex]; g.isSpring = false; }); });
+  await page.evaluate(async () => { const SM = await import('/baseball-gm/store/StateManager.js'); SM.mutate(s => { const g = s.schedule[s.currentGameIndex]; g.isSpring = false; g.isHome = false; }); });   // r210: on the road (our first game is at home now, where a crew call would plan its weather again)
   await plan(page, { gameAt: -(130 + 150 + 3), outcome: 'called', calledBy: 'limit', reason: 'rain', stopAt: 130, delays: [{ atPlayMin: 130, from: 130, to: 280 }] });
   await page.waitForTimeout(7000);
   const g = await page.evaluate(async () => { const SM = await import('/baseball-gm/store/StateManager.js'); const s = SM.get(); const x = s.schedule[0]; return { status: x.status, committed: !!x._committed, ruling: x.wxResult?.ruling, score: x.score, gameTime: x.gameTime, date: x.date, susp: x.suspension || null }; });
   const ru = g.ruling;
-  check(`the game was ruled (${ru ? `${ru.outcome}: ${ru.text}` : 'no ruling'})`, !!ru);
+  check(`the game was ruled (${ru ? `${ru.outcome}: ${ru.text}` : 'no ruling'})`, !!ru, JSON.stringify(g));
   await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); App.switchTab('schedule'); });
   await page.waitForTimeout(800);
   const sched = await page.textContent('#tab-schedule');

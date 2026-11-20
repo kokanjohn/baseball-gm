@@ -56,7 +56,8 @@ const SPRING_OFF_DAYS           = new Set([2, 5, 8]);
  * generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride?, opts?)
  * The whole league's season on ONE calendar — the user is one of ten teams.
  *
- *   Spring:  10 games each, every team plays every spring day (off days 3, 6, 9).
+ *   Spring:  10 games each, every team plays every spring day (off days 3, 6, 9). Our first one
+ *            is at home (r210 §122.88); the rest fall as they fall.
  *   Season:  46 series rounds; every team plays in every round, so every team
  *            plays exactly REGULAR_SEASON_GAME_COUNT games. Division-weighted
  *            (user decision, §67): ~6 series (~17 games) vs each division
@@ -96,7 +97,10 @@ export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride
   while (played < SPRING_TRAINING_GAME_COUNT) {
     if (!SPRING_OFF_DAYS.has(offset)) {
       for (const [a, b] of springRounds[played % springRounds.length]) {
-        const home = eventRand() < 0.5;
+        let home = eventRand() < 0.5;
+        // r210 §122.88 our first spring game is at home: a full first day (the crew, the weather calls, the gate)
+        // however it goes. The rest of spring, home or away as it falls.
+        if (played === 0 && (a === 'user' || b === 'user')) home = a === 'user';
         put(offset, { homeId: home ? a : b, awayId: home ? b : a, isSpring: true,
                       seriesId: `st-${played}-${a}-${b}`, seriesGame: 1, seriesLength: 1 });
       }
