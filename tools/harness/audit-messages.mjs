@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 const mdAt = args.indexOf('--md');
 const md = mdAt >= 0 ? args[mdAt + 1] : null;
-const files = args.filter((a, i) => a !== '--md' && i !== mdAt + 1);
+const files = args.filter((a, i) => a !== '--md' && (mdAt < 0 || i !== mdAt + 1));
 const DAY = 86_400_000;
 const dayKey = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const at = (key, h) => { const [y, m, d] = key.split('-').map(Number); return new Date(y, m - 1, d, h, 0, 0, 0).getTime(); };

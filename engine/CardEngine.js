@@ -63,6 +63,9 @@ import {
   LEAGUE_POSITIONS,
   FIELD_CARE,
   STAFF_QUIET,   // r213 §122.91
+  MORNING,       // r214 §122.93
+  STORY_PACE,
+  REGULAR_SEASON_GAME_COUNT,
   EMERGENCY,
 } from '../data/constants.js';
 
@@ -223,6 +226,8 @@ export function checkAndDeliver(context) {
   };
   const delivered = [];
   const taken = new Set();
+  // r214 §122.93 the once-a-season stories, paced over the regular season (so the last weeks aren't bare).
+  const pace = _storyPace(state, context);
   const takenFamilies = new Set();   // §94 one version of a family a season — across today's moments too
   const takenStories = new Set();    // §122.60 and one card of a story (`_story`) a day: its log isn't written until it's scheduled
   for (const moment of ['pregame', 'ingame', 'between', 'leave']) {
@@ -243,15 +248,18 @@ export function checkAndDeliver(context) {
     for (const cardDef of _selectCards(eligible, context, state, eligible.length)) {
       if (made >= n) break;
       if (taken.has(cardDef.id) || (cardDef._family && takenFamilies.has(cardDef._family)) || (cardDef._story && takenStories.has(cardDef._story))) continue;
+      const story = pace && moment === 'between' && pace.isStory(cardDef);
+      if (story && pace.credit < 1) continue;   // (its day comes later in the season)
       taken.add(cardDef.id);
       if (cardDef._family) takenFamilies.add(cardDef._family);
       if (cardDef._story) takenStories.add(cardDef._story);
       const { _fromPool, ...def } = cardDef;
       const instance = _createInstance(def, context, state);
-      if (instance) { delivered.push({ ...instance, _pool: _fromPool, _moment: moment }); made++; }
+      if (instance) { delivered.push({ ...instance, _pool: _fromPool, _moment: moment }); made++; if (story) pace.credit -= 1; }
       else if (cardDebug.onDropped) cardDebug.onDropped(def.id);
     }
   }
+  if (pace) StateManager.mutate(s => { s.storyPace = { season: state.seasonNum || 1, credit: pace.credit }; });
 
   if (delivered.length === 0) return;
 
@@ -654,13 +662,57 @@ function _deliverAt(instance, atMs) {
   // r139 §121 a roster card's id comes from what it is about (its key, and
   // how many came before it), so the look-ahead and the real clock agree.
   const instanceId = instance._rosterKey ? diceId(dice(diceSeed(state), 'roster-card', instance._rosterKey, same.length)) : instance.instanceId;
-  const card = { ...instance, instanceId, deliverAtMs: atMs };
+  const card = { ...instance, instanceId, deliverAtMs: _morningIfItCanWait(state, instance, atMs) };
   StateManager.mutate(s => {
     s.scheduledCards = [...(s.scheduledCards || []), card].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
     _logDealt(s, card);   // §122.57 (a follow-up, a pool card delivered by hand)
   });
   return card;   // (the card as parked — with the id it will have in the inbox)
 }
+
+/**
+ * r214 §122.93 The between-games pool, paced over the regular season: each game day adds a credit of (what the pool
+ * still has to give this season — a story once, a card that comes back up to its limit — ÷ the regular-season games
+ * left, × `STORY_PACE.share` for the cards whose moment never comes); a card is drawn only on a whole credit. So the
+ * pool lasts to the last game rather than running dry in August. Returns { credit, isStory } or null (spring, the
+ * postseason, the offseason: not paced).
+ */
+function _storyPace(state, context) {
+  if (![PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK].includes(state.phase)) return null;
+  const season = state.seasonNum || 1;
+  const log = state.cardLog || {};
+  const left = Math.max(1, REGULAR_SEASON_GAME_COUNT - (context.regularSeasonIndex || 0));
+  let supply = 0;
+  for (const n of (PHASE_POOLS[state.phase] || []).filter(x => (POOL_MOMENT[x] || 'between') === 'between')) {
+    for (const c of ALL_POOLS[n] || []) {
+      if (!c || c._retired || c._requiresSpring || c._intlFollowupOnly) continue;
+      const rule = _repeatRule(c, n);
+      supply += Math.max(0, (rule.once ? 1 : (rule.max || 1)) - (log[c.id]?.n?.[season] || 0));
+    }
+  }
+  const prev = state.storyPace?.season === season ? state.storyPace.credit : 1;
+  return { credit: Math.min(STORY_PACE.cap, prev + STORY_PACE.share * supply / left), isStory: () => true };
+}
+
+/**
+ * r214 §122.93 A message the staff write in the night (after a night game, mostly) that can wait comes in the morning
+ * instead, between 8 and 9:30 (the staff's working day starts then), if its answer isn't due before 10. Only the
+ * staff's own looks after a game (`MORNING.cards`: the rest question, roster advice, a lineup nudge): never an
+ * emergency, an injury, the weather, a trade, a reply, or anything answering what the GM just did (an open spot).
+ * Deterministic (the card's own dice), so the look-ahead foresees it exactly.
+ */
+function _morningIfItCanWait(state, card, atMs) {
+  const h = new Date(atMs).getHours();
+  if (h >= 8 && h < 22) return atMs;
+  if (!MORNING.cards.includes(card.cardId) || card._urgent) return atMs;   // the staff's own looks only
+  const wake = new Date(atMs); if (h >= 22) wake.setDate(wake.getDate() + 1); wake.setHours(8, 0, 0, 0);
+  const at = wake.getTime() + Math.floor(dice(diceSeed(state), 'morning', card._rosterKey || card.cardId || '', atMs)() * MORNING.spreadMs);
+  if (Number.isFinite(card.expiresAtMs) && card.expiresAtMs < at + MORNING.dueAfterMs) return atMs;
+  return at;
+}
+
+/** For the checks: park a card the way the roster clock does (r214). */
+export const _testDeliverAt = (card, atMs) => _deliverAt(card, atMs);
 
 /** Remove unresolved cards matching `pred` from the inbox and the schedule. */
 function _withdraw(pred) {

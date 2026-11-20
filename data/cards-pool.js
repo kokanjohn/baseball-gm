@@ -1281,10 +1281,10 @@ export const DECISIONS_POOL = [
    yesMsg:"Rest day granted. The arm is protected.",noMsg:"Pushed through. I'm not happy — the fatigue risk is rising.",
    onYes:'bench_active_pitcher',_restGames:1,_requiresBPCoverage:true,_minGames:5,_ttl:1,_expireMsg:'Rest window passed — {active_bp_name} pitched again. Fatigue risk is now a real injury risk.',_expireFx:{morale:-8,ovr:-1},_rosterContract:'roster:bench:pitcher'},
   {id:'op1',_repeat:{gapDays:30,max:2},autoResolve:'no',autoResolveTax:{morale:-2},_requiresAway:true,type:'urgent',tag:'OPERATIONS',sender:'Travel Coordinator',avatar:'✈️',
-   subject:"URGENT: a {transport_mode} problem in {road_city}",
+   subject:"Trouble with our {transport_mode} on the road",   // r214 §122.93 (was "URGENT: a … problem in on the road")
    preview:"Our {transport_mode} {transport_issue}…",
    body:"Our {transport_mode} {transport_issue} on the way to the road game. An emergency replacement costs {misc_cost_xs} but gets everyone there on time. Leaving the players to figure it out saves money but tanks morale and risks a late-arrival fine from the league.",
-   yesLabel:'Book the Charter',noLabel:'Figure It Out',
+   yesLabel:'Pay for a Replacement',noLabel:'Figure It Out',
    yesEffect:{morale:3,atmo:1},noEffect:{morale:-6,atmo:-2},
    yesMsg:"Replacement booked. Everyone arrived on time — crisis averted.",noMsg:"Left to sort it out. Morale took a real hit.",
    _budgetCost:'misc_cost_xs',_ttl:1,_expireMsg:'No charter booked — team arrived late. League fine issued.',_expireFx:{morale:-10,atmo:-4}},

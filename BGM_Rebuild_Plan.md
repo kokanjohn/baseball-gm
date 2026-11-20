@@ -13304,3 +13304,40 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 Spring and the first days hold up.
 
 (Side note: ember seed 2's multi-season run flagged a 4-man rotation at the turn to season 2; not related to the messages.)
+
+## §122.93 — r214: the pool paced over the season; the night's messages that can wait come in the morning (Release 1 of the message plan)
+**The plan, decided with the user (after the §122.92 audit):**
+- **Targets:** home game days 4–5 messages, road game days about 3, off days about 2, the offseason at least 1 on most days. About two-thirds decisions; the rest news that ties things together (a follow-up, a "how it went").
+- **Releases:**
+  1. Pacing and the morning (this release).
+  2. The trade deadline story, shaped by the GM's buy / sell / stand-pat answer to the owner (which also steers the offers that come).
+  3. The stretch run (in the race / out of it) and the postseason by series.
+  4. Off days and road trips. This includes more events at our ballpark while we're away (rv1/rv2/rv4 come today; rv3 never showed). An event can leave the field worse for our return, and that leads to the groundskeeper's own messages.
+  5. The offseason spread over the winter, and situations from what's happening (milestones, a hot rookie, slumps, injury runs, rivalries).
+- Each release re-runs the audit.
+
+**Pacing** (`CardEngine._storyPace`, `STORY_PACE { cap 2.5, share 0.75 }`):
+- In the regular season, the between-games pools draw a card only on a whole credit.
+- Each game day adds (what the pools still have to give this season — a story once, a card that comes back up to its limit — × 0.75 ÷ the regular-season games left). Credit is capped at 2.5 and kept in `state.storyPace`.
+- Spring, the postseason and the offseason aren't paced.
+- Pool draws by fifths of the season (2 runs × 2 seasons):
+
+| | 1st | 2nd | 3rd | 4th | 5th |
+|---|---|---|---|---|---|
+| Before | 1.28 | 1.12 | 1.06 | 0.75 | 0.34 |
+| After | 1.00 | 0.95 | 0.93 | 1.00 | 0.53 |
+
+- Stretch run: about the same (1.9 decisions a day). The last fifth still dips (some stories only fit early or late), and Release 3 adds the stretch's own messages.
+
+**The morning** (`_morningIfItCanWait` in `_deliverAt`, `MORNING { spreadMs 90 min, dueAfterMs 2h }`):
+- The staff's own looks after a game (`MORNING.cards`: rest_ask, roster_advice, lineup_return) parked between 10pm and 8am come at 8:00–9:30 (their own dice), unless the answer is due within 2 hours of then.
+- Never held: anything else. That covers an emergency, an injury, the weather, a trade, a reply, and a message answering what the GM just did: an open spot after benching a player at midnight came at once in check-open-spots, and stays that way.
+- Decisions arriving 10pm–8am: 366 → 168 over 4 seasons. What's left: open spots and roster needs (a game's injury, or the GM's own move), injuries, trades, field prep, the manager's fill notices.
+
+**Fixed:** op1's subject read "URGENT: a equipment truck problem in on the road". It's now "Trouble with our {transport_mode} on the road", and the yes button reads "Pay for a Replacement".
+
+**The audit tool:** `audit-messages.mjs` dropped the first file when run without `--md` (the §122.92 table was run with it, so it stands).
+
+**Checks:** check-pace-morning (new: the night's messages); the audit re-run. check-il-return waits up to 90 hours for the manager's second nudge (written in the night, it now comes in the morning).
+
+**Fresh team:** not needed.

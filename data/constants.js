@@ -1331,6 +1331,17 @@ export const DEF_AGE_CURVE = Object.freeze([2.0, 0.0, -2.0, -3.0, -4.5]);
 export const STAFF_HOURS = Object.freeze({ start: '08:00', end: '22:00' });
 export const STAFF_QUIET = Object.freeze({ quietStart: STAFF_HOURS.end, quietEnd: STAFF_HOURS.start });
 
+// r214 §122.93 a message written in the night that can wait comes in the morning: spread over this long from 8am, and
+// only if its answer isn't due within `dueAfterMs` of that.
+// Only the staff's own looks (after a game): a message answering something the GM just did (benching a player at
+// midnight opens a spot) comes at once.
+export const MORNING = Object.freeze({ spreadMs: 90 * 60_000, dueAfterMs: 2 * 3_600_000,
+  cards: Object.freeze(['rest_ask', 'roster_advice', 'lineup_return']) });
+
+// r214 §122.93 the between-games pool, paced over the regular season: each day adds (what the pool still has to give ×
+// share ÷ the games left); a card is drawn only on a whole credit. `cap`: credit never piles past it.
+export const STORY_PACE = Object.freeze({ cap: 2.5, share: 0.75 });
+
 // r213 §122.91 after-hours emergencies: how many a season, when in the night (minutes from the midnight before
 // a game of ours), how long before that game at the least, and when an answer is due (hours after, and before
 // first pitch).

@@ -184,7 +184,7 @@ const notPlaying = c._choices.find(x => !U().lineupSlots.some(sl => sl.playerId 
 resolve(c.instanceId, 'yes', { pick: notPlaying.key }); advanceClock(clock.get());
 n = waitFor('lineup_return', X3);
 const lock = n?.expiresAtMs;
-for (let i = 0; i < 60 && cardFor('lineup_return', X3)?._nudge !== 2; i++) step(60 * 60_000);
+for (let i = 0; i < 90 && cardFor('lineup_return', X3)?._nudge !== 2; i++) step(60 * 60_000);   // (r214 a nudge written in the night comes in the morning)
 const n2 = cardFor('lineup_return', X3);
 console.log(`    ${n2?.sender}: “${n2?.body}”`);
 check('no answer by first pitch: nothing changed', SM.get().inbox.find(x => x.instanceId === n.instanceId)?.choice === 'auto' && !slotOf(X3));
