@@ -13202,3 +13202,32 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 - check-game-pushes: a suspended game is now followed into the day it picks up again. The harness had stopped at "suspended" on the resume day too, so the resumed game's final push (foreseen correctly) looked invented. Seed 1's world shifted with this release and hit the case.
 
 **Fresh team:** needed to see it (it's the new team's first day).
+
+## §122.90 — r212: who a message is from, the same way everywhere; GMs come and go; welcoming a new GM
+**Senders** (`engine/Senders.js`):
+- A person is shown as **"Name, Role"**: Calloway, Owner · Ferreira, Scouting Director · Hollandale, Manager · Morello, Gulfport Mullets GM. A department or office stays as it is: Pro Scouting, Ticket Office, Team Physician, a player's agent.
+- Before this, the same person could read "Ferreira" on one message and "Ferreira, Scouting Director" on another (Compose replies already used "Name, Role"; roster cards, owner cards and pool cards used the bare name or "Name (Role)").
+- The card's `sender` stays as written (the engine and its checks speak in names). `senderLabel(card, state)` is what's shown: the inbox row, the reading pane, the Completed tab ("to …"), the toast, and the phone's push title.
+- The role is stamped on arrival (`stampSender` → `_senderRole`, at every way into the inbox), so an old message keeps "Hollandale, Manager" after Hollandale is let go. The foreseen messages carry it too, for the push.
+- Avatar initials are the person's, not the role's.
+
+**GMs come and go:**
+- A club keeps its GM (`team.gm = { name, since, prev }`). At each spring's opening (`gmTurnover`, in the spring step after `openNewSeason`) every club's GM is fixed by name first; then one club makes a change, two 40% of the time. A losing club is likelier: weight 0.25 + last season's loss rate, measured before the new season zeroes the records.
+- The new GM is a staff-style name not in use (other GMs, our staff). Our standing carries over halfway: rapport moves halfway back to 50.
+- A line in Recent: "The X have a new GM: Y takes over from Z."
+
+**Every spring after the first** (`CardEngine.scheduleSpringGms`, spring days 1–10, staff hours):
+- Each new GM reaches out (`NEW_GM_HELLOS`, 5 versions: coffee, advice, dinner, a clean slate, a notes swap).
+- One club we've never traded with reaches out too (`LATER_HELLOS`, 5 versions; `tradedWith` reads our trade arrivals). It's never a new GM's club or a club we've traded with.
+- The answers move our standing (`_rapport`), like the first spring's hellos.
+
+**Compose → Other GMs** now has topics:
+- **Talk trade** opens the trade screen, as the channel itself used to.
+- **Welcome a new GM** lists the new GMs we haven't reached out to or answered this season (`gmsToWelcome`), as "Newcomb, Seagrove Osprey".
+- Sending: +8 standing at once (`GM_TURNOVER.welcomeBonus`, more than any answer to a hello), and their own hello is taken back (`_withdraw` on `gmhello:season:club`).
+- The new GM writes back (`W.gm_welcome`), signed by them, from them: a writer can now answer as someone outside the club (`res.who`, no staff opener).
+- The channel row reads "1 new GM to welcome" when there is one.
+
+**Checks:** check-gm-connections (new, 17); test-gm-connections-ui (new: the inbox shows "Name, Owner" / "Name, Scouting Director"; Other GMs' topics; Talk trade opens the trade screen; welcome, sent, waiting).
+
+**Fresh team:** not needed. Old messages pick up the role from the staff as it stands; the GM changes start next spring.

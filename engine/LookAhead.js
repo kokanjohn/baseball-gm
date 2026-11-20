@@ -153,6 +153,7 @@ export function lookAheadMessages(nowMs = clockNow(), untilMs = nowMs + 24 * 360
       .map(c => ({ instanceId: c.instanceId, cardId: c.cardId, sender: c.sender || null, subject: c.subject || null,
                    arrivedAtMs: c.arrivedAtMs, expiresAtMs: c.expiresAtMs ?? null, targetId: c._targetPlayerId ?? null,
                    // §122.58 the weather's word: pushed under its own alerts, past quiet hours near game time
+                   ...(c._senderRole ? { _senderRole: c._senderRole } : {}),   // r212 §122.90 who it's from, shown
                    ...(c._wxCrew ? { _wxCrew: true } : {}), ...(c._wxCalledOff ? { _wxCalledOff: true } : {}), ...(c._urgent ? { _urgent: true } : {}) }))
       .sort((a, b) => a.arrivedAtMs - b.arrivedAtMs);
     return { untilMs, messages };

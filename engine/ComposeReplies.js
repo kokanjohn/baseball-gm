@@ -1535,6 +1535,20 @@ W.doc_health = (f, r, who, arg) => {
   return { body: out, memo: { playerId: p.id }, topic: `${name}'s health` };
 };
 
+/** r212 §122.90 we welcomed a new GM first: the GM writes back, warmly — the line's open. */
+W.gm_welcome = (f, r, who, arg) => {
+  const st = f.state;
+  const t = (st.leagueTeams || []).find(x => x.id === arg?.key);
+  if (!t) return { body: ['Thanks for the note.'], memo: {}, topic: 'your note' };
+  const gm = t.gm?.name || arg.gm || 'the GM';
+  const lines = [
+    [`Your note was the first one I got from another club, and I won't forget it.`, `I've been calling around all week, and yours is the first note that came to me. That means something.`, `I hadn't gotten to your name on my list yet, and here you are first. Thank you.`],
+    [`I'm still learning where everything is in this building, but my door is open to you.`, `I don't know yet what the ${t.name} need most, but when I do, you'll hear it from me first.`, `When we do get to talking business, I'd like it to be straight with each other from the start.`],
+  ].map(xs => xs[Math.floor(r() * xs.length)]);
+  return { body: lines, memo: {}, topic: 'your note',
+           who: { name: gm, role: `${t.name} GM`, rel: 70, sender: `${gm}, ${t.name} GM`, noOpen: true } };
+};
+
 /** Topics with a writer. */
 export const COMPOSE_TOPICS = Object.freeze(Object.keys(W));
 
@@ -1550,9 +1564,10 @@ export function writeComposeReply(state, { topicId, channelId, atMs, subject = n
   catch (err) { console.warn('ComposeReplies:', topicId, err?.message); return null; }
   const paras = (res.body || []).filter(Boolean);
   if (!paras.length) return null;
-  const open = _open(who.rel, r, res.topic || TOPIC_LABELS[topicId] || 'that');
-  const body = [open, ...paras, _sign(who)].join('\n\n');
-  return { sender: who.sender, subject: subject || `Re: ${Cap(TOPIC_LABELS[topicId] || 'your message')}`, body,
+  const by = res.who || who;   // r212 §122.90 someone outside the club answering (another club's GM)
+  const open = by.noOpen ? null : _open(by.rel, r, res.topic || TOPIC_LABELS[topicId] || 'that');
+  const body = [open, ...paras, _sign(by)].filter(Boolean).join('\n\n');
+  return { sender: by.sender, subject: subject || `Re: ${Cap(TOPIC_LABELS[topicId] || 'your message')}`, body,
            preview: paras[0].split('\n')[0], memo: res.memo || {}, decision: res.decision || null, trade: res.trade || null,
            faReport: res.faReport || null,   // r204 §122.82 the free agents the report offers
            sheet: res.sheet || null, agreed: res.agreed || null,   // r202 §122.79 the deal table; a deal they've agreed to

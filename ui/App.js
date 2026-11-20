@@ -23,6 +23,7 @@
  *   schedule  → #tab-schedule
  */
 
+import { senderLabel } from '../engine/Senders.js';   // r212 §122.90
 import * as EventBus  from './EventBus.js';
 import * as StateManager from '../store/StateManager.js';
 import { applyTheme, applyTeamColors, metricBarColor } from './formatters.js';
@@ -34,7 +35,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r211';
+export const APP_VERSION = 'tfo-v2-r212';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -843,7 +844,8 @@ async function _releaseDueCards({ quiet = false } = {}) {
   if (!quiet && _activeTab !== 'decisions' && document.visibilityState === 'visible') {
     const c = released[released.length - 1];
     const more = released.length > 1 ? ` (+${released.length - 1} more)` : '';
-    showToast(`📬 ${c.sender ? c.sender + ': ' : ''}${c.subject}${more}`, 'neutral', 4500);
+    const from = senderLabel(c, StateManager.get());   // r212 §122.90
+    showToast(`📬 ${from ? from + ': ' : ''}${c.subject}${more}`, 'neutral', 4500);
   }
   _syncPush();
   return released;

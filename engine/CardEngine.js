@@ -101,8 +101,9 @@ import { writeComposeReply } from './ComposeReplies.js';
 import { dealByKey } from './TradeAdvice.js';
 import { reviewWords } from './SeasonReview.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
-import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS } from '../data/cards-first-day.js';   // r211 §122.89
-import { FIRST_DAY, CORE_SLOTS, firstDayTimes, gmHelloTimes, cpuGmName } from './FirstDay.js';
+import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS, NEW_GM_HELLOS, LATER_HELLOS } from '../data/cards-first-day.js';   // r211 §122.89, r212 §122.90
+import { stampSender, senderLabel } from './Senders.js';   // r212 §122.90
+import { FIRST_DAY, CORE_SLOTS, firstDayTimes, gmHelloTimes, cpuGmName, newGms, tradedWith, GM_TURNOVER } from './FirstDay.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
 import { rapportOf, rapportGrade, adjustRapport, wouldStart, clubMode, isRental, playsSlot } from './TradeEngine.js';
@@ -517,7 +518,7 @@ export function expire(instanceId, atMs = clockNow()) {
     if (!sched) return;
     StateManager.mutate(s => {
       s.scheduledCards = (s.scheduledCards || []).filter(c => c.instanceId !== instanceId);
-      s.inbox = [...(s.inbox || []), { ...sched, arrivedAtMs: Math.min(sched.deliverAtMs, atMs) }];
+      s.inbox = [...(s.inbox || []), stampSender({ ...sched, arrivedAtMs: Math.min(sched.deliverAtMs, atMs) }, s)];
     });
     state    = StateManager.get();
     instance = state.inbox.find(c => c.instanceId === instanceId);
@@ -2199,7 +2200,7 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
   if (seed) {
     // New-franchise seed: visible immediately, never pushed.
     StateManager.mutate(s => {
-      s.inbox = [...(s.inbox || []), { ...instance, arrivedAtMs: when }];
+      s.inbox = [...(s.inbox || []), stampSender({ ...instance, arrivedAtMs: when }, s)];
       _sortInbox(s.inbox);
     });
     return instance;
@@ -2568,7 +2569,7 @@ function _releaseDue(nowMs) {
   });
   StateManager.mutate(s => {
     s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId));
-    s.inbox = [...(s.inbox || []), ...due.map(c => ({ ...c, arrivedAtMs: c.deliverAtMs }))];
+    s.inbox = [...(s.inbox || []), ...due.map(c => stampSender({ ...c, arrivedAtMs: c.deliverAtMs }, s))];
     _sortInbox(s.inbox);
     if (log.length) s.composeLog = [...(s.composeLog || []), ...log].slice(-COMPOSE_LOG_MAX);
     // §122.15 the players the scouts named to the GM (kept on the player: the log is short).
@@ -2612,9 +2613,9 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
   const horizon = foreseen && Number.isFinite(foreseen.untilMs) ? foreseen.untilMs : -Infinity;
   const planned = (state?.scheduledCards || [])
     .filter(c => !c._seed && c.deliverAtMs > horizon)
-    .map(c => ({ instanceId: c.instanceId, sender: c.sender, subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent, kind: _pushKind(c) }));
+    .map(c => ({ instanceId: c.instanceId, sender: senderLabel(c, state), subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent, kind: _pushKind(c) }));
   const coming = (foreseen?.messages || [])
-    .map(m => ({ instanceId: m.instanceId, sender: m.sender, subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent, kind: _pushKind(m) }));
+    .map(m => ({ instanceId: m.instanceId, sender: senderLabel(m, state), subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent, kind: _pushKind(m) }));
   const cards = [...coming, ...planned].filter(c => alertOn(state, c.kind))
     // Pool cards are already planned outside quiet hours; real-time roster
     // cards reach the inbox when they happen and only the alert waits (§65).
@@ -2802,12 +2803,7 @@ export function scheduleFirstDay(context) {
   const clubs = (st.leagueTeams || []).filter(t => ![...busy].some(s => s.includes(t.name)))
     .map(t => ({ t, k: r() })).sort((a, b) => a.k - b.k).map(o => o.t).slice(0, FIRST_DAY.gmHellos);
   const hellos = [...GM_HELLOS].map(c => ({ c, k: r() })).sort((a, b) => a.k - b.k).map(o => o.c);
-  const hello = (t, def) => {
-    const gm = cpuGmName(st, t.id);
-    const fill = (v) => (typeof v === 'string' ? v.replaceAll('{gm}', gm).replaceAll('{club}', t.name) : v);
-    const d = Object.fromEntries(Object.entries(def).map(([k, v]) => [k, fill(v)]));
-    return { ...d, onYes: 'gm_rapport_yes', onNo: 'gm_rapport_no', _gmTeamId: t.id };
-  };
+  const hello = (t, def) => _gmHelloDef(st, t, def);
   const gmFirstDay = clubs.length && plan.hours >= FIRST_DAY.gmHelloFirstDayHours && plan.secondary > 0;
   const fill = [];
   if (gmFirstDay) fill.push(hello(clubs[0], hellos[0]));
@@ -2821,7 +2817,7 @@ export function scheduleFirstDay(context) {
     if (!def) return;
     const inst = _createInstance(def, context || {}, StateManager.get());
     if (!inst) return;
-    const extra = def._gmTeamId ? { _gmTeamId: def._gmTeamId } : {};
+    const extra = def._gmTeamId ? { _gmTeamId: def._gmTeamId, _gmSeason: st.seasonNum || 1 } : {};
     const card = _deliverAt({ ...inst, ...extra, _firstDay: true, _rosterKey: `firstday:${def.id}:${def._gmTeamId || ''}` }, at);
     if (card) parked.push(card);
   });
@@ -2831,7 +2827,45 @@ export function scheduleFirstDay(context) {
     const def = hello(rest[i], hellos[(gmFirstDay ? 1 : 0) + i]);
     const inst = _createInstance(def, context || {}, StateManager.get());
     if (!inst) return;
-    const card = _deliverAt({ ...inst, _gmTeamId: def._gmTeamId, _firstDay: true, _rosterKey: `firstday:${def.id}:${def._gmTeamId}` }, at);
+    const card = _deliverAt({ ...inst, _gmTeamId: def._gmTeamId, _gmSeason: st.seasonNum || 1, _firstDay: true, _rosterKey: `firstday:${def.id}:${def._gmTeamId}` }, at);
+    if (card) parked.push(card);
+  });
+  return parked;
+}
+
+/** A GM's hello, written for one club: its GM's name and the club's, the answer moving our standing with them. */
+function _gmHelloDef(st, t, def) {
+  const gm = cpuGmName(st, t.id);
+  const fill = (v) => (typeof v === 'string' ? v.replaceAll('{gm}', gm).replaceAll('{club}', t.name) : v);
+  const d = Object.fromEntries(Object.entries(def).map(([k, v]) => [k, fill(v)]));
+  return { ...d, onYes: 'gm_rapport_yes', onNo: 'gm_rapport_no', _gmTeamId: t.id };
+}
+
+/**
+ * r212 §122.90 Every spring after the first (at spring's opening): each club with a new GM — the GM reaches out
+ * (unless we welcome them first: Compose → Other GMs, which takes the hello back) — and one club we've never
+ * traded with. Staff hours, spring days 1–10. Returns the cards parked.
+ */
+export function scheduleSpringGms(atMs = clockNow(), context = {}) {
+  const st = StateManager.get();
+  const season = st.seasonNum || 1;
+  if (season < 2) return [];
+  const r = dice(diceSeed(st), 'spring-gms', season);
+  const quiet = { quietStart: st.push?.quietStart, quietEnd: st.push?.quietEnd };
+  const fresh = newGms(st);
+  const traded = tradedWith(st);
+  const strangers = (st.leagueTeams || []).filter(t => !traded.has(t.id) && !fresh.some(f => f.id === t.id));
+  const later = strangers.length ? [strangers[Math.floor(r() * strangers.length)]] : [];
+  const shuffle = (xs) => xs.map(c => ({ c, k: r() })).sort((a, b) => a.k - b.k).map(o => o.c);
+  const nh = shuffle([...NEW_GM_HELLOS]), lh = shuffle([...LATER_HELLOS]);
+  const who = [...fresh.map((t, i) => ({ t, def: nh[i % nh.length], kind: 'new' })), ...later.map((t, i) => ({ t, def: lh[i % lh.length], kind: 'later' }))];
+  const times = gmHelloTimes(atMs, who.length, quiet, r);
+  const parked = [];
+  who.forEach(({ t, def, kind }, i) => {
+    const d = _gmHelloDef(st, t, def);
+    const inst = _createInstance(d, context || {}, StateManager.get());
+    if (!inst || !Number.isFinite(times[i])) return;
+    const card = _deliverAt({ ...inst, _gmTeamId: t.id, _gmSeason: season, _gmKind: kind, _rosterKey: `gmhello:${season}:${t.id}` }, times[i]);
     if (card) parked.push(card);
   });
   return parked;
@@ -2876,7 +2910,7 @@ export function deliverSeedCards(cardIds, context) {
 
   const arrivedAtMs = clockNow();
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), ...instances.map(c => ({ ...c, arrivedAtMs }))];
+    s.inbox = [...(s.inbox || []), ...instances.map(c => stampSender({ ...c, arrivedAtMs }, s))];
     _sortInbox(s.inbox);
     for (const c of instances) _logDealt(s, { ...c, deliverAtMs: arrivedAtMs });   // §122.60 the opening slate counts too (sp1 came again)
   });
@@ -2932,7 +2966,7 @@ export function deliverCardById(cardId) {
   if (!instance) return;
 
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), { ...instance, _debugInjected: true, arrivedAtMs: clockNow() }];
+    s.inbox = [...(s.inbox || []), stampSender({ ...instance, _debugInjected: true, arrivedAtMs: clockNow() }, s)];
     _sortInbox(s.inbox);
   });
   return instance;
@@ -2949,6 +2983,13 @@ export function deliverCardById(cardId) {
  * @param {String} channelId  — e.g. 'groundskeeper', 'manager'
  */
 export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs = clockNow(), arg = null } = {}) {
+  // r212 §122.90 welcoming a new GM first: it goes further than answering their hello, which is taken back.
+  if (topicId === 'gm_welcome' && arg?.key) {
+    const season = StateManager.get().seasonNum || 1;
+    arg = { ...arg, season };
+    StateManager.mutate(s => { adjustRapport(s, arg.key, GM_TURNOVER.welcomeBonus); });
+    _withdraw(c => c._rosterKey === `gmhello:${season}:${arg.key}`);
+  }
   const state   = StateManager.get();
   const cardDef = COMPOSE_RESPONSE_POOL[topicId];
 

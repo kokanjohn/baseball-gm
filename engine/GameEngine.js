@@ -162,6 +162,8 @@ import {
 } from '../data/constants.js';
 import { clockNow, runAt } from './Clock.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
+import { gmTurnover } from './FirstDay.js';   // r212 §122.90
+import { GM_RELATIONSHIP_DEFAULT } from '../data/constants.js';
 import { naturalFor, seedSwingman } from './Positions.js';
 import * as Teaching from './PlayerWork.js';   // r166 the Bench Coach's position work
 import { posLabel } from './Positions.js';   // r163 §122.35
@@ -3509,9 +3511,12 @@ function _runOffseasonStep(step, atMs) {
   if (step === 'spring') {
     // Required decisions still open were auto-resolved by the roster step at
     // this same moment (their deadline is spring). Now the new season.
-    let ev = [];
+    let ev = [], gmChanges = [];
     StateManager.mutate(s => {
+      const records = Object.fromEntries((s.leagueTeams || []).map(t => [t.id, { wins: t.wins || 0, losses: t.losses || 0 }]));
       ev = Offseason.openNewSeason(s, atMs);
+      // r212 §122.90 a club or two has a new GM this spring
+      gmChanges = gmTurnover(s, dice(diceSeed(s), 'gm-turnover', s.seasonNum), { records, rapportDefault: GM_RELATIONSHIP_DEFAULT });
       // §112.6 settled: a club rebuilt over the winter puts its call-ups in the lineup and the rotation.
       for (const t of s.leagueTeams || []) settleRoster(s, t.id, { autoManage: true });
       settleRoster(s, 'user');
@@ -3531,6 +3536,13 @@ function _runOffseasonStep(step, atMs) {
     });
     // r147 promises for "next spring": the staff remembers, the boosters come back.
     CardEngine.keepPromises('spring', atMs + 10 * 3600_000);
+    // r212 §122.90 the new GMs, in the feed; they (and a club we've never traded with) reach out this spring.
+    StateManager.mutate(s => {
+      const lines = gmChanges.map(c => buildActivityFeedEntry('milestone', (s.leagueTeams || []).find(t => t.id === c.teamId)?.abbr || '',
+        `The ${(s.leagueTeams || []).find(t => t.id === c.teamId)?.name} have a new GM: ${c.name} takes over from ${c.prev}.`, atMs));
+      if (lines.length) s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), ...lines]);
+    });
+    CardEngine.scheduleSpringGms(atMs, buildCardContext());
     return events;
   }
   return events;

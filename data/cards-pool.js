@@ -2728,6 +2728,15 @@ export const COMPOSE_RESPONSE_POOL = {
     yesLabel:'Noted', yesEffect:{}, yesMsg:'Noted.',
   },
 
+  // r212 §122.90 we welcomed a new GM first (Compose → Other GMs): written as it comes back (ComposeReplies gm_welcome)
+  gm_welcome: {
+    id:'compose_gm_welcome', autoResolve:'yes', type:'good', tag:'TRADE',
+    sender:'Other GMs', avatar:'📞',
+    subject:'Welcome to the league',
+    body:"Thanks for the note.",
+    yesLabel:'Noted', yesEffect:{}, yesMsg:'Noted.',
+  },
+
   // r209 §122.87 an offer we're putting together (from the trade screen): written as it comes back (ComposeReplies sc_offer)
   sc_offer: {
     id:'compose_sc_offer', autoResolve:'yes', type:'normal', tag:'TRADE',

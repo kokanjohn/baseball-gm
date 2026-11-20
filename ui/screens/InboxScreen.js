@@ -39,6 +39,8 @@ import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatK } from '../../engine/CardTokens.js';
 import { FA_WATCH } from '../../data/constants.js';
 import { askScoutingButton, askScouting } from '../components/AskScouting.js';   // r208 §122.86
+import { senderLabel } from '../../engine/Senders.js';   // r212 §122.90
+import { newGms, gmsToWelcome } from '../../engine/FirstDay.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -67,7 +69,11 @@ const COMPOSE_CHANNELS = [
     icon:     '📞',
     role:     'Around the League',
     priority: 'high',
-    topics:   [],
+    // r212 §122.90 trade talk opens the trade screen; a new GM can be welcomed first (it goes further than answering)
+    topics:   [
+      { id: 'gm_trade',   label: 'Talk trade',            desc: 'Put an offer together for another club', opens: 'trade' },
+      { id: 'gm_welcome', label: 'Welcome a new GM',      desc: 'Reach out before they reach out to you', deal: 'gms' },
+    ],
   },
   // High priority — built in initial release
   {
@@ -332,11 +338,15 @@ const _longWhen  = (ms) => When.agoFull(ms, Date.now());
 // sender is always the same color.
 const _AV_COLORS = ['#3B6FD6', '#2E9E6A', '#B5562B', '#7A55C7', '#C23F6A', '#2D8C9E', '#8A7A1E', '#5B6B82'];
 function _initials(sender) {
-  const words = String(sender || '?').replace(/'s\b/g, '').split(/[\s&/-]+/).filter(w => /^[A-Za-z]/.test(w));
+  // r212 the person's initials, not the role's
+  const words = String(sender || '?').split(', ')[0].replace(/'s\b/g, '').split(/[\s&/-]+/).filter(w => /^[A-Za-z]/.test(w));
   const caps = words.filter(w => /^[A-Z]/.test(w));
   const use = (caps.length ? caps : words).slice(0, 2);
   return use.map(w => w[0].toUpperCase()).join('') || '?';
 }
+/** r212 §122.90 who it's from, as shown everywhere: "Name, Role" for a person, the department as it is. */
+function _from(card) { return senderLabel(card, StateManager.get()); }
+
 function _avatar(sender, cls = 'ml-av', { me = false } = {}) {
   let h = 2166136261;                                      // FNV-1a: a better spread of colors
   for (const ch of String(sender || '')) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
@@ -380,10 +390,10 @@ function _renderRow(card) {
   const labels = _labels(card);
   return `
     <div class="ml-row${unread ? ' unread' : ''}" data-open="${card.instanceId}" id="card-${card.instanceId}">
-      ${_avatar(card.sender)}
+      ${_avatar(_from(card))}
       <div class="ml-main">
         <div class="ml-top">
-          <span class="ml-from">${_escape(card.sender || '')}</span>
+          <span class="ml-from">${_escape(_from(card))}</span>
           <span class="ml-time">${when}</span>
         </div>
         <div class="ml-subj">${_escape(card.subject || '')}</div>
@@ -480,9 +490,9 @@ function _renderReading(card, inbox, state) {
         <h2 class="mr-subject">${_escape(card.subject || '')}</h2>
       </div>
       <div class="mr-sender">
-        ${_avatar(card.sender, 'mr-av')}
+        ${_avatar(_from(card), 'mr-av')}
         <div class="mr-who">
-          <div class="mr-name">${_escape(card.sender || '')}</div>
+          <div class="mr-name">${_escape(_from(card))}</div>
           <div class="mr-to">to me${Number.isFinite(card.arrivedAtMs) ? ` · ${_longWhen(card.arrivedAtMs)}` : ''}</div>
         </div>
       </div>
@@ -544,10 +554,10 @@ function _renderCompleted(state) {
     const who = d.read ? 'Read' : d.auto ? 'By default' : 'You';
     return `
       <div class="ml-row" data-open="${card.instanceId}">
-        ${_avatar(card.sender)}
+        ${_avatar(_from(card))}
         <div class="ml-main">
           <div class="ml-top">
-            <span class="ml-from">${_escape(card.sender || '')}</span>
+            <span class="ml-from">${_escape(_from(card))}</span>
             <span class="ml-time">${when}</span>
           </div>
           <div class="ml-subj">${_escape(card.subject || '')}</div>
@@ -574,9 +584,9 @@ function _renderThread(card, state) {
       </div>
       <div class="mt-msg">
         <div class="mr-sender">
-          ${_avatar(card.sender, 'mr-av')}
+          ${_avatar(_from(card), 'mr-av')}
           <div class="mr-who">
-            <div class="mr-name">${_escape(card.sender || '')}</div>
+            <div class="mr-name">${_escape(_from(card))}</div>
             <div class="mr-to">to me${Number.isFinite(card.arrivedAtMs) ? ` · ${_longWhen(card.arrivedAtMs)}` : ''}</div>
           </div>
         </div>
@@ -588,7 +598,7 @@ function _renderThread(card, state) {
           ${d.auto ? _avatar(state.userTeam?.coachingStaff?.manager?.name || 'Manager', 'mr-av') : _avatar(gm, 'mr-av', { me: true })}
           <div class="mr-who">
             <div class="mr-name">${d.auto ? 'No reply in time' : `${_escape(gm)} (me)`}</div>
-            <div class="mr-to">${d.auto ? 'decided by default' : `to ${_escape(card.sender || '')}`}${Number.isFinite(card.resolvedAtMs) ? ` · ${_longWhen(card.resolvedAtMs)}` : ''}</div>
+            <div class="mr-to">${d.auto ? 'decided by default' : `to ${_escape(_from(card))}`}${Number.isFinite(card.resolvedAtMs) ? ` · ${_longWhen(card.resolvedAtMs)}` : ''}</div>
           </div>
         </div>
         <div class="mt-decision">${_escape(d.text)}</div>
@@ -596,9 +606,9 @@ function _renderThread(card, state) {
       ${d.outcome ? `
       <div class="mt-msg">
         <div class="mr-sender">
-          ${_avatar(card.sender, 'mr-av')}
+          ${_avatar(_from(card), 'mr-av')}
           <div class="mr-who">
-            <div class="mr-name">${_escape(card.sender || '')}</div>
+            <div class="mr-name">${_escape(_from(card))}</div>
             <div class="mr-to">to me</div>
           </div>
         </div>
@@ -654,6 +664,18 @@ function _faRowsHtml(card, state) {
 }
 
 function _topicState(t, state) {
+  if (t.opens) return {};
+  // r212 §122.90 the new GMs this season we haven't reached out to (or answered) yet.
+  if (t.deal === 'gms') {
+    const fresh = newGms(state);
+    if (!fresh.length) return { none: (state.seasonNum || 1) > 1 ? 'No new GMs this season' : 'Every GM is new to you this spring' };
+    const open = gmsToWelcome(state);
+    if (!open.length) {
+      const waiting = (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id);
+      return waiting ? { waiting } : { none: 'Every new GM has heard from us' };
+    }
+    return { deals: open };
+  }
   // r150 a trade topic is about one deal on the table: open while a deal hasn't been asked about.
   if (t.deal) {
     const deals = dealsFor(t.id, state, Date.now());
@@ -715,7 +737,7 @@ function _composeRecipients(state) {
         <span class="cp-main"><span class="cp-name">${_escape(ch.label)}</span><span class="cp-sub">Vacant · hiring</span></span></div>`;
     }
     let sub;
-    if (ch.id === 'other_gms') sub = 'Trade talks with the other clubs';
+    if (ch.id === 'other_gms') { const n = gmsToWelcome(state).length; sub = n ? `${n} new GM${n === 1 ? '' : 's'} to welcome` : 'Trade talks with the other clubs'; }
     else {
       const st = ch.topics.map(t => _topicState(t, state));
       const open = st.filter(x => !x.waiting && !x.left && !x.none).length;
@@ -744,7 +766,7 @@ function _composeTopics(state, ch) {
       : st.left ? `Available again in ${st.left} game${st.left !== 1 ? 's' : ''}` : st.none || '';
     const off = !!(st.waiting || st.left || st.none);
     // r150 a trade topic, picked: which deal (each with its deadline).
-    const deals = isSel && !off && st.deals ? `<div class="compose-h compose-deal-h">Which deal?</div>
+    const deals = isSel && !off && st.deals ? `<div class="compose-h compose-deal-h">${t.deal === 'gms' ? 'Which GM?' : 'Which deal?'}</div>
       <div class="compose-deals">${st.deals.map(d => `<button type="button" class="compose-deal${_composeDeal === d.key ? ' selected' : ''}" data-deal="${_escape(d.key)}">
         <span class="cd-label">${_escape(d.label)}</span>
         ${d.expiresAtMs ? `<span class="cd-due">Answer due ${_escape(When.untilFull(d.expiresAtMs, Date.now()))}</span>` : ''}</button>`).join('')}</div>` : '';
@@ -782,7 +804,7 @@ function _composeTopics(state, ch) {
 function _composeSendBtn(sel) {
   const canSend = (!(sel.deal || sel.player) || !!_composeDeal) && (!sel.skill || !!_composeSkill);
   const label = canSend ? 'Send Message' : sel.player && !_composeDeal ? 'Pick a player'
-    : sel.skill ? (sel.choices === 'positions' ? 'Pick a position' : sel.choices === 'roles' ? 'Pick a role' : 'Pick a skill') : 'Pick a deal';
+    : sel.skill ? (sel.choices === 'positions' ? 'Pick a position' : sel.choices === 'roles' ? 'Pick a role' : 'Pick a skill') : sel.deal === 'gms' ? 'Pick a GM' : 'Pick a deal';
   return `<button class="compose-send-btn compose-send-inline" ${canSend ? '' : 'disabled'} id="compose-send-btn">${label}</button>`;
 }
 
@@ -959,13 +981,9 @@ function _attachTabListeners(state) {
     el.addEventListener('click', () => {
       const ch = COMPOSE_CHANNELS.find(c => c.id === el.dataset.channel);
       if (!ch) return;
-      if (ch.id === 'other_gms') {
-        import('../components/TradeComposer.js').then(m => m.openTradeComposer({}));
-        return;
-      }
       _composeChannel = ch.id;
       // One open topic: picked already.
-      const open = ch.topics.filter(t => { const st = _topicState(t, StateManager.get()); return !st.waiting && !st.left && !st.none; });
+      const open = ch.topics.filter(t => { if (t.opens) return false; const st = _topicState(t, StateManager.get()); return !st.waiting && !st.left && !st.none; });
       _composeTopic = open.length === 1 ? open[0].id : null;
       _composeDeal = _onlyDeal(ch, _composeTopic);
       _composeSkill = null;
@@ -983,6 +1001,12 @@ function _attachTabListeners(state) {
   document.querySelectorAll('[data-topic]').forEach(el => {
     el.addEventListener('click', () => {
       if (el.classList.contains('disabled')) return;
+      // r212 §122.90 "Talk trade" opens the trade screen
+      const chNow = COMPOSE_CHANNELS.find(c => c.id === _composeChannel);
+      if (chNow?.topics.find(x => x.id === el.dataset.topic)?.opens === 'trade') {
+        import('../components/TradeComposer.js').then(m => m.openTradeComposer({}));
+        return;
+      }
       if (_composeTopic !== el.dataset.topic) { _composeDeal = null; _composeSkill = null; }
       _composeTopic = el.dataset.topic;
       const ch = COMPOSE_CHANNELS.find(c => c.id === _composeChannel);
@@ -1104,7 +1128,9 @@ async function _sendCompose(topicId, channelId, state) {
   // §105 the reply is written now and arrives later (CardEngine schedules it; a push when it lands).
   try {
     const { deliverComposeCard } = await import('../../engine/CardEngine.js');
-    deliverComposeCard(topicId, channelId, deal
+    deliverComposeCard(topicId, channelId, topic?.deal === 'gms' && deal
+      ? { topicLabel: 'Welcome to the league', arg: { key: deal.key, gm: deal.gm, club: deal.club, label: deal.label } }
+      : deal
       ? { topicLabel: deal.label, arg: { key: deal.key, label: deal.label, instanceId: deal.instanceId, expiresAtMs: deal.expiresAtMs } }
       : player && WORK_LABEL[topicId] ? { topicLabel: WORK_LABEL[topicId](player), arg: { playerId: player.id, skill, label: player.name } }
       : player ? { topicLabel: `What could we get for ${player.name}?`, arg: { playerId: player.id, label: player.name } }

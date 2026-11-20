@@ -86,15 +86,88 @@ export function gmHelloTimes(nowMs, count, quiet, rand) {
 }
 
 /**
- * A CPU club's GM's last name: the same every time it's asked (from the save's seed), a front-office
+ * A CPU club's GM's last name. r212 §122.90 a club keeps its GM (`team.gm`, set at the first turnover) until it
+ * makes a change; before that, the name is the same every time it's asked (from the save's seed), a front-office
  * name, different for every club, never one of our staff's.
  */
 export function cpuGmName(state, teamId) {
+  const t = (state.leagueTeams || []).find(x => x.id === teamId);
+  if (t?.gm?.name) return t.gm.name;
   const staff = new Set(Object.values(state.userTeam?.coachingStaff || {}).map(c => c?.name).filter(Boolean));
   const r = dice(diceSeed(state), 'cpu-gms');
   const pool = STAFF_NAMES.filter(n => !staff.has(n));
   for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
-  const ids = (state.leagueTeams || []).map(t => t.id).sort();
+  const ids = (state.leagueTeams || []).map(x => x.id).sort();
   const k = ids.indexOf(teamId);
   return pool[(k < 0 ? 0 : k) % pool.length];
+}
+
+// ── r212 §122.90 GMs come and go: every spring, a club or two has a new one ──
+
+export const GM_TURNOVER = Object.freeze({
+  second: 0.4,        // the odds a second club makes a change the same winter
+  welcomeBonus: 8,    // our standing with a new GM when we reach out first (from Compose → Other GMs)
+  carry: 0.5,         // how much of our standing with the old GM the new one inherits (the rest back to even)
+});
+
+/**
+ * The winter's GM changes (on the draft, at the turn of the season): every club's GM is fixed by name first; then
+ * one club (two, sometimes) brings in a new GM, a losing club more likely than a winning one. The new GM starts
+ * from part of our standing with the old one. Returns [{ teamId, name, prev }].
+ */
+export function gmTurnover(draft, rand, { records = {}, rapportDefault = 50 } = {}) {
+  const teams = draft.leagueTeams || [];
+  for (const t of teams) if (!t.gm?.name) t.gm = { name: cpuGmName(draft, t.id), since: 1 };
+  const n = 1 + (rand() < GM_TURNOVER.second ? 1 : 0);
+  // (records: last season's, taken before the new season zeroes them)
+  const losses = (t) => { const r = records[t.id] || t; const w = r.wins || 0, l = r.losses || 0; return w + l ? l / (w + l) : 0.5; };
+  const pool = teams.map(t => ({ t, w: 0.25 + losses(t) }));
+  const used = new Set([...teams.map(t => t.gm.name), ...Object.values(draft.userTeam?.coachingStaff || {}).map(c => c?.name).filter(Boolean)]);
+  const out = [];
+  for (let k = 0; k < n && pool.length; k++) {
+    const tot = pool.reduce((m, x) => m + x.w, 0);
+    let x = rand() * tot, i = 0;
+    while (i < pool.length - 1 && x >= pool[i].w) { x -= pool[i].w; i++; }
+    const { t } = pool.splice(i, 1)[0];
+    const names = STAFF_NAMES.filter(nm => !used.has(nm));
+    const name = names[Math.floor(rand() * names.length)] || t.gm.name;
+    used.add(name);
+    out.push({ teamId: t.id, name, prev: t.gm.name });
+    t.gm = { name, since: draft.seasonNum, prev: t.gm.name };
+    const rels = draft.userTeam.gmRelationships || {};
+    if (rels[t.id] != null) draft.userTeam.gmRelationships = { ...rels, [t.id]: Math.round(rapportDefault + (rels[t.id] - rapportDefault) * GM_TURNOVER.carry) };
+  }
+  return out;
+}
+
+/** Clubs whose GM is new this season (after the first). */
+export function newGms(state) {
+  const n = state.seasonNum || 1;
+  return n > 1 ? (state.leagueTeams || []).filter(t => t.gm?.since === n) : [];
+}
+
+/** Clubs we've made a trade with (either way), ever. */
+export function tradedWith(state) {
+  const out = new Set();
+  for (const tx of state.transactions || []) {
+    if (tx?.reason !== 'trade') continue;
+    if (tx.teamId === 'user' && tx.fromTeamId) out.add(tx.fromTeamId);
+    if (tx.fromTeamId === 'user' && tx.teamId) out.add(tx.teamId);
+  }
+  return out;
+}
+
+/** Whether we've already reached out to (or answered) a club's GM this season. */
+export function greetedThisSeason(state, teamId) {
+  const n = state.seasonNum || 1;
+  const sent = [...(state.scheduledCards || []), ...(state.inbox || [])]
+    .some(c => c.isCompose && c._composeTopic === 'gm_welcome' && c._composeArg?.key === teamId && (c._composeArg?.season ?? n) === n);
+  const answered = (state.inbox || []).some(c => c._gmTeamId === teamId && c._gmSeason === n && c.resolved);
+  return sent || answered;
+}
+
+/** The new GMs we could still welcome (Compose → Other GMs). */
+export function gmsToWelcome(state) {
+  return newGms(state).filter(t => !greetedThisSeason(state, t.id))
+    .map(t => ({ key: t.id, teamId: t.id, label: `${t.gm.name}, ${t.name}`, gm: t.gm.name, club: t.name }));
 }
