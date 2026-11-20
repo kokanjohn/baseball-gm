@@ -37,9 +37,9 @@ export const OFFDAY_POOL = [
 
   {id:'od3',autoResolve:'no',_weight:1.0,type:'normal',tag:'TRAINING',sender:'{pitching_coach_name} (Pitching Coach)',avatar:'⚾',
    _minGames:10,_repeat:{gapDays:18,max:3},
-   subject:"A bullpen session for {active_bp_name}",
-   preview:"{active_bp_name} has been leaving the breaking ball up…",
-   body:"{active_bp_name} ({active_bp_pos}) has been leaving the breaking ball up. I'd like a bullpen session today, with nobody around, to work on the release point. It's a day of rest given up in the middle of the season, and the arm will feel it tomorrow. Or they rest, and we fix it between outings.",
+   subject:"A bullpen session for {active_bp_who}",
+   preview:"{active_bp_who} has been leaving the breaking ball up…",
+   body:"{active_bp_who} ({active_bp_pos}) has been leaving the breaking ball up. I'd like a bullpen session today, with nobody around, to work on the release point. It's a day of rest given up in the middle of the season, and the arm will feel it tomorrow. Or they rest, and we fix it between outings.",
    yesLabel:'Schedule the Session',noLabel:'Let Them Rest',
    yesEffect:{},noEffect:{morale:1},
    yesMsg:"Session set for this afternoon.",noMsg:"Resting. We'll work on it between outings.",

@@ -166,6 +166,7 @@ import { gmTurnover } from './FirstDay.js';   // r212 §122.90
 import { planEmergencies, nextEmergencyAt } from './Emergencies.js';   // r213 §122.91
 import { nextStepAt as nextDeadlineStep } from './DeadlineStory.js';   // r215 §122.94
 import { nextStepAt as nextStretchStep } from './StretchStory.js';   // r216 §122.95
+import { nextStepAt as nextWinterStep } from './WinterStory.js';   // r218 §122.97
 import { GM_RELATIONSHIP_DEFAULT } from '../data/constants.js';
 import { naturalFor, seedSwingman } from './Positions.js';
 import * as Teaching from './PlayerWork.js';   // r166 the Bench Coach's position work
@@ -1109,6 +1110,10 @@ function _commitAt(gameIndex) {
   // processFollowupQueue fires any queued follow-up cards whose atGame was reached.
   // checkAndDeliver selects and delivers new cards based on current context.
   CardEngine.processFollowupQueue();
+  // r218 §122.97 what's happening (a milestone, a hot rookie, a run of injuries, a slump, a rival): a word next morning.
+  if (game.status !== GAME_STATUS.POSTPONED && !game.isSpring && !game.isPlayoff) {
+    withDice(dice(diceSeed(StateManager.get()), 'situation', game.index ?? gameIndex, endMs), () => CardEngine.deliverSituation(endMs, buildCardContext()));
+  }
   planCardsForNextGame();
 
   // (Rainouts are made up when they're called — §102.3 _postponeGame.)
@@ -3328,7 +3333,10 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     // r216 §122.95 the stretch run and October, a step at its moment.
     const srStep = nextStretchStep(st, clockMs);
     const stretch = srStep ? { kind: 'stretch', at: srStep.atMs } : null;
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look, staff, emergency, deadline, stretch].filter(Boolean);
+    // r218 §122.97 the winter, a day at a time.
+    const wtStep = nextWinterStep(st, clockMs);
+    const winter = wtStep ? { kind: 'winter', at: wtStep.atMs } : null;
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look, staff, emergency, deadline, stretch, winter].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     // r139 §121 the cards due by this moment arrive before it (a card the event withdraws, after it, never does).
@@ -3354,6 +3362,7 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'wxtell') _wxStoryTell(next.at);
     else if (next.kind === 'deadline') CardEngine.deliverDeadlineStep(next.at, buildCardContext());
     else if (next.kind === 'stretch') CardEngine.deliverStretchStep(next.at, buildCardContext());
+    else if (next.kind === 'winter') CardEngine.deliverWinterStep(next.at, buildCardContext());
     else if (next.kind === 'emergency') {
       StateManager.mutate(s => { const p = (s.emergencies?.plan || []).find(x => !x.done && x.atMs === next.at); if (p) p.done = true; });
       CardEngine.deliverEmergency(next.at, buildCardContext());

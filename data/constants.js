@@ -1346,6 +1346,21 @@ export const STORY_PACE = Object.freeze({ cap: 2.5, share: 0.75 });
 // (and a second this often); on a road game day, one more this often.
 export const AWAY_DAY = Object.freeze({ offday: 0.8, offdayExtra: 0.2, road: 0.55 });
 
+// r218 §122.97 the winter, a day at a time: a day with this many decisions already is busy (nothing more); a quiet day
+// gets a message this often, a news one this share of the time.
+export const WINTER_STORY = Object.freeze({ busy: 2, chance: 0.9, newsShare: 0.35 });
+
+// r218 §122.97 messages from what's happening (Situations): none before this many regular-season games; a first-year
+// player (this age or younger) hitting this well over these games (at-bats at least), or pitching this well over
+// these outings (innings at least); this many on the IL with one this week (and the gap before it comes again); a
+// regular this cold over these games (at-bats at least; the gap for that player, and between any two); the closest club in the division, this many games
+// apart; money as a share of the payroll (the scoreboard moment, the specialist, the rivalry weekend).
+export const SITUATIONS = Object.freeze({
+  minGames: 15, rookieAge: 25, rookieGames: 15, rookieAb: 40, rookieAvg: 0.33, rookieStarts: 4, rookieIp: 18, rookieEra: 2.5,
+  ilRun: 3, ilRecentDays: 4, ilGapDays: 30, slumpGames: 10, slumpAb: 30, slumpAvg: 0.125, slumpGapDays: 40, slumpTeamGapDays: 12, rivalGap: 3,
+  markShare: 0.002, specialistShare: 0.006, rivalShare: 0.003,
+});
+
 // r216 §122.95 the stretch run and October as a story: each stretch step with this many regular-season games left;
 // money as a share of the payroll (at least minK): the ticket bump, the owner's bonus pool, a playoff gate, the parade.
 export const STRETCH_STORY = Object.freeze({

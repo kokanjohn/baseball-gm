@@ -31,6 +31,9 @@ import {
 } from '../data/cards-pool.js';
 import { OFFDAY_POOL, ROAD_POOL, AWAY_FOLLOWUPS } from '../data/cards-away.js';   // r217 §122.96
 import { offDayWindow, hometownPlayer, PARK_EVENT_IDS } from './AwayDays.js';   // r217 §122.96
+import { WINTER_POOL } from '../data/cards-winter.js';   // r218 §122.97
+import * as Winter from './WinterStory.js';   // r218 §122.97
+import * as Situations from './Situations.js';   // r218 §122.97
 
 import {
   PHASE,
@@ -68,6 +71,7 @@ import {
   MORNING,       // r214 §122.93
   STORY_PACE,
   AWAY_DAY,
+  WINTER_STORY,
   REGULAR_SEASON_GAME_COUNT,
   EMERGENCY,
 } from '../data/constants.js';
@@ -2020,7 +2024,9 @@ export function expireDueRosterCards(atMs) {
     // Roster cards, pre-game cards (§74 — their question is moot at first pitch), and the
     // weather's questions (§104.2 — answered by first pitch or not at all; on the game clock,
     // not the wall clock, so an unanswered one never outlives its game).
-    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency || c._deadlineStory || c._stretchStory)
+    // (r217/r218: a card with a deadline of its own — an invitation for a time, the winter's, a situation's — on its clock too)
+    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency || c._deadlineStory || c._stretchStory
+                  || c._winterCard || c._situation || c._raw?._expiresAfterMs)
                  && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   // r139 §121 what an unanswered card's deadline sets off draws from its own stream.
@@ -3016,6 +3022,59 @@ export function deliverStretchStep(atMs, context = {}) {
   return out;
 }
 
+/**
+ * r218 §122.97 The winter's day (WinterStory): a quiet day's message, at its midday moment. A moment long past (the
+ * app closed for days) is marked done and skipped. A decision waits three days for an answer. Returns the cards parked.
+ */
+export function deliverWinterStep(atMs, context = {}) {
+  const st = StateManager.get();
+  const season = st.seasonNum || 1;
+  const m = Winter.winterDays(st, atMs).find(x => x.atMs === atMs && !(st.winter?.season === season && st.winter.done?.[x.key]));
+  if (!m) return [];
+  const late = clockNow() - atMs > 36 * 3_600_000;
+  const def = late ? null : Winter.pickCard(st, atMs, WINTER_POOL);
+  StateManager.mutate(s => {
+    if (s.winter?.season !== season) s.winter = { season, done: {}, used: {} };
+    s.winter.done = { ...(s.winter.done || {}), [m.key]: true };
+    if (def) s.winter.used = { ...(s.winter.used || {}), [def.id]: (s.winter.used?.[def.id] || 0) + 1 };
+    if (def?._needsSeries) s.winter.lastLine = Winter.seriesLine(st);
+  });
+  if (!def) return [];
+  const champ = st.playoffBracket?.champion?.name || '';
+  const line = Winter.seriesLine(st) || '';
+  const fill = (v) => (typeof v === 'string' ? v.replaceAll('{champion_name}', champ).replaceAll('{series_line}', line) : v);
+  const inst = _createInstance(Object.fromEntries(Object.entries(def).map(([k, v]) => [k, fill(v)])), context, StateManager.get());
+  if (!inst) return [];
+  const card = _deliverAt({ ...inst, _winterCard: true, _rosterKey: `winter:${season}:${m.key}`, expiresAtMs: atMs + (def._toastOnly ? 1 : 3) * 86_400_000 }, atMs);
+  releaseDueCards(atMs);
+  return card ? [card] : [];
+}
+
+/**
+ * r218 §122.97 After one of our regular-season games (`atMs`, its final): the situation most worth a word (Situations),
+ * the next morning (9:30–11:00) — at most one a day, never one that can't happen (a day off nobody can cover).
+ * Returns the card parked, or null.
+ */
+export function deliverSituation(atMs, context = {}) {
+  const st = StateManager.get();
+  if (![PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK].includes(st.phase)) return null;
+  const morning = new Date(atMs - 4 * 3_600_000); morning.setDate(morning.getDate() + 1); morning.setHours(9, 30, 0, 0);
+  const at = morning.getTime() + Math.floor(dice(diceSeed(st), 'situation', atMs)() * 90) * 60_000;
+  const dayKey = new Date(at).toDateString();
+  if ([...(st.inbox || []), ...(st.scheduledCards || [])].some(c => c._situation && new Date(c.deliverAtMs ?? c.arrivedAtMs).toDateString() === dayKey)) return null;
+  for (const sit of Situations.findSituations(st, at)) {
+    const spec = Situations.buildCard(sit, st, at);
+    if (!spec || (Number.isFinite(spec.expiresAtMs) && spec.expiresAtMs - at < 2 * 3_600_000)) continue;
+    const inst = _rosterCard(st, spec);
+    if (!cardFeasible(st, inst)) continue;
+    const card = _deliverAt(inst, at);
+    if (!card) continue;
+    StateManager.mutate(s => { s.situations = { ...(s.situations || {}), done: { ...(s.situations?.done || {}), [sit.key]: at, ...Object.fromEntries((sit.also || []).map(k => [k, at])) } }; });
+    return card;
+  }
+  return null;
+}
+
 /** A GM's hello, written for one club: its GM's name and the club's, the answer moving our standing with them. */
 function _gmHelloDef(st, t, def) {
   const gm = cpuGmName(st, t.id);
@@ -3123,6 +3182,7 @@ export function deliverCardById(cardId, context = {}) {
     MONEY_BETWEEN, MONEY_PREGAME,                 // r147 the money cards
     ...Object.values(MOMENT_CARDS),               // and the moments, too
     OFFDAY_POOL, ROAD_POOL, AWAY_FOLLOWUPS,       // r217 §122.96 off days and the road
+    WINTER_POOL,                                  // r218 §122.97 the winter
   ];
 
   let cardDef = null;

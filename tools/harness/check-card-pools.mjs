@@ -11,6 +11,7 @@ const P  = await import('../../data/cards-pool.js');
 const Mn = await import('../../data/cards-money.js');
 const Mo = await import('../../data/cards-moments.js');
 const Aw = await import('../../data/cards-away.js');   // r217 §122.96 off days and the road
+const Wi = await import('../../data/cards-winter.js');   // r218 §122.97 the winter
 const CE = await import('../../engine/CardEngine.js');
 
 const results = [];
@@ -31,7 +32,7 @@ const MARKERS = {
 };
 
 const all = [];
-for (const [name, v] of Object.entries({ ...P, ...Mn, ...Aw })) {
+for (const [name, v] of Object.entries({ ...P, ...Mn, ...Aw, ...Wi })) {
   if (!Array.isArray(v) || name === 'COMPOSE_RESPONSE_POOL') continue;
   // (how a ballpark booking went: follow-ups, led to by the booking's `_outcomes`)
   const pool = name === 'AWAY_FOLLOWUPS' ? 'FOLLOWUP_POOL' : name;
@@ -71,7 +72,8 @@ const twoSame = live.filter(x => x.d.yesLabel && x.d.yesLabel === x.d.noLabel).m
 check(`a card with one answer is shown as a notice (${twoSame.length} such cards; CardEngine shows "Understood")`, /const notice = /.test(ceSrc));
 
 // 6. Every live pool card has a repeat rule; the half hour before first pitch is part of the pre-game moment.
-const noRule = live.filter(x => !['FOLLOWUP_POOL', 'MANAGER_CONTRACT_POOL', 'COACHING_CONTRACT_POOL'].includes(x.pool) && !CE.cardRepeatRule(x.d.id)).map(x => x.d.id);
+// (the winter's cards come back by their own rule: _winterMax a winter, WinterStory.pickCard)
+const noRule = live.filter(x => !['FOLLOWUP_POOL', 'MANAGER_CONTRACT_POOL', 'COACHING_CONTRACT_POOL', 'WINTER_POOL'].includes(x.pool) && !CE.cardRepeatRule(x.d.id)).map(x => x.d.id);
 check('every live pool card has a rule for coming back', noRule.length === 0, noRule.slice(0, 8).join(', '));
 check('the half-hour cards are dealt at the pre-game moment', P.PREGAME30_POOL.filter(d => !d._retired).every(d => CE.cardRepeatRule(d.id)?.pool === 'PREGAME_POOL'));
 const stories = live.filter(x => x.d._oncePerSeason || CE.cardRepeatRule(x.d.id)?.once).length;

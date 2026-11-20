@@ -13467,3 +13467,77 @@ Home game days are unchanged (4.1). Every new message appeared in the sims.
 - check-card-pools now reads cards-away.js and accepts follow-ups led to by `_outcomes`.
 
 **Fresh team:** not needed.
+
+## §122.97 — r218: the winter, a day at a time, and messages from what's happening (Release 5 of the message plan)
+
+### The winter
+`engine/WinterStory.js` is pure. `CardEngine.deliverWinterStep` delivers each day's message, driven by a clock event (`winter`). The messages are in `data/cards-winter.js` (`WINTER_POOL`) and the rates in `WINTER_STORY`.
+
+**When**
+- The winter runs from the day after our last game to spring. Our last game is either our elimination (`eliminated`: a lost series, or the summary/offseason phase) or the World Series won.
+- Each day has a moment between 12:00 and 15:30, after the offseason's morning steps.
+
+**What a day gets**
+- A busy day (two or more decisions already arriving that day) gets nothing more.
+- A quiet day gets a message 90% of the time; about a third of those are news.
+- Which cards can come depends on the stage (`_winter`):
+  - `out`: while the postseason goes on without us.
+  - `winter`: once it's over.
+  - `any`: either stage.
+- Each card can come up to `_winterMax` times a winter (default once).
+- A decision expires after three days and news after one, on their own clock (`_winterCard` is in `expireDueRosterCards`).
+- A moment more than 36 hours late is marked done and skipped.
+- State: `s.winter = { season, done, used, lastLine }`.
+
+**The messages**
+
+| Stage | Messages |
+|---|---|
+| Out | The exit meeting (a player wants a bigger role) · scouts at the rest of the postseason (`fd_fa_look`: Scouting's market read) · winter ball (`offday_session`, +2) · season-ticket renewal price (money vs crowd) · a night in the TV studio · news: clean-out day, the latest series result (`seriesLine`, real, never repeated) |
+| Any | Winter caravan · a staff party (staff +1) · a winter strength program (`offday_session`, +2) · a clinic for high school coaches · a winter analyst (performance +1; the coaches +1 if no) · a veteran's winter workouts with the young players · news: the manager checking in |
+| Winter | Fan fest · clubhouse redo (morale +3) · alternate uniform · January minicamp · news: the champion (`_needsChampion`: not when it's us), mail from the fans, the field put away |
+
+`{champion_name}` and `{series_line}` are filled in at delivery.
+
+### What's happening
+`engine/Situations.js` is pure. After each of our regular-season games (GameEngine, on the game's own dice), `CardEngine.deliverSituation` sends the one situation most worth a word the next morning (9:30–11:00).
+- At most one a day.
+- Never one that can't happen (`cardFeasible`), or one whose deadline is under two hours away.
+- Nothing before the 15th game.
+- State: `s.situations.done`. Rates are in `SITUATIONS`.
+
+In priority order:
+1. **Rival.** A series opener against the division club closest to us, within 3 games.
+   - At home, the Ticket Office offers a rivalry weekend (cost ≈0.3% of payroll, crowd +3).
+   - On the road, the manager's word (news, morale +1).
+2. **Slump.** A regular hitting under .125 over 10 games (at least 30 at-bats). The hitting coach suggests sitting them tonight (`day_off`, a real day off; the card expires 30 minutes before first pitch). The gap is 40 days per player and 12 days between any two slumps.
+3. **Milestone.** A 30/40/50th home run, 150/200th hit, 100/125th RBI, 40/60th stolen base, 15/20th win, 200/250th strikeout, or 30/40th save. It's only sent within a game of the mark, and once.
+   - At home next, PR offers to mark it tonight (cost ≈0.2% of payroll, crowd +2, player +2).
+   - On the road, news.
+4. **Rookie.** A first-year player aged 25 or under, hitting .330+ over 15 games (40+ at-bats) or with an ERA of 2.50 or lower over 4 outings (18+ innings). The coach asks: let them talk to the press (crowd +3, player +1) or keep them to their routine (coach +1).
+5. **Injuries.** Three or more of ours on the IL, one of them this week. The Head Trainer asks to bring in a specialist (≈0.6% of payroll, morale +2) or ride it out (morale −1). The gap is 30 days.
+
+### The audit after (2 seasons, seed 1)
+
+| | Before | After |
+|---|---|---|
+| Offseason days with no decision | 61% | 29% |
+| Offseason, messages a day | 1.5 | 2.5 |
+| Off days, messages a day | — | 2.4 |
+| Road game days, messages a day | — | 3.0 |
+| Home game days, messages a day | — | 4.0 |
+
+Situations per season: about 6 milestones, 6 slumps, 3 injury runs, 1 rookie, 2–3 rivalries.
+
+Postseason game days still vary widely by run (a long series has its preview only on game 1). That is outside this release's scope.
+
+### Fixes
+- The off-day bullpen message and the winter strength program use `{active_*_who}`, the name alone; `_name` carries the throwing hand.
+- `expireDueRosterCards` also expires cards with `_raw._expiresAfterMs` (the golf invitation) on their own clock.
+
+### Checks
+- check-winter (new, 17): nothing while alive; daily midday moments; the out stage and its real series result; most quiet days get one; a busy day gets nothing; limits; a 3-day deadline; the winter stage; the champion only when it isn't us; all messages read right; nothing in spring.
+- check-situations (new, 15): milestone at home (cost), on the road (news), once, not long past; rookie; slump (by first pitch; a real day off); injuries (names all); rival home and road; one a day; not before the 15th game; voice.
+- check-message-voice and check-card-pools include cards-winter.js. Winter cards come back by `_winterMax`.
+
+**Fresh team:** not needed.
