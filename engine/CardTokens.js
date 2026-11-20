@@ -647,6 +647,7 @@ function _pickFarm(state, pitchers) {
 function _setPitcher(values, prefix, p, fallback) {
   const hand = p ? (PITCHER_HAND_DISPLAY[p.hand] || '(R)') : '';
   values[`${prefix}_name`]       = p ? `${p.name} ${hand}` : fallback;
+  values[`${prefix}_who`]        = p ? p.name : fallback;   // r213 §122.91 the name alone (in a sentence about the person)
   values[`${prefix}_pos`]        = p?.pos || 'P';
   values[`${prefix}_trait_note`] = p ? _traitNote(p.trait) : '';
   values[`${prefix}_name_tr`]    = values[`${prefix}_name`];
@@ -654,6 +655,7 @@ function _setPitcher(values, prefix, p, fallback) {
 }
 function _setHitter(values, prefix, p, fallback) {
   values[`${prefix}_name`]       = p?.name || fallback;
+  values[`${prefix}_who`]        = p?.name || fallback;   // r213 §122.91
   values[`${prefix}_pos`]        = p ? posLabel(p) : 'position player';
   values[`${prefix}_trait_note`] = p ? _traitNote(p.trait) : '';
   values[`${prefix}_name_tr`]    = values[`${prefix}_name`];

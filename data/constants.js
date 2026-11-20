@@ -1326,6 +1326,18 @@ export const AGE_CURVES = Object.freeze([
 // adds to it (CoachEngine.winterBonus 'defense': quality, +0.5 with the defense specialty).
 export const DEF_AGE_CURVE = Object.freeze([2.0, 0.0, -2.0, -3.0, -4.5]);
 
+// r213 §122.91 the staff's working day (local): messages are planned inside it. There are no quiet hours on
+// the phone any more (its own settings silence it); a game's news comes with the game, an emergency any hour.
+export const STAFF_HOURS = Object.freeze({ start: '08:00', end: '22:00' });
+export const STAFF_QUIET = Object.freeze({ quietStart: STAFF_HOURS.end, quietEnd: STAFF_HOURS.start });
+
+// r213 §122.91 after-hours emergencies: how many a season, when in the night (minutes from the midnight before
+// a game of ours), how long before that game at the least, and when an answer is due (hours after, and before
+// first pitch).
+export const EMERGENCY = Object.freeze({
+  perSeason: [2, 4], nightFromMin: -30, nightToMin: 270, minLeadH: 8, answerH: 7, beforeGameH: 2, minGapGames: 12,
+});
+
 // ─────────────────────────────────────────────────────────────
 // PLAYER RETIREMENT THRESHOLDS (Section 20.7 — LOCKED)
 // ─────────────────────────────────────────────────────────────

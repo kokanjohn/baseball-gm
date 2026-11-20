@@ -834,12 +834,6 @@ button.staff-card:active{background:var(--surface2);}
 .notif-status.denied{color:var(--danger);}
 .notif-fix-btn{margin-top:8px;}
 
-/* Quiet hours */
-.settings-quiet-row{display:flex;align-items:center;gap:8px;padding:10px 0 4px;flex-wrap:nowrap;}
-.settings-quiet-label{font-size:12px;color:var(--muted);font-weight:600;flex-shrink:0;}
-.settings-quiet-time{background:var(--surface);border:2px solid var(--border);color:var(--text);
-  font-family:'DM Sans',sans-serif;font-size:13px;padding:5px 7px;border-radius:8px;outline:none;
-  transition:border-color .2s;width:112px;flex-shrink:0;}
 .settings-quiet-time:focus{border-color:var(--accent);}
 .settings-quiet-time::-webkit-calendar-picker-indicator{filter:invert(60%);}
 
@@ -1306,18 +1300,6 @@ button.staff-card:active{background:var(--surface2);}
               <input type="checkbox" class="push-alert-toggle" data-alert="final">
               <div class="toggle-track"><div class="toggle-thumb"></div></div>
             </label>
-          </div>
-          <div class="settings-row" id="quiet-hours-row" style="cursor:default;">
-            <div style="width:100%;">
-              <div class="settings-row-label">Quiet Hours</div>
-              <div class="settings-row-sub">Nothing sounds in this window: a weather delay is skipped, everything else waits until it ends</div>
-              <div class="settings-quiet-row">
-                <span class="settings-quiet-label">From</span>
-                <input type="time" class="settings-quiet-time" id="quiet-start" value="22:00">
-                <span class="settings-quiet-label">To</span>
-                <input type="time" class="settings-quiet-time" id="quiet-end" value="08:00">
-              </div>
-            </div>
           </div>
         </div>
 

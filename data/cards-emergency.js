@@ -1,0 +1,193 @@
+/**
+ * data/cards-emergency.js
+ * r213 §122.91 After-hours emergencies: 2–4 a season, in the middle of the night, only when the situation would
+ * really wake a GM. Each wants an answer before morning. Slept through, the staff handle it as best they can
+ * (`autoResolve`: what they do), and sometimes that goes badly (`_staffBad`: the odds, what it costs, the words);
+ * otherwise `_staffGood` says how it went. A real GM finds out about some things after the fact.
+ *
+ *   _situation  one of each a season, never the same version twice until the bank runs out
+ *   _needs      'home' / 'away': only when our next game is at home / on the road
+ *
+ * Tokens resolve the way the pool's do. Card shape is the pool's (cards-pool.js).
+ */
+
+export const EMERGENCIES = Object.freeze([
+  // ── A starter's partner in labor ──
+  {id:'em_labor_a',_situation:'labor',tag:'PERSONAL',type:'urgent',sender:"{manager_name} (Manager)",relay:"{active_sp_who}",avatar:'🍼',
+   onYes:'personal_leave',onNo:'personal_leave',_leaveGamesYes:4,_leaveGamesNo:1,autoResolve:'yes',
+   subject:"{active_sp_who}'s partner is in labor",
+   preview:"Sorry for the hour. {active_sp_who} just called me from the hotel…",
+   body:"Sorry for the hour. {active_sp_who} just called me: the baby is coming, weeks early, and {active_sp_who} wants to be on the first flight home. That's a start we have to cover on no notice. I can tell {active_sp_who} to go and take the time, or ask {active_sp_who} to make one more start and fly out right after.",
+   yesLabel:'Go — Take the Time',noLabel:'One More Start First',
+   yesEffect:{morale:3},noEffect:{morale:-4,manConf:-1},
+   yesMsg:"{active_sp_who} is on the first flight. We'll figure out the start.",
+   noMsg:"{active_sp_who} will make the start. It wasn't a happy phone call.",
+   _staffGood:"No answer, so I sent {active_sp_who} home. The bullpen covered the start, and the clubhouse noticed we did right by a teammate.",
+   _staffBad:{p:0.4,effect:{morale:-2,manConf:-1},msg:"No answer, so I sent {active_sp_who} home and patched the start together with relievers. It got away from us early. Some of the arms are still sore about how it was handled."}},
+
+  {id:'em_labor_b',_situation:'labor',tag:'PERSONAL',type:'urgent',sender:"{manager_name} (Manager)",relay:"{active_hitter_name}",avatar:'🍼',
+   onYes:'personal_leave',onNo:'personal_leave',_leaveGamesYes:4,_leaveGamesNo:1,autoResolve:'yes',
+   subject:"{active_hitter_name} is headed to the hospital",
+   preview:"{active_hitter_name}'s partner went into labor about an hour ago…",
+   body:"{active_hitter_name}'s partner went into labor about an hour ago, and {active_hitter_name} is already packing. I want to say take as long as you need. The lineup takes a hit either way: the longer leave keeps {active_hitter_name} out most of the week, the short one has {active_hitter_name} back for the weekend series.",
+   yesLabel:'Take As Long As Needed',noLabel:'Back for the Weekend',
+   yesEffect:{morale:3},noEffect:{morale:1},
+   yesMsg:"{active_hitter_name} cried on the phone. Go, be a parent.",
+   noMsg:"{active_hitter_name} will be back for the weekend. Grateful for the time.",
+   _staffGood:"No answer, so I told {active_hitter_name} to go and take what's needed. Healthy baby, and a teammate who won't forget it.",
+   _staffBad:{p:0.35,effect:{morale:-2},msg:"No answer, so I gave {active_hitter_name} the standard few days. Word got around that the front office didn't call back. That stung in the clubhouse."}},
+
+  // ── Storm damage before a home game ──
+  {id:'em_storm_tarp',_situation:'storm',_needs:'home',tag:'OPERATIONS',type:'urgent',sender:'Head Groundskeeper',avatar:'⛈️',
+   autoResolve:'no',_budgetCost:'misc_cost_sm',
+   subject:"The storm tore the tarp",
+   preview:"The wind took the tarp off the infield about an hour ago…",
+   body:"The wind took the tarp off the infield about an hour ago and tore it in two places. The infield took on water. An overnight crew with pumps and a rush tarp costs {misc_cost_sm}, and the field will be ready by first pitch. Without it, my morning crew does what it can, and the infield will play slow and soft.",
+   yesLabel:'Call In the Overnight Crew',noLabel:'Wait for the Morning Crew',
+   yesEffect:{atmo:1},noEffect:{atmo:-2},
+   yesMsg:"The crew is on the way. We'll have it ready.",
+   noMsg:"The morning crew starts at dawn. We'll do our best.",
+   _staffGood:"No answer, so I waited for the morning crew. We got lucky: the sun came out and the infield dried by first pitch.",
+   _staffBad:{p:0.45,effect:{atmo:-3,ownerTrust:-1},msg:"No answer, so I waited for the morning crew. The infield played like mud. Two grounders took bad hops, and the owner's box noticed."}},
+
+  {id:'em_storm_lights',_situation:'storm',_needs:'home',tag:'OPERATIONS',type:'urgent',sender:'Stadium Ops.',avatar:'⛈️',
+   autoResolve:'no',_budgetCost:'misc_cost_sm',
+   subject:"Lightning hit a light tower",
+   preview:"Lightning hit the left-field light tower. Half the bank is out…",
+   body:"Lightning hit the left-field light tower, and half the bank is out. An electrician on overtime tonight costs {misc_cost_sm} and has it fixed before the game. The regular service call comes in the afternoon, and if it runs long, left field plays dim.",
+   yesLabel:'Overtime Electrician',noLabel:'Regular Service Call',
+   yesEffect:{},noEffect:{},
+   yesMsg:"The electrician is on the way.",
+   noMsg:"Service call in the afternoon.",
+   _staffGood:"No answer, so we took the afternoon service call. They finished with an hour to spare.",
+   _staffBad:{p:0.4,effect:{atmo:-3,morale:-1},msg:"No answer, so we took the afternoon service call. It ran into the game. Left field played dim for three innings, and the outfielders were not happy."}},
+
+  // ── A player sick in the night ──
+  {id:'em_sick_bug',_situation:'sick',tag:'HEALTH',type:'urgent',sender:'Head Trainer',avatar:'🤒',
+   onYes:'rest_active_hitter',_restGames:1,autoResolve:'yes',
+   subject:"{active_hitter_name} is sick",
+   preview:"{active_hitter_name} called me from the hotel, sick as a dog…",
+   body:"{active_hitter_name} called me, sick as a dog. Fever, and it looks like a stomach bug. I want {active_hitter_name} out of the next game and away from the clubhouse until it passes, before it goes through the whole room. {active_hitter_name} wants to play through it.",
+   yesLabel:'Keep Them Away',noLabel:'Let Them Play',
+   yesEffect:{morale:1},noEffect:{morale:-2},
+   yesMsg:"{active_hitter_name} stays in the hotel. I'm wiping down everything.",
+   noMsg:"{active_hitter_name} plays. I'll keep the hand sanitizer close.",
+   _staffGood:"No answer, so I kept {active_hitter_name} away. The bug stopped with one player.",
+   _staffBad:{p:0.35,effect:{morale:-3},msg:"No answer, so I kept {active_hitter_name} away, but too late: two more players woke up with it. We played short-handed and it showed."}},
+
+  {id:'em_sick_er',_situation:'sick',tag:'HEALTH',type:'urgent',sender:'Team Physician',avatar:'🏥',
+   onYes:'rest_active_hitter',_restGames:1,autoResolve:'yes',
+   subject:"{active_hitter_name} is in the emergency room",
+   preview:"I'm at the hospital with {active_hitter_name}. Nothing serious…",
+   body:"I'm at the hospital with {active_hitter_name}. Nothing serious: severe dehydration, two bags of fluid and a long night. I'd sit {active_hitter_name} for the next game. {active_hitter_name} insists on playing.",
+   yesLabel:'Sit Them',noLabel:'Let Them Play',
+   yesEffect:{},noEffect:{morale:1},
+   _promise:{no:{kind:'worn_down',afterDays:3,player:'active_hitter'}},
+   yesMsg:"Sitting. {active_hitter_name} will be fine.",
+   noMsg:"{active_hitter_name} plays. I'll watch closely.",
+   _staffGood:"No answer, so I sat {active_hitter_name}. Back at full strength the next day.",
+   _staffBad:{p:0.3,effect:{morale:-2},msg:"No answer, so I sat {active_hitter_name}. {active_hitter_name} took it badly and showed up to the park anyway, angry. We'll smooth it over."}},
+
+  // ── A minor car accident ──
+  {id:'em_accident',_situation:'accident',tag:'PERSONAL',type:'urgent',sender:"{manager_name} (Manager)",relay:"{active_hitter_name}",avatar:'🚗',
+   onYes:'rest_active_hitter',_restGames:1,autoResolve:'yes',
+   subject:"{active_hitter_name} was in a car accident",
+   preview:"First: {active_hitter_name} is okay. A fender-bender on the way home…",
+   body:"First: {active_hitter_name} is okay. A fender-bender on the way home, airbags, a sore neck and a shaken player. Nobody else was hurt. I'd give {active_hitter_name} the next game off to see a doctor and clear their head. {active_hitter_name} says they're fine to play.",
+   yesLabel:'Give Them the Day',noLabel:'Let Them Play',
+   yesEffect:{morale:1},noEffect:{},
+   _promise:{no:{kind:'worn_down',afterDays:2,player:'active_hitter'}},
+   yesMsg:"A day off, and a doctor in the morning.",
+   noMsg:"{active_hitter_name} plays. I'll keep an eye on that neck.",
+   _staffGood:"No answer, so I gave {active_hitter_name} the day. The doctor cleared the neck, and {active_hitter_name} is back.",
+   _staffBad:{p:0.35,effect:{atmo:-2},msg:"No answer, so I gave {active_hitter_name} the day. A local reporter got the police report before we said anything, and the story ran without our side of it."}},
+
+  {id:'em_accident_b',_situation:'accident',tag:'PERSONAL',type:'urgent',sender:'Media Relations',avatar:'🚗',
+   autoResolve:'no',
+   subject:"{active_sp_who} in a minor accident",
+   preview:"A reporter just called asking about {active_sp_who}'s accident…",
+   body:"A reporter just called asking about {active_sp_who}'s car accident on the way home. Minor, nobody hurt, {active_sp_who} is fine. We can put out a short statement now and own the story, or say nothing and hope it stays small.",
+   yesLabel:'Put Out a Statement',noLabel:'Say Nothing',
+   yesEffect:{atmo:1},noEffect:{},
+   yesMsg:"The statement is out. The story will be a footnote.",
+   noMsg:"No statement. We'll see what runs.",
+   _staffGood:"No answer, so we said nothing. The story never ran.",
+   _staffBad:{p:0.5,effect:{atmo:-3},msg:"No answer, so we said nothing. The story ran in the morning with a photo of the car and no comment from us. It looked worse than it was."}},
+
+  // ── A road trip's flight cancelled ──
+  {id:'em_flight',_situation:'flight',_needs:'away',tag:'OPERATIONS',type:'urgent',sender:'Travel Coordinator',avatar:'✈️',
+   autoResolve:'no',_budgetCost:'misc_cost_sm',
+   subject:"Our flight is cancelled",
+   preview:"The airline just cancelled our flight. Mechanical…",
+   body:"The airline just cancelled our flight, mechanical. A charter costs {misc_cost_sm} and gets everyone in by morning with a full night's sleep. Otherwise it's the first commercial flight out, split across two planes, and the players land a few hours before the game.",
+   yesLabel:'Book the Charter',noLabel:'First Commercial Flights',
+   yesEffect:{morale:1},noEffect:{morale:-2},
+   yesMsg:"Charter booked. Wheels up in an hour.",
+   noMsg:"Two commercial flights in the morning. It'll be a long day.",
+   _staffGood:"No answer, so I booked the morning commercial flights. Everyone made it with time to spare.",
+   _staffBad:{p:0.45,effect:{morale:-3,ovr:-1},msg:"No answer, so I booked the morning commercial flights. The second plane sat on the runway for two hours. Half the team got to the park at batting practice, and it showed."}},
+
+  {id:'em_flight_bus',_situation:'flight',_needs:'away',tag:'OPERATIONS',type:'urgent',sender:'Travel Coordinator',avatar:'🚌',
+   autoResolve:'no',_budgetCost:'misc_cost_xs',
+   subject:"Stuck at the airport",
+   preview:"Weather grounded us. We're at the gate with nowhere to go…",
+   body:"Weather grounded everything out of here. We're at the gate with nowhere to go. I can book a hotel by the airport for {misc_cost_xs} and we fly in the morning, or we board two buses now and drive through the night.",
+   yesLabel:'Hotel Tonight',noLabel:'Buses Now',
+   yesEffect:{morale:1},noEffect:{morale:-2},
+   yesMsg:"Rooms booked. Everyone sleeps.",
+   noMsg:"Buses are loading. Pillows are not included.",
+   _staffGood:"No answer, so we waited it out at the gate. The weather broke, and we got out after midnight.",
+   _staffBad:{p:0.5,effect:{morale:-3},msg:"No answer, so we waited it out at the gate. We never got out. The team slept on the floor and flew in the morning."}},
+
+  // ── A family emergency ──
+  {id:'em_family',_situation:'family',tag:'PERSONAL',type:'urgent',sender:"{manager_name} (Manager)",relay:"{active_hitter_name}",avatar:'🏥',
+   onYes:'personal_leave',onNo:'personal_leave',_leaveGamesYes:3,_leaveGamesNo:1,autoResolve:'yes',
+   subject:"{active_hitter_name}'s parent is in the hospital",
+   preview:"{active_hitter_name} just got a call from home…",
+   body:"{active_hitter_name} just got a call from home: a parent had a heart attack and is in surgery. {active_hitter_name} wants to go. I'd send them for as long as it takes. The other way, {active_hitter_name} flies out and back in a day.",
+   yesLabel:'As Long As It Takes',noLabel:'Out and Back',
+   yesEffect:{morale:3},noEffect:{morale:-2},
+   yesMsg:"{active_hitter_name} is on the way. The whole room is behind them.",
+   noMsg:"Out and back. {active_hitter_name} understood. Barely.",
+   _staffGood:"No answer, so I sent {active_hitter_name} home for as long as it takes. The surgery went well.",
+   _staffBad:{p:0.3,effect:{morale:-2},msg:"No answer, so I sent {active_hitter_name} home. The family heard nothing from the front office for two days, and {active_hitter_name} mentioned it."}},
+
+  // ── Trouble at a bar ──
+  {id:'em_bar',_situation:'bar',tag:'DISCIPLINE',type:'urgent',sender:"{manager_name} (Manager)",relay:"{active_hitter_name}",avatar:'🚨',
+   onYes:'rest_active_hitter',_restGames:1,autoResolve:'no',
+   subject:"{active_hitter_name} and a scene at a bar",
+   preview:"There was a shouting match outside a bar tonight. {active_hitter_name} was in it…",
+   body:"There was a shouting match outside a bar tonight, and {active_hitter_name} was in the middle of it. No punches, no charges, but there are phone videos. I can sit {active_hitter_name} a game and say so publicly, or we handle it inside the clubhouse and say nothing.",
+   yesLabel:'Sit Them a Game',noLabel:'Handle It Inside',
+   yesEffect:{atmo:1,morale:-1},noEffect:{},
+   yesMsg:"{active_hitter_name} sits a game. The statement says why.",
+   noMsg:"We'll handle it in the clubhouse.",
+   _staffGood:"No answer, so we handled it inside. The videos never got traction.",
+   _staffBad:{p:0.5,effect:{atmo:-3,ownerTrust:-1},msg:"No answer, so we handled it inside. The video was on every station by morning, and it looked like we didn't care."}},
+
+  // ── A water main at the ballpark ──
+  {id:'em_flood',_situation:'flood',_needs:'home',tag:'OPERATIONS',type:'urgent',sender:'Stadium Ops.',avatar:'💧',
+   autoResolve:'no',_budgetCost:'misc_cost_sm',
+   subject:"Water in the home clubhouse",
+   preview:"A pipe burst under the home clubhouse. There's an inch of water…",
+   body:"A pipe burst under the home clubhouse, and there's an inch of water on the floor. Overnight cleanup costs {misc_cost_sm}, and the room is dry by morning. Otherwise, the players dress in the visitors' overflow room for a day or two.",
+   yesLabel:'Overnight Cleanup',noLabel:'Overflow Room',
+   yesEffect:{},noEffect:{morale:-2},
+   yesMsg:"Crews are on it. Dry by morning.",
+   noMsg:"The overflow room it is.",
+   _staffGood:"No answer, so the players dressed in the overflow room. They made a joke of it.",
+   _staffBad:{p:0.45,effect:{morale:-3},msg:"No answer, so the players dressed in the overflow room. Two days became five. The veterans are making their feelings known."}},
+
+  // ── A family emergency, another ──
+  {id:'em_family_b',_situation:'family',tag:'PERSONAL',type:'urgent',sender:"{manager_name} (Manager)",relay:"{active_sp_who}",avatar:'🏥',
+   onYes:'personal_leave',onNo:'personal_leave',_leaveGamesYes:3,_leaveGamesNo:1,autoResolve:'yes',
+   subject:"{active_sp_who} needs to go home",
+   preview:"{active_sp_who} knocked on my hotel door a few minutes ago…",
+   body:"{active_sp_who} knocked on my hotel door a few minutes ago: a sibling was in a bad accident back home. {active_sp_who} needs to go. A few days covers it, and we skip a start. A quick trip has {active_sp_who} back on turn.",
+   yesLabel:'A Few Days',noLabel:'A Quick Trip',
+   yesEffect:{morale:3},noEffect:{morale:-1},
+   yesMsg:"{active_sp_who} is on the way. The rotation will cover.",
+   noMsg:"A quick trip. {active_sp_who} will be back on turn.",
+   _staffGood:"No answer, so I sent {active_sp_who} home for a few days. The rotation covered.",
+   _staffBad:{p:0.3,effect:{morale:-2},msg:"No answer, so I sent {active_sp_who} home. The spot start went badly, and the bullpen is short this week."}},
+]);

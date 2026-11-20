@@ -1377,9 +1377,9 @@ async function checkRemindersAndWatches() {
   if (g) {
     const at = g.gameTime - 30 * 60_000;
     const rem = CE.getPushSchedule(st, g.gameTime - 3 * 3_600_000).filter(i => i.id.startsWith('game-reminder-'));
-    const quiet = inQuietHours(at, st.push?.quietStart, st.push?.quietEnd);
-    check(`game reminder: a push 30 minutes before first pitch (${new Date(g.gameTime).toISOString().slice(11, 16)} UTC game${quiet ? ', in quiet hours' : ''}; ${rem.length} queued)`,
-          quiet ? !rem.some(i => i.deliverAt === at) : rem.some(i => i.deliverAt === at && /First pitch in 30 minutes/.test(i.title)));
+    // r213 §122.91 no quiet hours: the reminder comes whatever the hour
+    check(`game reminder: a push 30 minutes before first pitch (${new Date(g.gameTime).toISOString().slice(11, 16)} UTC game; ${rem.length} queued)`,
+          rem.some(i => i.deliverAt === at && /First pitch in 30 minutes/.test(i.title)));
   }
   // A "nobody fits" card, answered Keep Watching: the watch is checked at the
   // next desk; one that can't be met ends after two weeks with a Recent line.
@@ -2271,6 +2271,14 @@ async function main() {
     check(`errors realistic: ${epg.toFixed(2)} a team a game (0.35–0.8); hits taken away ${fielded.save}, let through ${fielded.cost}`,
           epg >= 0.35 && epg <= 0.8 && fielded.save > 0 && fielded.cost > 0);
   }
+  { // r213 §122.91 after-hours emergencies: 2–4 a season, each in the night, each came
+    const em = SM.get().emergencies || {};
+    const plan = em.plan || [];
+    const cards = [...(SM.get().inbox || []), ...(SM.get().history || [])].filter(c => c._emergency);
+    const night = (ms) => { const h = new Date(ms).getHours() + new Date(ms).getMinutes() / 60; return h >= 23.5 || h <= 4.5; };
+    check(`emergencies: ${plan.length} planned, ${plan.filter(x => x.done).length} came (${[...new Set(cards.map(c => c.cardId))].join(', ')}), every one in the night`,
+          plan.length >= 2 && plan.length <= 4 && plan.filter(x => x.atMs <= clock.get()).every(x => x.done) && plan.some(x => x.done) && plan.every(x => night(x.atMs)) && (em.situations || []).length === new Set(em.situations || []).size);
+  }
 
   // ── §61: timed delivery ─────────────────────────────────────────────────────
   {
@@ -2283,8 +2291,9 @@ async function main() {
     // A new club's opening cards (_seed) are there the moment the club is made, at
     // whatever hour that is, and never pushed (r152: in CI's UTC the harness's
     // starting moment is midnight, which is quiet hours).
-    const quiet = arrived.filter(c => !c._rosterKey && !c._seed && inQuietHours(c.arrivedAtMs, st.push?.quietStart, st.push?.quietEnd));
-    check('timed delivery: no pool card arrives during quiet hours', quiet.length === 0,
+    // r213 §122.91 the staff's working day (8am–10pm): planned messages keep to it (an emergency doesn't).
+    const quiet = arrived.filter(c => !c._rosterKey && !c._seed && c._pool !== 'INGAME_POOL' && c._pool !== 'PREGAME_POOL' && inQuietHours(c.arrivedAtMs, '22:00', '08:00'));   // (a game's own messages come with the game, whatever the hour)
+    check('timed delivery: no planned message arrives outside the staff\'s working day', quiet.length === 0,
           quiet.slice(0, 5).map(c => `${c.cardId}${c._seed ? ' (seed)' : ''} ${new Date(c.arrivedAtMs).toISOString()}`).join(', '));
     const hours = new Set(arrived.map(c => new Date(c.arrivedAtMs).getHours()));
     check(`timed delivery: arrival times vary (${hours.size} distinct hours)`, hours.size >= 8);
@@ -2293,8 +2302,9 @@ async function main() {
     check('timed delivery: seed cards are never pushed',
           !getPushSchedule(st, 0).some(i => (st.scheduledCards || []).find(c => c.instanceId === i.id)?._seed));
     const ps = getPushSchedule(st, clock.get());
-    check('push schedule: no alert sounds during quiet hours',
-          getPushSchedule(st, 0).every(i => !inQuietHours(i.deliverAt, st.push?.quietStart, st.push?.quietEnd)));
+    // r213 §122.91 no quiet hours: each alert sounds when its message arrives.
+    check('push schedule: each message\'s alert sounds when it arrives',
+          getPushSchedule(st, 0).filter(i => i.kind === 'messages').every(i => { const c = (st.scheduledCards || []).find(x => x.instanceId === i.id); return !c || c.deliverAtMs === i.deliverAt; }));
     check('push schedule: only future items, each with id/title/body',
           ps.every(i => i.deliverAt > clock.get() - 60000 && i.id && i.title && i.body), `${ps.length} items`);
     // §99 the game reminder: 30 minutes before each of our next first pitches
@@ -2302,7 +2312,7 @@ async function main() {
     {
       const next = (st.schedule || []).slice(st.currentGameIndex || 0).find(g => !g._committed && g.gameTime - 30 * 60_000 > clock.get());
       const rem = ps.filter(i => i.id.startsWith('game-reminder-'));
-      const want = next && !inQuietHours(next.gameTime - 30 * 60_000, st.push?.quietStart, st.push?.quietEnd);
+      const want = !!next;   // r213 §122.91 whatever the hour
       check(`push schedule: a reminder 30 minutes before our next first pitch (${rem.length} queued)`,
             !want || rem.some(i => i.deliverAt === next.gameTime - 30 * 60_000), next ? new Date(next.gameTime).toISOString() : 'no game');
       const off = getPushSchedule({ ...st, push: { ...(st.push || {}), gameReminder: false } }, clock.get());

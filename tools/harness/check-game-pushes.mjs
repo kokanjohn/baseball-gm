@@ -165,7 +165,8 @@ else console.log('    (no game postponed before its reminder in this run)');
   all.forEach(i => console.log(`    ${new Date(i.deliverAt).toISOString().slice(11, 16)}  ${i.title} — ${i.body}`));
   const titles = all.map(i => i.title.split(':')[0]);
   {
-    // §122.51 the grounds crew near game time gets past quiet hours; the morning look waits for them to end.
+    // r213 §122.91 no quiet hours: the crew's word sounds when it arrives, urgent or not, whatever the hour
+    // (and whatever an old save's quiet-hours setting said).
     const s2 = structuredClone(st);
     s2.push.quietStart = '19:00'; s2.push.quietEnd = '08:00';
     const T2 = new Date(T); T2.setHours(21, 0, 0, 0);
@@ -173,8 +174,8 @@ else console.log('    (no game postponed before its reminder in this run)');
     s2.scheduledCards = [card('crew-near', T2.getTime(), true), card('crew-morning', T2.getTime() + 60_000, false)];
     const ps = getPushSchedule(s2, T2.getTime() - 3600_000);
     const near = ps.find(i => i.id === 'crew-near'), morning = ps.find(i => i.id === 'crew-morning');
-    check('quiet hours: the crew\'s word near game time is sent as it happens; other messages wait for the morning',
-          near?.deliverAt === T2.getTime() && new Date(morning?.deliverAt).getHours() === 8, JSON.stringify(ps.map(i => [i.id, new Date(i.deliverAt).toString().slice(16, 21)])));
+    check('no quiet hours: the crew\'s word at 9pm sounds at 9pm, urgent or not',
+          near?.deliverAt === T2.getTime() && morning?.deliverAt === T2.getTime() + 60_000, JSON.stringify(ps.map(i => [i.id, new Date(i.deliverAt).toString().slice(16, 21)])));
   }
   check('a held start, a delay and a suspension: no game pushes, home or road (their messages carry them)',
         ![false, true].some(h => gamePushes(st, { ...L, isHome: h }, T - 3600_000).some(i => i.kind === 'weather' || i.kind === 'calledOff')), JSON.stringify(titles));

@@ -163,6 +163,7 @@ import {
 import { clockNow, runAt } from './Clock.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 import { gmTurnover } from './FirstDay.js';   // r212 §122.90
+import { planEmergencies, nextEmergencyAt } from './Emergencies.js';   // r213 §122.91
 import { GM_RELATIONSHIP_DEFAULT } from '../data/constants.js';
 import { naturalFor, seedSwingman } from './Positions.js';
 import * as Teaching from './PlayerWork.js';   // r166 the Bench Coach's position work
@@ -477,6 +478,8 @@ export async function startNewGame(config) {
     CardEngine.deliverSeedTradeOffer(ctx);
     // r211 §122.89 the first day: messages between now and the first pitch, other GMs through the spring.
     CardEngine.scheduleFirstDay(ctx);
+    // r213 §122.91 this season's after-hours emergencies (the nights; which one, when the night comes)
+    _planEmergencies(clockNow());
     // §86 the Recent list starts the day the club does.
     StateManager.mutate(s => {
       const at = clockNow();
@@ -3283,6 +3286,8 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
   if (state.rosterStepAt == null) StateManager.mutate(s => { s.rosterStepAt = clockMs; });
   if (state.faLookAt == null) StateManager.mutate(s => { s.faLookAt = clockMs; });   // §122 daily looks count from here
   if (state.staffLookAt == null) StateManager.mutate(s => { s.staffLookAt = clockMs; });   // r196 the staff's looks count from here
+  // r213 §122.91 a save from before r213: this season's emergency nights, from here on
+  if (state.emergencies?.season == null && state.userTeam) _planEmergencies(clockMs);
   let overdueRun = false;
   for (let guard = 0; guard < 12000; guard++) {
     _wxReplanDue(clockMs);           // §122.51 a weather decision that changes our game
@@ -3312,7 +3317,10 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     // r196 §122.73 the staff's look at the roster after each of our games: the rest and advice watches decide then.
     const sAt = CardEngine.staffLookAt(st);
     const staff = Number.isFinite(sAt) && sAt > (st.staffLookAt ?? -Infinity) && sAt <= clockMs ? { kind: 'staff', at: sAt } : null;
-    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look, staff].filter(Boolean);
+    // r213 §122.91 an emergency in the night, at its moment.
+    const emAt = nextEmergencyAt(st, clockMs);
+    const emergency = emAt != null ? { kind: 'emergency', at: emAt } : null;
+    const cands = [game, os && { kind: 'offseason', ...os }, fin && { ...fin, kind: `fin:${fin.kind}` }, desk, roster, ask, prep, tell, look, staff, emergency].filter(Boolean);
     const next = cands.sort((a, b) => a.at - b.at)[0] || null;
     if (!next) break;
     // r139 §121 the cards due by this moment arrive before it (a card the event withdraws, after it, never does).
@@ -3336,6 +3344,10 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
     else if (next.kind === 'wxask') _wxUserCards(next.at);
     else if (next.kind === 'fieldask') _fieldPrepCards(next.at);
     else if (next.kind === 'wxtell') _wxStoryTell(next.at);
+    else if (next.kind === 'emergency') {
+      StateManager.mutate(s => { const p = (s.emergencies?.plan || []).find(x => !x.done && x.atMs === next.at); if (p) p.done = true; });
+      CardEngine.deliverEmergency(next.at, buildCardContext());
+    }
     else if (next.kind === 'falook') {
       CardEngine.directorTips(next.at);   // §122.15 our scouting director hears first (or doesn't)
       StateManager.mutate(s => { s.faLookAt = next.at; events.push(...cpuFreeAgentLook(s, next.at)); });
@@ -3543,9 +3555,18 @@ function _runOffseasonStep(step, atMs) {
       if (lines.length) s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), ...lines]);
     });
     CardEngine.scheduleSpringGms(atMs, buildCardContext());
+    _planEmergencies(atMs);   // r213 §122.91
     return events;
   }
   return events;
+}
+
+/** r213 §122.91 this season's emergency nights (2–4), from its own dice. */
+function _planEmergencies(atMs) {
+  const st = StateManager.get();
+  const season = st.seasonNum || 1;
+  const plan = planEmergencies(st, atMs, dice(diceSeed(st), 'emergency-plan', season));
+  StateManager.mutate(s => { s.emergencies = { ...(s.emergencies || {}), season, plan, situations: [] }; });
 }
 
 /** One CPU free-agency round, recorded in the activity feed. */

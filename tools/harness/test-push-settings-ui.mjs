@@ -113,6 +113,7 @@ await page.click('#notif-toggle-label');
 check('paused', await waitStatus(/^Paused$/), await statusText());
 await shoot('paused');
 
+check('Settings: no Quiet Hours (r213: the phone\'s own settings silence it)', !(await page.$('#quiet-start')) && !(await page.$('#quiet-hours-row')));
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 process.exit(ok ? 0 : 1);

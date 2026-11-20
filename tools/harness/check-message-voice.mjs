@@ -5,7 +5,7 @@ import { voiceProblems, RULE_NAMES } from './voice-rules.mjs';
 let ok = true, n = 0;
 const check = (name, cond, info = '') => { n++; ok = ok && cond; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${!cond && info ? ' — ' + info : ''}`); };
 
-const files = ['cards-moments.js', 'cards-money.js', 'cards-pool.js', 'cards-first-day.js'];   // r211 the first day
+const files = ['cards-moments.js', 'cards-money.js', 'cards-pool.js', 'cards-first-day.js', 'cards-emergency.js'];   // r211 the first day
 const cards = [];
 for (const f of files) {
   const m = await import(new URL(`../../data/${f}`, import.meta.url));

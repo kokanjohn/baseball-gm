@@ -62,6 +62,8 @@ import {
   ROSTER_DECISION_LEAD_MS,
   LEAGUE_POSITIONS,
   FIELD_CARE,
+  STAFF_QUIET,   // r213 §122.91
+  EMERGENCY,
 } from '../data/constants.js';
 
 import {
@@ -96,13 +98,14 @@ import * as AllStar from './AllStarEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { addToMarket, signingTerms } from './MarketEngine.js';
 import { baseballYear, computeAge, isAvailable } from './PlayerFactory.js';
-import { planDeliveryTimes, pushTimeFor, replyTime } from './CardScheduler.js';
+import { planDeliveryTimes, replyTime } from './CardScheduler.js';
 import { writeComposeReply } from './ComposeReplies.js';
 import { dealByKey } from './TradeAdvice.js';
 import { reviewWords } from './SeasonReview.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS, NEW_GM_HELLOS, LATER_HELLOS } from '../data/cards-first-day.js';   // r211 §122.89, r212 §122.90
 import { stampSender, senderLabel } from './Senders.js';   // r212 §122.90
+import { pickEmergency, answerBy } from './Emergencies.js';   // r213 §122.91
 import { FIRST_DAY, CORE_SLOTS, firstDayTimes, gmHelloTimes, cpuGmName, newGms, tradedWith, GM_TURNOVER } from './FirstDay.js';
 import { MONEY_BETWEEN, MONEY_PREGAME } from '../data/cards-money.js';
 import * as Negotiation from './Negotiation.js';
@@ -569,6 +572,8 @@ export function expire(instanceId, atMs = clockNow()) {
     _applyRelationships(s, instance, def);   // §122.60 the default's effect on the people involved, too
     _applyChoiceMoney(s, instance, def);
     _applySoftEffects(s, tax, 'auto', instance);
+    // r213 §122.91 an emergency the staff handled: sometimes it goes badly (settled when it came)
+    if (instance._emergencyBad) _applySoftEffects(s, instance._emergencyBad, 'auto', instance);
   });
   _makePromise(instance, def, atMs);   // r147 the default's promise, too
   _maybeChainFollowup(instance, def, atMs);   // §122.57 and what follows from it (an unanswered "no" has its sequel too)
@@ -577,6 +582,11 @@ export function expire(instanceId, atMs = clockNow()) {
   const onNo = instance._raw?.onNo;
   if (autoPath === 'no' && onNo && (CARD_ACTIONS[onNo] || onNo.startsWith('as_'))) {
     _applyRosterAction(instance, 'no', StateManager.get(), { atMs });   // registry and All-Star actions alike
+  }
+  // r213 §122.91 an emergency the staff handled their way ("go, take the time"; "keep them away"): that action too
+  const onYes = instance._raw?.onYes;
+  if (instance._emergency && autoPath === 'yes' && onYes && CARD_ACTIONS[onYes]) {
+    _applyRosterAction(instance, 'yes', StateManager.get(), { atMs });
   }
 }
 
@@ -1938,7 +1948,7 @@ export function expireDueRosterCards(atMs) {
     // Roster cards, pre-game cards (§74 — their question is moot at first pitch), and the
     // weather's questions (§104.2 — answered by first pitch or not at all; on the game clock,
     // not the wall clock, so an unanswered one never outlives its game).
-    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER')
+    .filter(c => (c.autoResolve === 'roster' || c._pool === 'PREGAME_POOL' || c._pool === 'INGAME_POOL' || c.tag === 'WEATHER' || c._emergency)
                  && Number.isFinite(c.expiresAtMs) && c.expiresAtMs <= atMs)
     .sort((a, b) => a.expiresAtMs - b.expiresAtMs);
   // r139 §121 what an unanswered card's deadline sets off draws from its own stream.
@@ -2286,8 +2296,7 @@ function _scheduleCards(instances, state, game = null) {
   const times = planDeliveryTimes(instances.length, {
     nowMs,
     windowEndMs: Number.isFinite(T) && T - nowMs >= 45 * 60_000 ? T : _nextGameTime(state, nowMs),
-    quietStart:  state.push?.quietStart,
-    quietEnd:    state.push?.quietEnd,
+    ...STAFF_QUIET,   // r213 §122.91 the staff's working day
   });
   // planDeliveryTimes returns ascending times; shuffle the pairing so card
   // order in the pool doesn't dictate arrival order.
@@ -2609,7 +2618,6 @@ function _pushKind(c) {
 }
 
 export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foreseen = null) {
-  const qs = state?.push?.quietStart, qe = state?.push?.quietEnd;
   const horizon = foreseen && Number.isFinite(foreseen.untilMs) ? foreseen.untilMs : -Infinity;
   const planned = (state?.scheduledCards || [])
     .filter(c => !c._seed && c.deliverAtMs > horizon)
@@ -2617,10 +2625,9 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
   const coming = (foreseen?.messages || [])
     .map(m => ({ instanceId: m.instanceId, sender: senderLabel(m, state), subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent, kind: _pushKind(m) }));
   const cards = [...coming, ...planned].filter(c => alertOn(state, c.kind))
-    // Pool cards are already planned outside quiet hours; real-time roster
-    // cards reach the inbox when they happen and only the alert waits (§65).
-    // §122.51 the grounds crew near game time is urgent: it gets past quiet hours (§8.8).
-    .map(c => ({ c, at: c.urgent ? c.at : pushTimeFor(c.at, qs, qe) }))
+    // r213 §122.91 each alert sounds when its message arrives: no quiet hours (the phone's own settings
+    // silence it). Planned messages already keep to the staff's working day.
+    .map(c => ({ c, at: c.at }))
     // An alert that would sound after the card's deadline is pointless.
     .filter(({ c, at }) => at > nowMs - 60 * 1000 && !(Number.isFinite(c.expiresAtMs) && at >= c.expiresAtMs))
     .map(({ c, at }) => ({
@@ -2638,19 +2645,17 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
 /**
  * gameReminders(state, nowMs, ahead) — §99 a push 30 minutes before each of our next
  * first pitches (spring, season and postseason alike), so the GM can catch up
- * on the inbox before the game. A push only, never an inbox card; none inside
- * quiet hours (moved later it would land after first pitch); off in Settings.
+ * on the inbox before the game. A push only, never an inbox card; off in Settings.
  * r138 none for a game the look-ahead knows is already called off by then.
  */
 export function gameReminders(state, nowMs = clockNow(), ahead = null) {
   if (state?.push?.gameReminder === false || !state?.userTeam) return [];
-  const qs = state.push?.quietStart, qe = state.push?.quietEnd;
   const out = [];
   for (const g of (state.schedule || []).slice(state.currentGameIndex || 0)) {
     if (out.length >= GAME_REMINDER.ahead) break;
     if (!g || g._committed || !Number.isFinite(g.gameTime)) continue;
     const at = g.gameTime - GAME_REMINDER.leadMs;
-    if (at <= nowMs - 60 * 1000 || pushTimeFor(at, qs, qe) !== at) continue;
+    if (at <= nowMs - 60 * 1000) continue;
     if (reminderMoot(ahead, g.gameTime, at)) continue;
     const opp = g.opponent || g.opp || 'today\'s opponent';
     out.push({
@@ -2793,7 +2798,7 @@ export function scheduleFirstDay(context) {
   if (!first?.gameTime) return [];
   const r = dice(diceSeed(st), 'first-day');
   const pick = (xs) => xs[Math.floor(r() * xs.length)];
-  const quiet = { quietStart: st.push?.quietStart, quietEnd: st.push?.quietEnd };
+  const quiet = STAFF_QUIET;   // r213 §122.91
   const plan = firstDayTimes(now, first.gameTime, quiet, r);
   // Which cards: one version per core slot (in order of importance), then the secondary, shuffled.
   const core = CORE_SLOTS.slice(0, plan.core).map(slot => pick(FIRST_DAY_CORE[slot]));
@@ -2833,6 +2838,31 @@ export function scheduleFirstDay(context) {
   return parked;
 }
 
+/**
+ * r213 §122.91 An emergency in the night, at its moment: which one (from the club as it stands), written now,
+ * delivered now, due by morning (and before first pitch). If it goes unanswered, the staff handle it — and
+ * whether that goes well or badly is settled now (its own dice), so the look-ahead foresees it exactly.
+ * Returns the card, or null (nothing fits, or it can't be written).
+ */
+export function deliverEmergency(atMs, context = {}) {
+  const st = StateManager.get();
+  const r = dice(diceSeed(st), 'emergency', st.seasonNum || 1, atMs);
+  const def = pickEmergency(st, atMs, r);
+  if (!def) return null;
+  const bad = def._staffBad && r() < def._staffBad.p;
+  const inst = _createInstance({ ...def, _expireMsg: bad ? def._staffBad.msg : def._staffGood }, context || {}, st);
+  if (!inst) return null;
+  const card = { ...inst, type: 'urgent', _urgent: true, _emergency: true, _emergencyBad: bad ? def._staffBad.effect : null,
+                 expiresAtMs: answerBy(st, atMs), _rosterKey: `emergency:${st.seasonNum || 1}:${atMs}:${def.id}` };
+  StateManager.mutate(s => {
+    s.emergencies = { ...(s.emergencies || {}), used: [...new Set([...(s.emergencies?.used || []), def.id])],
+                      situations: [...new Set([...(s.emergencies?.situations || []), def._situation])] };
+  });
+  const parked = _deliverAt(card, atMs);
+  releaseDueCards(atMs);
+  return parked;
+}
+
 /** A GM's hello, written for one club: its GM's name and the club's, the answer moving our standing with them. */
 function _gmHelloDef(st, t, def) {
   const gm = cpuGmName(st, t.id);
@@ -2851,7 +2881,7 @@ export function scheduleSpringGms(atMs = clockNow(), context = {}) {
   const season = st.seasonNum || 1;
   if (season < 2) return [];
   const r = dice(diceSeed(st), 'spring-gms', season);
-  const quiet = { quietStart: st.push?.quietStart, quietEnd: st.push?.quietEnd };
+  const quiet = STAFF_QUIET;   // r213 §122.91
   const fresh = newGms(st);
   const traded = tradedWith(st);
   const strangers = (st.leagueTeams || []).filter(t => !traded.has(t.id) && !fresh.some(f => f.id === t.id));
@@ -2997,7 +3027,7 @@ export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs 
   const [minMin, maxMin] = COMPOSE_REPLY.windows[channelId] || COMPOSE_REPLY.defaultWindow;
   let deliverAtMs = replyTime({
     nowMs, minMin, maxMin,
-    quietStart: state.push?.quietStart, quietEnd: state.push?.quietEnd,
+    ...STAFF_QUIET,   // r213 §122.91
     busy: COMPOSE_REPLY.gameWorkers.includes(channelId) ? _userGameWindows(state, nowMs) : [],
   });
   // r150 a question about something with a deadline (a trade on the table) is answered before it.
@@ -3720,7 +3750,7 @@ function _createInstance(cardDef, context, state) {
  * The player a pool card is about (§71): the first player-role token its text
  * names. Its action, its OVR effect and its withdrawal all follow that man.
  */
-const _ROLE_TOKEN = /\{(active_sp|active_bp|active_pitcher|active_hitter|active_catcher|farm_pitcher|farm_hitter|leader_player|act_hi|pl_player|active_farm)_(?:name|pos)?(?:_tr)?\}|\{(act_hi)\}/;
+const _ROLE_TOKEN = /\{(active_sp|active_bp|active_pitcher|active_hitter|active_catcher|farm_pitcher|farm_hitter|leader_player|act_hi|pl_player|active_farm)_(?:name|pos|who)?(?:_tr)?\}|\{(act_hi)\}/;
 function _cardTarget(cardDef, tokenPlayers = {}) {
   const text = [cardDef.subject, cardDef.preview, cardDef.body].filter(Boolean).join(' ');
   const m = text.match(_ROLE_TOKEN);

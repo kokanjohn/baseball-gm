@@ -13231,3 +13231,44 @@ sim-season (+1): at most one ask at the break and one at the season's end, each 
 **Checks:** check-gm-connections (new, 17); test-gm-connections-ui (new: the inbox shows "Name, Owner" / "Name, Scouting Director"; Other GMs' topics; Talk trade opens the trade screen; welcome, sent, waiting).
 
 **Fresh team:** not needed. Old messages pick up the role from the staff as it stands; the GM changes start next spring.
+
+## §122.91 — r213: no quiet hours; the staff's working day; after-hours emergencies (Step 3)
+**No quiet hours:**
+- The Settings row and its state reads are gone (the phone's own settings silence it).
+- Every alert sounds when its message arrives (`getPushSchedule`: no `pushTimeFor`). A game's news (injury, the final) goes as it happens (`gamePushes`). The 30-minute game reminder comes whatever the hour.
+- An old save's `push.quietStart/quietEnd` are left in place and ignored.
+
+**The staff's working day** (`STAFF_HOURS` 8am–10pm local; `STAFF_QUIET` for the scheduler):
+- Planned messages keep to it: the between-games pool, the first day, the GMs' hellos, Compose replies.
+- A game's messages come with the game. Real-time roster cards come when they happen.
+
+**After-hours emergencies** (`engine/Emergencies.js`, `data/cards-emergency.js`):
+- **The nights:** 2–4 a season, planned at the season's start (`_planEmergencies`: new team, each spring, and a pre-r213 save on its first tick).
+  - Each falls the night before a regular-season game of ours, between 11:30pm and 4:30am local, 8+ hours before first pitch.
+  - Nights are at least 12 of our games apart, and each has its own dice.
+- **At its moment** (a clock event, `emergency`, so the look-ahead foresees it and it pushes): `CardEngine.deliverEmergency` picks one that fits.
+  - Our next game home or away (`_needs`).
+  - A situation not used this season, and a version not seen before until the bank runs out.
+  - It's written from the club as it stands, delivered urgent, and due by morning: 7 hours later, and 2+ hours before first pitch.
+- **Slept through:** the staff handle it their way (`autoResolve`, and its action — "go, take the time", "keep them away" — for emergencies even on a yes default).
+  - Whether that goes badly is settled when it comes (`_staffBad.p`, its own dice): the extra effects, and the staff's own words after the fact ("No answer, so I …", `expireMsg`).
+  - Answered, the choice does what it says.
+- **The bank:** 14 versions across 9 situations.
+  - Labor (a starter, or a regular).
+  - Storm damage before a home game (the tarp, a light tower).
+  - A player sick (a stomach bug, the ER).
+  - A minor car accident (the manager, or Media Relations).
+  - A road flight cancelled, or grounded at the gate.
+  - A family emergency (a regular, or a starter).
+  - A scene at a bar.
+  - A burst pipe in the home clubhouse.
+- A new token, `{x_who}`: a player's name without the pitcher's hand ("Kaufman's car accident", not "Kaufman (R)'s"). `_ROLE_TOKEN` accepts it for the target.
+
+**Checks:**
+- check-emergencies (new, 14): no quiet hours (11:40pm message, night-game reminder); the nights (count, window, spread, 2/3/4 over many seasons); one comes (moment, urgent, due, fits, voice); every version answered yes, no, and slept through does what it says (actions, no raw tokens); slept through sometimes goes badly in the staff's words; variety over five seasons.
+- sim-season: emergencies came, each at night, no situation twice. Its quiet-hours checks are now staff-hours checks, plus "each alert sounds when its message arrives".
+- check-game-pushes: the crew's word at 9pm sounds at 9pm, urgent or not.
+- sim-season's staff-hours check leaves out a game's own messages (in-game and pregame come with the game; a rain-delayed game ran to 3am).
+- test-push-settings-ui: no Quiet Hours row.
+
+**Fresh team:** not needed. A current save plans this season's remaining emergency nights on its first tick.

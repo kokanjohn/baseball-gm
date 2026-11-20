@@ -35,7 +35,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r212';
+export const APP_VERSION = 'tfo-v2-r213';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -1285,12 +1285,8 @@ function _refreshSettingsSwatches() {
   // ── Notifications ─────────────────────────────────────────
   _refreshNotifStatus();
 
-  // ── Quiet hours ───────────────────────────────────────────
-  const qStart = document.getElementById('quiet-start');
-  const qEnd   = document.getElementById('quiet-end');
+  // r213 §122.91 no quiet hours: the phone's own settings silence it; the staff keep their working day.
   const _push = StateManager.get()?.push || {};
-  if (qStart) qStart.value = _push.quietStart || '22:00';
-  if (qEnd)   qEnd.value   = _push.quietEnd   || '08:00';
   const gr = document.getElementById('game-reminder-toggle');
   if (gr) gr.checked = _push.gameReminder !== false;   // §99 on unless turned off
   // r138 §120 each kind of push: on unless turned off.
@@ -1349,13 +1345,6 @@ function _initSettingsPickers() {
   document.getElementById('notif-toggle')?.addEventListener('change', _toggleNotifications);
   document.getElementById('notif-test-btn')?.addEventListener('click', _sendTestNotification);
 
-  // Quiet hours live in state.push (§61) — the card scheduler reads them there.
-  const _setQuiet = (key, value) => {
-    if (!value || !StateManager.get()) return;
-    StateManager.mutate(s => { s.push = { ...(s.push || {}), [key]: value }; });
-  };
-  document.getElementById('quiet-start')?.addEventListener('change', (e) => _setQuiet('quietStart', e.target.value));
-  document.getElementById('quiet-end')?.addEventListener('change', (e) => _setQuiet('quietEnd', e.target.value));
   // §99 the 30-minute game reminder (a push, never an inbox card).
   document.getElementById('game-reminder-toggle')?.addEventListener('change', (e) => {
     if (!StateManager.get()) return;

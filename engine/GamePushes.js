@@ -17,14 +17,12 @@
  * look-ahead runs the real engine on the same dice. Anything the GM changes
  * changes the look-ahead, and the app re-sends the schedule (ui/PushClient.js).
  *
- * Quiet hours: an injury and the final still matter in the morning, so they
- * wait for quiet hours to end (like the inbox's alerts). (The weather's
- * messages near game time get through them: CardEngine's urgent rule.)
+ * r213 §122.91 no quiet hours: each push goes at its moment (the phone's own
+ * settings silence it).
  *
  * Pure: state and a look-ahead in, items out. No StateManager.
  */
 
-import { pushTimeFor } from './CardScheduler.js';
 
 /** The kinds a GM can turn off, as Settings shows them (and the inbox's). */
 export const PUSH_ALERTS = Object.freeze({
@@ -52,19 +50,16 @@ const WHY_WORD = { lightning: 'storms', snow: 'snow', rain: 'rain', 'wet field':
  */
 export function gamePushes(state, L, nowMs) {
   if (!L || !state?.userTeam || L.isAllStar) return [];
-  const qs = state.push?.quietStart, qe = state.push?.quietEnd;
   const us = state.userTeam.nickname || state.userTeam.name || 'We';
   const oppTeam = (state.leagueTeams || []).find(t => t.name === L.opponent);
   const them = oppTeam?.nickname || String(L.opponent || '').split(' ').pop() || 'Them';
   const match = `${L.isHome ? 'vs' : '@'} ${L.opponent}`;
   const key = `g:${L.gameTime}`;
   const out = [];
-  // live: sent only as it happens; later: waits out quiet hours.
-  const add = (kind, at, id, title, body, { tag = id, live = false } = {}) => {
+  // r213 §122.91 sent as it happens, any hour (the phone's own settings silence it).
+  const add = (kind, at, id, title, body, { tag = id } = {}) => {
     if (!Number.isFinite(at) || !alertOn(state, kind)) return;
-    const when = pushTimeFor(at, qs, qe);
-    if (live && when !== at) return;   // news only as it happens
-    out.push({ id, deliverAt: when, title, body, tag, kind });
+    out.push({ id, deliverAt: at, title, body, tag, kind });
   };
 
   // ── Called off before it started: no game (§122.58 its messages say so) ──
