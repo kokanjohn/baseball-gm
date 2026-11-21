@@ -1424,6 +1424,9 @@ export const RETIREMENT_SOFT_ODDS = 0.6; // the share of those who decide to ret
 export const RETIRE_PLAN = Object.freeze({
   tellGames: [10, 50], lateGames: 3,
   oneMore: { base: 0.5, rel: 0.2, old: -0.15, poor: -0.10 },
+  // r223 the scouts asked about another club's player or a free agent (35+ next season): right this often, by the
+  // director (40 → 90 quality), the same answer all season
+  scout: { worst: 0.70, best: 0.90 }, askAge: 35,
 });
 
 // ─────────────────────────────────────────────────────────────

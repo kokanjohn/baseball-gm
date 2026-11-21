@@ -30,6 +30,7 @@ import { PROMOTIONS, FIELD_CARE, FA_WATCH } from '../data/constants.js';   // r1
 import { drainageAt, drainageLevel, prepCostK } from './FieldCare.js';   // r170
 import { cutBy } from './OffseasonEngine.js';   // r200
 import { watching } from './FaWatch.js';   // r204 §122.82
+import * as Retirement from './Retirement.js';   // r223 §122.102
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -974,7 +975,7 @@ const TOPIC_LABELS = {
   bc_tactics: 'the running game', pc_bullpen: 'the bullpen', pc_roles: 'the bullpen roles', tix_attendance: 'attendance',
   tix_promo: 'a promotion', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
-  hc_work: 'the work', pc_work: 'the work', bc_defense: 'the glove work', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
+  sc_retire: 'a player\'s plans', hc_work: 'the work', pc_work: 'the work', bc_defense: 'the glove work', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
 };
 
 
@@ -1533,6 +1534,43 @@ W.doc_health = (f, r, who, arg) => {
   else if (read.age >= 32) out.push(`At ${read.age}, the risk starts to creep up, but nothing unusual yet.`);
   if (read.away?.reason === 'training') out.push(`${name} is away for development work right now.`);
   return { body: out, memo: { playerId: p.id }, topic: `${name}'s health` };
+};
+
+/**
+ * r223 §122.102 Is a veteran on another club (or a free agent) retiring after the season? The scouts ask around and
+ * answer — right most of the time (the director), the same answer all season. The wording never tells which.
+ */
+W.sc_retire = (f, r, who, arg) => {
+  const st = f.state;
+  const p = arg?.playerId ? st.players[arg.playerId] : null;
+  if (!p) return { body: ['I couldn\'t find who you meant.'], memo: {}, topic: 'that player' };
+  const n = p.name, topic = `${n}'s plans`;
+  if (p.group === 'retired') return { body: [`${n} has already retired.`], memo: { playerId: p.id }, topic };
+  if (p.teamId === 'user') return { body: [`${n} is ours now, so that's a question for the manager.`], memo: { playerId: p.id }, topic };
+  const club = (st.leagueTeams || []).find(t => t.id === p.teamId);
+  const around = club ? `around the ${club.name}` : `who know ${n}`;
+  const says = Retirement.scoutSays(st, p);
+  const pick = (xs) => xs[Math.floor(r() * xs.length)];
+  const out = [];
+  if (says.retiring) {
+    out.push(pick([
+      `Their agent says ${n} has told the family this is the last season.`,
+      `I'm hearing ${n} is done after this year. Two people ${around} told me the same thing.`,
+      `${n} hasn't said it publicly, but one of our area scouts talked to a coach who knows ${n} well: this is the last one.`,
+      `From what I can gather, ${n} plans to retire after the season.`,
+    ]));
+    const left = Math.max(0, (p.contractExpiry ?? (st.seasonNum || 1) + 1) - (st.seasonNum || 1) - 1);
+    if (left) out.push(`That would mean walking away from ${left === 1 ? 'the last year' : `the last ${num(left)} years`} of the deal.`);
+  } else {
+    out.push(pick([
+      `Their agent says ${n} wants to play next year and is already planning the winter workouts.`,
+      club ? `I'm hearing ${n} has no plans to retire. People around the ${club.name} expect ${n} back.` : `I'm hearing ${n} has no plans to retire and wants a job for next season.`,
+      `${n} told a reporter they feel as good as they have in years. Nobody I talked to thinks ${n} is done.`,
+      `From what I can gather, ${n} plans to keep playing.`,
+    ]));
+  }
+  if (r() < 0.35) out.push(pick(['Players change their minds, and agents say what helps their clients.', 'I\'d put some weight on it, not all of it.', 'That\'s the best read I can get without asking the player.']));
+  return { body: out, memo: { playerId: p.id, says: says.retiring }, topic };
 };
 
 /** r212 §122.90 we welcomed a new GM first: the GM writes back, warmly — the line's open. */

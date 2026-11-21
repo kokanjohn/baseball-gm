@@ -21,6 +21,7 @@
  * Section references: Section 9 (trade system), Section 22 (GM relationship)
  */
 
+import { tradeYearsLeft } from './Retirement.js';   // r223 §122.102
 import {
   PLAYER_GROUP,
   PHASE,
@@ -63,7 +64,7 @@ export function evaluateTrade(offer, state) {
   const outgoingPlayers = outgoingIds.map(id => state.players[id]).filter(Boolean);
 
   const incomingValue  = incomingPlayers.reduce((sum, p) => sum + _playerValue(p, state), 0);
-  const outgoingValue  = outgoingPlayers.reduce((sum, p) => sum + _playerValue(p, state), 0);
+  const outgoingValue  = outgoingPlayers.reduce((sum, p) => sum + _playerValue(p, state, 'user'), 0);   // (r223 ours: what we know)
   // §85 money is value too: cash they send (or we send), salary they keep
   // paying on players we get (or we keep paying on players we send).
   const ret = offer.retain || {}, rem = remainingShare(state);
@@ -112,7 +113,7 @@ export function evaluateTrade(offer, state) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * _playerValue(player, state)
+ * _playerValue(player, state, byTeamId)
  * Calculates a single composite value score for a player.
  * Higher = more valuable. Used for trade fairness comparison only —
  * not displayed to the user (they see OVR, salary, contract years).
@@ -128,12 +129,13 @@ export function evaluateTrade(offer, state) {
  * @param {Object} state
  * @returns {Number} value score
  */
-function _playerValue(player, state) {
+function _playerValue(player, state, byTeamId = null) {
   if (!player) return 0;
 
   const ovr          = player.ovr || 55;
   const age          = computeAge(player.dob, baseballYear(state));
-  const yearsLeft    = yearsAfterThis(player, state);   // §94 seasons covered after this one
+  // §94 seasons covered after this one (r223 §122.102 none for a club's own player it knows is retiring)
+  const yearsLeft    = byTeamId ? tradeYearsLeft(state, player, byTeamId) : yearsAfterThis(player, state);
   const salary       = player.contractSalary || 0;
 
   // Base OVR value — §90 measured above replacement level (the player any
@@ -528,7 +530,7 @@ function _isKey(p, state, teamId) {
  * would play for it (receiving) or is a piece it can spare (giving).
  */
 export function valueToClub(p, state, teamId, receiving) {
-  let v = _playerValue(p, state);
+  let v = _playerValue(p, state, receiving ? null : teamId);
   const mode = clubMode(state, teamId);
   const age = computeAge(p.dob, baseballYear(state));
   const rental = _isRentalPlayer(p, state);

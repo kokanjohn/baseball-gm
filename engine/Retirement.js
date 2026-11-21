@@ -22,6 +22,11 @@
  *   oneMoreOdds(state, p)        the chance they say yes to one more year
  *   stayOneMore(draft, p)        they said yes: the plan is cancelled
  *   gamesPlayed(state)           our regular-season games played this season
+ *   askable(state)               r223 who the scouts can be asked about: other clubs' players and free agents 35+ next season
+ *   scoutAccuracy(state)         r223 how often the scouts' answer is right (by the director)
+ *   scoutSays(state, p)          r223 what the scouts say: { retiring, right } (the same all season)
+ *   tradeYearsLeft(state, p, by) r223 seasons after this one a club counts when valuing a player (none for a player
+ *                                of its own it knows is retiring)
  *
  * State: p.retireIntent = { season, retiring, tell, told?, stayed? }.
  * PURE: no StateManager.
@@ -30,6 +35,7 @@ import { RETIREMENT_AGE_HARD, RETIREMENT_AGE_SOFT, RETIREMENT_OVR_SOFT, RETIREME
          PLAYER_GROUP } from '../data/constants.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
 import { dice, diceSeed, randInt } from './Dice.js';
+import { qualityOf } from './CoachEngine.js';
 
 const isP = (p) => p?.pos === 'SP' || p?.pos === 'RP';
 const OFF = new Set([PLAYER_GROUP.RETIRED, PLAYER_GROUP.DEPARTED]);
@@ -103,4 +109,40 @@ export function stayOneMore(draft, p) {
   const plan = planFor(draft, p);
   p.retireIntent = { ...plan, retiring: false, stayed: true };
   delete p._retiringAfter;
+}
+
+// ─────────────────────────────────────────────────────────────
+// r223 §122.102 ASKING THE SCOUTS; WHAT A CLUB KNOWS IN A TRADE
+// ─────────────────────────────────────────────────────────────
+
+/** Who the scouts can be asked about: another club's player or a free agent, 35 or older next season. */
+export function askable(st) {
+  const clubs = new Set((st.leagueTeams || []).map(t => t.id));
+  const yr = baseballYear(st) + 1;
+  return Object.values(st.players || {}).filter(p => p && !OFF.has(p.group) && p.teamId !== 'user'
+    && (clubs.has(p.teamId) || (!p.teamId && p.group === PLAYER_GROUP.FREE_AGENT))
+    && computeAge(p.dob, yr) >= RETIRE_PLAN.askAge);
+}
+
+/** How often the scouts' answer is right: 70% (a director of 40) to 90% (90). */
+export function scoutAccuracy(st) {
+  const q = qualityOf(st.userTeam?.coachingStaff?.scoutingDirector);
+  const t = Math.max(0, Math.min(1, (q - 40) / 50));
+  return RETIRE_PLAN.scout.worst + (RETIRE_PLAN.scout.best - RETIRE_PLAN.scout.worst) * t;
+}
+
+/** What the scouts say about a player's plan: right or wrong on the player's own dice, the same all season. */
+export function scoutSays(st, p) {
+  const truth = isRetiring(st, p);
+  const right = dice(diceSeed(st), 'retire-scout', p.id, st.seasonNum || 1)() < scoutAccuracy(st);
+  return { retiring: right ? truth : !truth, right };
+}
+
+/** Seasons after this one a club counts when valuing a player: none for one of its own it knows is retiring. */
+export function tradeYearsLeft(st, p, byTeamId) {
+  const s = st.seasonNum || 1;
+  const left = Math.max(0, (p?.contractExpiry ?? s + 1) - s - 1);
+  if (!left || !byTeamId || p.teamId !== byTeamId) return left;
+  const knows = byTeamId === 'user' ? knownRetiring(st, p) : isRetiring(st, p);
+  return knows ? 0 : left;
 }

@@ -37,10 +37,12 @@ import { dealOfCard } from '../../engine/TradeEngine.js';   // r198 the deal tab
 import * as FaWatch from '../../engine/FaWatch.js';   // r204 §122.82
 import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatK } from '../../engine/CardTokens.js';
-import { FA_WATCH } from '../../data/constants.js';
+import { FA_WATCH, PHASE } from '../../data/constants.js';
 import { askScoutingButton, askScouting } from '../components/AskScouting.js';   // r208 §122.86
 import { senderLabel } from '../../engine/Senders.js';   // r212 §122.90
 import { newGms, gmsToWelcome } from '../../engine/FirstDay.js';
+import { askable as retireAskable } from '../../engine/Retirement.js';   // r223 §122.102
+import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -166,6 +168,7 @@ const COMPOSE_CHANNELS = [
       { id: 'sc_trade',      label: 'A trade on the table',     desc: 'The director\'s read on a deal: on the field, the value, a counter, the payroll', deal: true },   // r202 §122.79 (the manager's folded in)
       { id: 'sc_shop',       label: 'What could we get for…?',  desc: 'Pick one of our players: the director calls the clubs that could use them', player: true },
       { id: 'sc_program',    label: 'A development program',    desc: 'Send a player to our complex for focused work on one skill', player: 'any', skill: true },
+      { id: 'sc_retire',     label: 'Is … retiring?',           desc: 'Pick a veteran on another club, or a free agent', player: 'league' },   // r223 §122.102
     ],
   },
   // Low priority — event-driven
@@ -688,6 +691,15 @@ function _topicState(t, state) {
     }
     return { deals: open };
   }
+  // r223 §122.102 a veteran on another club, or a free agent (35+ next season): not one already asked about and
+  // waiting; nothing to find out in the winter (next season's plans come in the spring).
+  if (t.player === 'league') {
+    if (state.phase === PHASE.OFFSEASON) return { none: 'Ask again in the spring' };
+    const asked = new Set((state.scheduledCards || []).filter(c => c.isCompose && c._composeTopic === t.id).map(c => c._composeArg?.playerId));
+    const ps = retireAskable(state).filter(p => !asked.has(p.id));
+    if (!ps.length) return asked.size ? { waiting: (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id) } : { none: 'No veteran to ask about' };
+    return { players: ps };
+  }
   // r159 a player topic (work, a day off, health): any of ours it fits, not one already asked about.
   if (t.player && t.player !== true) {
     const asked = new Set((state.scheduledCards || []).filter(c => c.isCompose && c._composeTopic === t.id).map(c => c._composeArg?.playerId));
@@ -775,11 +787,20 @@ function _composeTopics(state, ch) {
     const opt = (p) => `<option value="${p.id}"${_composeDeal === p.id ? ' selected' : ''}>${_escape(p.name)} — ${_escape(posLabel(p))}, OVR ${p.ovr}</option>`;
     const isP = (p) => p.pos === 'SP' || p.pos === 'RP';
     const hit = st.players ? st.players.filter(p => !isP(p)).sort(byOvr) : [], arm = st.players ? st.players.filter(isP).sort(byOvr) : [];
+    // r223 §122.102 the league's veterans: free agents first, then by club (with the age next season)
+    const yr = baseballYear(state);
+    const optAge = (p) => `<option value="${p.id}"${_composeDeal === p.id ? ' selected' : ''}>${_escape(p.name)} — ${_escape(posLabel(p))}, OVR ${p.ovr}, age ${computeAge(p.dob, yr)}</option>`;
+    const groups = t.player === 'league' && st.players ? [
+      ['Free agents', st.players.filter(p => !p.teamId)],
+      ...(state.leagueTeams || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))
+        .map(c => [c.name, st.players.filter(p => p.teamId === c.id)]),
+    ].filter(([, ps]) => ps.length) : null;
     const players = isSel && !off && st.players ? `<div class="compose-h compose-deal-h">Which player?</div>
       <select class="compose-player-select" id="compose-player" aria-label="Which player">
         <option value=""${_composeDeal ? '' : ' selected'}>Choose a player</option>
+        ${groups ? groups.map(([label, ps]) => `<optgroup label="${_escape(label)}">${ps.sort(byOvr).map(optAge).join('')}</optgroup>`).join('') : `
         ${hit.length ? `<optgroup label="Hitters">${hit.map(opt).join('')}</optgroup>` : ''}
-        ${arm.length ? `<optgroup label="Pitchers">${arm.map(opt).join('')}</optgroup>` : ''}
+        ${arm.length ? `<optgroup label="Pitchers">${arm.map(opt).join('')}</optgroup>` : ''}`}
       </select>` : '';
     // r159 a work topic, a player picked: which skill (with where it stands now).
     const pick = isSel && !off && t.skill && _composeDeal ? state.players[_composeDeal] : null;
@@ -1118,7 +1139,8 @@ async function _sendCompose(topicId, channelId, state) {
   const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`,
                        sc_program: (p) => `A development program for ${p.name}`, mgr_rest: (p) => `A day off for ${p.name}`,
                        doc_health: (p) => `${p.name}'s health`, bc_teach: (p) => `Teach ${p.name} ${skill}`,
-                       pc_stretch: (p) => `Stretch ${p.name} out`, bc_defense: (p) => `Work with ${p.name} on defense`, pc_roles: (p) => `${p.name}'s role` };
+                       pc_stretch: (p) => `Stretch ${p.name} out`, bc_defense: (p) => `Work with ${p.name} on defense`, pc_roles: (p) => `${p.name}'s role`,
+                       sc_retire: (p) => `Is ${p.name} retiring?` };
 
   // Record cooldown immediately
   if (!topic?.deal && !topic?.player && !topic?.looks) StateManager.mutate(s => {

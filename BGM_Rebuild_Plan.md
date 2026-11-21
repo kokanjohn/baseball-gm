@@ -13768,3 +13768,39 @@ In the sims (2 seasons, seed 1) these ran from start to finish: a veteran's full
 - check-agent-ask, check-card-pools, check-message-voice, check-promises, check-callbacks, check-situations, sim-season and multi-season pass.
 
 **Fresh team:** not needed. A current save settles every player's plan for this season on its first tick, using today's ratings. Players past their tell game are known at once; ours get the manager's word only if the tell game was within the last 3 games.
+
+## §122.102 — r223: asking the scouts who's retiring; what a club knows in a trade
+### The user's decisions (§122.101)
+A Compose topic for Scouting to find out whether a veteran on another club, or a free agent, is retiring after the season. The answer isn't always right.
+
+### Compose: Scouting → "Is … retiring?" (`sc_retire`, `player: 'league'`)
+- **Who can be asked about** (`Retirement.askable`): another club's player or a free agent, 35 or older next season (`RETIRE_PLAN.askAge`). Nobody younger can retire.
+- **The picker:** free agents first, then each club, best first, each as "Name — POS, OVR x, age y".
+- **When:** not in the offseason ("Ask again in the spring"); next season's plans are settled in the spring. A player with a reply still on its way isn't listed again.
+- **The reply** comes back later like other Compose replies, from the scouting director, subject "Re: Is X retiring?".
+- **What the scouts say** (`scoutSays`):
+  - Right with odds set by the director (`scoutAccuracy`): 70% at quality 40, 90% at 90 (`RETIRE_PLAN.scout`); about 80% for most directors.
+  - When it's wrong, it says the opposite.
+  - The dice are the player's own (`retire-scout`, id, season), so asking again this season gets the same answer.
+- **The words** come from four versions each way (an agent, two people around the club, a coach who knows the player, "from what I can gather"). When the answer is retiring and the deal has years left, it adds: "That would mean walking away from the last year of the deal." About a third of replies add a hedge ("I'd put some weight on it, not all of it"). None of it depends on whether the answer is right.
+
+### Trade value (`TradeEngine._playerValue(p, state, byTeamId)`, `Retirement.tradeYearsLeft`)
+- **A club valuing its own player** (`valueToClub`, giving) counts a retiring player's years after this season as none, valuing them like a rental.
+- **A club getting the player** doesn't know, and values the years as before.
+- **Ours, in the user-side read** (`evaluateTrade`, outgoing): the years count as none only once we know (`knownRetiring`).
+
+### Checks
+- **check-retirement** (now 50):
+  - Who can be asked about.
+  - 70%/90% by the director, and about 80% over the league at 65.
+  - Right means the truth; the same answer twice.
+  - A reply for each case (says retiring or not; right or wrong) reads right, says what the scouts read, and gives nothing away.
+  - Trade value: their own retiring player is worth less to the club that has them, unchanged to one getting them; ours only once we know.
+- **test-retire-ui** (new; dark and light):
+  - r222's card line for our player who told us, and none for one who isn't retiring.
+  - The picker's groups.
+  - Send waits for a player.
+  - Sent and waiting; the reply's subject and sender.
+- check-arcs, check-compose-replies, check-scouting-director, check-trade-advice, check-message-voice, test-compose-ui, sim-season and multi-season pass.
+
+**Fresh team:** not needed.

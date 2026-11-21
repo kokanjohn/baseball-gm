@@ -8,6 +8,9 @@
  *     telling their old club is known without a word; the card line (knownRetiring);
  *   - the routine extension messages skip a player planning to retire; the arc's one more year (both answers; with
  *     years left, no new deal); the odds move with how they feel about the GM and with age; voice.
+ *   - r223: who the scouts can be asked about; right about as often as the director is good (70–90%), the same
+ *     answer all season, the wording the same either way; voice; a club's own retiring player counts no years
+ *     in a trade (ours only once we know), another club's still does.
  */
 import { clock, seedRandom } from './shims.js';
 import * as SM from '../../store/StateManager.js';
@@ -16,6 +19,8 @@ import * as CE from '../../engine/CardEngine.js';
 import * as Offseason from '../../engine/OffseasonEngine.js';
 import * as Retirement from '../../engine/Retirement.js';
 import { CARD_ACTIONS } from '../../engine/CardActions.js';
+import { writeComposeReply } from '../../engine/ComposeReplies.js';
+import { valueToClub, evaluateTrade } from '../../engine/TradeEngine.js';
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
 import { senderLabel } from '../../engine/Senders.js';
 import { voiceProblems } from './voice-rules.mjs';
@@ -199,6 +204,80 @@ console.log('\nExtensions');
     check(`the odds: 50% at neutral, 36 (${at(50, 36)})`, Math.abs(at(50, 36) - 0.5) < 1e-9);
     check(`…higher when they like the GM (${at(100, 36).toFixed(2)}), lower when they don't (${at(0, 36).toFixed(2)})`, at(100, 36) > 0.65 && at(0, 36) < 0.35);
     check(`…lower at 38 or older (${at(50, 38).toFixed(2)})`, at(50, 38) < 0.4);
+  });
+}
+
+console.log('\nAsking the scouts (r223)');
+{
+  SM.speculate(() => {
+    after(40);
+    const yr = baseballYear(S()) + 1;
+    const list = Retirement.askable(S());
+    const clubs = new Set(S().leagueTeams.map(t => t.id));
+    check(`who can be asked about: other clubs' players and free agents, 35+ next season (${list.length})`,
+      list.length > 0 && list.every(p => p.teamId !== 'user' && (clubs.has(p.teamId) || !p.teamId) && computeAge(p.dob, yr) >= 35));
+    check('…none of ours', !list.some(p => p.teamId === 'user'));
+    const sd = () => S().userTeam.coachingStaff.scoutingDirector;
+    SM.mutate(s => { s.userTeam.coachingStaff.scoutingDirector.quality = 40; });
+    const lo = Retirement.scoutAccuracy(S());
+    SM.mutate(s => { s.userTeam.coachingStaff.scoutingDirector.quality = 90; });
+    const hi = Retirement.scoutAccuracy(S());
+    check(`right 70% with a director of 40, 90% with 90 (${lo.toFixed(2)}, ${hi.toFixed(2)})`, Math.abs(lo - 0.7) < 1e-9 && Math.abs(hi - 0.9) < 1e-9);
+    SM.mutate(s => { s.userTeam.coachingStaff.scoutingDirector.quality = 65; });
+    // every player in the league (their plans as they are), as if each could be asked
+    const all = Object.values(S().players).filter(p => p && p.teamId !== 'user' && ![PLAYER_GROUP.RETIRED, PLAYER_GROUP.DEPARTED].includes(p.group));
+    const reads = all.map(p => ({ p, ...Retirement.scoutSays(S(), p) }));
+    const rate = reads.filter(x => x.right).length / reads.length;
+    check(`right about 80% of the time with a director of 65 (${Math.round(rate * 100)}% of ${reads.length})`, rate > 0.74 && rate < 0.86);
+    check('…the answer matches the truth exactly when right', reads.every(x => x.retiring === (x.right ? Retirement.isRetiring(S(), x.p) : !Retirement.isRetiring(S(), x.p))));
+    check('the same answer when asked again this season', reads.every(x => Retirement.scoutSays(S(), x.p).retiring === x.retiring));
+
+    // the reply, for a veteran they say is retiring and one they say isn't (right and wrong both)
+    const pickWhere = (says, right) => list.find(p => { const x = Retirement.scoutSays(S(), p); return x.retiring === says && x.right === right; })
+      || (() => { const p = list.find(q => !Retirement.scoutSays(S(), q).right === !right); return p; })();
+    const kinds = [];
+    for (const said of [true, false]) for (const right of [true, false]) {
+      // make one: set the truth so the scouts' (fixed) read lands on this case
+      const p = list.find(q => Retirement.scoutSays(S(), q).right === right);
+      if (!p) continue;
+      SM.mutate(s => { s.players[p.id].retireIntent = { season: s.seasonNum || 1, retiring: right ? said : !said, tell: 10 }; });
+      const x = Retirement.scoutSays(S(), S().players[p.id]);
+      const rep = writeComposeReply(S(), { topicId: 'sc_retire', channelId: 'scouting', atMs: clock.get(), arg: { playerId: p.id } });
+      kinds.push({ said: x.retiring, right: x.right, rep });
+      console.log(`    (${x.retiring ? 'says retiring' : 'says playing on'}, ${x.right ? 'right' : 'wrong'}) ${rep?.subject}\n      ${rep?.body.replace(/\n\n/g, '\n      ')}`);
+    }
+    check('a reply for each case (says retiring / playing on; right / wrong)', kinds.length === 4 && kinds.every(k => k.rep));
+    check('…it says what the scouts read', kinds.every(k => k.said ? /retire after|last season|done after|the last one/.test(k.rep.body) : /keep playing|play next year|no plans to retire|isn't done|is done\./.test(k.rep.body) || !/retire after|last season|done after this|the last one/.test(k.rep.body)));
+    check('…and reads right', kinds.every(k => readsRight({ ...k.rep, sender: k.rep.sender })), kinds.map(k => voiceProblems(k.rep, personOf).join('; ')).join(' | '));
+    check('…nothing in it gives away whether it\'s right', kinds.every(k => !/\b(wrong|mistaken|actually|in truth)\b/i.test(k.rep.body)));
+  });
+}
+
+console.log('\nTrade value (r223)');
+{
+  SM.speculate(() => {
+    after(40);
+    const other = S().leagueTeams[0];
+    const their = other.rosterIds.map(id => S().players[id]).find(p => !['SP', 'RP'].includes(p.pos));
+    const ours = S().userTeam.rosterIds.map(id => S().players[id]).find(p => !['SP', 'RP'].includes(p.pos));
+    SM.mutate(s => {
+      for (const p of [s.players[their.id], s.players[ours.id]]) { p.contractExpiry = (s.seasonNum || 1) + 3; p.retireIntent = { season: s.seasonNum || 1, retiring: false, tell: 60 }; }
+    });
+    const giveBefore = valueToClub(S().players[their.id], S(), other.id, false);
+    const getBefore = valueToClub(S().players[their.id], S(), 'x', true);
+    SM.mutate(s => { s.players[their.id].retireIntent.retiring = true; });
+    const giveAfter = valueToClub(S().players[their.id], S(), other.id, false);
+    const getAfter = valueToClub(S().players[their.id], S(), 'x', true);
+    check(`their own retiring player is worth less to the club that has them (${giveBefore.toFixed(1)} → ${giveAfter.toFixed(1)})`, giveAfter < giveBefore);
+    check('…to a club getting them, unchanged (it doesn\'t know)', Math.abs(getAfter - getBefore) < 1e-9);
+    check('their years: none to them, all to us', Retirement.tradeYearsLeft(S(), S().players[their.id], other.id) === 0 && Retirement.tradeYearsLeft(S(), S().players[their.id], 'user') === 2);
+    const offer = { incomingIds: [], outgoingIds: [ours.id], proposingTeamId: other.id };
+    const v0 = evaluateTrade(offer, S()).outgoingValue;
+    SM.mutate(s => { s.players[ours.id].retireIntent.retiring = true; });
+    const v1 = evaluateTrade(offer, S()).outgoingValue;
+    SM.mutate(s => { s.players[ours.id].retireIntent.told = true; });
+    const v2 = evaluateTrade(offer, S()).outgoingValue;
+    check(`ours: unchanged until we know (${v0.toFixed(1)} → ${v1.toFixed(1)}), less once we do (${v2.toFixed(1)})`, Math.abs(v1 - v0) < 1e-9 && v2 < v0);
   });
 }
 
