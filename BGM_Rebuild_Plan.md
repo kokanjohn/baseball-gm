@@ -13804,3 +13804,44 @@ A Compose topic for Scouting to find out whether a veteran on another club, or a
 - check-arcs, check-compose-replies, check-scouting-director, check-trade-advice, check-message-voice, test-compose-ui, sim-season and multi-season pass.
 
 **Fresh team:** not needed.
+
+## §122.103 — r224: the payroll, person by person
+### The user's decisions
+- The Payroll card on Team → Finances opens a breakdown, and it says so on the card: "Select to see a breakdown".
+- The breakdown shows who's paid how much and for how long, players and staff apart, highest salary first.
+- It covers the trade shares another club still pays.
+- A player of ours retiring is paid for this season only. "One more year" puts next season's pay back.
+
+### What's counted (`FinanceEngine.payrollBreakdown`, pure)
+- **The payroll is unchanged:** `payrollOf`, the players on our roster (active or on the IL).
+  - Less a share another club keeps paying this season (§85).
+  - Plus the shares we keep paying on players we traded away.
+- **Staff salaries are paid apart** (`staffAnnual`) and aren't part of the payroll figure or its target.
+- **Players**, highest paid by us first, each with:
+  - What we pay, and the position (IL marked).
+  - How long: "This season only" or "N seasons left", counted from this season.
+  - A player of ours who has told us they're retiring (`knownRetiring`): "This season only · retiring".
+  - A share another club pays: "The X pay 25% of $3.9M this season".
+  - A new deal from next season (`pendingContract`: an in-season extension, the arc's "one more year", the agent's ask): "Then: $X a year for N seasons", or "New deal from next season: …" when it replaces a deal with years left.
+- **Traded away:** each share we pay: "Now with the X · we pay 40% this season".
+- **Staff**, highest first: each with seasons left (`contractExpiry` is their last season).
+- **The sheet's header:** "$X this season · $Y committed for next season".
+  - The next-season total counts deals that run past this season, plus new deals from next season.
+  - It counts nothing for a player retiring (once we know).
+  - The trade shares end with the season, so they're left out.
+- **In the winter,** seasons count from the season about to start ("Next season only", "Deal up"), and the header gives the player salaries alone.
+- Each player opens their card.
+
+### Checks
+- **check-payroll-breakdown** (new, 18):
+  - The rows add up to the payroll; highest first; staff apart and its total.
+  - A share the other club pays (we pay the rest).
+  - A share we pay on a player traded away, and it still adds up.
+  - This season only / three seasons.
+  - Retiring: before they tell us (counted as usual); once told (this season only, nothing next season).
+  - One more year: with years left (counted again); on an expiring deal, yes (the new deal next season) and no.
+  - The winter.
+- **test-payroll-ui** (new; dark and light): the card's line; the sections; the header; the share line; the retiring line; traded away; a player opens their card.
+- check-contracts, check-deal-sheet, check-frontoffice, check-retirement, test-team-roster-ui, sim-season and multi-season pass.
+
+**Fresh team:** not needed.

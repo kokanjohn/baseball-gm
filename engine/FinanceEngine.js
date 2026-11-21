@@ -47,6 +47,7 @@ import {
   OWNER_PROFILE, OWNER_PATIENCE, OWNER_STAGE, OWNER_TRUST_FX, OWNER_ORDER_TARGET_PENALTY,
   FIN_TOLERANCE_MAX, FIN_OVERDRAFT_SHARE, FIN_BOOKS_OFFER, FIN_CPU, FIN_MIN_MOVE_K, FIN_PRICE_ELASTICITY,
 } from '../data/constants.js';
+import { knownRetiring } from './Retirement.js';   // r224 §122.103
 import { dayOf } from './PitchingEngine.js';
 import { eventRand } from './Dice.js';
 
@@ -259,6 +260,52 @@ export function payrollOf(state, teamId = 'user') {
     if (p && isPaid(p)) sum += (p.contractSalary || 0) * r.pct;
   }
   return Math.round(sum);
+}
+
+/**
+ * r224 §122.103 payrollBreakdown(state) — the user's payroll, person by person (the Finances tab's sheet).
+ *   players  everyone on the payroll, highest paid by us first: { id, name, pos, il, salary (a year), pays (what we
+ *            pay: less a share another club keeps paying this season), keptBy { teamId, pct }, left (seasons on the
+ *            deal from this one: 1 = this season only), retiring (one of ours who has told us), next { salary,
+ *            years, replaces } (a new deal from next season: an extension, the agent's ask) }
+ *   away     shares we keep paying on players we traded away, this season: { id, name, teamId, pct, pays }
+ *   staff    the coaching staff, highest paid first: { key, name, salary, left }
+ *   totals   { players (= payrollOf), staff (a year), nextSeason (players committed for next season: deals that run
+ *            past this one or start then, none for a player retiring) }
+ * In the winter the deals are counted from next season (`left` from the season about to start).
+ */
+export function payrollBreakdown(state) {
+  const u = state.userTeam;
+  const season = state.seasonNum || 1;
+  const winter = state.phase === 'OFFSEASON';
+  const from = winter ? season + 1 : season;
+  const players = [];
+  for (const id of u?.rosterIds || []) {
+    const p = state.players[id];
+    if (!(p && p.teamId === 'user' && isPaid(p))) continue;
+    const kept = p.retained && p.retained.season === season && p.retained.payerId !== 'user' ? p.retained : null;
+    const salary = p.contractSalary || 0;
+    const next = p.pendingContract ? { salary: p.pendingContract.salary, years: p.pendingContract.years, replaces: !!p.pendingContract.replaces } : null;
+    players.push({ id, name: p.name, pos: p.pos, il: p.group === PLAYER_GROUP.IL, salary,
+      pays: Math.round(salary * (1 - (kept?.pct || 0))), keptBy: kept ? { teamId: kept.payerId, pct: kept.pct } : null,
+      left: Math.max(0, (p.contractExpiry ?? season + 1) - from), retiring: !winter && knownRetiring(state, p), next });
+  }
+  players.sort((a, b) => b.pays - a.pays || b.salary - a.salary || String(a.name).localeCompare(String(b.name)));
+  const away = [];
+  for (const r of u?.finances?.retained || []) {
+    if (r.season !== season) continue;
+    const p = state.players[r.playerId];
+    if (!(p && isPaid(p))) continue;
+    away.push({ id: p.id, name: p.name, teamId: p.teamId, pct: r.pct, pays: Math.round((p.contractSalary || 0) * r.pct) });
+  }
+  away.sort((a, b) => b.pays - a.pays);
+  const staff = Object.entries(u?.coachingStaff || {}).filter(([, c]) => c && !c.vacant && c.name)
+    .map(([key, c]) => ({ key, name: c.name, salary: c.salary || 0, left: Math.max(0, (c.contractExpiry ?? season) - from + 1) }))
+    .sort((a, b) => b.salary - a.salary);
+  // next season: a new deal's salary, else this one's if it runs on (and the player isn't retiring)
+  const nextSeason = winter ? null : players.reduce((a, x) => a + (x.next ? x.next.salary : (x.left >= 2 && !x.retiring ? x.salary : 0)), 0);
+  return { players, away, staff, winter,
+           totals: { players: payrollOf(state, 'user'), staff: staffAnnual(u), nextSeason } };
 }
 
 /**

@@ -745,11 +745,12 @@ function _renderFinances(state) {
         ${order ? `<div class="fin-order">Ordered: ${formatMoney(order.amountK)} off the payroll ${(() => { const u = When.untilDay(order.dueAt, Date.now()); return u.startsWith('in ') ? u : `by ${u}`; })()}</div>` : ''}
       </div>
 
-      <div class="fin-card">
+      <button type="button" class="fin-card fin-tap" id="fin-payroll-card">
         <div class="fin-row-head"><span class="fin-label">Payroll</span><span>${formatMoney(payroll)} / ${formatMoney(target)} target</span></div>
         <div class="fin-bar"><div class="${barCls}" style="width:${pct}%"></div></div>
         <div class="fin-sub">${room > 0 ? `Ownership would approve about ${formatMoney(room)} more in salary right now.` : 'Ownership won\'t approve more salary right now.'}</div>
-      </div>
+        <div class="fin-more">Select to see a breakdown <span aria-hidden="true">›</span></div>
+      </button>
 
       <div class="fin-card">
         <div class="fin-row-head"><span class="fin-label">This season</span><span class="${inc - out < 0 ? 'fin-neg' : 'fin-pos'}">${inc - out < 0 ? '−' : '+'}${formatMoney(Math.abs(inc - out))}</span></div>
@@ -780,6 +781,8 @@ function _attachListeners(state) {
   if (fBtn) fBtn.addEventListener('click', () => { _activeTab = 'finances'; refresh(); });
   if (pBtn) pBtn.addEventListener('click', () => { _activeTab = 'players'; refresh(); });
   if (sBtn) sBtn.addEventListener('click', () => { _activeTab = 'staff';   refresh(); });
+  // r224 §122.103 the payroll card opens the breakdown.
+  document.getElementById('fin-payroll-card')?.addEventListener('click', () => _openPayrollSheet(StateManager.get()));
   // r145 a staff card opens the staff member's sheet.
   document.querySelectorAll('.staff-card-tap[data-staff]').forEach(el => {
     el.addEventListener('click', () => _openStaffSheet(StateManager.get(), el.dataset.staff));
@@ -907,6 +910,48 @@ function _doMove(playerId, key) {
 
 const STAFF_LABELS = { manager: 'Manager', pitchingCoach: 'Pitching Coach', hittingCoach: 'Hitting Coach', benchCoach: 'Bench Coach',
                        scoutingDirector: 'Scouting Director' };
+
+/**
+ * r224 §122.103 the payroll, person by person: players (what we pay, highest first; a share another club keeps
+ * paying; how long; retiring; a new deal from next season), the shares we pay on players we traded away, and
+ * the staff. A player opens their card.
+ */
+function _openPayrollSheet(state) {
+  const b = Finance.payrollBreakdown(state);
+  const club = (id) => (state.leagueTeams || []).find(t => t.id === id)?.name || 'another club';
+  const pctW = (x) => `${Math.round(x * 100)}%`;
+  const seasons = (n) => (n <= 0 ? 'Deal up' : n === 1 ? (b.winter ? 'Next season only' : 'This season only') : `${n} seasons left`);
+  const row = (name, amount, subs, attrs = '') => `
+    <div class="pay-row"${attrs}>
+      <div class="pay-main"><span class="pay-name">${name}</span><span class="pay-amt">${amount}</span></div>
+      ${subs.filter(Boolean).map(x => `<div class="pay-sub">${x}</div>`).join('')}
+    </div>`;
+  const players = b.players.map(x => row(
+    `${_escape(x.name)} <span class="pay-pos">${_escape(x.pos || '')}${x.il ? ' · IL' : ''}</span>`, formatMoney(x.pays),
+    [
+      x.retiring ? `<span class="pay-retiring">This season only · retiring</span>` : _escape(seasons(x.left)),
+      x.keptBy ? _escape(`The ${club(x.keptBy.teamId)} pay ${pctW(x.keptBy.pct)} of ${formatMoney(x.salary)} this season`) : '',
+      x.next ? _escape(`${x.next.replaces || x.left >= 2 ? 'New deal from next season' : 'Then'}: ${formatMoney(x.next.salary)} a year for ${x.next.years} season${x.next.years === 1 ? '' : 's'}`) : '',
+    ], ` data-pid="${x.id}"`)).join('');
+  const away = b.away.map(x => row(_escape(x.name), formatMoney(x.pays),
+    [_escape(`Now with the ${club(x.teamId)} · we pay ${pctW(x.pct)} this season`)])).join('');
+  const staff = b.staff.map(x => row(`${_escape(x.name)} <span class="pay-pos">${_escape(STAFF_LABELS[x.key] || '')}</span>`, formatMoney(x.salary),
+    [_escape(seasons(x.left))])).join('');
+  const awayTotal = b.away.reduce((a, x) => a + x.pays, 0);
+  const html = `<div class="pay-sheet">
+      <div class="pay-head"><span>Players</span><span>${formatMoney(b.players.reduce((a, x) => a + x.pays, 0))}</span></div>
+      ${players || '<div class="pay-sub">Nobody on the payroll.</div>'}
+      ${away ? `<div class="pay-head"><span>Traded away</span><span>${formatMoney(awayTotal)}</span></div>${away}` : ''}
+      ${staff ? `<div class="pay-head"><span>Staff</span><span>${formatMoney(b.totals.staff)}</span></div>${staff}` : ''}
+    </div>`;
+  const sub = b.winter ? `${formatMoney(b.totals.players)} in player salaries`
+    : `${formatMoney(b.totals.players)} this season · ${formatMoney(b.totals.nextSeason)} committed for next season`;
+  _showSwapSheet('Payroll', _escape(sub), html, (overlay) => {
+    overlay.querySelectorAll('.pay-row[data-pid]').forEach(el => el.addEventListener('click', () => {
+      overlay.remove(); openPlayerCard(el.dataset.pid, StateManager.get());
+    }));
+  });
+}
 
 /** r145 a staff member's sheet: rating and specialty (coaches and the scouting director), background, pay, contract, the relationship. */
 /** §122.64 the club's setting for the part of the game the manager's style is about ("Normal Hook"). */
@@ -1054,6 +1099,19 @@ function _injectCSS() {
     .fin-muted{color:var(--muted);}
     .fin-when{font-size:11px;color:var(--muted);margin-left:6px;}
     .fin-neg{color:var(--danger);} .fin-pos{color:#22C55E;}
+    .fin-tap{display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;}
+    .fin-tap:active{opacity:.75;}
+    .fin-more{margin-top:8px;font-size:12px;font-weight:600;color:var(--text);}
+    .pay-sheet{padding:0 16px 8px;}
+    .pay-head{display:flex;justify-content:space-between;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin:14px 0 4px;}
+    .pay-row{padding:8px 0;border-top:1px solid var(--border);}
+    .pay-row[data-pid]{cursor:pointer;}
+    .pay-main{display:flex;justify-content:space-between;gap:10px;font-size:14px;color:var(--text);}
+    .pay-name{font-weight:600;}
+    .pay-pos{font-size:11px;font-weight:500;color:var(--muted);margin-left:4px;}
+    .pay-amt{font-variant-numeric:tabular-nums;}
+    .pay-sub{font-size:12px;color:var(--muted);margin-top:2px;}
+    .pay-retiring{color:var(--danger);}
     .rp-role{font-size:9px;font-weight:800;letter-spacing:.5px;border-radius:4px;padding:1px 4px;
       margin-left:5px;vertical-align:middle;color:var(--muted);border:1px solid var(--border);}
     .rp-role-closer{color:#fbbf24;border-color:#fbbf24;}
