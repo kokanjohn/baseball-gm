@@ -1608,6 +1608,8 @@ function _deliverOpenSpotsCard(atMs) {
   const st = StateManager.get();
   const fillAt = managerFillAt(st);
   if (!Number.isFinite(fillAt) || managerFillsNow(st, atMs)) return null;
+  // r239 §122.118 the GM opened it after the deadline, knowingly: no message (it's filled at first pitch)
+  if (Number.isFinite(st.userTeam?.fillHeldFor) && fillAt === st.userTeam.fillHeldFor) return null;
   const spots = openSpots(st);
   if (!spots.any) return null;
   const key = `openspots:${fillAt}`;

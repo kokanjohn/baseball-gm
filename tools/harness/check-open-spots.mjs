@@ -117,15 +117,21 @@ if (news) console.log(`    Recent: ${news.text}`);
 const resolvedCard = SM.get().inbox.find(c => c.instanceId === card?.instanceId);
 check('the manager\'s message settled at the deadline', !card || resolvedCard?.resolved, JSON.stringify(resolvedCard && { r: resolvedCard.resolved, c: resolvedCard.choice }));
 
-// ── 4. Inside the last hour, an open spot is filled at once ──
+// ── 4. Inside the last hour, a spot the GM opens stays open until first pitch (r239 §122.118; was: filled at once) ──
 console.log('\nInside the last hour');
 check('it is the manager\'s time', managerFillsNow(SM.get(), clock.get()));
-const lf = slots().find(sl => sl.slot === 'OF').playerId;
-move(lf, o => o.key === 'bench');
-check('a starter benched now is replaced at once', slots().every(sl => sl.playerId));
+const ofIdx = slots().findIndex(sl => sl.slot === 'OF');
+move(slots()[ofIdx].playerId, o => o.key === 'bench');
+check('a starter benched now: the slot stays open', !slots()[ofIdx].playerId);
+check('…and the manager now fills at first pitch', !managerFillsNow(SM.get(), clock.get()));
+toBefore(60_000);
+check('…still open a minute before first pitch', !slots()[ofIdx].playerId);
 
 // ── 5. "Do it that way now" ──
-step(nextGame().gameTime - clock.get() + 5 * 3600_000);   // past this game, the evening after
+const firstPitch = nextGame().gameTime;
+step(firstPitch - clock.get() + 5 * 3600_000);   // past this game, the evening after
+const played = SM.get().schedule.find(g => g.gameTime === firstPitch);
+check('first pitch: the manager filled it, and the game was played', slots().every(sl => sl.playerId) && !!played?._committed && played.result !== 'postponed');
 const c3 = slots().find(sl => sl.slot === 'C');
 move(c3.playerId, o => o.key === 'bench');
 step(30 * 60_000);

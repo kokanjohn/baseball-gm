@@ -56,7 +56,7 @@ import {
   defaultActiveGroup,
   pendingArrivals,
   teamRating, recordRating,
-  openSpots, managerFillAt, managerFillDue, moveOptions, applyMove,
+  openSpots, managerFillAt, managerFillDue, managerFillsNow, nextLineupGame, moveOptions, applyMove,
 } from './RosterEngine.js';
 
 import { rosterClock, applyDue, hasDue, cpuSalaryMove, cpuFreeAgentLook, campCallAt } from './TransactionEngine.js';
@@ -3920,7 +3920,10 @@ export function gmMove(playerId, key, nowMs = clockNow()) {
   const st = StateManager.get();
   if (!st?.userTeam) return { ok: false, reason: 'no team loaded' };
   if (!moveOptions(st, playerId).some(o => o.key === key)) return { ok: false, reason: 'That move is no longer possible.' };
+  // r239 §122.118 a move after the roster deadline: whatever it leaves open stays open until first pitch.
+  const held = managerFillsNow(st, nowMs) ? nextLineupGame(st)?.gameTime : null;
   StateManager.mutate(s => {
+    if (Number.isFinite(held)) s.userTeam.fillHeldFor = held;
     applyMove(s, playerId, key);
     applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: nowMs }));
   });

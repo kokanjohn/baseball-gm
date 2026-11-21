@@ -640,7 +640,10 @@ async function runOffseasonChecks() {
     check(`coaches: blown saves recorded (${U?.bs} blown in ${U?.svo} chances)`, (U?.bs || 0) > 0 && (U?.svo || 0) >= (U?.bs || 0));
     const cards = [...coachCards.values()];
     const reviews = cards.filter(c => c.cardId === 'os_coach_review'), hires = cards.filter(c => c.cardId === 'os_coach_hire');
-    const upRoles = roles.filter(r => (staffBefore[r]?.contractExpiry ?? 99) <= 2);
+    // (r239 not a coach who left to manage another club, r221 §122.100: the chair opens, no review)
+    const leftToManage = roles.filter(r => staffBefore[r]?._leaving);
+    if (leftToManage.length) console.log(`  coaches: left to manage another club: ${leftToManage.map(r => staffBefore[r].name).join(', ')}`);
+    const upRoles = roles.filter(r => (staffBefore[r]?.contractExpiry ?? 99) <= 2 && !staffBefore[r]?._leaving);
     check(`coaches: a card for every coach whose deal was up (${upRoles.join(', ') || 'none'}; ${reviews.length} review cards: ${reviews.map(c => c.subject).join(' | ')})`,
           upRoles.every(r => reviews.some(c => c._coachRole === r)));
     console.log(`  coaches: ${reviews.map(c => `${c.subject} → ${c.choice || '—'}`).join('; ') || 'no review cards'}`);

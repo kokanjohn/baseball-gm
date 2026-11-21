@@ -31,7 +31,8 @@ import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary, formatOPS } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, POSITION_RULES } from '../../data/constants.js';
-import { eligibleSlotsFor, moveOptions, tradedAway, managerFillAt }
+import { clockNow } from '../../engine/Clock.js';   // r239 §122.118
+import { eligibleSlotsFor, moveOptions, tradedAway, managerFillAt, managerFillsNow, nextLineupGame }
   from '../../engine/RosterEngine.js';
 import * as GameEngine from '../../engine/GameEngine.js';
 import { getRosterNeeds } from '../../engine/TransactionEngine.js';
@@ -874,6 +875,17 @@ function _attachListeners(state) {
 // MOVE (r153) — one sheet of where a player can go
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * r239 §122.118 how long a spot the GM leaves open waits: until the roster deadline, or — the deadline passed
+ * (the GM's move holds it) — until first pitch of the game it's for.
+ */
+function _openNote(st) {
+  const mgr = _escape(st.userTeam.coachingStaff?.manager?.name || 'the manager');
+  const g = nextLineupGame(st);
+  if (g && managerFillsNow(st, clockNow())) return `An open spot waits until first pitch, at ${_clockText(g.gameTime)}. Then ${mgr} fills it from the bench.`;
+  return `An open spot waits for you until ${_clockText(managerFillAt(st))}, an hour before first pitch. Then ${mgr} fills it from the bench.`;
+}
+
 function _openMoveSheet(playerId) {
   const st = StateManager.get();
   const p = st.players[playerId];
@@ -894,7 +906,7 @@ function _openMoveSheet(playerId) {
   const rows = elig.map(row).join('')
     + (oop.length ? `<button class="sm-oop-toggle" type="button">${oopWord(true)} (${oop.length})</button>
        <div class="sm-oop-list" hidden>${oop.map(row).join('')}</div>` : '')
-    + (leaves && deadline ? `<div class="sm-note">An open spot waits for you until ${_clockText(deadline)}, an hour before first pitch. Then ${_escape(st.userTeam.coachingStaff?.manager?.name || 'the manager')} fills it from the bench.</div>` : '');
+    + (leaves && deadline ? `<div class="sm-note">${_openNote(st)}</div>` : '');
   const pos = posLabel(p);
   _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}`, rows, (overlay) => {
     overlay.querySelectorAll('.sm-row[data-key]').forEach(row => row.addEventListener('click', () => {

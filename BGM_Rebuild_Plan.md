@@ -14291,3 +14291,25 @@ No fresh team needed.
 - check-compose-overlap: Scouting's offer is withdrawn on its way and from Messages; the reply introduces the director once. The crew's card and the gk_prep reply are never both sent for one game.
 
 No fresh team needed. (Existing saves: a Scouting offer already parked is withdrawn the next time the GM asks.)
+
+---
+
+## §122.118 r239 — A spot the GM opens stays open
+
+**What the GM saw.** On the Team screen, MOVE → Bench ("Leave 1B open") seemed refused: the player came straight back. Moving a starter to the DH filled the slot they left with the best bench bat.
+
+**Why.** The manager fills our open spots from the next game's roster deadline (an hour before first pitch) until it's played (r153). "Until it's played" covered the whole live game, and the hour before it. A move then had its open spot filled in the same reconcile, usually by the player just moved out (the best fit on the bench). It wasn't the r233 decision fill.
+
+**Decisions.**
+- A game under way already has its lineups (`liveLineups`, taken at first pitch). `_nextOpenGame` skips it, so during a game the open spots are for the next game and wait until its deadline. Exported as `nextLineupGame`.
+- A move the GM makes after the deadline sets `userTeam.fillHeldFor = that game's first pitch`. `managerFillAt` is then first pitch, not the deadline. The spot stays open until the game needs nine: `_activateGameNow` fills it at first pitch through the roster step, so Recent says so.
+- The open-spots message isn't sent for a held spot. The GM opened it knowingly, and the message would name a deadline already past.
+- MOVE's note: before the deadline, as before ("waits for you until 6:05, an hour before first pitch"). After it: "An open spot waits until first pitch, at 7:05. Then {manager} fills it from the bench."
+
+**Checks.** check-move-open (6 of 13 fail on the old code):
+- Benched half an hour before first pitch: open until first pitch, no message, filled at first pitch.
+- During the game: the next game's deadline counts. A bench move and a starter to the DH both leave their slots open until then, and the manager fills them at that deadline.
+
+check-open-spots §4 now expects r239's rule: inside the last hour, a benched starter's slot stays open, the manager fills it at first pitch, and the game is played. Before, it expected the slot filled at once. sim-season's coach check leaves out a coach who left to manage another club (r221). This run's games changed, and its pitching coach, Tamburino, left that way. The season run (all pass), multi-season, check-manager-fill, check-roster-advice, check-deadline-story and the Team-screen UI tests pass.
+
+No fresh team needed.

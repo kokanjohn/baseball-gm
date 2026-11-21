@@ -858,10 +858,15 @@ function _nextOpenGame(state) {
   const sched = state?.schedule || [];
   for (let i = state?.currentGameIndex || 0; i < sched.length; i++) {
     const g = sched[i];
-    if (g && !g._committed && Number.isFinite(g.gameTime)) return g;
+    // r239 §122.118 a game under way already has its lineups (liveLineups, taken at first pitch): a move now is
+    // for the game after it, so that's the one whose deadline counts.
+    if (g && !g._committed && !g.liveLineups && Number.isFinite(g.gameTime)) return g;
   }
   return null;
 }
+
+/** r239 §122.118 the game our open spots are for: the next one whose lineup isn't set yet (null with none ahead). */
+export function nextLineupGame(state) { return _nextOpenGame(state); }
 
 /**
  * managerFillsNow(state, atMs) — r153 the manager fills our open spots (a
@@ -870,14 +875,20 @@ function _nextOpenGame(state) {
  * played. Before that an open spot waits for the GM. No game ahead: it waits.
  */
 export function managerFillsNow(state, atMs) {
-  const g = _nextOpenGame(state);
-  return !!g && atMs >= g.gameTime - ROSTER_DECISION_LEAD_MS;
+  const at = managerFillAt(state);
+  return Number.isFinite(at) && atMs >= at;
 }
 
-/** When the manager will fill our open spots: the next game's roster deadline (null with no game ahead). */
+/**
+ * When the manager will fill our open spots: the next game's roster deadline (null with no game ahead).
+ * r239 §122.118 a spot the GM opens after the deadline (fillHeldFor, set by the GM's own move) is the GM's
+ * choice: it stays open until first pitch, when the game needs nine (before, the manager filled it at once,
+ * often with the player just moved out).
+ */
 export function managerFillAt(state) {
   const g = _nextOpenGame(state);
-  return g ? g.gameTime - ROSTER_DECISION_LEAD_MS : null;
+  if (!g) return null;
+  return state.userTeam?.fillHeldFor === g.gameTime ? g.gameTime : g.gameTime - ROSTER_DECISION_LEAD_MS;
 }
 
 /**
