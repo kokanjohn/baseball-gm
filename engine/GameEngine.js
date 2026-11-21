@@ -25,6 +25,7 @@
  *     game's plan (GameWeather), postponements, suspensions and resumptions.
  */
 
+import * as Retirement from './Retirement.js';   // r222 §122.101
 import * as StateManager from '../store/StateManager.js';
 
 import {
@@ -1114,6 +1115,8 @@ function _commitAt(gameIndex) {
   if (game.status !== GAME_STATUS.POSTPONED && !game.isSpring && !game.isPlayoff) {
     withDice(dice(diceSeed(StateManager.get()), 'situation', game.index ?? gameIndex, endMs), () => CardEngine.deliverSituation(endMs, buildCardContext()));
   }
+  // r222 §122.101 the plans to retire: one of ours tells the manager at their tell game.
+  if (game.status !== GAME_STATUS.POSTPONED && !game.isPlayoff) CardEngine.deliverRetirePlans(endMs, buildCardContext());
   // r220 §122.99 now and then, a word back about a decision the GM made (spring and the season).
   if (game.status !== GAME_STATUS.POSTPONED && !game.isPlayoff) CardEngine.deliverCallback(endMs, buildCardContext());
   // r221 §122.100 the story arcs: the next step of one running, or a new one when its situation is real.
@@ -3299,6 +3302,10 @@ export function advanceClock(nowMs = clockNow(), opts = {}) {
   if (state.staffLookAt == null) StateManager.mutate(s => { s.staffLookAt = clockMs; });   // r196 the staff's looks count from here
   // r213 §122.91 a save from before r213: this season's emergency nights, from here on
   if (state.emergencies?.season == null && state.userTeam) _planEmergencies(clockMs);
+  // r222 §122.101 every player's plan for after the season (a new season, a new team, or a save from before r222)
+  if (state.userTeam && state.retirePlans?.season !== (state.seasonNum || 1)) {
+    StateManager.mutate(s => { Retirement.settlePlans(s); s.retirePlans = { season: s.seasonNum || 1 }; });
+  }
   let overdueRun = false;
   for (let guard = 0; guard < 12000; guard++) {
     _wxReplanDue(clockMs);           // §122.51 a weather decision that changes our game
@@ -3429,7 +3436,7 @@ function _runOffseasonStep(step, atMs) {
     const offer = Offseason.ownershipOffer(StateManager.get());
     CardEngine.deliverOwnershipCard(offer, cardAt(1, OFFSEASON_CARD_HOUR), springAt);
     for (const e of ev.filter(e => e.type === 'RETIRED' && e.teamId === 'user')) {
-      CardEngine.deliverRetirementNotice(e.playerId, e.age, cardAt(1, OFFSEASON_CARD_HOUR));
+      CardEngine.deliverRetirementNotice(e.playerId, e.age, cardAt(1, OFFSEASON_CARD_HOUR), e.owedYears, e.owedK);
     }
     // r164 §122.35 who kept and lost which positions over the season.
     const posTurn = ev.find(e => e.type === 'POSITIONS_TURN');
@@ -3590,6 +3597,7 @@ function _runOffseasonStep(step, atMs) {
     });
     CardEngine.scheduleSpringGms(atMs, buildCardContext());
     _planEmergencies(atMs);   // r213 §122.91
+    StateManager.mutate(s => { Retirement.settlePlans(s); s.retirePlans = { season: s.seasonNum || 1 }; });   // r222 §122.101
     return events;
   }
   return events;

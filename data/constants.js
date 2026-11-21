@@ -1356,7 +1356,7 @@ export const WINTER_STORY = Object.freeze({ busy: 2, chance: 0.9, newsShare: 0.3
 // the payroll); a coach this good is asked about, and gets the job this often; a losing streak this long starts a feud,
 // which flares again this often if left alone.
 export const ARC = Object.freeze({
-  maxActive: 2, startChance: 0.06, veteranGamesLeft: 12, prospectAge: 24, prospectUpside: 3,
+  maxActive: 2, startChance: 0.06, veteranGamesLeft: 12, veteranLastStart: 80, prospectAge: 24, prospectUpside: 3,
   shuttleShare: 0.004, meetShare: 0.002, coachQuality: 65, coachGetsJob: 0.5, feudStreak: 4, feudFlares: 0.5,
 });
 
@@ -1415,6 +1415,16 @@ export const EMERGENCY = Object.freeze({
 export const RETIREMENT_AGE_HARD  = 38;  // retires regardless of OVR
 export const RETIREMENT_AGE_SOFT  = 35;  // retires if OVR also below RETIREMENT_OVR_SOFT
 export const RETIREMENT_OVR_SOFT  = 55;  // OVR threshold for age-35+ retirement
+export const RETIREMENT_SOFT_ODDS = 0.6; // the share of those who decide to retire
+
+// r222 §122.101 the plan to retire, settled once a season (engine/Retirement.js). A player planning to retire tells
+// their club between these regular-season games (ours: the manager's word; one who joins us after it: known on
+// arrival); the word goes out only within `lateGames` of it. The veteran arc's "one more year": the player says yes
+// at `base`, ± `rel` × how they feel about the GM (−1…+1), `old` at 38 or older next season, `poor` after a poor season.
+export const RETIRE_PLAN = Object.freeze({
+  tellGames: [10, 50], lateGames: 3,
+  oneMore: { base: 0.5, rel: 0.2, old: -0.15, poor: -0.10 },
+});
 
 // ─────────────────────────────────────────────────────────────
 // MAKEUP GAME SCHEDULING

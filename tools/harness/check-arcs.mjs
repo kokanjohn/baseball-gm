@@ -52,7 +52,9 @@ console.log('The veteran');
     SM.speculate(() => {
       fresh();
       const p = S().players[S().userTeam.lineupSlots[0].playerId];
-      SM.mutate(s => { s.players[p.id].contractExpiry = (s.seasonNum || 1) + 1; s.players[p.id].contractYears = 1; });
+      // (r222 §122.101 the arc is for a player of ours who said it's their last season)
+      SM.mutate(s => { const q = s.players[p.id]; q.contractExpiry = (s.seasonNum || 1) + 1; q.contractYears = 1;
+        q.retireIntent = { season: s.seasonNum || 1, retiring: true, tell: 10, told: true }; });
       start('veteran', { p: p.id });
       const a = advance(30);
       check('the manager: their last season (a decision)', a?.cardId === 'arc_veteran' && /last season/.test(a.body) && a.noLabel);
@@ -65,13 +67,20 @@ console.log('The veteran');
       answer(b, 'yes');
       check('the last question waits for the season\'s end', advance(90) == null);
       const c = advance(122);
-      check('one more year, or out on top', c && /One more year/.test(c.subject) && c.yesLabel === 'Offer One More Year');
+      check('one more year, or out on top', c && /One more year/.test(c.subject) && c.yesLabel === 'Ask for One More Year');
       answer(c, final);
       if (final === 'no') {
-        check('out on top: marked to retire', S().players[p.id]._retiringAfter === (S().seasonNum || 1));
+        check('out on top: the plan to retire stands', S().players[p.id].retireIntent?.retiring === true);
         SM.mutate(s => { Offseason.beginOffseason(s, clock.get()); });
         check('…and they retire when the offseason begins', S().players[p.id].group === PLAYER_GROUP.RETIRED);
-      } else check('one more year: an extension', !!S().players[p.id].pendingContract && S().players[p.id].pendingContract.years >= 1);
+      } else {
+        const q = S().players[p.id], said = q._oneMore?.yes;
+        check('one more year: they answered', typeof said === 'boolean');
+        check(said ? '…yes: a one-year extension, the plan cancelled' : '…no: no new deal, the plan stands',
+          said ? q.pendingContract?.years === 1 && q.retireIntent?.retiring === false : !q.pendingContract && q.retireIntent?.retiring === true);
+        const d = advance(124);
+        check('…their answer, the next day', d && (said ? /staying/.test(d.subject) : /answer/.test(d.subject)));
+      }
     });
   }
 }
@@ -152,6 +161,17 @@ console.log('\nThe rules');
     SM.mutate(s => { s.players[p.id].teamId = s.leagueTeams[0].id; });
     advance(70);
     check('its player traded away: the arc ends', !S().arcs.active.length);
+  });
+  SM.speculate(() => {   // r222 §122.101 the veteran arc only for a player of ours who said it's their last season
+    fresh(); after(40);
+    SM.mutate(s => { for (const id of s.userTeam.rosterIds) s.players[id].retireIntent = { season: s.seasonNum || 1, retiring: false, tell: 10 }; });
+    const none = ARCS.find(d => d.key === 'veteran').trigger(S(), clock.get(), () => 0.3);
+    const id = S().userTeam.lineupSlots[2].playerId;
+    SM.mutate(s => { s.players[id].retireIntent = { season: s.seasonNum || 1, retiring: true, tell: 60 }; });
+    const notYet = ARCS.find(d => d.key === 'veteran').trigger(S(), clock.get(), () => 0.3);
+    SM.mutate(s => { s.players[id].retireIntent.told = true; });
+    const told = ARCS.find(d => d.key === 'veteran').trigger(S(), clock.get(), () => 0.3);
+    check('the veteran arc: only a player who has told us it\'s their last season', !none && !notYet && told?.p === id);
   });
   SM.speculate(() => {
     fresh(); after(40);

@@ -4,9 +4,9 @@
  * to the one before and from what really happened since. At most ARC.maxActive running at once; each starts from a
  * real situation, never on a timer alone.
  *
- *   veteran     a player 35 or older in the last year of a deal: they tell the manager it's probably their last
- *               season — a farewell tour or quiet; how it's going; with the season ending, one more year (an
- *               extension) or let them go out on top (they retire)
+ *   veteran     r222 a player of ours who has said it's their last season (Retirement.js): a farewell tour or quiet;
+ *               how it's going; with the season ending, ask for one more year (they may say no) or let them go out
+ *               on top; their answer
  *   prospect    a young bench bat the scouts think is better than the rating: the scouts' word; a week in the lineup
  *               (a real lineup change); how it went, and whether the regular gets the job back
  *   neighbors   the neighbors and game nights: a shuttle, or not; the council steps in; how it ends
@@ -26,6 +26,7 @@
 import { ARC, PHASE, PLAYER_GROUP, REGULAR_SEASON_GAME_COUNT } from '../data/constants.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
 import { contractIsUp } from './OffseasonEngine.js';
+import { knownRetiring } from './Retirement.js';
 import { trueOVR } from './Diamonds.js';
 import { eligibleSlotsFor } from './RosterEngine.js';
 import { since, doing, good, bad, enough } from './Callbacks.js';
@@ -46,13 +47,13 @@ const ROLE_TITLE = { pitchingCoach: 'Pitching Coach', hittingCoach: 'Hitting Coa
 
 export const ARCS = [
   // ── A veteran's last season ───────────────────────────────────
+  // r222 §122.101 only a player of ours who has said it's their last season (their plan to retire, Retirement.js).
   { key: 'veteran',
     trigger(st, atMs, rand) {
       const n = played(st);
-      if (n < 15 || n > 70) return null;
-      const yr = baseballYear(st);
+      if (n < 15 || n > ARC.veteranLastStart) return null;
       const list = (st.userTeam?.rosterIds || []).map(id => st.players[id])
-        .filter(p => p && ours(st, p.id) && computeAge(p.dob, yr) >= 35 && contractIsUp(p, st.seasonNum || 1) && !p.pendingContract);
+        .filter(p => p && ours(st, p.id) && knownRetiring(st, p));
       return list.length ? { p: pickOf(list, rand).id } : null;
     },
     doneKey: (st, who) => `veteran:${who.p}`,
@@ -61,8 +62,8 @@ export const ARCS = [
       { build(st, arc) {
         const p = st.players[arc.who.p];
         return { sender: mgr(st), avatar: '📋', tag: 'CULTURE', _targetPlayerId: p.id, _tokenPlayers: { pl_player: p.id },
-          subject: `${p.name}'s last season`, preview: `${p.name} told me something in confidence…`,
-          body: `${p.name} told me in confidence: this is probably their last season. They'd rather not make a fuss. We could make it a farewell tour anyway — a moment in every park, the fans saying goodbye — or keep it quiet and let them play it out their way.`,
+          subject: `${p.name}'s last season`, preview: `${p.name} would rather not make a fuss…`,
+          body: `${p.name} hasn't wavered: this is the last season. They'd rather not make a fuss. We could make it a farewell tour anyway — a moment in every park, the fans saying goodbye — or keep it quiet and let them play it out their way.`,
           yesLabel: 'Make It a Farewell Tour', noLabel: 'Keep It Quiet', yesEffect: { atmo: 3 }, noEffect: {},
           yesMsg: 'I\'ll tell them. They\'ll pretend to hate it.', noMsg: 'Quiet it is. They\'ll appreciate that.',
           autoResolve: 'no', _raw: { _relYes: { pl_nm: 1 }, _relNo: { pl_nm: 2 } } };
@@ -80,16 +81,29 @@ export const ARCS = [
       } },
       { after: [7, 7], within: 150, when: (st) => REGULAR_SEASON_GAME_COUNT - played(st) <= ARC.veteranGamesLeft, build(st, arc) {
         const p = st.players[arc.who.p];
+        const up = contractIsUp(p, st.seasonNum || 1);
         return { sender: mgr(st), avatar: '📋', tag: 'ROSTER', _targetPlayerId: p.id, _tokenPlayers: { pl_player: p.id },
-          subject: `One more year for ${p.name}?`, preview: `With the season almost over, ${p.name} asked…`,
-          body: `With the season almost over, ${p.name} asked me straight: is there one more year here? We can offer one — a one-year deal at what the market says they're worth. Or we let them go out on top, and they retire when the season ends. Either way, they want to hear it from the club.`,
-          yesLabel: 'Offer One More Year', noLabel: 'Let Them Go Out on Top', yesEffect: { morale: 1 }, noEffect: { atmo: 2 },
-          yesMsg: 'They took it. One more year.', noMsg: 'They took it well. They\'ll go out on top.',
-          autoResolve: 'skip', _raw: { onYes: isP(p) ? 'retain_active_pitcher' : 'retain_active_hitter', onNo: 'arc_retire', _relYes: { pl_nm: 2 } },
+          subject: `One more year for ${p.name}?`, preview: `With the season almost over, we could ask ${p.name}…`,
+          body: up
+            ? `With the season almost over, we could ask ${p.name} for one more year — a one-year deal at what the market says they're worth. They might say no; their mind was made up in the spring. Or we let them go out on top, and they retire when the season ends.`
+            : `With the season almost over, we could ask ${p.name} to stay and play out the deal — they're signed for next year. They might say no; their mind was made up in the spring. Or we let them go out on top, and they retire when the season ends.`,
+          yesLabel: 'Ask for One More Year', noLabel: 'Let Them Go Out on Top', yesEffect: {}, noEffect: { atmo: 2 },
+          yesMsg: 'I\'ll ask them tonight.', noMsg: 'They took it well. They\'ll go out on top.',
+          autoResolve: 'skip', _raw: { onYes: 'arc_one_more', onNo: 'arc_retire', _relNo: { pl_nm: 1 } },
           _fallback: { sender: mgr(st), avatar: '📋', tag: 'ROSTER', _targetPlayerId: p.id,
             subject: `${p.name}'s last weeks`, preview: `${p.name} knows there isn't another year here…`,
             body: `${p.name} knows we can't make room for another year, and made peace with it before I said a word. They'll retire when the season ends. The last weeks are theirs.`,
             yesLabel: 'Got It', noLabel: null, autoResolve: 'yes', _news: true, yesEffect: {}, _raw: { onYes: 'arc_retire' } } };
+      } },
+      { after: [1, 1], build(st, arc) {
+        const p = st.players[arc.who.p];
+        if (arc.picks[2] !== 'yes' || p._oneMore?.season !== (st.seasonNum || 1)) return null;
+        if (p._oneMore.yes) return news({ sender: mgr(st), avatar: '📋', tag: 'ROSTER', _targetPlayerId: p.id, yesEffect: { morale: 2 },
+          subject: `${p.name} is staying`, preview: `I asked ${p.name} last night…`,
+          body: `I asked ${p.name} last night. They took a long breath and said yes — one more year. The clubhouse heard before I got back to my office.` });
+        return news({ sender: mgr(st), avatar: '📋', tag: 'ROSTER', _targetPlayerId: p.id,
+          subject: `${p.name}'s answer`, preview: `I asked ${p.name} last night…`,
+          body: `I asked ${p.name} last night. They thanked us — meant it, too — but they're done. They'll retire when the season ends.` });
       } },
     ] },
 

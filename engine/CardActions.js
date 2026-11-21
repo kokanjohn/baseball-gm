@@ -38,6 +38,7 @@ import { startPromo, post as postMoney, canSpend } from './FinanceEngine.js';   
 import { PROMOTIONS, PROFILE } from '../data/constants.js';   // r169, r219
 import { drainageLevel, startDrainage } from './FieldCare.js';   // r170
 import { homeMorning } from './AwayDays.js';   // r217 §122.96
+import { isRetiring, oneMoreOdds, stayOneMore } from './Retirement.js';   // r222 §122.101
 
 const isPitcher = (p) => ['SP', 'RP'].includes(p?.pos);
 const ours = (st, id) => !!id && (st.userTeam.rosterIds || []).includes(id) && st.players[id]?.teamId === 'user';
@@ -228,6 +229,7 @@ const extend = {
     const p = st.players[c._targetPlayerId];
     // §78: no fee — the extension's cost is the raise, and ownership has to tolerate it.
     return ours(st, c._targetPlayerId) && contractIsUp(p, st.seasonNum || 1) && !p.pendingContract && !p._willWalk
+      && !isRetiring(st, p)   // r222 §122.101 a player planning to retire isn't asking for a deal (the veteran arc is the way)
       && Finance.canAddSalary(st, Math.max(0, marketTerms(st, p).salary - (p.contractSalary || 0)));
   },
   apply(d, c) {
@@ -635,10 +637,36 @@ const parkEvent = {
   },
 };
 
-/** r221 §122.100 a veteran goes out on top: they retire when the season ends (OffseasonEngine._retirements). */
+/** r221 §122.100 a veteran goes out on top. r222 §122.101 their plan to retire stands (it already says so). */
 const arcRetire = {
   feasible: (st, c) => ours(st, c._targetPlayerId),
-  apply(d, c) { d.players[c._targetPlayerId]._retiringAfter = d.seasonNum || 1; return []; },
+  apply() { return []; },
+};
+
+/**
+ * r222 §122.101 the veteran arc's "one more year": the player answers (their own dice, at RETIRE_PLAN.oneMore odds).
+ * Yes: the plan is cancelled — on an expiring deal, a one-year extension at market terms (settled on contract day);
+ * with years left, the deal they have. No: they retire as planned. The answer comes in the arc's next step.
+ */
+const arcOneMore = {
+  feasible: (st, c) => {
+    const p = st.players[c._targetPlayerId];
+    if (!ours(st, c._targetPlayerId) || !isRetiring(st, p)) return false;
+    if (!contractIsUp(p, st.seasonNum || 1)) return true;
+    return !p.pendingContract && Finance.canAddSalary(st, Math.max(0, marketTerms(st, p).salary - (p.contractSalary || 0)));
+  },
+  apply(d, c) {
+    const p = d.players[c._targetPlayerId];
+    const season = d.seasonNum || 1;
+    const yes = dice(diceSeed(d), 'one-more', p.id, season)() < oneMoreOdds(d, p);
+    p._oneMore = { season, yes };
+    if (!yes) return [];
+    stayOneMore(d, p);
+    if (!contractIsUp(p, season)) return [];
+    const t = { ...marketTerms(d, p), years: 1 };
+    p.pendingContract = { salary: t.salary, years: 1, signedSeason: season };
+    return [{ type: 'EXTENDED', playerId: p.id, terms: t }];
+  },
 };
 
 /** r219 §122.98 hold back the small asks for a month (fewer of them come: CardEngine._profileWeight). */
@@ -675,6 +703,7 @@ export const CARD_ACTIONS = Object.freeze({
   park_event:            parkEvent,       // r217 §122.96
   spend_freeze:          spendFreeze,     // r219 §122.98
   arc_retire:            arcRetire,       // r221 §122.100
+  arc_one_more:          arcOneMore,      // r222 §122.101
   sign_acquire_hitter:   signStarter,
   sign_veteran_hitter:   signStarter,
   sign_acquire_pitcher:  signProspect('acq_pitcher'),

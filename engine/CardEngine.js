@@ -35,6 +35,7 @@ import { WINTER_POOL } from '../data/cards-winter.js';   // r218 §122.97
 import { PROFILE_POOL } from '../data/cards-profile.js';   // r219 §122.98
 import * as Winter from './WinterStory.js';   // r218 §122.97
 import * as Situations from './Situations.js';   // r218 §122.97
+import * as Retirement from './Retirement.js';   // r222 §122.101
 import * as GMP from './GMProfile.js';   // r219 §122.98
 import * as Callbacks from './Callbacks.js';   // r220 §122.99
 import * as Arcs from './Arcs.js';   // r221 §122.100
@@ -81,6 +82,7 @@ import {
   ARC,
   REGULAR_SEASON_GAME_COUNT,
   EMERGENCY,
+  RETIRE_PLAN,
 } from '../data/constants.js';
 
 import {
@@ -3086,6 +3088,42 @@ export function deliverSituation(atMs, context = {}) {
 }
 
 /**
+ * r222 §122.101 After one of our regular-season games (`atMs`, its final): every player's plan for the season settled
+ * (a player who joined the league since), and a player of ours planning to retire tells the manager at their tell game —
+ * the manager's word the next morning (10:00–11:30). One who came to us after telling their old club is simply known
+ * (no word). Returns the cards parked.
+ */
+export function deliverRetirePlans(atMs, context = {}) {
+  if (Object.values(StateManager.get().players || {}).some(p => p && p.retireIntent?.season !== (StateManager.get().seasonNum || 1)
+    && p.group !== PLAYER_GROUP.RETIRED && p.group !== PLAYER_GROUP.DEPARTED)) StateManager.mutate(s => { Retirement.settlePlans(s); });
+  const st = StateManager.get();
+  if (![PHASE.REGULAR_SEASON, PHASE.TRADE_DEADLINE, PHASE.ALL_STAR_BREAK].includes(st.phase)) return [];
+  const season = st.seasonNum || 1, played = Retirement.gamesPlayed(st);
+  const due = (st.userTeam?.rosterIds || []).map(id => st.players[id])
+    .filter(p => p && p.teamId === 'user' && p.retireIntent?.season === season && p.retireIntent.retiring && !p.retireIntent.told && played >= p.retireIntent.tell);
+  if (!due.length) return [];
+  const day = new Date(atMs - 4 * 3_600_000); day.setDate(day.getDate() + 1); day.setHours(10, 0, 0, 0);
+  const r = dice(diceSeed(st), 'retire-word', atMs);
+  const cards = [];
+  for (const p of due) {
+    if (played - p.retireIntent.tell <= RETIRE_PLAN.lateGames) {
+      const at = day.getTime() + Math.floor(r() * 90) * 60_000;
+      const left = Math.max(0, (p.contractExpiry ?? season + 1) - season - 1);
+      const deal = left === 1 ? ' They\'ll walk away from the last year of the deal.' : left > 1 ? ` They'll walk away from the last ${left} years of the deal.` : '';
+      const inst = _rosterCard(st, { type: 'normal', sender: _managerName(st), avatar: '📋', tag: 'ROSTER', _targetPlayerId: p.id,
+        cardId: 'retire_plan', _rosterKey: `retire:${p.id}:${season}`, expiresAtMs: at + 36 * 3_600_000,
+        subject: `${p.name} plans to retire`, preview: `${p.name} came to see me after the game…`,
+        body: `${p.name} came to see me after the game: this will be their last season. The decision is made, and they wanted the club to hear it first.${deal}`,
+        yesLabel: 'Got It', noLabel: null, autoResolve: 'yes', _news: true, yesEffect: {}, _raw: {} });
+      const card = _deliverAt(inst, at);
+      if (card) cards.push(card);
+    }
+    StateManager.mutate(s => { const q = s.players[p.id]; if (q?.retireIntent) q.retireIntent = { ...q.retireIntent, told: true }; });
+  }
+  return cards;
+}
+
+/**
  * r220 §122.99 After one of our games (`atMs`, its final), now and then: a callback to a decision the GM made
  * (Callbacks), the next afternoon (1–4pm) — at most one a day. Returns the card parked, or null.
  */
@@ -3146,9 +3184,9 @@ export function advanceArcs(atMs, context = {}) {
     setArcs((A, s) => {
       const a = A.active.find(x => x.id === arc.id);
       if (a) { a.at = { ...a.at, [arc.step]: at }; a.step = arc.step + 1; a.nextAt = at + gap * DAYMS; a.lastAt = at; a.maxAt = next?.after ? at + (next.within ?? next.after[1]) * DAYMS : null; }
-      // what the step itself set in motion: a coach who took the job leaves after the season; a veteran with no year left retires
+      // what the step itself set in motion: a coach who took the job leaves after the season (a veteran with no year
+      // left retires on their plan — r222 §122.101)
       if (used._arcCoachLeaves) { const c = s.userTeam.coachingStaff?.[arc.who.role]; if (c) c._leaving = { season: s.seasonNum || 1, clubId: arc.who.club }; }
-      if (used === spec._fallback && used._raw?.onYes === 'arc_retire' && s.players[inst._targetPlayerId]) s.players[inst._targetPlayerId]._retiringAfter = s.seasonNum || 1;
     });
     return card;
   };
@@ -6139,16 +6177,18 @@ export function deliverGateReminder(atMs, springAt) {
   }, atMs);
 }
 
-/** A user player retires. */
-export function deliverRetirementNotice(playerId, age, atMs) {
+/** A user player retires (r222 §122.101 with what they walked away from, when the deal had years left). */
+export function deliverRetirementNotice(playerId, age, atMs, owedYears = 0, owedK = 0) {
   const state = StateManager.get();
   const p = state.players[playerId];
   if (!p) return null;
+  const money = (k) => (k >= 1000 ? `$${(k / 1000).toFixed(1).replace(/\.0$/, '')}M` : `$${Math.round(k)}K`);
+  const left = owedYears > 0 ? ` They walked away from ${owedYears === 1 ? 'a year' : `${owedYears} years`} and ${money(owedK)} left on the deal.` : '';
   return _deliverNotice(`os:retire:${playerId}`, {
     sender: _managerName(state), avatar: '🎩', type: 'normal',
     subject: `${p.name} is retiring`,
     preview: `${_who(p)} has decided to hang them up at ${age}.`,
-    body: `${_who(p)} told us it's time to retire, at ${age}, after ${p.careerStats?.seasons || 1} season${(p.careerStats?.seasons || 1) === 1 ? '' : 's'}. The roster spot is open.`,
+    body: `${_who(p)} told us it's time to retire, at ${age}, after ${p.careerStats?.seasons || 1} season${(p.careerStats?.seasons || 1) === 1 ? '' : 's'}.${left} The roster spot is open.`,
   }, atMs);
 }
 

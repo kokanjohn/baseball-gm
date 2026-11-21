@@ -23,6 +23,7 @@
  *   openPlayerCard(playerId, state);
  */
 
+import { knownRetiring } from '../../engine/Retirement.js';   // r222 §122.101
 import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
 import { getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
@@ -515,6 +516,7 @@ function _renderContract(player, state) {
         <div class="pc-contract-salary">${formatSalary(player.contractSalary)}/yr</div>
         <div class="pc-contract-status ${statusCls}">${status}</div>
       </div>
+      ${knownRetiring(state, player) ? '<div class="pc-contract-status danger" style="margin-top:6px;">Retiring after the season</div>' : ''}
     </div>
   `;
 }

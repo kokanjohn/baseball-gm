@@ -13696,3 +13696,75 @@ In the sims (2 seasons, seed 1) these ran from start to finish: a veteran's full
 - multi-season (3 seasons; ember seed 2) passes. check-coaches, check-managers, check-open-spots, check-pitcher-roles, check-manager-fill, check-il-return and check-roster-advice pass.
 
 **Fresh team:** not needed.
+
+## §122.101 — r222: the plan to retire, settled during the season
+`engine/Retirement.js` is pure. Rates are in `RETIRE_PLAN`, plus `RETIREMENT_SOFT_ODDS`.
+
+### The user's decisions
+- A player can retire with years left on the deal.
+- A player's plan to retire is settled during the season, not on offseason day 1.
+- Our own players' plans show on their player card. A Compose topic for Scouting to find out about other clubs' players and free agents, sometimes wrong, comes in r223.
+- Once a player says they're retiring, they retire at the season's end. A trade, a waiver claim or a free-agent signing doesn't change that.
+- Only the veteran arc's "one more year" can change it, and the player may say no. The routine extension messages don't come for a player planning to retire, and not every retiring player gets the arc.
+
+### The plan (`p.retireIntent = { season, retiring, tell, told?, stayed? }`)
+- **When it's settled:** once a season, for every player in the league (ours, other clubs', free agents).
+  - When spring opens.
+  - On a save's first tick (`s.retirePlans.season`).
+  - For a player who joins the league later, after the next of our games (`CardEngine.deliverRetirePlans`).
+  - Anyone still unsettled at the start of `beginOffseason`.
+- **The rules,** from the age next season and the rating then, on the player's own dice (`retire-plan`, id, season):
+  - 38 or older: retires.
+  - 35–37 and rated under 55: retires 60% of the time.
+  - A pre-r222 `_retiringAfter` for this season: retires.
+- **Offseason day 1** (`_retirements`) retires exactly the players whose plan says so. The day-1 roll is gone.
+  - The event carries the seasons and money left on the deal (`owedYears`, `owedK`).
+  - The salary stops (no dead money, as before).
+  - Our notice says it: "They walked away from 2 years and $4M left on the deal."
+
+### Who knows
+- **The tell game:** each player planning to retire tells their club at a game between 10 and 50 (`tell`, regular-season games played).
+- **Ours:** the manager's word, news, the next morning 10:00–11:30: "X plans to retire". It includes "They'll walk away from the last year of the deal" when there are years left. It's sent only within 3 games of the tell game.
+- **One who joins us after their tell game:** known on arrival, with no word.
+- **The player card:** for ours, once known (`knownRetiring`), the Contract section shows "Retiring after the season".
+
+### Extensions
+- **The contract-year "keep or let walk"** (`extend`, and its target in `CardTokens._cardFit`) and **the agent's ask** (`breakoutAsks`) skip a player planning to retire.
+- **The veteran arc** starts only for a player of ours known to be retiring, whatever their contract (was: 35+ on an expiring deal). It starts between games 15 and 80 (`ARC.veteranLastStart`).
+  1. A farewell tour, or keep it quiet (picks up from the manager's word).
+  2. How it's going.
+  3. With 12 games left: "Ask for One More Year" (`arc_one_more`) or "Let Them Go Out on Top" (`arc_retire`, now a no-op: the plan stands). If an expiring deal's raise can't be afforded, the manager's word stands in, and the plan stands.
+  4. New: their answer, the next day. "X is staying" (morale +2) or "X's answer" (thanked us, but they're done).
+- **The odds of a yes** (`oneMoreOdds`, own dice `one-more`):
+  - 50% to start.
+  - ±20 for how they feel about the GM.
+  - −15 at 38 or older.
+  - −10 after a poor season (OPS under .650 over 120 at-bats, or an ERA over 5.00 over 30 innings).
+  - Kept between 5% and 95%.
+- **What a yes does:**
+  - On an expiring deal: a one-year extension at market terms (`pendingContract`, settled on contract day).
+  - With years left: the deal they have.
+  - Either way, the plan is cancelled (`stayed`).
+
+### In the sims
+2 seasons, seed 1:
+- Season 1: four players of ours told us.
+- One ran the arc to "Let Them Go Out on Top" and retired with the notice.
+- Three had been put on waivers by the sim GM and retired as free agents.
+- Season 2: the arc through "One more year?" and the player's answer.
+
+### Checks
+- **check-retirement** (new, 36):
+  - Every player's plan settled once, and the same dice give the same plan.
+  - The rules: 38+ all; 34 and younger none; 35–37 under 55 about 60%; 35–37 at 55+ none.
+  - A change of club keeps the plan.
+  - Day 1 follows the plan: years left, other clubs, a 41-year-old who stays, nobody else.
+  - The notice's money.
+  - The manager's word: time, years left, once, voice.
+  - Known on arrival without a word; another club's player not shown.
+  - The contract-year extension and the agent's ask skip retirees.
+  - One more year: both answers, years left, the odds.
+- **check-arcs** (32): the veteran arc on the plan (both answers, the answer step); only for a player who has told us.
+- check-agent-ask, check-card-pools, check-message-voice, check-promises, check-callbacks, check-situations, sim-season and multi-season pass.
+
+**Fresh team:** not needed. A current save settles every player's plan for this season on its first tick, using today's ratings. Players past their tell game are known at once; ours get the manager's word only if the tell game was within the last 3 games.

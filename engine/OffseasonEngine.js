@@ -43,9 +43,6 @@ import {
   DEF_AGE_CURVE,
   FA_CLASS_INTL_AGE,
   DIAMOND,
-  RETIREMENT_AGE_HARD,
-  RETIREMENT_AGE_SOFT,
-  RETIREMENT_OVR_SOFT,
   WIN_TARGET_MET_WITHIN,
   WIN_TARGET_ADJ_EXCEED_8_PLUS,
   WIN_TARGET_ADJ_EXCEED_3_TO_7,
@@ -77,6 +74,7 @@ import {
 } from '../data/constants.js';
 
 import { computeAge, computeOVR, ovrFor, createPlayer, baseballYear, _freshStats } from './PlayerFactory.js';
+import { planFor, settlePlans } from './Retirement.js';
 import { originForKind } from './LeagueHistory.js';
 import { giveUntestedGap, seedUpside, markAvailable, cpuView } from './Diamonds.js';
 import { clearInjuryUpdate } from './InjuryEngine.js';
@@ -451,6 +449,7 @@ export function beginOffseason(draft, atMs) {
     Finance.cpuNextTarget(draft, t.id);
   }
   const mgrMoves = Managers.cpuWinter(draft, atMs);   // §122.64 a losing season can cost a CPU manager the job
+  settlePlans(draft);   // r222 §122.101 (anyone not yet settled, from the rating before the winter)
   _lockSeason(draft, atMs);
   const reps = _playingTime(draft);   // r162 §122.34 (before the season's lines are archived)
   _archiveStats(draft);
@@ -628,20 +627,18 @@ function _develop(p, nextYear, seasonNum, staff = null, facility = 0, played = n
 
 function _retirements(draft, atMs, nextYear) {
   const events = [];
-  const level  = draft.leagueTalentOffset || 0;
   for (const p of Object.values(draft.players || {})) {
     if (!p || p.group === PLAYER_GROUP.RETIRED || p.group === PLAYER_GROUP.DEPARTED) continue;
     const age = computeAge(p.dob, nextYear);
-    const rel = (p.ovr || 50) - level;
-    // (r221 §122.100 a veteran who chose to go out on top — the story arc — retires now)
-    let retire = age >= RETIREMENT_AGE_HARD || (p.teamId === 'user' && p._retiringAfter === (draft.seasonNum || 1));
-    if (!retire && age >= RETIREMENT_AGE_SOFT && rel < RETIREMENT_OVR_SOFT) retire = eventRand() < 0.6;
-    if (!retire) continue;
+    // r222 §122.101 the plan settled this season decides (a player who said yes to one more year has none)
+    if (!planFor(draft, p)?.retiring) continue;
     const teamId = p.teamId || null;
+    const owed = teamId ? Math.max(0, yearsLeft(p, draft.seasonNum || 1) - 1) : 0;   // seasons left on the deal
+    const owedK = owed * (p.contractSalary || 0);
     _detach(draft, p.id);
     Object.assign(p, { teamId: null, group: PLAYER_GROUP.RETIRED, tier: 'retired',
                        retiredSeason: draft.seasonNum || 1, _retiredFrom: teamId });
-    events.push({ type: 'RETIRED', playerId: p.id, teamId, age, atMs });
+    events.push({ type: 'RETIRED', playerId: p.id, teamId, age, atMs, owedYears: owed, owedK });
     if (teamId === 'user') {
       draft.history = [...(draft.history || []), {
         id: _uuid(), type: 'retirement', season: draft.seasonNum || 1, gameIdx: draft.currentGameIndex || 0,
@@ -875,7 +872,7 @@ export function breakoutAsks(draft, max = 1) {
   const A = AGENT_ASK;
   return (draft.userTeam?.rosterIds || []).map(id => draft.players[id])
     .filter(p => p && (p.contractSalary || 0) > 0 && !contractIsUp(p, season) && !p.pendingContract && !p._willWalk
-      && p._extendedSeason !== season && p._agentAsk?.season !== season)
+      && p._extendedSeason !== season && p._agentAsk?.season !== season && !planFor(draft, p)?.retiring)   // (r222 not one planning to retire)
     .map(p => {
       const shift = performanceShift(draft, p).shift;
       const m = marketTerms(draft, p), cur = p.contractSalary || 0;

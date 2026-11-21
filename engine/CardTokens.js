@@ -14,6 +14,7 @@
  * PURE: takes state as input, never imports StateManager.
  */
 
+import { isRetiring } from './Retirement.js';   // r222 §122.101
 import {
   PLAYER_GROUP,
   PITCHER_HAND_DISPLAY,
@@ -610,6 +611,7 @@ function _cardFit(cardDef, state) {
   const out = {};
   if (d._requiresContractYear) {
     const ok = (p) => (p.contractExpiry ?? season + 2) - season <= 1 && !p.pendingContract && !p._willWalk
+      && !isRetiring(state, p)   // r222 §122.101 (a player planning to retire isn't asking for a deal)
       && (!d._minRating || (p.ovr || 0) - (state.leagueTalentOffset || 0) >= d._minRating);
     out.hitter = ok; out.pitcher = ok;
   }
