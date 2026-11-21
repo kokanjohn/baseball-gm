@@ -14085,3 +14085,26 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - check-ball-placement, check-coaches, sim-season and multi-season pass.
 
 **Fresh team:** not needed. A game started before r229 shows the fielders from the lineups and finds pinch hitters' replacements by name.
+
+## §122.109 — r230: the Live View's infield larger; a dirt infield; the full box score
+### The user's decisions (from r229's screenshots)
+- The infield is enlarged so the fielders' and runners' names aren't crammed.
+- The infield diamond is dirt (brown), not grass, and the dirt arc extends past second base.
+- There's room below for a fuller box score.
+
+### Changed (`ui/components/LiveView.js`)
+- **The scale:**
+  - Feet to pixels at 1.05 out to 130 feet (the diamond square, about 60% larger than true scale); beyond, the outfield at 0.6, compressed.
+  - Every spot (bases, fielders, the ball, the fence) goes through the same scale (`px`), so a ball lands where it was fielded, relative to the fielders and the fence.
+  - Drawing area 380 × 376 with room below the plate for the catcher.
+- **The ground:**
+  - The diamond (home, first, second, third) is dirt, a lighter brown with chalk edges.
+  - The dirt arc reaches 158 feet, past second base.
+  - The mound and the bags are larger.
+- **The fielders' spots** are moved for the larger infield: corners at 112 feet, middle infielders at 148, outfielders at 275 / 315.
+- **The full box score:** both teams' batting and pitching, under R/H/E. It's the live card's Stats tab (`BoxScore.renderBoxScore` over `accumulateBox`), so the two always agree.
+
+### Checks
+- test-live-view-ui (dark and light) and test-compose-ui pass.
+
+**Fresh team:** not needed.

@@ -18,6 +18,7 @@ import { GAME_STATUS } from '../../data/constants.js';
 import { liveSituation, accumulateBox, fenceAt } from '../../engine/SimEngine.js';
 import { wxState } from './WeatherStatus.js';
 import { openPlayerCard } from './PlayerCard.js';
+import { renderBoxScore } from './BoxScore.js';   // (the live card's Stats tab: the same box)
 
 // ─────────────────────────────────────────────────────────────
 // THE FACTS
@@ -28,7 +29,7 @@ const PA_TYPES = new Set(['single', 'double', 'triple', 'hr', 'walk', 'hbp', 'st
 const HIT = new Set(['single', 'double', 'triple', 'hr']);
 const POS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'];
 // Where each fielder stands (degrees from straight away, feet from the plate).
-const STAND = { P: [0, 60.5], C: [0, -12], '1B': [39, 118], '2B': [16, 150], SS: [-16, 150], '3B': [-39, 118], LF: [-28, 265], CF: [0, 300], RF: [28, 265] };
+const STAND = { P: [0, 60.5], C: [0, -14], '1B': [38, 112], '2B': [17, 148], SS: [-17, 148], '3B': [-38, 112], LF: [-28, 275], CF: [0, 315], RF: [28, 275] };
 
 /** The fielders from a lineup's slots (a game from before r229): C … the outfield left, center, right in order. */
 function _fieldFromSlots(team) {
@@ -124,7 +125,7 @@ export function liveViewState(game, state) {
 
   return { isFinal, isHome, inning: sit.inning, half: sit.half, outs: sit.outs, bases: sit.bases, score, bat, field,
     atBat, onDeck, inHole, fielders, pitcher, ball, last, lastIndex: revealed.length - 1, scoredLast,
-    batLine, pitLine, bf, rhe: { away: { r: score.away, h: box.away.hits, e: box.away.errors }, home: { r: score.home, h: box.home.hits, e: box.home.errors } },
+    box, batLine, pitLine, bf, rhe: { away: { r: score.away, h: box.away.hits, e: box.away.errors }, home: { r: score.home, h: box.home.hits, e: box.home.errors } },
     status: isFinal ? 'Final' : wx.kind ? wx.pill : game.status === GAME_STATUS.DELAYED ? 'Delayed' : 'Live' };
 }
 
@@ -132,9 +133,13 @@ export function liveViewState(game, state) {
 // THE FIELD (SVG)
 // ─────────────────────────────────────────────────────────────
 
-const W = 360, H = 350, HX = 180, HY = 330, S = 0.66, TOP = 24;   // (TOP: room for a home run's flight over the fence)
+// (r229 the infield drawn larger than true scale, so the names fit: feet to pixels at IN out to KNEE feet — the diamond
+//  square — and OUT beyond, the outfield compressed. Every spot goes through the same scale, so a ball lands where it was
+//  fielded, relative to the fielders and the fence.)
+const W = 380, H = 376, HX = 190, HY = 340, TOP = 8, IN = 1.05, KNEE = 130, OUT = 0.6;
 const rad = (a) => a * Math.PI / 180;
-const pt = (a, d) => [HX + d * S * Math.sin(rad(a)), HY - d * S * Math.cos(rad(a))];
+const px = (d) => (d <= KNEE ? d * IN : KNEE * IN + (d - KNEE) * OUT);
+const pt = (a, d) => { const r = d < 0 ? d * IN : px(d); return [HX + r * Math.sin(rad(a)), HY - r * Math.cos(rad(a))]; };
 const xy = ([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`;
 const BASE = { first: pt(45, 90), second: pt(0, 127.3), third: pt(-45, 90), home: pt(0, 0) };
 
@@ -142,18 +147,18 @@ function _fieldSvg() {
   const fence = [];
   for (let a = -45; a <= 45; a += 3) fence.push(xy(pt(a, fenceAt(a))));
   const dirt = [];
-  for (let a = -45; a <= 45; a += 5) dirt.push(xy(pt(a, 98)));
-  const diamond = [pt(0, 6), pt(41, 86), pt(0, 120), pt(-41, 86)].map(xy).join(' ');
-  const bag = (p) => `<rect x="${(p[0] - 3.5).toFixed(1)}" y="${(p[1] - 3.5).toFixed(1)}" width="7" height="7" transform="rotate(45 ${xy(p).replace(',', ' ')})" class="lv-bag"/>`;
-  const [mx, my] = pt(0, 60.5);
+  for (let a = -45; a <= 45; a += 3) dirt.push(xy(pt(a, 158)));   // (the arc, past second base)
+  const diamond = [pt(0, 0), pt(45, 90), pt(0, 127.3), pt(-45, 90)].map(xy).join(' ');
+  const bag = (p) => `<rect x="${(p[0] - 4.5).toFixed(1)}" y="${(p[1] - 4.5).toFixed(1)}" width="9" height="9" transform="rotate(45 ${xy(p).replace(',', ' ')})" class="lv-bag"/>`;
+  const [mx, my] = pt(0, 60.5);   // (the mound)
   return `
     <polygon class="lv-grass" points="${xy(pt(0, 0))} ${fence.join(' ')}"/>
     <polyline class="lv-fence" points="${fence.join(' ')}"/>
-    <polygon class="lv-dirt" points="${xy(pt(0, -12))} ${xy(pt(-45, 30))} ${dirt.join(' ')} ${xy(pt(45, 30))}"/>
+    <polygon class="lv-dirt" points="${xy(pt(0, -14))} ${xy(pt(-45, 20))} ${dirt.join(' ')} ${xy(pt(45, 20))}"/>
     <polygon class="lv-infield" points="${diamond}"/>
     <line class="lv-line" x1="${HX}" y1="${HY}" x2="${xy(pt(-45, fenceAt(45))).split(',')[0]}" y2="${xy(pt(-45, fenceAt(45))).split(',')[1]}"/>
     <line class="lv-line" x1="${HX}" y1="${HY}" x2="${xy(pt(45, fenceAt(45))).split(',')[0]}" y2="${xy(pt(45, fenceAt(45))).split(',')[1]}"/>
-    <circle class="lv-mound" cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="6"/>
+    <circle class="lv-mound" cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="8"/>
     ${bag(BASE.first)}${bag(BASE.second)}${bag(BASE.third)}
     <polygon class="lv-plate" points="${HX - 3.5},${HY - 3} ${HX + 3.5},${HY - 3} ${HX + 3.5},${HY} ${HX},${HY + 3} ${HX - 3.5},${HY}"/>
     <g class="lv-path-layer"></g>
@@ -302,7 +307,10 @@ export function openLiveView(game) {
       <div class="lv-row"><span class="lv-k">In the hole</span><span class="lv-v">${name(v.inHole)}</span></div>
       <div class="lv-row"><span class="lv-k">Pitching</span><span class="lv-v">${name(v.pitcher)}</span><span class="lv-s">${pl ? _esc(`${pl.ip} IP, ${pl.h} H, ${pl.er} ER, ${pl.bb} BB, ${pl.k} K, ${v.bf} BF`) : ''}</span></div>`;
     const r = (s) => `<tr><td class="lv-t">${_esc(abbr[s])}</td><td>${v.rhe[s].r}</td><td>${v.rhe[s].h}</td><td>${v.rhe[s].e}</td></tr>`;
-    el.querySelector('.lv-box').innerHTML = `<table class="lv-rhe"><thead><tr><th></th><th>R</th><th>H</th><th>E</th></tr></thead><tbody>${r('away')}${r('home')}</tbody></table>`;
+    const oppName = (st.leagueTeams || []).find(t => t.id === game.opponentId)?.name || 'Opponent';
+    const uName = `${st.userTeam?.city || ''} ${st.userTeam?.nickname || ''}`.trim();
+    el.querySelector('.lv-box').innerHTML = `<table class="lv-rhe"><thead><tr><th></th><th>R</th><th>H</th><th>E</th></tr></thead><tbody>${r('away')}${r('home')}</tbody></table>`
+      + `<div class="lv-full">${renderBoxScore(v.box, { awayName: v.isHome ? oppName : uName, homeName: v.isHome ? uName : oppName })}</div>`;
   };
 
   const close = () => {
@@ -345,7 +353,7 @@ function _css() {
     .lv-field{padding:0 6px;}
     .lv-field svg{display:block;width:100%;height:auto;max-height:52vh;}
     .lv-grass{fill:#2f6e43;} .lv-fence{fill:none;stroke:#1d4a2c;stroke-width:3;}
-    .lv-dirt{fill:#9a7348;} .lv-infield{fill:#3a7d4f;}
+    .lv-dirt{fill:#9a7348;} .lv-infield{fill:#a98053;stroke:#f1f1f1;stroke-width:1;stroke-opacity:.7;}
     .lv-line{stroke:#f1f1f1;stroke-width:1;opacity:.85;}
     .lv-mound{fill:#a77d51;stroke:#8a6440;} .lv-bag{fill:#fafafa;} .lv-plate{fill:#fafafa;}
     .lv-fdot{fill:#1e3a8a;stroke:#fff;stroke-width:1;}
@@ -357,7 +365,7 @@ function _css() {
     .lv-path{stroke-width:1.6;stroke-linecap:round;opacity:.9;} .lv-ground{stroke-dasharray:3 3;}
     .lv-p-hit{stroke:#facc15;fill:#facc15;} .lv-p-out{stroke:#e5e7eb;fill:#e5e7eb;} .lv-p-hr{stroke:#f87171;fill:#f87171;} .lv-p-err{stroke:#fb923c;fill:#fb923c;}
     .lv-ball{fill:#fff;stroke:#333;stroke-width:.8;} .lv-shadow{fill:rgba(0,0,0,.35);}
-    .lv-last{padding:8px 14px 4px;font-size:14px;font-weight:600;color:var(--text);min-height:20px;}
+    .lv-last{padding:14px 14px 4px;font-size:14px;font-weight:600;color:var(--text);min-height:20px;}
     .lv-rows{padding:2px 14px;}
     .lv-row{display:flex;align-items:baseline;gap:10px;padding:6px 0;border-top:1px solid var(--border);font-size:14px;}
     .lv-k{width:84px;flex:none;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
@@ -368,6 +376,7 @@ function _css() {
     .lv-rhe{border-collapse:collapse;font-size:14px;color:var(--text);}
     .lv-rhe th{font-size:11px;font-weight:700;color:var(--muted);padding:2px 10px;}
     .lv-rhe td{padding:3px 10px;text-align:center;font-weight:700;}
-    .lv-rhe .lv-t{text-align:left;padding-left:0;}`;
+    .lv-rhe .lv-t{text-align:left;padding-left:0;}
+    .lv-full{margin:10px -14px 0;}`;
   document.head.appendChild(st);
 }
