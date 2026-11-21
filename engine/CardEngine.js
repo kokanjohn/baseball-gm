@@ -47,6 +47,7 @@ import {
   ROSTER_ADVICE,
   POSITION_RULES,
   PLAYER_GROUP,
+  ROSTER_LIMITS,   // r243
   PITCHER_HAND_DISPLAY,
   ARCHETYPE_CARD_WEIGHTS,
   TRADE_DEADLINE_OPEN,
@@ -145,7 +146,7 @@ import { starterRested, reliefValue } from './PitchingEngine.js';
 import { clockNow } from './Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
-import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt, stretchOf } from './Positions.js';   // r163 §122.35
+import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt, stretchOf, pitchRoles } from './Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -1363,6 +1364,68 @@ function _nextStarter(team, players, atMs, skipId = null) {
   return null;
 }
 
+/** r243 §122.122 who starts the next game as things stand (rested, in turn): an id, or null. */
+export function nextStarterId(state, atMs) {
+  return _nextStarter(state.userTeam, state.players || {}, atMs);
+}
+
+/**
+ * r243 §122.122 the GM took the starter who was next up out of the rotation (to the pitcher bench or the bullpen):
+ * the pitching coach says who starts that game now (the next rested starter in turn), and offers to fix it —
+ * put that pitcher back in line, or start a rested starter from the pitcher bench in the open turn. Leaving it
+ * is the GM's other answer. With nothing to offer, a notice. Withdrawn when the game starts or the pitcher is back.
+ */
+export function deliverNextStarterCard(benchedId, gameTime, atMs) {
+  const st = StateManager.get();
+  const players = st.players || {}, u = st.userTeam;
+  const B = players[benchedId];
+  const g = (st.schedule || []).find(x => x.gameTime === gameTime);
+  if (!B || !g) return null;
+  const key = `nextsp:${gameTime}:${benchedId}`;
+  if (_cardsWithKey(st, key).some(c => !c.resolved)) return null;
+  const staff = u.coachingStaff || {};
+  const sender = (!staff.pitchingCoach?.vacant && staff.pitchingCoach?.name) || _managerName(st);
+  const X = players[_nextStarter(u, players, gameTime)] || null;
+  const order = u.rotation?.order || [];
+  const room = order.length < ROSTER_LIMITS.STARTING_PITCHERS;
+  const rested = (p) => p && isAvailable(p) && starterRested(p, gameTime);
+  const choices = [];
+  if (room && rested(B) && (u.rosterIds || []).includes(B.id)) choices.push({ key: 'back', label: `Put ${B.name} back in line`, sub: `${B.name} starts it, as planned` });
+  if (room) {
+    (u.rosterIds || []).map(id => players[id])
+      .filter(p => p && p.id !== B.id && p.group === PLAYER_GROUP.PITCHER_BENCH && pitchRoles(p).includes('SP') && rested(p))
+      .sort((a, b) => b.ovr - a.ovr).slice(0, 2)
+      .forEach(p => choices.push({ key: `pick:${p.id}`, label: `Start ${p.name}`, sub: `From the pitcher bench, OVR ${p.ovr}: into the open turn, next up` }));
+  }
+  const when = When.untilFull(g.gameTime, atMs);
+  const vs = `${g.isHome ? 'against' : 'at'} the ${g.opponent}`;
+  const who = X ? `${X.name} is up next: ${when} ${vs}, rested and in turn.` : `Nobody left in the rotation is rested for ${when} ${vs}.`;
+  const fill = room ? ' If the open turn is still open at the deadline, it gets filled, and that pitcher slots in behind.' : '';
+  const orList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs.at(-1)}`);
+  const benchNames = choices.filter(c => c.key !== 'pick' && c.key.startsWith('pick:')).map(c => c.label.replace(/^Start /, ''));
+  const fixBits = [
+    ...(choices.some(c => c.key === 'back') ? [`put ${B.name} back in line`] : []),
+    ...(benchNames.length ? [`start ${orList(benchNames)} from the bench`] : []),
+  ];
+  const fixes = fixBits.length ? ` If you'd rather, I can ${fixBits.join(', or ')}.` : '';
+  const fields = {
+    cardId: 'next_starter', tag: 'ROTATION', sender, avatar: '⚾', type: 'normal',
+    _rosterKey: key, _targetPlayerId: B.id, _nextspGame: g.gameTime,
+    subject: X ? `${X.name} starts ${When.untilDay(g.gameTime, atMs)}` : `Nobody rested for ${When.untilDay(g.gameTime, atMs)}`,
+    preview: `With ${B.name} out of the rotation, ${X ? `${X.name} is up next` : 'nobody rested is in line'}.`,
+    body: `With ${B.name} out of the rotation, ${who}${fill}${fixes}`,
+  };
+  if (!choices.length) return _deliverNotice(key, fields, atMs);
+  return _deliverAt(_rosterCard(st, {
+    ...fields,
+    _choices: choices, _noRec: true,
+    yesLabel: choices[0].label, noLabel: X ? `Leave it: ${X.name} starts` : 'Leave it',
+    autoResolve: 'no', expiresAtMs: g.gameTime - 10 * 60_000,
+    _raw: { onYes: 'nextsp_fix', onNo: null, onAuto: null },
+    _autoLabel: X ? `No answer — ${X.name} started` : 'No answer — left as it was',
+  }), atMs);
+}
+
 /**
  * r160 §122.32 the rest watch: a regular in our lineup wearing down → one of the
  * staff writes, a decision (give the player the next game off, or not). Our
@@ -1612,8 +1675,12 @@ function _deliverOpenSpotsCard(atMs) {
   // The next game's spots: until its deadline (after it, the manager's turn). r239 §122.118 the GM opened them
   // after the deadline, knowingly: no word (filled at first pitch).
   const held = Number.isFinite(st.userTeam?.fillHeldFor) && fillAt === st.userTeam.fillHeldFor;
-  const spots = managerFillsNow(st, atMs) || held ? { lineup: [], rotation: 0, bullpen: 0, any: false } : openSpots(st);
-  const moves = spots.any ? _managerWouldFill(st) : [];
+  const spots0 = managerFillsNow(st, atMs) || held ? { lineup: [], rotation: 0, bullpen: 0, any: false } : openSpots(st);
+  // r243 §122.122 the pitching coach already told the GM about the open turn (and its fill): not again
+  const ng = nextLineupGame(st);
+  const told = !!ng && [...(st.inbox || []), ...(st.scheduledCards || [])].some(c => c._rosterKey?.startsWith(`nextsp:${ng.gameTime}:`));
+  const spots = told && spots0.rotation ? { ...spots0, rotation: 0, any: spots0.lineup.length > 0 || spots0.bullpen > 0 } : spots0;
+  const moves = spots.any ? _managerWouldFill(st).filter(m => !(told && m.slot === 'rotation')) : [];
   const nextOpen = moves.length ? [
     ...spots.lineup.map(x => x.emergency ? `${x.slot} (played out of position)` : x.slot),
     ...(spots.rotation ? [spots.rotation > 1 ? `${spots.rotation} rotation spots` : 'a rotation spot'] : []),
@@ -2038,6 +2105,12 @@ function _rosterConditionCards(delivered, atMs) {
     }
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
     if (key.startsWith('bats:'))     return key !== `bats:${state.userTeam?.batsDeadlineAt}`;   // r196 fixed, or the deadline moved
+    // r243 §122.122 the next-starter message: the game started, or the pitcher is back in the rotation
+    if (key.startsWith('nextsp:')) {
+      const gt = c._nextspGame;
+      const g = (state.schedule || []).find(x => x.gameTime === gt);
+      return !g || g._committed || !!g.liveLineups || (state.userTeam.rotation?.order || []).includes(c._targetPlayerId);
+    }
     // r241 §122.120 (the next game's spots, and the lineups set ahead)
     if (key.startsWith('openspots:')) {
       const base = `openspots:${managerFillAt(state)}`;
@@ -7109,6 +7182,24 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
       StateManager.mutate(s => { const p = s.players[need.ilFirst]; if (p?.injury?.status === 'dtd') Object.assign(p, placeOnILUpdate(p)); });
       reconcileUser();
       callUpBest(instance._pick || instance._choices?.[0]?.key, { side: 'hitter', pos: null });
+      reconcileUser();
+      break;
+    }
+
+    // ── r243 §122.122 the next starter: the benched one back in line, or a bench starter into the open turn, next up ──
+    case 'nextsp_fix': {
+      const pick = instance._pick || instance._choices?.[0]?.key;
+      const id = pick === 'back' ? instance._targetPlayerId : String(pick || '').replace(/^pick:/, '');
+      StateManager.mutate(s => {
+        const u = s.userTeam, p = s.players[id];
+        const rot = u.rotation || (u.rotation = { order: [], currentIndex: 0 });
+        const order = rot.order || (rot.order = []);
+        if (!p || order.includes(id) || order.length >= ROSTER_LIMITS.STARTING_PITCHERS || !(u.rosterIds || []).includes(id)) return;
+        p.group = PLAYER_GROUP.STARTING_PITCHERS;
+        const at = order.length ? (rot.currentIndex || 0) % order.length : 0;
+        order.splice(at, 0, id);   // in the turn that's up: next
+        rot.currentIndex = at;
+      });
       reconcileUser();
       break;
     }

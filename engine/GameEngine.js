@@ -3929,11 +3929,18 @@ export function gmMove(playerId, key, nowMs = clockNow()) {
   if (!moveOptions(st, playerId).some(o => o.key === key)) return { ok: false, reason: 'That move is no longer possible.' };
   // r239 §122.118 a move after the roster deadline: whatever it leaves open stays open until first pitch.
   const held = managerFillsNow(st, nowMs) ? nextLineupGame(st)?.gameTime : null;
+  // r243 §122.122 the starter who was next up, taken out of the rotation (to the bench or the bullpen): the
+  // pitching coach says who starts now. (A swap that puts someone in that turn — in:, turn: — is the GM's pick.)
+  const ng = nextLineupGame(st);
+  const upNext = ng ? CardEngine.nextStarterId(st, ng.gameTime) : null;
   StateManager.mutate(s => {
     if (Number.isFinite(held)) s.userTeam.fillHeldFor = held;
     applyMove(s, playerId, key);
     applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: nowMs }));
   });
+  if (upNext === playerId && (key === 'bench' || key.startsWith('pen:')) && !(StateManager.get().userTeam.rotation?.order || []).includes(playerId)) {
+    CardEngine.deliverNextStarterCard(playerId, ng.gameTime, nowMs + 60_000);
+  }
   CardEngine.syncRosterCards([], nowMs);
   return { ok: true };
 }

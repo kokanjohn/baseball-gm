@@ -14402,3 +14402,32 @@ No fresh team needed.
 - test-lineup-days-ui (14): the strip, tomorrow carried, MOVE on tomorrow (the next game untouched), the mark and the note, Same as the day before.
 
 No fresh team needed.
+
+---
+
+## §122.122 r243 — Lineups set ahead, phase 4: benching the starter who's next up
+
+**The rule (the GM's).** The GM doesn't pick who pitches next. When the GM takes the starter who's next up out of the rotation (MOVE → the pitcher bench, or the bullpen), the next rested starter in turn takes that game, as before (`_nextStarter`, the sim's §76 rule). The pitching coach now says so at once, with ways to fix it.
+
+**The message (next_starter, from the pitching coach; the manager if that chair is open).**
+- Subject: "Gaviria starts tomorrow".
+- Body: "With Pineda out of the rotation, Gaviria is up next: tomorrow at 1:05 PM against the Tideland Anchors, rested and in turn. If the open turn is still open at the deadline, it gets filled, and that pitcher slots in behind. If you'd rather, I can put Pineda back in line, or start Montoya or Solano from the bench."
+- Choices (`nextsp_fix`):
+  - "Put {pitcher} back in line": into the turn that's up, next again.
+  - "Start {name}": up to two rested SP-capable pitchers from the pitcher bench, best first, into the open turn, next up.
+  - The other button: "Leave it: {name} starts".
+  - The fix choices need an open turn. With nothing to offer, it's a notice.
+- Withdrawn when the game starts or the pitcher is back in the rotation; it expires 10 minutes before first pitch.
+- Sent only when the GM moved the starter who was next up with `bench` or `pen:`. A swap that puts someone in that turn (`in:`, `turn:`) is the GM's pick: nothing is sent.
+- The manager's open-spots message leaves out the open rotation turn (and its fill) for that game once the pitching coach has written about it.
+
+**Checks.** check-next-starter (13):
+- Benching the next starter names the new one, with the game and the choices; no second message about the turn.
+- "Put back" and "Start {bench}" each make that pitcher next.
+- A swap sends nothing.
+- Leaving it: the deadline fill slots in behind, and the named starter still starts.
+- An unanswered message goes at first pitch.
+
+The season run is identical to r242's (the sim GM doesn't bench its next starter); multi-season and the open-spots, fill, move, lineup, coach and pitcher-move tests pass.
+
+No fresh team needed.
