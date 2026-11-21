@@ -40,7 +40,8 @@ const eng = () => page.evaluate(async () => {
 
 await tap('.nav-item[data-tab="roster"]');
 const chips = await page.evaluate(() => [...document.querySelectorAll('.ds-chip')].map(c => c.innerText.replace(/\s+/g, ' ').trim()));
-check(`the day strip: ${chips.join(' | ')}`, chips.length >= 2 && /SP /.test(chips[0]));
+const nGames = (await eng()).n;
+check(`the day strip, a rolling week (${nGames} games): ${chips.join(' | ')}`, chips.length === nGames && nGames >= 3 && chips.every(c => /SP /.test(c)));
 check('the next game is chosen', await page.evaluate(() => document.querySelector('.ds-chip')?.classList.contains('on')));
 const today = await lineup();
 await page.screenshot({ path: `${out}/lineup-days-next-${theme}.png` });

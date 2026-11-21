@@ -14431,3 +14431,15 @@ No fresh team needed.
 The season run is identical to r242's (the sim GM doesn't bench its next starter); multi-season and the open-spots, fill, move, lineup, coach and pitcher-move tests pass.
 
 No fresh team needed.
+
+---
+
+## §122.123 r244 — Lineups set ahead, phase 5: a rolling week for everyone
+
+**Decision (the GM's).** No setting. Everyone can set lineups a rolling 7 days ahead, counting today (`LINEUP_PLAN.days = 7`). Gating is for later, when features that aren't premium are sorted out: `LINEUP_PLAN.freeDays = 2` (today and tomorrow) is kept for that. The day strip scrolls sideways through the week's games, one chip each (a doubleheader is two).
+
+**Checks.** check-lineup-ahead: the window is every game through the 7th day counting today, and none after. test-lineup-days-ui: one chip per game in the week, each with its probable starter. The other lineup checks, check-next-starter, check-open-spots, test-team-roster-ui and the season run pass.
+
+The plan from §122.119 is done (r240–r244).
+
+No fresh team needed.

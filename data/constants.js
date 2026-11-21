@@ -1553,9 +1553,10 @@ export const ROSTER_DECISION_LEAD_MS       = 60 * 60_000;   // 1 hour before fir
 /**
  * r240 §122.119 lineups set ahead, game by game (hitters only). A game takes the lineup of the game before it
  * unless the GM set its own (`game.lineupPlan`); each locks at first pitch. `days`: how far ahead the GM can set
- * them, counting today (2 = today and tomorrow; 7 = a rolling week). Until the day strip (r242) nothing sets one.
+ * them, counting today. r244 §122.123 a rolling week for everyone (no setting): `freeDays` (today and tomorrow)
+ * is kept for when features are gated later.
  */
-export const LINEUP_PLAN = Object.freeze({ days: 2, fullDays: 7 });
+export const LINEUP_PLAN = Object.freeze({ days: 7, freeDays: 2 });
 // §122 an open spot's deadline is the night before the next game day when there's time
 // (a signing then reports for that game), else an hour before first pitch.
 export const VACANCY_MIN_WINDOW_MS        = 3 * 3600_000;

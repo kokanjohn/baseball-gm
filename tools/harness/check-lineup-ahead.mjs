@@ -37,7 +37,11 @@ step(clock.get());
 let st = SM.get();
 const games = lineupGames(st, 7);
 check(`a week ahead: ${games.length} games whose lineups can be set`, games.length >= 4, games.length);
-check(`the default window is ${LINEUP_PLAN.days} days (today and tomorrow)`, lineupGames(st).every(g => g.gameTime < games[0].gameTime + 2 * 86_400_000 + 24 * H));
+// r244 §122.123 a rolling week: every game through the 7th day counting today, and none after
+{ const d0 = new Date(clock.get()); d0.setHours(0, 0, 0, 0); const until = d0.getTime() + LINEUP_PLAN.days * 86_400_000;
+  const all = st.schedule.filter(g => !g._committed && !g.liveLineups && Number.isFinite(g.gameTime) && g.gameTime >= games[0].gameTime);
+  check(`the window is ${LINEUP_PLAN.days} days: ${lineupGames(st).length} games`, LINEUP_PLAN.days === 7
+        && JSON.stringify(lineupGames(st).map(g => g.gameTime)) === JSON.stringify(all.filter(g => g === games[0] || g.gameTime < until).map(g => g.gameTime))); }
 const [g1, g2, g3, g4] = games.map(g => g.gameTime);
 const base = st.userTeam.lineupSlots.map(sl => ({ ...sl }));
 check('every game takes the lineup to start with', [g1, g2, g3, g4].every(t => same(lineupFor(st, byTime(t)), base)));
