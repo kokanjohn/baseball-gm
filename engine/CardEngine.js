@@ -67,6 +67,7 @@ import {
   CARD_MONEY_BASE_TARGET_K,
   GAME_WEATHER,
   COMPOSE_REPLY,
+  COMPOSE_OVERLAP,
   OFFSEASON_CARD_HOUR,
   GAME_STATUS,
   ROSTER_DECISION_LEAD_MS,
@@ -695,6 +696,9 @@ function _deliverAt(instance, atMs) {
   const state = StateManager.get();
   const same = _cardsWithKey(state, instance._rosterKey);
   if (same.some(c => !c.resolved)) return null;
+  // r238 §122.117 the GM already asked for this in Compose
+  const topic = COMPOSE_OVERLAP.cards[instance.cardId];
+  if (topic && askedInCompose(state, topic, atMs)) return null;
   // r139 §121 a roster card's id comes from what it is about (its key, and
   // how many came before it), so the look-ahead and the real clock agree.
   const instanceId = instance._rosterKey ? diceId(dice(diceSeed(state), 'roster-card', instance._rosterKey, same.length)) : instance.instanceId;
@@ -751,6 +755,16 @@ function _morningIfItCanWait(state, card, atMs) {
 export const _testDeliverAt = (card, atMs) => _deliverAt(card, atMs);
 
 /** Remove unresolved cards matching `pred` from the inbox and the schedule. */
+/**
+ * r238 §122.117 whether the GM asked this Compose question: a reply still on its way, or one that came in the last
+ * COMPOSE_OVERLAP.days.
+ */
+export function askedInCompose(state, topicId, atMs = clockNow()) {
+  if ((state.scheduledCards || []).some(c => c.isCompose && c._composeTopic === topicId)) return true;
+  return (state.inbox || []).some(c => c.isCompose && c._composeTopic === topicId
+    && atMs - (c._sentAtMs ?? c.deliverAtMs ?? 0) < COMPOSE_OVERLAP.days * 86_400_000);
+}
+
 function _withdraw(pred) {
   const state = StateManager.get();
   const hit = [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])].filter(pred);
@@ -2583,6 +2597,15 @@ function _releaseDue(nowMs) {
   const state = StateManager.get();
   let due = (state?.scheduledCards || []).filter(c => c.deliverAtMs <= nowMs);
   if (!due.length) return [];
+  // r238 §122.117 the crew's message about a game the GM already has a decision on (asked in Compose): not sent.
+  const fieldAsked = new Set((state.inbox || []).filter(c => Number.isFinite(c._fieldGameTime)).map(c => c._fieldGameTime));
+  const moot = due.filter(c => c.cardId === 'field_prep' && fieldAsked.has(c._fieldGameTime));
+  if (moot.length) {
+    const gone = new Set(moot.map(c => c.instanceId));
+    StateManager.mutate(s => { s.scheduledCards = (s.scheduledCards || []).filter(c => !gone.has(c.instanceId)); });
+    due = due.filter(c => !gone.has(c.instanceId));
+    if (!due.length) return [];
+  }
   const ids = new Set(due.map(c => c.instanceId));
   // §106 a staff reply is written now, as of the moment it was sent back.
   const log = [];
@@ -3395,6 +3418,8 @@ export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs 
     StateManager.mutate(s => { adjustRapport(s, arg.key, GM_TURNOVER.welcomeBonus); });
     _withdraw(c => c._rosterKey === `gmhello:${season}:${arg.key}`);
   }
+  // r238 §122.117 a message offering what the GM just asked for is moot: on its way, or unanswered in Messages.
+  _withdraw(c => !c.isCompose && COMPOSE_OVERLAP.cards[c.cardId] === topicId);
   const state   = StateManager.get();
   const cardDef = COMPOSE_RESPONSE_POOL[topicId];
 

@@ -1982,8 +1982,12 @@ function _fieldPrepCards(clockMs) {
     const g = st.schedule[i];
     if (!Number.isFinite(g.gameTime) || g.gameTime - lead > clockMs) break;
     if (g._committed || g.isSpring || g.cancelled || !g.isHome || g.fieldAsked === g.gameTime || g.status !== GAME_STATUS.SCHEDULED) continue;
+    // r238 §122.117 the GM asked the crew in Compose and the reply is on its way: wait for it (it may be about this game)
+    if ((st.scheduledCards || []).some(c => c.isCompose && c._composeTopic === 'gk_prep')) continue;
     StateManager.mutate(s => { const x = s.schedule[i]; if (x) x.fieldAsked = x.gameTime; });
     if (clockMs > g.gameTime - close || st.fieldPrep?.[g.gameTime]) continue;
+    // r238 the reply's decision about this game is already in Messages
+    if ((st.inbox || []).some(c => c._fieldGameTime === g.gameTime)) continue;
     const ctx = weatherContext(st);
     const at = g.gameTime - lead;
     const fc = forecastForGame(ctx, at, g);

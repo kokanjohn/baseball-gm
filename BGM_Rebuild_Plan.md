@@ -14259,3 +14259,35 @@ No fresh team needed.
 **Checks.** test-oop-move-ui: red slot with "!", no words in the name column, the toast, the card stays closed. test-pitcher-move-ui: the "!" says out of role. test-deal-sheet-ui: every player reads "Signed through YYYY", no "season". check-card-pools and check-message-voice pass.
 
 No fresh team needed.
+
+---
+
+## §122.117 r238 — The groundskeeper's weather between games; Compose and incoming messages aware of each other
+
+**The groundskeeper's weather reply (gk_weather) covers the time between games.** Before, it only spoke to each home game's own hours. Rain or snow passing over the park overnight between back-to-back home games went unmentioned, even with the radar showing it. Now each home game's line can be followed by one about the window before it: from now, or the end of the game before it (any game, home or away), to 30 minutes before first pitch, if that's at least 3 hours.
+- Only within the next 36 hours (further out, the game's own forecast and "I'll know more the day before" is all there is).
+- Said when the forecast run (what the radar's future frames show) brings rain or snow over the park in the window (30-minute steps), and the window's chance (`chanceOfPrecip`, the same ensemble the forecasts use) is 30% or more. The run is checked first, so a dry window costs one run, not the ensemble (the season run's 500 ms budget per reply): "Between games, there's an 80% chance of snow mixed with rain here." "Before then" is used when the game before is more than 12 hours back.
+- What it does to the field is what the game's weather will do with it (`fieldOutlook`, from the forecast run of the hour):
+  - Snow (12 hours before first pitch) enough to cover the field: "If it does, there's no clearing it in time and that game is off."
+  - Not enough to stick: "the tarp on and the crew in early".
+  - Rain in the last 6 hours: a soft field (the start could wait) or a flooded one.
+  - Rain earlier than that: "the field drains well before first pitch. It won't be a problem."
+- a/an by the number ("an 80%").
+
+**Compose and incoming messages know about each other.**
+- `COMPOSE_OVERLAP` (constants) maps a message to the Compose question it duplicates. For now: Scouting's first-day offers (fd_scout_market, fd_scout_holes) ↔ "Free agents worth a look" (sc_free_agents).
+  - Asking in Compose withdraws such a message, whether still on its way or unanswered in Messages.
+  - `_deliverAt` doesn't send one while the question is asked (`askedInCompose`: a reply on its way, or one in the last 7 days).
+- The director's reply, when the GM wrote first and their introduction (fd_scout_market) never came, opens with who they are: "I run our scouting, and I'm looking forward to working with you. Here's what you asked for." A later reply opens as usual.
+- **The groundskeeper's extra-crew message (field_prep) and the Compose question (gk_prep):**
+  - A gk_prep reply on its way holds back the crew's card. The game isn't marked asked, since the reply may be about another game.
+  - A decision about a game already in Messages means no card for that game. One already parked is dropped when it comes due.
+  - The reply to gk_prep, when the crew's card for that game is waiting unanswered, points to it rather than asking again.
+
+**"Two responses."** From the description, the second was probably the crew's own game-day outlook for the same game (WeatherMessages, a must-tell moment). That one stays: it's the crew's report on the day, not an answer to the GM. Waiting on the GM to confirm which two messages.
+
+**Checks.**
+- check-gk-between: 50–60 home games per seed asked about just after the game before. The between-games line appears exactly when the run shows it and the chance is 30% or more, with that chance and kind; the field consequence matches `fieldOutlook`. Seeds 1–3 pass; snow and cover cases are seen. sim-season (compose replies under 500 ms), multi-season, test-compose-ui, check-game-pushes, check-gm-connections, check-card-pools, check-message-voice pass.
+- check-compose-overlap: Scouting's offer is withdrawn on its way and from Messages; the reply introduces the director once. The crew's card and the gk_prep reply are never both sent for one game.
+
+No fresh team needed. (Existing saves: a Scouting offer already parked is withdrawn the next time the GM asks.)

@@ -1736,6 +1736,17 @@ export const CARD_DAY = Object.freeze({
 });
 // §105 Compose: how long each person takes to write back, in minutes [soonest, latest]
 // (most replies land early in the window). Field staff work the game: they answer after it.
+/**
+ * r238 §122.117 Messages that offer what the GM can also ask for in Compose (card id → the Compose topic). Once
+ * the GM has asked (a reply on the way, or one in the last `days`), the message isn't sent; asking withdraws one
+ * still on its way or unanswered in Messages. Scouting's first-day offer of the free agents is the Compose
+ * question "Free agents worth a look".
+ */
+export const COMPOSE_OVERLAP = Object.freeze({
+  days: 7,
+  cards: Object.freeze({ fd_scout_market: 'sc_free_agents', fd_scout_holes: 'sc_free_agents' }),
+});
+
 export const COMPOSE_REPLY = Object.freeze({
   windows: Object.freeze({
     groundskeeper:   [15, 90],

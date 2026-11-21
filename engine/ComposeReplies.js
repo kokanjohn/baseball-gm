@@ -27,7 +27,10 @@ import { strategyOf, battingOrder, recommendOrder, styleChoices, ORDER_STYLES, R
 import * as Managers from './ManagerEngine.js';   // §122.64
 import { bullpenRoles } from './PitchingEngine.js';   // r169
 import { PROMOTIONS, FIELD_CARE, FA_WATCH } from '../data/constants.js';   // r169, r170, r204
-import { drainageAt, drainageLevel, prepCostK } from './FieldCare.js';   // r170
+import { drainageAt, drainageLevel, prepCostK, fieldFor } from './FieldCare.js';   // r170
+import { chanceOfPrecip } from './WeatherForecast.js';   // r238 §122.117
+import { fieldOutlook } from './GameWeather.js';
+import { precipAt, forecastContext, DBZ_MIN } from './WeatherSystems.js';
 import { cutBy } from './OffseasonEngine.js';   // r200
 import { watching } from './FaWatch.js';   // r204 §122.82
 import * as Retirement from './Retirement.js';   // r223 §122.102
@@ -255,6 +258,9 @@ W.gk_prep = (f, r, who) => {
   const g = f.upcoming().filter(f.atHome).find(x => !x.isSpring && x.gameTime - close - f.atMs >= 2 * MS_HOUR);
   if (!g || g.gameTime - f.atMs > 4 * MS_DAY) return { body: [offseasonNote(f) || `We don't have a home game in the next few days that I could still get a crew in for. Ask me when we're back.`], memo: {} };
   const booked = f.state.fieldPrep?.[g.gameTime];
+  // r238 §122.117 the crew's own message about that game is already waiting on the GM
+  const sent = (f.state.inbox || []).find(c => !c.resolved && c.cardId === 'field_prep' && c._fieldGameTime === g.gameTime);
+  if (!booked && sent) return { body: [`I already sent you a note about ${gameWords(f, g)}: the extra crew and the full tarp for ${formatK(sent._fieldCostK || 0)}. It's in your messages. I need an answer ${FIELD_CARE.prep.closeH} hours before first pitch.`], memo: { gameTime: g.gameTime } };
   if (booked) return { body: [`The extra crew is already booked for ${gameWords(f, g)}. The tarp setup goes in the day before.`], memo: {} };
   const { fc, text } = forecastWords(f, g);
   const chance = fc?.chance ?? 0;
@@ -274,6 +280,48 @@ W.gk_prep = (f, r, who) => {
                 yesMsg: 'The extra crew is booked.', noMsg: 'The regular crew it is.' },
   };
 };
+
+/**
+ * r238 §122.117 the weather at the park before a home game, outside the game's own hours: from now, or the end of
+ * the game before it, to first pitch. What it does to the field is what the game's weather does with it
+ * (GameWeather._before): snow in the 12 hours before first pitch can cover the field and call the game off; rain
+ * only matters in the last 6 (a soft or flooded field). Rain earlier than that drains: said so, briefly.
+ * Nothing said for a dry window or a short one.
+ */
+function _betweenGames(f, g) {
+  // (the game before it on the schedule: ours, home or away, spring or not)
+  const prev = (f.state.schedule || []).filter(x => Number.isFinite(x.gameTime) && x.gameTime < g.gameTime)
+    .sort((a, b) => b.gameTime - a.gameTime)[0];
+  const t0 = Math.max(f.atMs, prev ? prev.gameTime + 3.5 * MS_HOUR : f.atMs);
+  const t1 = g.gameTime - 30 * 60_000;
+  if (t1 - t0 < 3 * MS_HOUR) return '';
+  if (t0 - f.atMs > 36 * MS_HOUR) return '';   // (further out, the game's own forecast is all there is to say: "I'll know more the day before")
+  const pk = f.park('user');
+  // Told when the forecast run (what the radar's future frames show) brings rain or snow over the park in the
+  // window, and its chance is 30% or more. (The run first: a dry window — most of them — costs one run, not the ensemble.)
+  const run = forecastContext(f.wx(), f.atMs);
+  let wet = false;
+  for (let t = t0 + 15 * 60_000; t < t1 && !wet; t += 30 * 60_000) {
+    const p = t <= f.atMs ? precipAt(f.wx(), pk.x, pk.y, t) : precipAt(run, pk.x, pk.y, t);
+    wet = p.dbz > DBZ_MIN && p.rateMmH > 0.1;
+  }
+  if (!wet) return '';
+  const ch = chanceOfPrecip(f.wx(), f.atMs, pk.x, pk.y, t0, t1);
+  if (!(ch.chance >= 30)) return '';
+  const fo = fieldOutlook(f.wx(), { ...g, venueId: 'user', field: fieldFor(f.state, 'user', g.gameTime) }, f.atMs);
+  const when = prev && prev.gameTime > f.atMs - 12 * MS_HOUR ? 'Between games' : 'Before then';
+  const wintry = ch.kind === 'snow' || ch.kind === 'mix' || fo.snowCover;
+  const what = ch.kind === 'snow' ? 'snow' : ch.kind === 'mix' || (wintry && ch.kind !== 'snow') ? 'snow mixed with rain' : ch.kind === 'storms' ? 'storms' : 'rain';
+  const an = /^(8|11|18)/.test(String(ch.chance)) && ![1, 100].includes(ch.chance) ? 'an' : 'a';   // "an 80%", "an 11%"
+  const head = `${when}, there's ${an} ${ch.chance}% chance of ${what} here.`;
+  if (wintry) {
+    if (fo.snowCover) return `${head} As it looks now, enough could stick to cover the field. If it does, there's no clearing it in time and that game is off.`;
+    return `${head} As it looks now, not enough to stick. We'll have the tarp on and the crew in early to clear what does.`;
+  }
+  if (fo.washout) return `${head} As it looks now, a lot of it comes in the hours before first pitch. That's enough to flood the field.`;
+  if (fo.soggy) return `${head} As it looks now, some of it comes close to first pitch. The field will be soft, and the start could wait on it.`;
+  return `${head} The tarp stays on and the field drains well before first pitch. It won't be a problem.`;
+}
 
 W.gk_weather = (f, r, who) => {
   const out = [];
@@ -304,6 +352,8 @@ W.gk_weather = (f, r, who) => {
     else if (fc.chance >= 10) plan = `Only a slight chance. If something pops up, it won't be enough to hurt the field.`;
     else plan = r() < 0.5 ? `Nothing to worry about from the field's side.` : `A good ${nightOf(f, g)} for the field.`;
     out.push(`${Cap(gameWords(f, g))}: ${text}. ${plan}`);
+    const between = _betweenGames(f, g);
+    if (between) out.push(between);
   }
   // Rain that's already fallen, and what it means for the next one.
   const rain = f.rainPast(24);
@@ -1603,7 +1653,13 @@ export function writeComposeReply(state, { topicId, channelId, atMs, subject = n
   const paras = (res.body || []).filter(Boolean);
   if (!paras.length) return null;
   const by = res.who || who;   // r212 §122.90 someone outside the club answering (another club's GM)
-  const open = by.noOpen ? null : _open(by.rel, r, res.topic || TOPIC_LABELS[topicId] || 'that');
+  // r238 §122.117 the scouting director's first word to this GM (the GM wrote first): who they are, before the answer.
+  // (Their first-day introduction isn't sent once the GM has asked them for the free agents.)
+  const first = channelId === 'scouting' && !res.who && who.name
+    && !(state.inbox || []).some(c => c.cardId === 'fd_scout_market')   // (the introduction itself; Scouting's read on a trade isn't one)
+    && !(state.composeLog || []).some(x => x.channelId === 'scouting' && x.atMs < atMs);
+  const open = by.noOpen ? null : first ? `I run our scouting, and I'm looking forward to working with you. Here's what you asked for.`
+    : _open(by.rel, r, res.topic || TOPIC_LABELS[topicId] || 'that');
   const body = [open, ...paras, _sign(by)].filter(Boolean).join('\n\n');
   return { sender: by.sender, subject: subject || `Re: ${Cap(TOPIC_LABELS[topicId] || 'your message')}`, body,
            preview: paras[0].split('\n')[0], memo: res.memo || {}, decision: res.decision || null, trade: res.trade || null,
