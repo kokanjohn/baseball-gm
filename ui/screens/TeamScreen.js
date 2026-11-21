@@ -30,9 +30,10 @@ import { lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary, formatOPS } from '../formatters.js';
-import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, POSITION_RULES } from '../../data/constants.js';
+import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, POSITION_RULES, LINEUP_PLAN } from '../../data/constants.js';
 import { clockNow } from '../../engine/Clock.js';   // r239 §122.118
-import { eligibleSlotsFor, moveOptions, tradedAway, managerFillAt, managerFillsNow, nextLineupGame }
+import { eligibleSlotsFor, moveOptions, tradedAway, managerFillAt, managerFillsNow, nextLineupGame,
+         lineupGames, lineupFor, hasOwnLineup, moveOptionsFor, availableFor }
   from '../../engine/RosterEngine.js';
 import * as GameEngine from '../../engine/GameEngine.js';
 import { getRosterNeeds } from '../../engine/TransactionEngine.js';
@@ -48,6 +49,7 @@ import { posLabel, eligibleAt, pitchRoles } from '../../engine/Positions.js';   
 // ─────────────────────────────────────────────────────────────
 
 let _activeTab   = 'players';
+let _dayAt       = null;   // r242 §122.121 the game whose lineup the Players tab shows (first pitch; null: the next game)
 let _mounted     = false;
 let _listeners   = [];
 
@@ -294,12 +296,79 @@ export function refresh() {
 const HIT_COLS = [['hab', 'H/AB'], ['r', 'R'], ['hr', 'HR'], ['rbi', 'RBI'], ['bb', 'BB'], ['sb', 'SB'], ['avg', 'AVG'], ['ops', 'OPS']];
 const PIT_COLS = [['ip', 'IP'], ['w', 'W'], ['l', 'L'], ['sv', 'SV'], ['era', 'ERA'], ['whip', 'WHIP'], ['k', 'K'], ['bb', 'BB']];
 
+/**
+ * r242 §122.121 the game the Players tab shows: the next game (lineupSlots), one set ahead (its own lineup or
+ * the one carried to it), or the game under way (the lineup it took at first pitch, locked).
+ */
+function _dayCtx(state) {
+  const games = lineupGames(state, LINEUP_PLAN.days);
+  const live = (state.schedule || []).find(g => g.liveLineups && !g._committed && g.lineupTaken);
+  const pick = (Number.isFinite(_dayAt) && [live, ...games].find(g => g?.gameTime === _dayAt)) || null;
+  if (!pick) _dayAt = null;
+  const game = pick || games[0] || null;
+  if (game && game === live) return { game, games, live, locked: true, next: false, slots: game.lineupTaken };
+  const next = !game || game === games[0];
+  return { game, games, live, locked: false, next, slots: next ? (state.userTeam.lineupSlots || []) : (lineupFor(state, game) || []) };
+}
+
+/** MOVE for a hitter on the chosen day (a pitcher: the staff, as ever). */
+function _optsFor(state, playerId) {
+  const g = _dayAt != null ? (state.schedule || []).find(x => x.gameTime === _dayAt) : null;
+  return g ? moveOptionsFor(state, playerId, g) : moveOptions(state, playerId);
+}
+
+/** A hitter who can't play in a game set ahead (still here today): said on the row. */
+function _outThatDay(state, p, day) {
+  if (day.next || day.locked || !day.game || availableFor(state, p, day.game)) return null;
+  return tradedAway(state, p.id) ? null : 'out that day';
+}
+
+/** The probable starter for each game ahead: the rotation in turn (the pitching coach's call, not the GM's). */
+function _probables(state, games) {
+  const rot = state.userTeam.rotation || {}, order = rot.order || [];
+  if (!order.length) return new Map();
+  return new Map(games.map((g, k) => [g.gameTime, state.players[order[((rot.currentIndex || 0) + k) % order.length]]]));
+}
+
+function _dayStrip(state, day) {
+  if (!day.game) return '';
+  const chips = [...(day.live ? [day.live] : []), ...day.games];
+  const sp = _probables(state, day.games);
+  const opp = (g) => (state.leagueTeams || []).find(t => t.id === g.opponentId)?.abbr || g.opponent || '';
+  const chip = (g) => {
+    const locked = g === day.live;
+    const own = !locked && hasOwnLineup(state, g);
+    const slots = locked ? g.lineupTaken : g === day.games[0] ? state.userTeam.lineupSlots : lineupFor(state, g);
+    const open = !locked && (slots || []).some(sl => !sl.playerId);
+    const on = g === day.game;
+    const starter = locked ? null : sp.get(g.gameTime);
+    return `<button type="button" class="ds-chip${on ? ' on' : ''}${locked ? ' locked' : ''}" data-day="${g.gameTime}">
+      <span class="ds-day">${_escape(When.relDay(g.gameTime, clockNow()))}${own ? '<span class="ds-own" title="Set for this game">•</span>' : ''}${open ? '<span class="ds-open" title="An open spot">●</span>' : ''}</span>
+      <span class="ds-game">${g.isHome ? 'vs' : '@'} ${_escape(opp(g))} · ${_escape(When.clockText(g.gameTime))}</span>
+      <span class="ds-sp">${locked ? 'Under way' : starter ? `SP ${_escape(starter.name)}` : '&nbsp;'}</span>
+    </button>`;
+  };
+  const g = day.game;
+  const note = day.locked ? 'Under way: the lineup it started with. Changes are for the next game.'
+    : day.next ? 'The next game. Days after it take this lineup unless you set them.'
+    : hasOwnLineup(state, g) ? 'Set for this game. The days after it take it unless you set them.'
+    : 'Takes the lineup of the game before it. Any change sets this game on its own.';
+  const same = !day.locked && !day.next && hasOwnLineup(state, g)
+    ? '<button type="button" class="ds-same" id="ds-same">Same as the day before</button>' : '';
+  return `<div class="ds-wrap">
+      <div class="ds-strip">${chips.map(chip).join('')}</div>
+      <div class="ds-note"><span>${note}</span>${same}</div>
+    </div>`;
+}
+
 function _renderPlayers(state) {
   const team      = state.userTeam;
   const rosterIds = team.rosterIds || [];
   const players   = state.players || {};
   const impScores = state.impScores || {};
-  const slots     = team.lineupSlots || [];
+  // r242 §122.121 the day strip: the hitters as they stand for the chosen game
+  const day       = _dayCtx(state);
+  const slots     = day.slots;
   const isP       = (p) => ['SP', 'RP'].includes(p?.pos);
   const ours      = rosterIds.map(id => players[id]).filter(Boolean);
 
@@ -311,13 +380,14 @@ function _renderPlayers(state) {
   const seated    = new Set(slots.map(s => s.playerId).filter(Boolean));
   const hitBench  = ours.filter(p => !isP(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id)).sort((a, b) => b.ovr - a.ovr);
   const hitIL     = ours.filter(p => !isP(p) && p.group === PLAYER_GROUP.IL);
+  const hitMove = (p) => !day.locked && _optsFor(state, p.id).length > 0;
   const hitRows = [
     ...slots.map((sl, i) => {
       const p = sl.playerId ? players[sl.playerId] : null;
-      return p ? _row(state, p, sl.slot, impScores[p.id], { oop: !!(sl.emergency || sl.oop) })
-               : _emptyRow(sl.slot, { slotIdx: i });
+      return p ? _row(state, p, sl.slot, impScores[p.id], { oop: !!(sl.emergency || sl.oop), movable: hitMove(p), out: _outThatDay(state, p, day) })
+               : _emptyRow(sl.slot, { slotIdx: i, locked: day.locked });
     }),
-    ...hitBench.map((p, i) => _row(state, p, 'Bench', impScores[p.id], { first: i === 0 })),
+    ...hitBench.map((p, i) => _row(state, p, 'Bench', impScores[p.id], { first: i === 0, movable: hitMove(p), out: _outThatDay(state, p, day) })),
     ...coming.filter(c => !isP(c.p)).map((c, i) => _row(state, c.p, 'Bench', impScores[c.p.id], { first: !hitBench.length && i === 0, coming: c })),
     ...needRows('hitter').map((n, i) => _needRow(n, needs, { first: !hitBench.length && !coming.some(c => !isP(c.p)) && i === 0 })),
     ...hitIL.map((p, i) => _row(state, p, 'IL', impScores[p.id], { first: i === 0, il: true })),
@@ -353,6 +423,7 @@ function _renderPlayers(state) {
   return `
     <div class="tr-players">
       ${vacancyBanner}
+      ${_dayStrip(state, day)}
       ${_table('Hitters', HIT_COLS, hitRows, _seasonLabel(state, ours.filter(p => !isP(p))))}
       ${_table('Pitchers', PIT_COLS, pitRows, _seasonLabel(state, ours.filter(isP)))}
     </div>`;
@@ -449,9 +520,9 @@ function _wearCell(p) {
 const _blankCells = (cols) => cols.map(([k]) => `<div class="tr-td tr-c-${k}"></div>`).join('') + '<div class="tr-td tr-c-imp"></div>';
 
 /** One of our players: slot, name (with marks and tags), MOVE, the line. */
-function _row(state, p, slot, imp, { first = false, il = false, coming = null, oop = false, next = false } = {}) {
+function _row(state, p, slot, imp, { first = false, il = false, coming = null, oop = false, next = false, movable = null, out = null } = {}) {
   const traded = !coming && tradedAway(state, p.id);
-  const canMove = !coming && !il && moveOptions(state, p.id).length > 0;
+  const canMove = !coming && !il && (movable ?? moveOptions(state, p.id).length > 0);
   const shown = _statsShown(p);
   const pitcher = ['SP', 'RP'].includes(p.pos);
   const pos = pitcher ? `${posLabel(p)} · ${p.hand === 'L' ? 'L' : 'R'}` : posLabel(p);   // r167 SP/RP
@@ -487,6 +558,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
     if (next) subBits.push('<span class="tr-next" title="Starts the next game">Next</span>');
     const st = _statusWord(p);
     if (st) subBits.push(`<span class="tr-hurt">${st}</span>`);
+    if (out) subBits.push(`<span class="tr-hurt">${out}</span>`);   // r242 can't play that day
     if (pitcher && isAvailable(p) && slot !== 'Bench' && !slot.startsWith('SP')) {
       const arm = armStatus(p, Date.now()).status;
       if (arm === 'down') subBits.push('<span class="tr-hurt">resting today</span>');
@@ -513,14 +585,14 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
 }
 
 /** An open lineup slot, rotation turn or bullpen spot: tap to fill it from the bench. */
-function _emptyRow(slot, { slotIdx = null, turn = false, pen = false, first = false } = {}) {
+function _emptyRow(slot, { slotIdx = null, turn = false, pen = false, first = false, locked = false } = {}) {
   const cols = turn || pen ? PIT_COLS : HIT_COLS;
-  const attr = slotIdx != null ? `data-fill-slot="${slotIdx}"` : turn ? 'data-fill-turn="1"' : 'data-fill-pen="1"';
+  const attr = locked ? '' : slotIdx != null ? `data-fill-slot="${slotIdx}"` : turn ? 'data-fill-turn="1"' : 'data-fill-pen="1"';
   return `
-    <div class="tr-row tr-empty${first ? ' tr-first' : ''}" ${attr}>
+    <div class="tr-row${locked ? ' tr-empty-locked' : ' tr-empty'}${first ? ' tr-first' : ''}" ${attr}>
       <div class="tr-fz">
         <div class="tr-slot">${slot}</div>
-        <div class="tr-name"><div class="tr-name-line tr-muted">Empty</div><div class="tr-sub">Tap to fill</div></div>
+        <div class="tr-name"><div class="tr-name-line tr-muted">Empty</div><div class="tr-sub">${locked ? 'Locked' : 'Tap to fill'}</div></div>
         <div class="tr-wearc"></div>
         <div class="tr-ovr"></div>
         <div class="tr-act"></div>
@@ -811,6 +883,22 @@ function _attachListeners(state) {
     else App.showToast('To improve the staff: ' + moves.join(' · '), 'neutral', 5500);
   });
 
+  // r242 §122.121 the day strip
+  document.querySelectorAll('.ds-chip[data-day]').forEach(el => el.addEventListener('click', () => {
+    App.playClick();
+    const t = Number(el.dataset.day);
+    const nx = nextLineupGame(StateManager.get());
+    _dayAt = nx && nx.gameTime === t ? null : t;
+    refresh();
+  }));
+  document.getElementById('ds-same')?.addEventListener('click', () => {
+    App.playClick();
+    const res = GameEngine.gmSameAsBefore(_dayAt);
+    if (!res.ok) App.showToast(res.reason, 'negative');
+    EventBus.emit('roster:changed', { type: 'move' });
+    refresh();
+  });
+
   // r153 MOVE: where this player can go (RosterEngine.moveOptions).
   document.querySelectorAll('.tr-move[data-move]:not([disabled])').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -827,12 +915,13 @@ function _attachListeners(state) {
       const st = StateManager.get();
       const idx = el.dataset.fillSlot != null ? Number(el.dataset.fillSlot) : null;
       const key = idx != null ? `slot:${idx}` : el.dataset.fillTurn ? 'turn:new' : 'pen:new';
-      const label = idx != null ? `the ${st.userTeam.lineupSlots[idx]?.slot} slot` : el.dataset.fillTurn ? 'the open rotation spot' : 'the open bullpen spot';
+      const daySlots = _dayCtx(st).slots;   // r242 §122.121 the chosen day's
+      const label = idx != null ? `the ${daySlots[idx]?.slot} slot` : el.dataset.fillTurn ? 'the open rotation spot' : 'the open bullpen spot';
       // (the bench only: r167 MOVE offers a starter the bullpen too, but filling one hole shouldn't open another;
       //  those holding the role first, out of role after)
-      const seated = new Set((st.userTeam.lineupSlots || []).map(sl => sl.playerId).filter(Boolean));
+      const seated = new Set((idx != null ? daySlots : st.userTeam.lineupSlots || []).map(sl => sl.playerId).filter(Boolean));
       const onBench = (p) => p.group === PLAYER_GROUP.PITCHER_BENCH || (p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id));
-      const optFor = (p) => moveOptions(st, p.id).find(o => o.key === key);
+      const optFor = (p) => _optsFor(st, p.id).find(o => o.key === key);
       const who = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(p => p && onBench(p) && optFor(p))
         .sort((a, b) => (!!optFor(a).oop - !!optFor(b).oop) || (b.ovr - a.ovr));
       if (!who.length) { App.showToast(`Nobody on the bench can fill ${label}.`, 'negative'); return; }
@@ -889,9 +978,11 @@ function _openNote(st) {
 function _openMoveSheet(playerId) {
   const st = StateManager.get();
   const p = st.players[playerId];
-  const opts = moveOptions(st, playerId);
+  const opts = _optsFor(st, playerId);
   if (!p || !opts.length) { refresh(); return; }
-  const deadline = managerFillAt(st);
+  const day = _dayCtx(st);
+  const ahead = !day.next && !['SP', 'RP'].includes(p.pos);   // r242 a game set ahead
+  const deadline = ahead ? null : managerFillAt(st);
   const leaves = opts.some(o => o.key === 'bench');
   const row = (o) => `
     <div class="sm-row${o.oop ? ' sm-oop' : ''}" data-key="${o.key}">
@@ -908,7 +999,8 @@ function _openMoveSheet(playerId) {
        <div class="sm-oop-list" hidden>${oop.map(row).join('')}</div>` : '')
     + (leaves && deadline ? `<div class="sm-note">${_openNote(st)}</div>` : '');
   const pos = posLabel(p);
-  _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}`, rows, (overlay) => {
+  const forDay = ahead ? ` · ${_escape(When.relDay(day.game.gameTime, clockNow()))}'s game` : '';
+  _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}${forDay}`, rows, (overlay) => {
     overlay.querySelectorAll('.sm-row[data-key]').forEach(row => row.addEventListener('click', () => {
       App.playClick(); overlay.remove(); _doMove(playerId, row.dataset.key);
     }));
@@ -922,7 +1014,7 @@ function _openMoveSheet(playerId) {
 }
 
 function _doMove(playerId, key) {
-  const res = GameEngine.gmMove(playerId, key);
+  const res = _dayAt != null ? GameEngine.gmMoveFor(playerId, key, _dayAt) : GameEngine.gmMove(playerId, key);   // r242
   if (!res.ok) { App.showToast(res.reason, 'negative'); refresh(); return; }
   EventBus.emit('roster:changed', { type: 'move' });
   const ropt = _calcRopt(StateManager.get());
@@ -1202,6 +1294,19 @@ function _injectCSS() {
       color:var(--muted);white-space:nowrap;padding-top:6px;padding-bottom:6px;}
     .tr-slot{width:46px;flex-shrink:0;padding-left:10px;box-sizing:border-box;font-size:11px;font-weight:600;color:var(--soft);white-space:nowrap;}
     .tr-slot.tr-oop{color:var(--danger);}
+    .ds-wrap{margin:4px 0 10px;padding:0 16px;}
+    .ds-strip{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 6px;scrollbar-width:none;}
+    .ds-strip::-webkit-scrollbar{display:none;}
+    .ds-chip{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:112px;padding:7px 10px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font:inherit;text-align:left;cursor:pointer;}
+    .ds-chip.on{border-color:#4A9EE0;box-shadow:0 0 0 1px #4A9EE0 inset;}
+    .ds-chip.locked{opacity:.6;}
+    .ds-day{font-size:12px;font-weight:800;display:flex;align-items:center;gap:4px;}
+    .ds-own{color:#4A9EE0;font-size:18px;line-height:0;}
+    .ds-open{color:var(--danger);font-size:9px;}
+    .ds-game{font-size:11px;color:var(--muted);white-space:nowrap;}
+    .ds-sp{font-size:11px;color:var(--muted);white-space:nowrap;}
+    .ds-note{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted);padding:0 2px;}
+    .ds-same{flex:0 0 auto;font:inherit;font-size:12px;font-weight:700;padding:5px 10px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer;}
     .tr-oop-mark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin-left:3px;padding:0;border:none;border-radius:50%;background:var(--danger);color:#fff;font-size:10px;font-weight:800;line-height:1;vertical-align:1px;cursor:pointer;}
     .tr-name{width:76px;flex-shrink:0;min-width:0;padding:7px 4px 7px 2px;}
     .tr-name-line{font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}

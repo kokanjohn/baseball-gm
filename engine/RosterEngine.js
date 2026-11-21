@@ -938,10 +938,44 @@ export function setLineupFor(draft, game, slots) {
     draft.userTeam.lineupSlots = _copySlots(slots);
     return true;
   }
-  // r241 a spot the GM leaves open in a later game's lineup is the GM's choice (`gmOpen`): no message about it
-  if (slots) game.lineupPlan = _copySlots(slots).map(sl => (sl.playerId ? (delete sl.gmOpen, sl) : { ...sl, gmOpen: true }));
-  else delete game.lineupPlan;
+  // r241 a spot the GM leaves open in a later game's lineup is the GM's choice (`gmOpen`): no message about it.
+  // (r242 only a slot the GM emptied, or one already marked: a slot a roster change opened stays the manager's to tell)
+  if (slots) {
+    const before = lineupFor(draft, game) || [];
+    game.lineupPlan = _copySlots(slots).map((sl, i) => {
+      if (sl.playerId) { delete sl.gmOpen; return sl; }
+      const was = before[i];
+      return was?.playerId || was?.gmOpen ? { ...sl, gmOpen: true } : sl;
+    });
+  } else delete game.lineupPlan;
   return true;
+}
+
+/**
+ * r242 §122.121 moveOptionsFor(state, playerId, game) — MOVE for one of our hitters in a game set ahead: the
+ * lineup slots and the bench as they stand for that game, with who can play in it (availableFor). The next
+ * game, and any pitcher (the staff isn't set game by game), is moveOptions as ever.
+ */
+export function moveOptionsFor(state, playerId, game) {
+  const me = state.players?.[playerId];
+  const next = _nextOpenGame(state);
+  if (!game || game === next || ['SP', 'RP'].includes(me?.pos)) return moveOptions(state, playerId);
+  const slots = lineupFor(state, game);
+  if (!slots) return [];
+  const shadow = { ...state, userTeam: { ...state.userTeam, lineupSlots: slots } };
+  return moveOptions(shadow, playerId, { ok: (p) => availableFor(state, p, game) });
+}
+
+/** r242 §122.121 carries out one of moveOptionsFor on a draft: that game's lineup becomes its own. */
+export function applyMoveFor(draft, playerId, key, game) {
+  const next = _nextOpenGame(draft);
+  const me = draft.players?.[playerId];
+  if (!game || game === next || ['SP', 'RP'].includes(me?.pos)) return applyMove(draft, playerId, key);
+  const slots = lineupFor(draft, game);
+  if (!slots) return false;
+  const shadow = { ...draft, userTeam: { ...draft.userTeam, lineupSlots: slots } };
+  if (!applyMove(shadow, playerId, key, { ok: (p) => availableFor(draft, p, game) })) return false;
+  return setLineupFor(draft, game, shadow.userTeam.lineupSlots);
 }
 
 /**
@@ -1154,12 +1188,13 @@ export function tradedAway(state, playerId) {
  *     taking the turn, or open. A reliever likewise with the bullpen.
  * An open spot waits for the GM until the roster deadline (managerFillsNow).
  */
-export function moveOptions(state, playerId) {
+export function moveOptions(state, playerId, { ok: okFor = null } = {}) {
   const u = state.userTeam, players = state.players || {};
   const me = players[playerId];
-  if (!me || !(u.rosterIds || []).includes(playerId) || !isAvailable(me) || me.group === PLAYER_GROUP.IL || tradedAway(state, playerId)) return [];
+  // r242 §122.121 for a game set ahead (moveOptionsFor): who can play is who can play in that game
+  const ok = okFor || ((p) => p && isAvailable(p) && !tradedAway(state, p.id));
+  if (!me || !(u.rosterIds || []).includes(playerId) || me.group === PLAYER_GROUP.IL || !ok(me)) return [];
   const ids = u.rosterIds || [];
-  const ok = (p) => p && isAvailable(p) && !tradedAway(state, p.id);
   const ovr = (p) => `OVR ${p.ovr}`;
   const out = [];
   if (!['SP', 'RP'].includes(me.pos)) {
@@ -1242,8 +1277,8 @@ function stretchWords(p) {
  * draft (the caller reconciles after, at the move's moment). Returns false
  * when the option no longer exists.
  */
-export function applyMove(draft, playerId, key) {
-  if (!moveOptions(draft, playerId).some(o => o.key === key)) return false;
+export function applyMove(draft, playerId, key, opts = {}) {
+  if (!moveOptions(draft, playerId, opts).some(o => o.key === key)) return false;
   const u = draft.userTeam, players = draft.players;
   const me = players[playerId];
   const [kind, arg] = key.split(':');

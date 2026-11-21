@@ -14375,3 +14375,30 @@ No fresh team needed.
 The season run passes (3,808 of 3,808), as do multi-season and check-lineup-ahead, check-move-open, check-open-spots, check-manager-fill, check-roster-advice and test-team-roster-ui. The run's games differ from r240's because of one behaviour change, even with no lineups set ahead. A second opening before the same deadline now gets its own message (replacing an unanswered one); before, the first message per deadline was the only one. In the one-season message audit, open-spot messages went from 19 to 25. Only one pair came close together: "OF is open", then two hours later "Open spots before the next game" covering it plus the new one.
 
 No fresh team needed.
+
+---
+
+## §122.121 r242 — Lineups set ahead, phase 3: the day strip and MOVE for any day
+
+**Team → Players: the day strip** (above the Hitters table).
+- One chip per game whose lineup can be set (`lineupGames`, `LINEUP_PLAN.days`: today and tomorrow until r244's setting).
+- Each chip shows the day ("Today", "Tomorrow", a weekday), "vs/@ ABBR · 7:05 PM", and the probable starter ("SP Pineda": the rotation in turn, read-only; the pitching coach's call).
+- A blue • marks a game the GM set on its own; a red ● marks a game with an open spot.
+- During a game, a greyed "Under way" chip comes first, showing the lineup the game started with (`lineupTaken`), read-only ("Locked").
+- The note under the strip:
+  - the next game: "The next game. Days after it take this lineup unless you set them."
+  - a carried game: "Takes the lineup of the game before it. Any change sets this game on its own."
+  - a set game: "Set for this game. …", with **Same as the day before**, which clears it (`gmSameAsBefore`).
+- The hitters show that game's lineup; the bench is the hitters not in it. A hitter who can't play that day says "out that day". Pitchers are the same on every day, and their MOVE is the staff's, as ever.
+
+**MOVE for any day.**
+- RosterEngine `moveOptionsFor(state, id, game)` and `applyMoveFor(draft, id, key, game)` run the same MOVE on that game's lineup. A shadow team holds that game's slots, and who can play is `availableFor` that game: `moveOptions` / `applyMove` take an `ok` predicate.
+- GameEngine `gmMoveFor(id, key, gameTime)`: the next game, or a pitcher, is `gmMove`.
+- The Move sheet names the day ("· Tomorrow's game"). Its open-spot deadline note is for the next game only. Tapping an empty slot fills it for the chosen day.
+- `setLineupFor` now marks `gmOpen` only on a slot the GM emptied (or one already marked). A slot a roster change opened stays the manager's to tell, even after the GM edits that day.
+
+**Checks.**
+- check-lineup-move (11): a day-to-day player isn't offered for a game they miss but is for one after; benching for game 3 sets it on its own and leaves the next game and game 2 untouched; the GM's open spot gets no message, while a roster change's does; filling from the bench; Same as the day before.
+- test-lineup-days-ui (14): the strip, tomorrow carried, MOVE on tomorrow (the next game untouched), the mark and the note, Same as the day before.
+
+No fresh team needed.

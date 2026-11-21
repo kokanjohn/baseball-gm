@@ -57,7 +57,7 @@ import {
   pendingArrivals,
   teamRating, recordRating,
   openSpots, managerFillAt, managerFillDue, managerFillsNow, nextLineupGame, moveOptions, applyMove,
-  promoteLineup,
+  promoteLineup, moveOptionsFor, applyMoveFor, setLineupFor,
 } from './RosterEngine.js';
 
 import { rosterClock, applyDue, hasDue, cpuSalaryMove, cpuFreeAgentLook, campCallAt } from './TransactionEngine.js';
@@ -3934,6 +3934,35 @@ export function gmMove(playerId, key, nowMs = clockNow()) {
     applyMove(s, playerId, key);
     applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: nowMs }));
   });
+  CardEngine.syncRosterCards([], nowMs);
+  return { ok: true };
+}
+
+/**
+ * r242 §122.121 gmMoveFor(playerId, key, gameTime, nowMs) — MOVE for a game set ahead (the Team screen's day
+ * strip): that game's lineup becomes its own; the games after it without their own take it. The next game
+ * (or no game named), or a pitcher, is gmMove. Returns { ok, reason }.
+ */
+export function gmMoveFor(playerId, key, gameTime = null, nowMs = clockNow()) {
+  const st = StateManager.get();
+  if (!st?.userTeam) return { ok: false, reason: 'no team loaded' };
+  const game = Number.isFinite(gameTime) ? (st.schedule || []).find(g => g.gameTime === gameTime) : null;
+  const next = nextLineupGame(st);
+  if (!game || game === next || ['SP', 'RP'].includes(st.players[playerId]?.pos)) return gmMove(playerId, key, nowMs);
+  if (!moveOptionsFor(st, playerId, game).some(o => o.key === key)) return { ok: false, reason: 'That move is no longer possible.' };
+  let ok = false;
+  StateManager.mutate(s => { ok = applyMoveFor(s, playerId, key, s.schedule.find(g => g.gameTime === gameTime)); });
+  if (!ok) return { ok: false, reason: 'That move is no longer possible.' };
+  CardEngine.syncRosterCards([], nowMs);
+  return { ok: true };
+}
+
+/** r242 §122.121 a game set ahead takes the lineup of the game before it again. */
+export function gmSameAsBefore(gameTime, nowMs = clockNow()) {
+  const st = StateManager.get();
+  const game = (st?.schedule || []).find(g => g.gameTime === gameTime);
+  if (!game || game === nextLineupGame(st)) return { ok: false, reason: 'That game takes the lineup as it is.' };
+  StateManager.mutate(s => { setLineupFor(s, s.schedule.find(g => g.gameTime === gameTime), null); });
   CardEngine.syncRosterCards([], nowMs);
   return { ok: true };
 }
