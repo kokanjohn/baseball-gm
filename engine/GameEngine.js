@@ -57,6 +57,7 @@ import {
   pendingArrivals,
   teamRating, recordRating,
   openSpots, managerFillAt, managerFillDue, managerFillsNow, nextLineupGame, moveOptions, applyMove,
+  promoteLineup,
 } from './RosterEngine.js';
 
 import { rosterClock, applyDue, hasDue, cpuSalaryMove, cpuFreeAgentLook, campCallAt } from './TransactionEngine.js';
@@ -711,6 +712,7 @@ function _activateGameNow(game) {
     g.plays         = plays;
     g.livePlayIndex = 0;
     g.status        = GAME_STATUS.LIVE;
+    g.lineupTaken   = (state.userTeam.lineupSlots || []).map(sl => ({ ...sl }));   // r240 §122.119
     if (wx) { Object.assign(g, wx.record); g.wx = wx.plan; g.wxResult = weather; }
     if (resumeState) g.resumeState = resumeState;   // §109 suspended: where it stands, finished when it resumes
     // Pre-computed full-game box (promoted to g.boxScore at commit) + seed lineups.
@@ -723,6 +725,8 @@ function _activateGameNow(game) {
       if (crowd) { g.attendance = crowd.attendance; g.gateK = crowd.gateK; g.sellout = crowd.sellout; }
     }
   });
+  // r240 §122.119 the game after this one is the next now: the lineup the GM set for it, if any, is the lineup.
+  StateManager.mutate(s => { if (promoteLineup(s)) applyRosterMutation(s, reconcileRoster(s, 'user', { atMs: game.gameTime })); });
   // §122.51 the crew's word through the game, now that its weather is settled: each at its moment.
   _wxStoryPark(game.index);   // (§122.58 home and road)
 }
@@ -733,7 +737,9 @@ function _activateGameNow(game) {
  * changes its weather before anything but the hold has been shown.
  */
 function _simOurGame(state, game) {
-  const userTeam    = state.userTeam;
+  // r240 §122.119 the lineup this game took at first pitch (a held start played again keeps it: by then
+  // lineupSlots is the next game's)
+  const userTeam    = game.lineupTaken ? { ...state.userTeam, lineupSlots: game.lineupTaken } : state.userTeam;
   const players     = state.players;
 
   // Find the opponent's league team object by name
@@ -2426,6 +2432,7 @@ function _postponeGame(ref, atMs) {
     // §122.70 a starter named for that day's game (a bullpen game in a doubleheader) was for that day: the makeup
     // starts whoever is in turn then. (Left on, a makeup months later started a pitcher long gone from the club.)
     delete x.userStarterId; delete x.keepRotation;
+    delete x.lineupPlan;   // r240 §122.119 a lineup the GM set for that day was for that day: the makeup takes the one before it
     if (moves) {
       for (const m of moves) _wxMove(s, m.g, m.isUser, { date: m.date, gameTime: m.gameTime, venueId: m.g.venueId });
     } else if (slot) {

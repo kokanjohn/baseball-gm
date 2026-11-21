@@ -14313,3 +14313,31 @@ No fresh team needed. (Existing saves: a Scouting offer already parked is withdr
 check-open-spots §4 now expects r239's rule: inside the last hour, a benched starter's slot stays open, the manager fills it at first pitch, and the game is played. Before, it expected the slot filled at once. sim-season's coach check leaves out a coach who left to manage another club (r221). This run's games changed, and its pitching coach, Tamburino, left that way. The season run (all pass), multi-season, check-manager-fill, check-roster-advice, check-deadline-story and the Team-screen UI tests pass.
 
 No fresh team needed.
+
+---
+
+## §122.119 r240 — Lineups set ahead, phase 1: one lineup per game, carried forward
+
+**The plan (agreed with the GM; five releases).** The GM can set the lineup for each game up to a rolling week ahead (a premium idea: today and tomorrow free, 7 days full). Hitters only.
+- **Pitchers stay as they are.** The GM moves them between the bench, the rotation and the bullpen, but doesn't pick who pitches next. If the next starter is benched, the next most rested starts, and the pitching coach says who's up next with options to change it (r243).
+- **Carry-forward.** A game takes the lineup of the game before it, unless the GM set that date on its own; then that lineup wins.
+- **Doubleheaders** get two separate lineups.
+- **Roster changes.** A trade, the IL, a suspension, a release, a waiver loss, a call-up or send-down, or a retirement clears only that player's spot, on the days they can't play. That spot is then open like any other: the open-spots message, and the manager's fill at that game's deadline (r241).
+- **Releases:** r240 data → r241 roster changes, deadlines, fills and messages → r242 the day strip on the Team screen and MOVE for any day → r243 the next-starter message → r244 the 2-day / 7-day setting.
+
+**r240: the data, no visible change.**
+- The next game's lineup is still `userTeam.lineupSlots`, so everything that reads or changes "the lineup" is untouched. A later game the GM set on its own carries `lineupPlan` (nine slots) on its schedule entry, so it moves with the game when the weather reschedules it.
+- RosterEngine:
+  - `lineupGames(state, days)`: the next game, then each starting before the end of the `days`th day counting today.
+  - `lineupFor(state, game)`: carry-forward.
+  - `hasOwnLineup`.
+  - `setLineupFor(draft, game, slots|null)`: the next game → lineupSlots; later → its own; null clears it.
+  - `promoteLineup(draft)`: after a game takes its lineup, the next game's own lineup becomes lineupSlots. A player who can't play by then (gone, hurt, suspended, traded) leaves that slot open, and the roster rules take it from there. Lineups left on games played or under way go.
+- `LINEUP_PLAN = { days: 2, fullDays: 7 }`.
+- GameEngine:
+  - At first pitch the game keeps the lineup it took (`g.lineupTaken`), and `_simOurGame` uses it. A held start played again (§122.51 re-plan) used to read lineupSlots, which by then can be the next game's. Then `promoteLineup` runs, with a reconcile.
+  - A postponement drops the game's own lineup, as with its named starter (the makeup takes the lineup before it).
+
+**Checks.** check-lineup-ahead (17): carry-forward; game 3's own lineup is used at its first pitch and carried to game 4; a player hurt before a set game opens only that slot; postponement. The season run is identical to r239's, line for line (3,807 of 3,807). Multi-season, check-move-open, check-open-spots, check-manager-fill, check-sim-plays, test-team-roster-ui and test-live-view-ui pass.
+
+No fresh team needed.

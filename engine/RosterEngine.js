@@ -25,6 +25,7 @@ import {
   LINEUP_SLOTS,
   PHASE,
   ROSTER_DECISION_LEAD_MS,
+  LINEUP_PLAN,
   POSITION_RULES,
 } from '../data/constants.js';
 import { isAvailable } from './PlayerFactory.js';
@@ -867,6 +868,103 @@ function _nextOpenGame(state) {
 
 /** r239 §122.118 the game our open spots are for: the next one whose lineup isn't set yet (null with none ahead). */
 export function nextLineupGame(state) { return _nextOpenGame(state); }
+
+// ─────────────────────────────────────────────────────────────
+// r240 §122.119 LINEUPS SET AHEAD (hitters only)
+//   The next game's lineup is userTeam.lineupSlots (as ever: everything that reads or changes "the lineup"
+//   still does). A later game the GM set on its own carries it on the schedule entry (`lineupPlan`, the nine
+//   slots), so it moves with the game; a game without one takes the lineup of the game before it. At first
+//   pitch the next game takes lineupSlots, and the game after it becomes the next one: its own lineup, if
+//   it has one, becomes lineupSlots (promoteLineup).
+// ─────────────────────────────────────────────────────────────
+
+const _copySlots = (slots) => (slots || []).map(sl => ({ ...sl }));
+const _startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+
+/**
+ * lineupGames(state, days, atMs) — our games whose lineups can be set now, in playing order: the next game,
+ * then each after it that starts before the end of the `days`th day counting today. (A doubleheader is two.)
+ */
+export function lineupGames(state, days = LINEUP_PLAN.days, atMs = clockNow()) {
+  const next = _nextOpenGame(state);
+  if (!next) return [];
+  const until = _startOfDay(atMs) + Math.max(1, days) * 86_400_000;
+  const sched = state.schedule || [];
+  const out = [next];
+  for (let i = sched.indexOf(next) + 1; i < sched.length; i++) {
+    const g = sched[i];
+    if (!g || g._committed || g.liveLineups || !Number.isFinite(g.gameTime)) continue;
+    if (g.gameTime >= until) break;
+    out.push(g);
+  }
+  return out;
+}
+
+/**
+ * lineupFor(state, game) — the lineup a game will start with as things stand: the next game's is
+ * lineupSlots; a later one's is its own, else the one before it carried forward. A copy (null for a game
+ * that already has its lineup, or isn't ahead of us).
+ */
+export function lineupFor(state, game) {
+  const next = _nextOpenGame(state);
+  if (!next || !game) return null;
+  const sched = state.schedule || [];
+  const from = sched.indexOf(next), to = sched.indexOf(game);
+  if (from < 0 || to < from) return null;
+  let cur = state.userTeam?.lineupSlots || [];
+  for (let i = from + 1; i <= to; i++) {
+    const g = sched[i];
+    if (!g || g._committed || g.liveLineups) continue;
+    if (g.lineupPlan) cur = g.lineupPlan;
+  }
+  return _copySlots(cur);
+}
+
+/** Whether the GM set this game's lineup on its own (the next game's is always lineupSlots: false). */
+export function hasOwnLineup(state, game) {
+  return !!game?.lineupPlan && game !== _nextOpenGame(state);
+}
+
+/**
+ * setLineupFor(draft, game, slots) — the GM sets a game's lineup: the next game's is lineupSlots; a later
+ * game's becomes its own (`lineupPlan`). Pass null to clear a later game's own lineup (it takes the one
+ * before it again). Returns false for a game whose lineup can't be set.
+ */
+export function setLineupFor(draft, game, slots) {
+  const next = _nextOpenGame(draft);
+  if (!next || !game || game._committed || game.liveLineups) return false;
+  if (game === next) {
+    if (!slots) return false;
+    draft.userTeam.lineupSlots = _copySlots(slots);
+    return true;
+  }
+  if (slots) game.lineupPlan = _copySlots(slots);
+  else delete game.lineupPlan;
+  return true;
+}
+
+/**
+ * promoteLineup(draft) — when a game takes its lineup (first pitch): the game after it is the next one now;
+ * its own lineup, if it set one, becomes lineupSlots. A player there who can't play now (gone, hurt,
+ * suspended, traded) leaves the slot open: the roster rules take it from there. Lineups left on games
+ * already played or under way go.
+ */
+export function promoteLineup(draft) {
+  for (const g of draft.schedule || []) if (g.lineupPlan && (g._committed || g.liveLineups)) delete g.lineupPlan;
+  const next = _nextOpenGame(draft);
+  if (!next?.lineupPlan) return false;
+  const u = draft.userTeam, players = draft.players || {};
+  const seen = new Set();
+  u.lineupSlots = next.lineupPlan.map(sl => {
+    const p = players[sl.playerId];
+    const ok = p && (u.rosterIds || []).includes(p.id) && isAvailable(p) && p.group !== PLAYER_GROUP.IL
+      && !tradedAway(draft, p.id) && !seen.has(p.id);
+    if (ok) seen.add(p.id);
+    return ok ? { ...sl } : { slot: sl.slot, playerId: null };
+  });
+  delete next.lineupPlan;
+  return true;
+}
 
 /**
  * managerFillsNow(state, atMs) — r153 the manager fills our open spots (a

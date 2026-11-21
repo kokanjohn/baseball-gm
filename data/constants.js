@@ -1549,6 +1549,13 @@ export const INJURY_MORNING_EXAM_HOUR      = 9;       // local, + up to 90 min
 // makes the call-up himself (by position and seniority, not best rating)
 // and the front office takes a small hit for not acting.
 export const ROSTER_DECISION_LEAD_MS       = 60 * 60_000;   // 1 hour before first pitch
+
+/**
+ * r240 §122.119 lineups set ahead, game by game (hitters only). A game takes the lineup of the game before it
+ * unless the GM set its own (`game.lineupPlan`); each locks at first pitch. `days`: how far ahead the GM can set
+ * them, counting today (2 = today and tomorrow; 7 = a rolling week). Until the day strip (r242) nothing sets one.
+ */
+export const LINEUP_PLAN = Object.freeze({ days: 2, fullDays: 7 });
 // §122 an open spot's deadline is the night before the next game day when there's time
 // (a signing then reports for that game), else an hour before first pitch.
 export const VACANCY_MIN_WINDOW_MS        = 3 * 3600_000;
