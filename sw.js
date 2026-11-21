@@ -16,7 +16,7 @@
  *   - If both cache and network fail, serve the offline fallback
  */
 
-const CACHE_VERSION  = 'tfo-v2-r235';
+const CACHE_VERSION  = 'tfo-v2-r236';
 const CACHE_NAME     = `the-front-office-${CACHE_VERSION}`;
 const OFFLINE_URL    = '/baseball-gm/index.html';
 
@@ -275,28 +275,46 @@ self.addEventListener('message', (event) => {
 
 // ─────────────────────────────────────────────────────────────
 // PUSH — show inbox notifications from the push worker (§61)
-// Always shown (also while the app is open), so a new message is noticed on
-// any screen. tag = card instanceId, so a repeat replaces rather than stacks.
+// tag = card instanceId, so a repeat replaces rather than stacks.
+// r236 §122.115 with the app on screen, the app is asked first: it brings in
+// what's due, and a message already in Messages gets no notification (the
+// worker sends on its once-a-minute cron, so the app had it before the push).
 // ─────────────────────────────────────────────────────────────
 
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; }
   catch { data = { body: event.data ? event.data.text() : '' }; }
-
-  event.waitUntil(Promise.all([
-    self.registration.showNotification(data.title || 'The Front Office', {
-      body:  data.body || 'New message in your inbox',
-      tag:   data.tag  || 'bgm',
-      icon:  '/baseball-gm/icon-192.png',
-      badge: '/baseball-gm/icon-192.png',
-      data:  data.data || {},
-    }),
-    // Let any open window pull the card into the inbox right away.
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then(list => list.forEach(c => c.postMessage({ type: 'PUSH_RECEIVED', cardId: data.data?.cardId }))),
-  ]));
+  event.waitUntil(_onPush(data));
 });
+
+async function _onPush(data) {
+  const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const shown = list.filter(c => c.visibilityState === 'visible');
+  const answers = await Promise.all(shown.map(c => _askClient(c, data.tag)));
+  // Windows not on screen still pull the card in now.
+  list.filter(c => !shown.includes(c))
+    .forEach(c => c.postMessage({ type: 'PUSH_RECEIVED', cardId: data.data?.cardId }));
+  if (answers.some(a => a?.have)) return;
+  await self.registration.showNotification(data.title || 'The Front Office', {
+    body:  data.body || 'New message in your inbox',
+    tag:   data.tag  || 'bgm',
+    icon:  '/baseball-gm/icon-192.png',
+    badge: '/baseball-gm/icon-192.png',
+    data:  data.data || {},
+  });
+}
+
+/** Asks an open window whether the message is already in Messages; no answer in 2 s = no. */
+function _askClient(client, tag) {
+  return new Promise((resolve) => {
+    const ch = new MessageChannel();
+    const timer = setTimeout(() => resolve(null), 2000);
+    ch.port1.onmessage = (e) => { clearTimeout(timer); resolve(e.data); };
+    try { client.postMessage({ type: 'PUSH_CHECK', tag }, [ch.port2]); }
+    catch { clearTimeout(timer); resolve(null); }
+  });
+}
 
 // ─────────────────────────────────────────────────────────────
 // SUBSCRIPTION REPLACED (r134)

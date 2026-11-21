@@ -35,7 +35,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r235';
+export const APP_VERSION = 'tfo-v2-r236';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -366,6 +366,16 @@ function _wireBus() {
     navigator.serviceWorker?.addEventListener('message', (event) => {
       if (event.data?.type === 'OPEN_INBOX')    { _releaseDueCards().then(() => switchTab('decisions')); }
       if (event.data?.type === 'PUSH_RECEIVED') { _releaseDueCards(); }
+      // r236 §122.115 a push arrived with the app on screen: bring in what's due, then say whether the
+      // message is already in Messages (then the service worker shows no notification).
+      if (event.data?.type === 'PUSH_CHECK') {
+        const port = event.ports?.[0];
+        _releaseDueCards().catch(() => {}).finally(() => {
+          const tag = event.data.tag;
+          const have = !!tag && (StateManager.get()?.inbox || []).some(c => c.instanceId === tag);
+          port?.postMessage({ have });
+        });
+      }
       // r134 the service worker registered a replaced subscription: send the
       // worker this device's current schedule.
       if (event.data?.type === 'PUSH_RESUBSCRIBED') { _syncPush({ immediate: true }); }

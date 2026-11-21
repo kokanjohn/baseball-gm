@@ -73,6 +73,16 @@ let _fsJob = null;         // { id, inputRev } — a worker run in flight
 let _fsTimer = null;
 let _worker, _workerSeq = 0;
 
+/** r236 §122.115 takes a message's notification off the phone (the tag is the message's instanceId). */
+export async function clearNotification(tag) {
+  if (!tag || typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const list = reg ? await reg.getNotifications({ tag }) : [];
+    list.forEach(n => n.close());
+  } catch { /* no notifications here */ }
+}
+
 export function pushSupported() {
   return typeof window !== 'undefined'
     && 'serviceWorker' in navigator

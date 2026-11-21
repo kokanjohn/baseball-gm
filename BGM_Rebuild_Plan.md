@@ -14223,3 +14223,25 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - check-claim-lost, check-league-positions, check-card-pools, check-message-voice, check-deal-sheet, check-trade-advice, test-compose-ui and test-league-positions-ui pass.
 
 **Fresh team:** not needed.
+
+---
+
+## §122.115 r236 — Push notifications and messages already seen
+
+**What the GM saw.** With the app open, a message's push came after the message was already in Messages, so it looked delayed and wasn't needed. Opening a message left its notification in the tray. "kokanjohn" was in every notification.
+
+**Why.**
+- The push worker sends on a once-a-minute cron (plus the push service's own latency), while the app brings a message in on its own clock as soon as it's due. With the app open, the app is always first.
+- `getPushSchedule` kept a foreseen message (LookAhead.foresee, kept up to four hours) on the worker's list for a minute past its arrival time, even after it had arrived in the app. So the worker still sent it.
+- The service worker always showed the push, even with the app on screen.
+- "kokanjohn" isn't in our text. Chrome on Android puts the site's address (kokanjohn.github.io) in the header of a website's notification.
+
+**Decisions.**
+- `getPushSchedule` leaves out any message already in `state.inbox`. The sync that follows an arrival takes it off the worker's list.
+- sw.js push: when a window is on screen, the service worker asks it first (`PUSH_CHECK` over a MessageChannel, 2 s timeout). The app brings in what's due and answers whether the tagged message is in Messages. If it is, no notification is shown. Game pushes and messages not yet in Messages are still shown. Windows that aren't on screen still get `PUSH_RECEIVED`.
+- Opening a message in Messages closes its notification (`PushClient.clearNotification(tag)`; the tag is the message's instanceId).
+- "kokanjohn": the address can't be changed from the app. It goes away when the app is installed from Chrome's menu ("Install app", an installed app's notifications carry its name), or with a custom domain. The manifest already meets Chrome's install requirements.
+
+**Checks.** check-push-arrived (fails without the fix); test-push-seen-ui (a real push through the service worker over CDP in Chrome's new headless mode, where notifications work; fails without the fix). check-game-pushes, check-gm-connections and test-compose-ui still pass.
+
+No fresh team needed.

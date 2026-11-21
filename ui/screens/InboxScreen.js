@@ -1060,6 +1060,7 @@ function _openMessage(instanceId, { keepScroll = false } = {}) {
   if (!keepScroll && !_openCard) _listScroll = window.scrollY || 0;
   _openCard = instanceId;
   if (_activeTab !== 'completed') markRead(instanceId);
+  import('../PushClient.js').then(P => P.clearNotification(instanceId)).catch(() => {});   // r236 §122.115 opened here: its notification goes too
   refresh();
   window.scrollTo(0, 0);
   if (_activeTab !== 'completed') App.updateHeader?.(StateManager.get());

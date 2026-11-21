@@ -2716,12 +2716,15 @@ function _pushKind(c) {
 
 export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foreseen = null) {
   const horizon = foreseen && Number.isFinite(foreseen.untilMs) ? foreseen.untilMs : -Infinity;
+  // r236 §122.115 a message already in Messages needs no alert: the foresight is kept for hours, and a message it
+  // saw coming stayed on the worker's list (kept a minute past due for the cron) after it had arrived in the app.
+  const arrived = new Set((state?.inbox || []).map(c => c.instanceId));
   const planned = (state?.scheduledCards || [])
     .filter(c => !c._seed && c.deliverAtMs > horizon)
     .map(c => ({ instanceId: c.instanceId, sender: senderLabel(c, state), subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent, kind: _pushKind(c) }));
   const coming = (foreseen?.messages || [])
     .map(m => ({ instanceId: m.instanceId, sender: senderLabel(m, state), subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent, kind: _pushKind(m) }));
-  const cards = [...coming, ...planned].filter(c => alertOn(state, c.kind))
+  const cards = [...coming, ...planned].filter(c => !arrived.has(c.instanceId) && alertOn(state, c.kind))
     // r213 §122.91 each alert sounds when its message arrives: no quiet hours (the phone's own settings
     // silence it). Planned messages already keep to the staff's working day.
     .map(c => ({ c, at: c.at }))
