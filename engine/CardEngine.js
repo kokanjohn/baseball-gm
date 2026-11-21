@@ -96,6 +96,7 @@ import { exposeRatings } from './Diamonds.js';
 import {
   activateFromIL, placeOnWaivers, reconcileRoster, applyRosterMutation, reserveGroup,
   openSpots, managerFillAt, managerFillsNow, pendingArrivals,
+  nextLineupGame, laterOpenSpots, sweepLineupPlans, fillLineupsAhead,
   HITTER_TARGET, PITCHER_TARGET,
   defaultActiveGroup, nextCalendarDay, computePayroll, teamRating, recordRating,
 } from './RosterEngine.js';
@@ -1607,39 +1608,62 @@ function _managerWouldFill(st) {
 function _deliverOpenSpotsCard(atMs) {
   const st = StateManager.get();
   const fillAt = managerFillAt(st);
-  if (!Number.isFinite(fillAt) || managerFillsNow(st, atMs)) return null;
-  // r239 §122.118 the GM opened it after the deadline, knowingly: no message (it's filled at first pitch)
-  if (Number.isFinite(st.userTeam?.fillHeldFor) && fillAt === st.userTeam.fillHeldFor) return null;
-  const spots = openSpots(st);
-  if (!spots.any) return null;
-  const key = `openspots:${fillAt}`;
-  if (_cardsWithKey(st, key).length) return null;
-  const moves = _managerWouldFill(st);
-  if (!moves.length) return null;
-  const at = Math.max(atMs, Math.min(atMs + 20 * 60_000, fillAt - 10 * 60_000));
-  const open = [
+  if (!Number.isFinite(fillAt)) return null;
+  // The next game's spots: until its deadline (after it, the manager's turn). r239 §122.118 the GM opened them
+  // after the deadline, knowingly: no word (filled at first pitch).
+  const held = Number.isFinite(st.userTeam?.fillHeldFor) && fillAt === st.userTeam.fillHeldFor;
+  const spots = managerFillsNow(st, atMs) || held ? { lineup: [], rotation: 0, bullpen: 0, any: false } : openSpots(st);
+  const moves = spots.any ? _managerWouldFill(st) : [];
+  const nextOpen = moves.length ? [
     ...spots.lineup.map(x => x.emergency ? `${x.slot} (played out of position)` : x.slot),
     ...(spots.rotation ? [spots.rotation > 1 ? `${spots.rotation} rotation spots` : 'a rotation spot'] : []),
     ...(spots.bullpen ? [spots.bullpen > 1 ? `${spots.bullpen} bullpen spots` : 'a bullpen spot'] : []),
-  ];
+  ] : [];
+  // r241 §122.120 and the lineups set ahead: a slot a roster change opened (each game, as it stands)
+  const later = laterOpenSpots(st);
+  if (!nextOpen.length && !later.length) return null;
+  // One message per change: a new one when something opened that the last didn't say (it replaces that one).
+  const sig = [...nextOpen.map(x => `next:${x}`), ...later.map(x => `${x.gameTime}:${x.slot}`)];
+  const base = `openspots:${fillAt}`;
+  const mine = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._rosterKey === base || c._rosterKey?.startsWith(`${base}:`));
+  const said = new Set(mine.flatMap(c => c._openSig || (c._rosterKey === base ? nextOpen.map(x => `next:${x}`) : [])));
+  if (sig.every(x => said.has(x))) return null;
+  const ids = new Set(mine.map(c => c.instanceId));
+  _withdraw(c => ids.has(c.instanceId));
+  const at = Math.max(atMs, Math.min(atMs + 20 * 60_000, fillAt - 10 * 60_000));
   const coming = pendingArrivals(st, 'user').map(t => st.players[t.playerId]).filter(Boolean).map(p => p.name);
-  const game = (st.schedule || []).find(g => !g._committed && Number.isFinite(g.gameTime) && g.gameTime - ROSTER_DECISION_LEAD_MS === fillAt);
-  const when = game ? When.untilFull(game.gameTime, at) : 'the next game';
-  const plan = _list(_spotMoves(st, moves));
+  const game = nextLineupGame(st);
+  const parts = [];
+  if (nextOpen.length) {
+    const when = game ? When.untilFull(game.gameTime, at) : 'the next game';
+    parts.push(`For our game ${when}, ${_list(nextOpen)} ${nextOpen.length > 1 ? 'are' : 'is'} open. `
+      + `If ${nextOpen.length > 1 ? 'they\'re' : 'it\'s'} still open at ${_clock(fillAt)}, an hour before first pitch, I'll go with ${_list(_spotMoves(st, moves))}.`);
+  }
+  // later: by slot, its games in order ("SS is open Tuesday at 7:05 PM and Wednesday at 1:10 PM")
+  const bySlot = new Map();
+  for (const x of later) bySlot.set(x.slot, [...(bySlot.get(x.slot) || []), x.gameTime]);
+  const laterWords = [...bySlot].map(([slot, ts]) => `${slot} is open ${_list(ts.map(t => When.untilFull(t, at)))}`);
+  if (laterWords.length) {
+    parts.push(`In the lineups you set ahead, ${_list(laterWords)}. I'll fill ${later.length > 1 ? 'those' : 'that'} at each game's deadline if you don't.`);
+  }
+  const n = nextOpen.length + later.length;
+  const subject = !later.length ? (nextOpen.length > 1 ? 'Open spots before the next game' : `${nextOpen[0][0].toUpperCase()}${nextOpen[0].slice(1)} is open`)
+    : !nextOpen.length && bySlot.size === 1 ? `${[...bySlot.keys()][0]} is open in the lineups ahead`
+    : 'Open spots in the lineups ahead';
   const card = _rosterCard(st, {
     cardId: 'open_spots', tag: 'LINEUP', sender: _managerName(st), avatar: '📋', type: 'normal',
-    _rosterKey: key, _rosterKind: 'openspots',
-    subject: open.length > 1 ? 'Open spots before the next game' : `${open[0][0].toUpperCase()}${open[0].slice(1)} is open`,
-    preview: `Open: ${_list(open)}. I'll fill ${open.length > 1 ? 'them' : 'it'} at ${_clock(fillAt)} if you don't.`,
-    body: `For our game ${when}, ${_list(open)} ${open.length > 1 ? 'are' : 'is'} open. `
-        + `If ${open.length > 1 ? 'they\'re' : 'it\'s'} still open at ${_clock(fillAt)}, an hour before first pitch, I'll go with ${plan}.`
+    _rosterKey: `${base}:${sig.join(',')}`, _rosterKind: 'openspots', _openSig: sig,
+    subject,
+    preview: nextOpen.length ? `Open: ${_list(nextOpen)}. I'll fill ${nextOpen.length > 1 ? 'them' : 'it'} at ${_clock(fillAt)} if you don't.`
+      : `${_list(laterWords)}.`,
+    body: parts.join(' ')
         + (coming.length ? ` ${_list(coming)} ${coming.length > 1 ? 'report' : 'reports'} at midnight and ${coming.length > 1 ? 'land' : 'lands'} on the bench, so you could wait for that and move them in yourself.` : '')
         + ` Or set it however you like in Team.`,
-    yesLabel: open.length > 1 ? 'Fill the Spots' : 'Fill the Spot',
+    yesLabel: n > 1 ? 'Fill the Spots' : 'Fill the Spot',
     noLabel: "I'll set it in Team",
     expiresAtMs: fillAt,
     _raw: { onYes: 'openspots_fill', onNo: 'openspots_defer', onAuto: 'openspots_auto' },
-    _autoLabel: `No answer — ${_managerName(st)} filled them at the deadline`,
+    _autoLabel: nextOpen.length ? `No answer — ${_managerName(st)} filled them at the deadline` : 'No answer — left for each game\'s deadline',
   });
   return _deliverAt(card, at);
 }
@@ -1841,6 +1865,8 @@ export function syncRosterCards(events = [], atMs = clockNow()) {
 }
 function _syncRosterCards(events, atMs) {
   syncWinterOffers(atMs);   // §122.60
+  // r241 §122.120 a roster change reaches the lineups set ahead: a player who can't play in a game leaves that slot open
+  if ((StateManager.get().schedule || []).some(g => g.lineupPlan)) StateManager.mutate(s => { sweepLineupPlans(s); });
   let delivered = 0;
   const seed = diceSeed(StateManager.get());
   for (const ev of events) {
@@ -2012,7 +2038,11 @@ function _rosterConditionCards(delivered, atMs) {
     }
     if (c._rosterKind === 'need')    return !liveNeedKeys.has(key);
     if (key.startsWith('bats:'))     return key !== `bats:${state.userTeam?.batsDeadlineAt}`;   // r196 fixed, or the deadline moved
-    if (key.startsWith('openspots:')) return key !== `openspots:${managerFillAt(state)}` || !openSpots(state).any;
+    // r241 §122.120 (the next game's spots, and the lineups set ahead)
+    if (key.startsWith('openspots:')) {
+      const base = `openspots:${managerFillAt(state)}`;
+      return !(key === base || key.startsWith(`${base}:`)) || (!openSpots(state).any && !laterOpenSpots(state).length);
+    }
     // §70: a free agent who signed elsewhere (or left); a re-sign card for a
     // player no longer ours (retired, traded).
     if (key.startsWith('os:fa:'))     return players[c._targetPlayerId]?.group !== PLAYER_GROUP.FREE_AGENT;
@@ -7086,7 +7116,7 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
     // ── r153 our open spots: the manager's fill now, or the GM sets it ──
     case 'openspots_fill': {
       const rec = reconcileRoster(StateManager.get(), 'user', { fill: true, atMs });
-      StateManager.mutate(s => applyRosterMutation(s, rec));
+      StateManager.mutate(s => { applyRosterMutation(s, rec); fillLineupsAhead(s); });   // r241 §122.120 and the lineups set ahead
       break;
     }
     case 'openspots_defer':

@@ -938,9 +938,110 @@ export function setLineupFor(draft, game, slots) {
     draft.userTeam.lineupSlots = _copySlots(slots);
     return true;
   }
-  if (slots) game.lineupPlan = _copySlots(slots);
+  // r241 a spot the GM leaves open in a later game's lineup is the GM's choice (`gmOpen`): no message about it
+  if (slots) game.lineupPlan = _copySlots(slots).map(sl => (sl.playerId ? (delete sl.gmOpen, sl) : { ...sl, gmOpen: true }));
   else delete game.lineupPlan;
   return true;
+}
+
+/**
+ * r241 §122.120 availableFor(state, p, game) — whether one of our hitters can play in that game, as things
+ * stand: on our roster and not traded away (a deal that goes through after tonight's final), not on the IL,
+ * back from a day-to-day by first pitch, past a suspension (_suspendedUntilGame, a schedule index) and any
+ * games away (unavailable: a count of our games, or a date), not on personal leave or still being looked at.
+ */
+export function availableFor(state, p, game) {
+  const u = state.userTeam;
+  if (!p || !game || p.teamId !== 'user' || !(u?.rosterIds || []).includes(p.id) || p.group === PLAYER_GROUP.IL) return false;
+  if (game !== _nextOpenGame(state) && tradedAway(state, p.id)) return false;
+  if (p.onPersonalLeave) return false;
+  if (p.isInjured || p.injury) {
+    const inj = p.injury;
+    if (!(inj?.status === 'dtd' && Number.isFinite(inj.returnAt) && inj.returnAt <= game.gameTime)) return false;
+  }
+  if (p.isSuspended && !(Number.isFinite(p._suspendedUntilGame) && (game.index ?? -1) >= p._suspendedUntilGame)) return false;
+  const un = p.unavailable;
+  if (un) {
+    if (Number.isFinite(un.untilMs) && un.untilMs > game.gameTime) return false;
+    if (Number.isFinite(un.gamesLeft) && un.gamesLeft > 0) {
+      const sched = state.schedule || [], from = sched.indexOf(_nextOpenGame(state)), to = sched.indexOf(game);
+      let k = 0;
+      for (let i = from; i >= 0 && i < to; i++) if (sched[i] && !sched[i]._committed && Number.isFinite(sched[i].gameTime)) k++;
+      if (k < un.gamesLeft) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * r241 §122.120 sweepLineupPlans(draft) — a roster change reaches the lineups set ahead: in each later game's
+ * own lineup, a player who can't play in that game leaves the slot open (only that slot, only that game;
+ * a game carrying it forward follows). Returns what it opened: [{ gameTime, slot, playerId }].
+ */
+export function sweepLineupPlans(draft) {
+  const next = _nextOpenGame(draft);
+  const out = [];
+  if (!next) return out;
+  for (const g of draft.schedule || []) {
+    if (!g.lineupPlan) continue;
+    if (g._committed || g.liveLineups) { delete g.lineupPlan; continue; }
+    if (g === next) continue;   // (promoteLineup's)
+    g.lineupPlan.forEach(sl => {
+      if (sl.playerId && !availableFor(draft, draft.players?.[sl.playerId], g)) {
+        out.push({ gameTime: g.gameTime, slot: sl.slot, playerId: sl.playerId });
+        sl.playerId = null; delete sl.gmOpen; delete sl.emergency; delete sl.oop;
+      }
+    });
+  }
+  return out;
+}
+
+/**
+ * r241 §122.120 laterOpenSpots(state) — open spots in the lineups set ahead: each later game whose lineup
+ * comes from a game the GM set (its own, or carried from one), with a slot open that the GM didn't leave
+ * open. (A game carrying the next game's lineup is the next game's business: the deadline fills it.)
+ * → [{ gameTime, slot }] in playing order.
+ */
+export function laterOpenSpots(state) {
+  const next = _nextOpenGame(state);
+  if (!next) return [];
+  const sched = state.schedule || [];
+  const out = [];
+  let src = null;
+  for (let i = sched.indexOf(next) + 1; i < sched.length; i++) {
+    const g = sched[i];
+    if (!g || g._committed || g.liveLineups || !Number.isFinite(g.gameTime)) continue;
+    if (g.lineupPlan) src = g.lineupPlan;
+    if (!src) continue;
+    for (const sl of src) if (!sl.playerId && !sl.gmOpen) out.push({ gameTime: g.gameTime, slot: sl.slot });
+  }
+  return out;
+}
+
+/**
+ * r241 §122.120 fillLineupsAhead(draft) — the manager fills the open spots in the lineups set ahead now (the
+ * GM said so): each with the best bat on the bench who can play there and in that game. A spot nobody fits
+ * stays open for that game's deadline. Returns the moves: [{ gameTime, slot, playerId }].
+ */
+export function fillLineupsAhead(draft) {
+  const next = _nextOpenGame(draft);
+  const players = draft.players || {}, u = draft.userTeam;
+  const out = [];
+  if (!next) return out;
+  const bats = (u.rosterIds || []).map(id => players[id]).filter(p => p && !['SP', 'RP'].includes(p.pos));
+  for (const g of draft.schedule || []) {
+    if (!g.lineupPlan || g === next || g._committed || g.liveLineups) continue;
+    const inIt = new Set(g.lineupPlan.map(sl => sl.playerId).filter(Boolean));
+    for (const sl of g.lineupPlan) {
+      if (sl.playerId || sl.gmOpen) continue;
+      const pick = bats.filter(p => !inIt.has(p.id) && availableFor(draft, p, g) && (sl.slot === 'DH' || eligibleSlotsFor(p).includes(sl.slot)))
+        .sort((a, b) => b.ovr - a.ovr)[0];
+      if (!pick) continue;
+      sl.playerId = pick.id; inIt.add(pick.id);
+      out.push({ gameTime: g.gameTime, slot: sl.slot, playerId: pick.id });
+    }
+  }
+  return out;
 }
 
 /**
@@ -957,10 +1058,10 @@ export function promoteLineup(draft) {
   const seen = new Set();
   u.lineupSlots = next.lineupPlan.map(sl => {
     const p = players[sl.playerId];
-    const ok = p && (u.rosterIds || []).includes(p.id) && isAvailable(p) && p.group !== PLAYER_GROUP.IL
-      && !tradedAway(draft, p.id) && !seen.has(p.id);
+    const ok = p && availableFor(draft, p, next) && isAvailable(p) && !seen.has(p.id);
     if (ok) seen.add(p.id);
-    return ok ? { ...sl } : { slot: sl.slot, playerId: null };
+    const { gmOpen, ...rest } = sl;   // (the next game's spots: the deadline's rules now)
+    return ok ? rest : { slot: sl.slot, playerId: null };
   });
   delete next.lineupPlan;
   return true;

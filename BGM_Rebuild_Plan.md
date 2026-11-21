@@ -14341,3 +14341,37 @@ No fresh team needed.
 **Checks.** check-lineup-ahead (17): carry-forward; game 3's own lineup is used at its first pitch and carried to game 4; a player hurt before a set game opens only that slot; postponement. The season run is identical to r239's, line for line (3,807 of 3,807). Multi-season, check-move-open, check-open-spots, check-manager-fill, check-sim-plays, test-team-roster-ui and test-live-view-ui pass.
 
 No fresh team needed.
+
+---
+
+## §122.120 r241 — Lineups set ahead, phase 2: roster changes, deadlines, fills and the message
+
+**Roster changes reach the lineups set ahead.**
+- `availableFor(state, p, game)` (RosterEngine) says whether one of our hitters can play in a given game as things stand:
+  - on our roster and not on the IL;
+  - not traded away (a deal going through after tonight's final: gone after the next game);
+  - back from a day-to-day by first pitch;
+  - past a suspension (`_suspendedUntilGame`);
+  - past any games away (`unavailable`: a count of our games, or a date);
+  - not on personal leave, and not still being looked at.
+- `sweepLineupPlans(draft)` runs at the start of every roster card sync, which is every roster change. In each later game's own lineup, a player who can't play in that game leaves only that slot open. A game carrying that lineup forward follows it. A day-to-day player back in time keeps their spot in the later game.
+- `promoteLineup` uses `availableFor` too, and drops the `gmOpen` mark (the next game's spots follow the deadline's rules).
+
+**The deadlines and fills.** A game set ahead is filled at its own deadline, because its lineup becomes lineupSlots when the game before it starts (r240), and the r153/r239 rules take it from there. "Fill the Spots" (`openspots_fill`) now also runs `fillLineupsAhead`: the best bench bat who can play that slot in that game. A slot nobody fits stays open for that game's deadline.
+
+**The message.**
+- The manager's open-spots message (open_spots) covers the next game as before, plus the lineups set ahead (`laterOpenSpots`: games whose lineup comes from one the GM set, with a slot open that the GM didn't leave open).
+- Example: "In the lineups you set ahead, SS is open Sunday at 1:05 PM and Tuesday at 7:05 PM. I'll fill those at each game's deadline if you don't."
+- One message per change: it carries what it said (`_openSig`). A new message comes only when something opens that the last one didn't mention, and it replaces the unanswered one. It's withdrawn when the next deadline moves or nothing is open anywhere.
+- A spot the GM leaves open in a later game (`setLineupFor` marks it `gmOpen`) gets no message, as with r239's after-the-deadline rule.
+
+**Checks.** check-lineup-changes (16):
+- A day-to-day out for games 2 and 3 opens SS in game 2's own lineup and in game 3 (carried), not game 4.
+- One message lists both games. "Fill the Spots" puts an SS-eligible bench bat in.
+- The GM's own open spot gets no message.
+- Suspension and games-away counts.
+- A game set ahead whose player is hurt becomes the next game with the spot open, and the manager fills it at its deadline.
+
+The season run passes (3,808 of 3,808), as do multi-season and check-lineup-ahead, check-move-open, check-open-spots, check-manager-fill, check-roster-advice and test-team-roster-ui. The run's games differ from r240's because of one behaviour change, even with no lineups set ahead. A second opening before the same deadline now gets its own message (replacing an unanswered one); before, the first message per deadline was the only one. In the one-season message audit, open-spot messages went from 19 to 25. Only one pair came close together: "OF is open", then two hours later "Open spots before the next game" covering it plus the new one.
+
+No fresh team needed.
