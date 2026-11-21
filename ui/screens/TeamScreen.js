@@ -457,6 +457,17 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
   // The sub-line: position (and hand), then what matters about the row today.
   // A row with a status (reporting, traded, on the IL) shows that alone, so it fits.
   const subBits = [];
+  // r237 §122.116 out of position (a hitter) or out of role (a pitcher): a red slot and a "!" to tap, not words in the
+  // name column.
+  let off = null;
+  if (!coming && !traded && !il) {
+    if (pitcher) {
+      const roles = pitchRoles(p);
+      const inRot = (state.userTeam.rotation?.order || []).includes(p.id);
+      if (inRot && !roles.includes('SP')) off = `${_escape(p.name)} is out of role in the rotation (a reliever).`;
+      else if (p.group === PLAYER_GROUP.BULLPEN && !roles.includes('RP')) off = `${_escape(p.name)} is out of role in the bullpen (a starter).`;
+    } else if (oop) off = `${_escape(p.name)} is out of position at ${_escape(slot)} (plays ${_escape(posLabel(p))}).`;
+  }
   if (coming) subBits.push(`<span class="tr-pend">Pending</span>`, _escape(coming.sub.replace(/^Reports /, '')));
   else if (traded) subBits.push('<span class="tr-hurt">Traded</span>', 'leaves tonight');
   else if (il) subBits.push(`<span class="tr-hurt">${_escape(_ilText(p))}</span>`);
@@ -468,8 +479,6 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
       const roles = pitchRoles(p), s = p.positions || {};
       if (!roles.includes('RP') && (s.relief || 0) > 0) subBits.push(`<span class="tr-learn">RP ${s.relief}/${POSITION_RULES.pitch.gainRelief}</span>`);
       if (!roles.includes('SP') && (s.starts || 0) > 0) subBits.push(`<span class="tr-learn">SP ${s.starts}/${POSITION_RULES.pitch.gainStarts}</span>`);
-      const inRot = (state.userTeam.rotation?.order || []).includes(p.id);
-      if ((inRot && !roles.includes('SP')) || (p.group === PLAYER_GROUP.BULLPEN && !roles.includes('RP'))) subBits.push('<span class="tr-hurt">out of role</span>');
     }
     if (!pitcher) for (const [x, n] of Object.entries(p.positions?.starts || {})) {
       if (x !== 'DH' && n > 0 && !eligibleAt(p).includes(x)) subBits.push(`<span class="tr-learn">${x} ${n}/10</span>`);
@@ -477,7 +486,6 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
     if (next) subBits.push('<span class="tr-next" title="Starts the next game">Next</span>');
     const st = _statusWord(p);
     if (st) subBits.push(`<span class="tr-hurt">${st}</span>`);
-    if (oop) subBits.push('<span class="tr-hurt">out of position</span>');
     if (pitcher && isAvailable(p) && slot !== 'Bench' && !slot.startsWith('SP')) {
       const arm = armStatus(p, Date.now()).status;
       if (arm === 'down') subBits.push('<span class="tr-hurt">resting today</span>');
@@ -490,7 +498,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
   return `
     <div class="tr-row${first ? ' tr-first' : ''}${coming ? ' tr-coming' : ''}" data-player="${p.id}">
       <div class="tr-fz">
-        <div class="tr-slot${oop ? ' tr-oop' : ''}">${slot}</div>
+        <div class="tr-slot${off ? ' tr-oop' : ''}">${slot}${off ? `<button type="button" class="tr-oop-mark" data-oop="${off}" aria-label="Out of position">!</button>` : ''}</div>
         <div class="tr-name">
           <div class="tr-name-line">${_escape(p.name)}${_dotIndicator(p)}</div>
           <div class="tr-sub">${subBits.join(' · ')}</div>
@@ -855,6 +863,8 @@ function _attachListeners(state) {
   document.querySelectorAll('.tr-row[data-player]').forEach(el => {
     el.addEventListener('click', (e) => {
       if (e.target.closest('.tr-move')) return;
+      const mark = e.target.closest('.tr-oop-mark');
+      if (mark) { App.showToast(mark.dataset.oop, 'negative', 4500); return; }
       openPlayerCard(el.dataset.player, StateManager.get());
     });
   });
@@ -1180,6 +1190,7 @@ function _injectCSS() {
       color:var(--muted);white-space:nowrap;padding-top:6px;padding-bottom:6px;}
     .tr-slot{width:46px;flex-shrink:0;padding-left:10px;box-sizing:border-box;font-size:11px;font-weight:600;color:var(--soft);white-space:nowrap;}
     .tr-slot.tr-oop{color:var(--danger);}
+    .tr-oop-mark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin-left:3px;padding:0;border:none;border-radius:50%;background:var(--danger);color:#fff;font-size:10px;font-weight:800;line-height:1;vertical-align:1px;cursor:pointer;}
     .tr-name{width:76px;flex-shrink:0;min-width:0;padding:7px 4px 7px 2px;}
     .tr-name-line{font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .tr-sub{font-size:10px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}

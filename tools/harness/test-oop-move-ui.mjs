@@ -52,9 +52,17 @@ await tap('.sm-oop-list .sm-row[data-key^="oop:"]:has(.sm-slot-label:text-is("3B
 await page.waitForTimeout(500);
 const row = await page.evaluate((id) => {
   const r = document.querySelector(`.tr-row[data-player="${id}"]`);
-  return { slot: r?.querySelector('.tr-slot')?.textContent.trim(), sub: r?.innerText || '' };
+  const slot = r?.querySelector('.tr-slot');
+  return { slot: slot?.firstChild?.textContent.trim(), red: !!slot?.classList.contains('tr-oop'), mark: !!slot?.querySelector('.tr-oop-mark'), sub: r?.querySelector('.tr-sub')?.innerText || '' };
 }, S.id);
-check(`chosen: ${S.name} plays 3B, "out of position" on the row`, row.slot === '3B' && /out of position/.test(row.sub));
+// r237 §122.116 a red slot and a "!" to tap; no words in the name column
+check(`chosen: ${S.name} plays 3B, the slot red with a "!", no words in the name column`, row.slot === '3B' && row.red && row.mark && !/out of position/i.test(row.sub), JSON.stringify(row));
+await tap(`.tr-row[data-player="${S.id}"] .tr-oop-mark`);
+await page.waitForTimeout(400);
+const toast = await page.evaluate(() => document.getElementById('toast')?.textContent || '');
+check(`tapping the "!": “${toast.trim()}”`, /out of position at 3B/.test(toast));
+const cardOpen = await page.evaluate(() => !!document.querySelector('#player-card-overlay.open'));
+check('…and the player card stays closed', !cardOpen);
 await page.screenshot({ path: `${out}/oop-move-row-${theme}.png` });
 
 check('no page errors', errors.length === 0, errors.join(' | '));

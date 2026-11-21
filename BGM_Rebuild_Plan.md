@@ -14245,3 +14245,17 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 **Checks.** check-push-arrived (fails without the fix); test-push-seen-ui (a real push through the service worker over CDP in Chrome's new headless mode, where notifications work; fails without the fix). check-game-pushes, check-gm-connections and test-compose-ui still pass.
 
 No fresh team needed.
+
+---
+
+## §122.116 r237 — Out-of-position mark, the manager named by role, contract years by year
+
+**Out of position / out of role (TeamScreen `_row`).** The words "out of position" (a hitter) and "out of role" (a pitcher in the rotation without SP, or in the bullpen without RP) no longer go in the name column. The slot stays red (`.tr-oop`) and gets a red "!" button (`.tr-oop-mark`). Tapping it shows a toast, e.g. "Mueller is out of position at 3B (plays 1B)." or "Woodson is out of role in the rotation (a reliever)." The tap doesn't open the player card. Pitchers now get the red slot too.
+
+**The manager on first-day messages.** "The players are waiting to meet you" (mo_take_clubhouse) said only "{manager_name}", before the GM may have seen that name. It now says "our manager, {manager_name}". The camp-speech card (same pool) does the same: "ours, {manager_name}".
+
+**The Deal sheet's years (DealSheet `_years`).** "final season" and "2 more seasons" read as a player about to retire. Each player now shows the deal's last season by year: "Signed through 2027" (`baseballYear(state) + yearsAfterThis`).
+
+**Checks.** test-oop-move-ui: red slot with "!", no words in the name column, the toast, the card stays closed. test-pitcher-move-ui: the "!" says out of role. test-deal-sheet-ui: every player reads "Signed through YYYY", no "season". check-card-pools and check-message-voice pass.
+
+No fresh team needed.

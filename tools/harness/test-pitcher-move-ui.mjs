@@ -51,8 +51,9 @@ check(`tapped: the rotation, how far stretched out — ${open[0]}`, open.length 
 await page.screenshot({ path: `${out}/pitcher-move-open-${theme}.png` });
 await tap('.sm-oop-list .sm-row[data-key^="turn:"]');
 await page.waitForTimeout(500);
-const row = await page.evaluate((id) => document.querySelector(`.tr-row[data-player="${id}"]`)?.innerText || '', S.id);
-check(`chosen: ${S.name} in the rotation, "out of role" on the row`, /out of role/.test(row));
+const row = await page.evaluate((id) => { const r = document.querySelector(`.tr-row[data-player="${id}"]`);
+  return { mark: r?.querySelector('.tr-slot.tr-oop .tr-oop-mark')?.dataset.oop || '', sub: r?.querySelector('.tr-sub')?.innerText || '' }; }, S.id);
+check(`chosen: ${S.name} in the rotation, a red "!" (“${row.mark}”), no words in the name column`, /out of role in the rotation/.test(row.mark) && !/out of role/.test(row.sub));
 await page.screenshot({ path: `${out}/pitcher-move-row-${theme}.png` });
 await tap(`.tr-row[data-player="${S.id}"] .tr-name`);
 const card = await page.evaluate(() => {

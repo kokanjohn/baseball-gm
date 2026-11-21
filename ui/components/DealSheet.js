@@ -19,6 +19,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { dealSheet } from '../../engine/TradeEngine.js';
 import { formatK } from '../../engine/CardTokens.js';
 import { posLabel } from '../../engine/Positions.js';
+import { baseballYear } from '../../engine/PlayerFactory.js';   // r237 §122.116
 
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const _e = (s) => String(s ?? '').replace(/[&<>"']/g, c => ESC[c]);
@@ -53,8 +54,9 @@ export function openDealSheet({ offer, teamName = 'They', title = 'The Deal', ve
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 }
 
-/** "2 more seasons" / "final season" */
-const _years = (n) => (n > 0 ? `${n} more season${n === 1 ? '' : 's'}` : 'final season');
+/** r237 §122.116 "Signed through 2028": the deal's last season by year ("final season" / "2 more seasons" read as
+ *  retiring). `n` is seasons after this one (TradeEngine.yearsAfterThis). */
+const _years = (state, n) => `Signed through ${baseballYear(state) + Math.max(0, n)}`;
 /** A sum that costs us (+) or saves us (−). */
 const _net = (k) => (Math.round(k) > 0 ? `Costs us ${formatK(Math.round(k))}` : Math.round(k) < 0 ? `Saves us ${formatK(-Math.round(k))}` : 'No change');
 
@@ -64,7 +66,7 @@ function _cell(state, r, col, row) {
   return `<button type="button" class="ds-player" data-ds-player="${_e(r.id)}" style="grid-column:${col};grid-row:${row}">
     <span class="ds-name">${_e(r.name)}</span>
     <span class="ds-meta">${_e(p ? posLabel(p) : r.pos)} · OVR ${r.ovr} · ${r.age}${r.injured ? ' · hurt' : ''}</span>
-    <span class="ds-pay">${r.salary > 0 ? `${formatK(r.salary)} a year` : 'No salary'} · ${_years(r.years)}</span>
+    <span class="ds-pay">${r.salary > 0 ? `${formatK(r.salary)} a year` : 'No salary'} · ${_years(state, r.years)}</span>
     ${kept}
   </button>`;
 }

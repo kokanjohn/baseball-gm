@@ -45,12 +45,16 @@ const sheet = await page.evaluate(() => {
   const names = (i) => [...s.querySelectorAll(`.ds-player[style*="grid-column:${i + 1}"] .ds-name`)].map(b => b.textContent);
   return { get: names(0), send: names(1), heads: [...s.querySelectorAll('.ds-colh')].map(h => h.textContent),
            rows: [...s.querySelectorAll('.ds-row')].map(r => [...r.children].map(c => c.textContent.trim()).join(' ')),
+           pay: [...s.querySelectorAll('.ds-pay')].map(x => x.textContent.trim()),
            money: [...s.querySelectorAll('.ds-money tbody tr')].map(r => [...r.children].map(c => c.textContent.trim()).join(' ')) };
 });
 const SM = async () => page.evaluate(async () => { const S = await import('/baseball-gm/store/StateManager.js'); return S.get(); });
 const st = await SM();
 check(`the table: We Get ${sheet.get.join(', ')} | We Send ${sheet.send.join(', ') || '—'}`,
       sheet.heads.join() === 'We Get,We Send' && deal.offer.incomingIds.every(id => sheet.get.includes(st.players[id].name)) && deal.offer.outgoingIds.every(id => sheet.send.includes(st.players[id].name)));
+// r237 §122.116 the years as the deal's last season by year
+{ const yr = (await page.evaluate(async () => { const P = await import('/baseball-gm/engine/PlayerFactory.js'); const S = await import('/baseball-gm/store/StateManager.js'); return P.baseballYear(S.get()); }));
+  check(`each player's deal by year: ${sheet.pay.join(' | ')}`, sheet.pay.length > 0 && sheet.pay.every(t => { const m = t.match(/Signed through (\d{4})$/); return m && +m[1] >= yr; }) && !sheet.pay.some(t => /season/.test(t))); }
 check(`the money: ${sheet.money.join(' · ')}`, sheet.money.some(r => /^Salary a year/.test(r)) && sheet.money.some(r => /^Later seasons/.test(r)));
 check(`the totals: ${sheet.rows.join(' · ')}`, sheet.rows.some(r => /^This season, net/.test(r)) && sheet.rows.some(r => /^Payroll after the deal .*target/.test(r)) && sheet.rows.some(r => /^Later seasons, net/.test(r)));
 await page.screenshot({ path: `${out}/deal-sheet-offer-${theme}.png` });
