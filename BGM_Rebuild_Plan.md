@@ -14174,3 +14174,26 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - check-open-spots, check-winter, check-card-pools, check-message-voice, check-weather, test-dashboard-radar, test-radar-sheet (dark and light), sim-season and multi-season pass.
 
 **Fresh team:** not needed. A new team's first day shows the changes.
+
+## §122.113 — r234: testing notes, batch 2 (the Live View)
+### The user's notes and what changed (`ui/components/LiveView.js`)
+- **The pitcher's line wrapped,** pushing "BF" onto its own line.
+  - It's now on a line of its own under the pitcher's name.
+  - "BF" (batters faced) is written out: "2.0 IP, 4 H, 0 ER, 0 BB, 4 K, 10 batters faced".
+- **The batter's name sat left of the plate,** which read as a left-handed batter (hitters have no batting side). It's now centred over the plate.
+- **Tapping a name opened the player card behind the Live View.** The Live View was at z-index 1000, above the app's modal layer (500), where the player card sits. It's now at 450: above the app's chrome (the bottom bar, 100), below its modals. The card opens on top.
+- **No dots for the fielders:** names alone, centred on their spots.
+- **When a half ends:**
+  - The play that ended it stays for 4 seconds; then its words and the ball's path clear, since the other side is up.
+  - If the Live View is opened after a half has ended, they're already clear.
+  - The new half's first play shows as usual (`stale` in `liveViewState`: the last play's half isn't the current one).
+
+### Checks
+- **test-live-view-ui** (dark and light), new checks:
+  - Names alone, with no dots.
+  - The batter centred over the plate.
+  - The pitcher's line on one line of its own.
+  - A tapped name opens the player card on top.
+  - The half's last out shows for a few seconds, then its words and path clear.
+
+**Fresh team:** not needed.

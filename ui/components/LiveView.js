@@ -126,6 +126,7 @@ export function liveViewState(game, state) {
   return { isFinal, isHome, inning: sit.inning, half: sit.half, outs: sit.outs, bases: sit.bases, score, bat, field,
     atBat, onDeck, inHole, fielders, pitcher, ball, last, lastIndex: revealed.length - 1, scoredLast,
     box, batLine, pitLine, bf, rhe: { away: { r: score.away, h: box.away.hits, e: box.away.errors }, home: { r: score.home, h: box.home.hits, e: box.home.errors } },
+    stale: !!(last?._halfInning && last._halfInning !== halfKey && !isFinal),   // (r234 the last play was the half before)
     status: isFinal ? 'Final' : wx.kind ? wx.pill : game.status === GAME_STATUS.DELAYED ? 'Delayed' : 'Live' };
 }
 
@@ -208,7 +209,8 @@ export function openLiveView(game) {
   const svg = el.querySelector('svg');
   const layer = (c) => svg.querySelector(`.${c}`);
   const runners = new Map();   // id → <g>
-  let shownIndex = null, raf = null;
+  let shownIndex = null, raf = null, staleTimer = null, cleared = false;
+  const CLEAR_MS = 4000;   // (r234 a half that's over: its last play and path stay this long, then clear)
   const listeners = [];
   const wire = (event, handler) => { EventBus.on(event, handler); listeners.push({ event, handler }); };
 
@@ -227,12 +229,11 @@ export function openLiveView(game) {
     const put = (pos, id) => {
       const [a, d] = STAND[pos];
       const [x, y] = pt(a, d);
-      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.2" class="lv-fdot"/>`);
-      out.push(label(x, pos === 'C' ? y + 11 : y - 6, players[id]?.name || pos, 'lv-fname', id));   // (the catcher's under: the batter's at the plate)
+      out.push(label(x, y + 3.5, players[id]?.name || pos, 'lv-fname', id));   // (r234 the name alone, on the spot)
     };
     for (const pos of POS) if (v.fielders[pos]) put(pos, v.fielders[pos]);
     if (v.pitcher) put('P', v.pitcher);
-    if (v.atBat && !v.isFinal) out.push(label(HX - 9, HY + 1, players[v.atBat]?.name || '', 'lv-batter', v.atBat, 'end'));
+    if (v.atBat && !v.isFinal) out.push(label(HX, HY - 7, players[v.atBat]?.name || '', 'lv-batter', v.atBat));   // (r234 centred over the plate: no side implied)
     layer('lv-fielder-layer').innerHTML = out.join('');
   };
 
@@ -305,7 +306,15 @@ export function openLiveView(game) {
     // (on opening: as it stands; on a new play: the ball travels if that play put it in play)
     if (shownIndex === null || moved) drawBall(v, moved && !!v.ball && v.ball.index === v.lastIndex);
     shownIndex = v.lastIndex;
-    el.querySelector('.lv-last').textContent = v.last?.description || '';
+    // a half that's over: the play that ended it stays a few seconds, then the words and the path clear
+    if (!v.stale) { clearTimeout(staleTimer); staleTimer = null; cleared = false; }
+    const clearStale = () => { cleared = true; el.querySelector('.lv-last').textContent = ''; layer('lv-path-layer').innerHTML = ''; layer('lv-ball-layer').innerHTML = ''; };
+    if (v.stale && !cleared && !staleTimer) {
+      if (!moved) clearStale();   // (opened after it: already old)
+      else staleTimer = setTimeout(() => { staleTimer = null; clearStale(); }, CLEAR_MS);
+    }
+    if (!(v.stale && cleared)) el.querySelector('.lv-last').textContent = v.last?.description || '';
+    else { layer('lv-path-layer').innerHTML = ''; layer('lv-ball-layer').innerHTML = ''; }
     const name = (id) => (id ? `<button type="button" class="lv-link" data-pid="${id}">${_esc(players[id]?.name || '')}</button>` : '—');
     const bl = v.batLine, pl = v.pitLine;
     const batWords = bl ? [`${bl.h}-for-${bl.ab}`, bl.hr ? `${bl.hr} HR` : '', bl.rbi ? `${bl.rbi} RBI` : '', bl.bb ? `${bl.bb} BB` : '', bl.k ? `${bl.k} K` : ''].filter(Boolean).join(', ') : '';
@@ -313,7 +322,7 @@ export function openLiveView(game) {
       <div class="lv-row"><span class="lv-k">At bat</span><span class="lv-v">${name(v.atBat)}</span><span class="lv-s">${_esc(batWords)}</span></div>
       <div class="lv-row"><span class="lv-k">On deck</span><span class="lv-v">${name(v.onDeck)}</span></div>
       <div class="lv-row"><span class="lv-k">In the hole</span><span class="lv-v">${name(v.inHole)}</span></div>
-      <div class="lv-row"><span class="lv-k">Pitching</span><span class="lv-v">${name(v.pitcher)}</span><span class="lv-s">${pl ? _esc(`${pl.ip} IP, ${pl.h} H, ${pl.er} ER, ${pl.bb} BB, ${pl.k} K, ${v.bf} BF`) : ''}</span></div>`;
+      <div class="lv-row lv-row-wrap"><span class="lv-k">Pitching</span><span class="lv-v">${name(v.pitcher)}</span>${pl ? `<span class="lv-line2">${_esc(`${pl.ip} IP, ${pl.h} H, ${pl.er} ER, ${pl.bb} BB, ${pl.k} K, ${v.bf} batter${v.bf === 1 ? '' : 's'} faced`)}</span>` : ''}</div>`;
     const r = (s) => `<tr><td class="lv-t">${_esc(abbr[s])}</td><td>${v.rhe[s].r}</td><td>${v.rhe[s].h}</td><td>${v.rhe[s].e}</td></tr>`;
     const oppName = (st.leagueTeams || []).find(t => t.id === game.opponentId)?.name || 'Opponent';
     const uName = `${st.userTeam?.city || ''} ${st.userTeam?.nickname || ''}`.trim();
@@ -324,6 +333,7 @@ export function openLiveView(game) {
   const close = () => {
     listeners.forEach(({ event, handler }) => EventBus.off(event, handler));
     if (raf) cancelAnimationFrame(raf);
+    clearTimeout(staleTimer);
     el.classList.remove('open');
     setTimeout(() => el.remove(), 200);
     _open = null;
@@ -345,7 +355,7 @@ function _css() {
   const st = document.createElement('style');
   st.id = 'live-view-css';
   st.textContent = `
-    .lv-overlay{position:fixed;inset:0;z-index:1000;background:var(--bg);display:flex;opacity:0;transform:translateY(16px);transition:opacity .2s ease,transform .2s ease;}
+    .lv-overlay{position:fixed;inset:0;z-index:450;background:var(--bg);display:flex;opacity:0;transform:translateY(16px);transition:opacity .2s ease,transform .2s ease;}
     .lv-overlay.open{opacity:1;transform:none;}
     .lv-panel{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:max(8px,env(safe-area-inset-top)) 0 max(12px,env(safe-area-inset-bottom));}
     .lv-panel > *{flex-shrink:0;}   /* (a long page scrolls; nothing in it is squeezed) */
@@ -365,7 +375,6 @@ function _css() {
     .lv-dirt{fill:#9a7348;} .lv-infield{fill:#a98053;stroke:#f1f1f1;stroke-width:1;stroke-opacity:.7;}
     .lv-line{stroke:#f1f1f1;stroke-width:1;opacity:.85;}
     .lv-mound{fill:#a77d51;stroke:#8a6440;} .lv-bag{fill:#fafafa;} .lv-plate{fill:#fafafa;}
-    .lv-fdot{fill:#1e3a8a;stroke:#fff;stroke-width:1;}
     .lv-fname,.lv-rname,.lv-batter{font:700 9.5px -apple-system,system-ui,sans-serif;fill:#fff;paint-order:stroke;stroke:rgba(0,0,0,.75);stroke-width:2.6px;cursor:pointer;}
     .lv-batter{font-size:10.5px;}
     .lv-runner{transition:transform .9s ease,opacity .4s ease;}
@@ -380,6 +389,7 @@ function _css() {
     .lv-k{width:84px;flex:none;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
     .lv-v{font-weight:700;color:var(--text);}
     .lv-s{margin-left:auto;font-size:12px;color:var(--muted);text-align:right;}
+    .lv-row-wrap{flex-wrap:wrap;} .lv-line2{flex-basis:100%;padding-left:94px;font-size:12px;color:var(--muted);margin-top:2px;}
     .lv-link{font:inherit;font-weight:700;color:var(--text);background:none;border:0;padding:0;cursor:pointer;}
     .lv-box{padding:8px 14px 0;}
     .lv-rhe{border-collapse:collapse;font-size:14px;color:var(--text);}

@@ -75,9 +75,35 @@ check(`nine fielders by name, the pitcher included (${shown.fielders.length})`, 
 check('the fielders are the ones the sim had in the field this half', !f.truth.savedField || Object.entries(f.truth.savedField).every(([k, id]) => f.v.fielders[k] === id));
 check(`the batter at the plate is the next plate appearance's (${f.names.atBat})`, f.v.atBat === f.truth.nextBatter && shown.batter === f.names.atBat);
 check(`on deck and in the hole follow in the order (${f.names.onDeck}, ${f.names.inHole})`, !!f.names.onDeck && !!f.names.inHole && shown.rows.some(r => r.startsWith('On deck') && r.includes(f.names.onDeck)) && shown.rows.some(r => r.startsWith('In the hole') && r.includes(f.names.inHole)));
-check(`the pitcher is the fielding club's latest, with a line (${shown.rows.find(r => r.startsWith('Pitching'))})`, f.truth.pitcherSeen && shown.rows.some(r => r.startsWith('Pitching') && /IP, \d+ H, \d+ ER, \d+ BB, \d+ K, \d+ BF/.test(r)));
+check(`the pitcher is the fielding club's latest, with a line (${shown.rows.find(r => r.startsWith('Pitching'))})`, f.truth.pitcherSeen && shown.rows.some(r => r.startsWith('Pitching') && /IP, \d+ H, \d+ ER, \d+ BB, \d+ K, \d+ batters? faced/.test(r)));
 check(`R/H/E for both teams (${shown.rhe.join(' | ')})`, shown.rhe.length === 2 && shown.rhe.every(r => /^\S+ \d+ \d+ \d+$/.test(r)));
 await page.screenshot({ path: `${out}/lv-open-${theme}.png` });
+// r234 §122.113 names only (no dots); the batter centred over the plate; the pitcher's line on one line of its own
+const look = await page.evaluate(() => {
+  const b = document.querySelector('#live-view .lv-batter'), plate = document.querySelector('#live-view .lv-plate');
+  const br = b?.getBoundingClientRect(), pr = plate?.getBoundingClientRect();
+  const line = document.querySelector('#live-view .lv-line2'), lr = line?.getBoundingClientRect();
+  return { dots: document.querySelectorAll('#live-view .lv-fdot').length,
+    centred: br && pr ? Math.abs((br.left + br.right) / 2 - (pr.left + pr.right) / 2) : 99, above: br && pr ? br.bottom <= pr.top + 2 : false,
+    oneLine: lr ? lr.height < 22 : false };
+});
+check(`the fielders are names alone (${look.dots} dots)`, look.dots === 0);
+check(`the batter's name is centred over the plate (off by ${look.centred.toFixed(1)}px)`, look.centred < 1.5 && look.above);
+check('the pitcher\'s line fits on one line of its own', look.oneLine);
+// a name opens the player card, on top of the Live View
+await page.click('#live-view .lv-fname[data-pid]');
+await page.waitForTimeout(500);
+const onTop = await page.evaluate(() => {
+  const o = document.getElementById('player-card-overlay');
+  if (!o || getComputedStyle(o).display === 'none') return 'not open';
+  const r = o.querySelector('.modal-sheet, .pc-sheet, .player-card')?.getBoundingClientRect() || o.getBoundingClientRect();
+  const hit = document.elementFromPoint((r.left + r.right) / 2, Math.max(r.top + 40, 120));
+  return o.contains(hit) ? 'on top' : `under ${hit?.closest('#live-view') ? 'the Live View' : hit?.tagName}`;
+});
+check(`tapping a name opens the player card on top (${onTop})`, onTop === 'on top');
+await page.screenshot({ path: `${out}/lv-card-on-top-${theme}.png` });
+await page.evaluate(async () => { const PC = await import('/baseball-gm/ui/components/PlayerCard.js'); PC.closePlayerCard(); });
+await page.waitForTimeout(400);
 
 // Reveal plays until a ball in play; the path and the runners follow.
 const step = await page.evaluate(async () => {
@@ -108,6 +134,28 @@ if (step) {
   const want = ['first', 'second', 'third'].map(b => step.after?.[b]).filter(Boolean).map(id => f.names && null);
   check(`the runners on base by name (${drawn.runners.join(', ') || 'none'})`, drawn.runners.length === f.names.runners.length && f.names.runners.every(n => drawn.runners.includes(n)));
   await page.screenshot({ path: `${out}/lv-after-hit-${theme}.png` });
+}
+
+// r234 the half's last out: the play and its path stay a few seconds, then clear (the other side is up)
+const endHalf = await page.evaluate(async () => {
+  const SM = await import('/baseball-gm/store/StateManager.js');
+  const EB = await import('/baseball-gm/ui/EventBus.js');
+  const s = SM.get(), g = s.schedule[s.currentGameIndex || 0];
+  const plays = g.plays, from = g.livePlayIndex || 0;
+  let k = from;
+  while (k < plays.length && !(plays[k].outsAfter === 3 && plays[k].batterId && plays[k]._ball)) k++;
+  if (k >= plays.length) return null;
+  SM.mutate(st => { st.schedule[st.currentGameIndex || 0].livePlayIndex = k + 1; });
+  EB.emit('game:tick', { game: SM.get().schedule[SM.get().currentGameIndex || 0] });
+  return plays[k].description;
+});
+if (endHalf) {
+  await page.waitForTimeout(1500);
+  const during = await page.evaluate(() => ({ last: document.querySelector('#live-view .lv-last').textContent, path: !!document.querySelector('#live-view .lv-path') }));
+  await page.waitForTimeout(3500);
+  const after = await page.evaluate(() => ({ last: document.querySelector('#live-view .lv-last').textContent, path: !!document.querySelector('#live-view .lv-path') }));
+  check(`the half's last out shows for a few seconds ("${during.last}")`, during.last === endHalf && during.path);
+  check('…then its words and the ball\'s path clear', after.last === '' && !after.path);
 }
 
 // A game from before r229 (no fielders saved on its plays): still nine, from the lineups.
