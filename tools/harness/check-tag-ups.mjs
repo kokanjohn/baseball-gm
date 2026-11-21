@@ -10,7 +10,8 @@
 import { seedRandom } from './shims.js';
 import * as SM from '../../store/StateManager.js';
 import { startNewGame } from '../../engine/GameEngine.js';
-import { generatePlays, leagueNorms } from '../../engine/SimEngine.js';
+import { generatePlays, leagueNorms, tagSendChance } from '../../engine/SimEngine.js';
+import { STRATEGY } from '../../data/constants.js';
 import { dice } from '../../engine/Dice.js';
 import { baseballYear } from '../../engine/PlayerFactory.js';
 import { playingRating } from '../../engine/Diamonds.js';
@@ -23,7 +24,7 @@ const check = (name, ok, info = '') => { if (ok) pass++; else fail++; console.lo
 const N = 900;   // (r228 fewer runners stranded on third: a larger sample for the speed check)
 const measure = (runStyleKey) => {
 SM.mutate(s => { s.userTeam.strategy = { ...(s.userTeam.strategy || {}), run: runStyleKey }; for (const t of s.leagueTeams) t.strategy = { ...(t.strategy || {}), run: runStyleKey }; });
-const c = { deep: [0, 0], shallow: [0, 0], mid: [], r3: 0, sent: 0, safe: 0, out3rd: 0, sf: 0, pop3: 0, popScored: 0, r2: 0, r2go: 0, r2out: 0, byF: { LF: [0, 0], CF: [0, 0], RF: [0, 0] }, r1: 0, r1go: 0, runs: 0, sfThirdOut: 0 };
+const c = { situations: [], deep: [0, 0], shallow: [0, 0], mid: [], r3: 0, sent: 0, safe: 0, out3rd: 0, sf: 0, pop3: 0, popScored: 0, r2: 0, r2go: 0, r2out: 0, byF: { LF: [0, 0], CF: [0, 0], RF: [0, 0] }, r1: 0, r1go: 0, runs: 0, sfThirdOut: 0 };
 for (let i = 0; i < N; i++) {
   const opp = st.leagueTeams[i % st.leagueTeams.length];
   const g = { id: `t-${i}`, isHome: i % 2 === 0, gameTime: T0 + i * 864e5, weather: null, fieldCondition: null };
@@ -40,6 +41,7 @@ for (let i = 0; i < N; i++) {
       const went = p.type === 'sac_fly' || outHome;
       if (went) c.sent++;
       const b = p._ball.dist >= 300 ? c.deep : p._ball.dist < 260 ? c.shallow : null; if (b) { b[0]++; if (went) b[1]++; }
+      c.situations.push([p._ball.dist, playingRating(st.players[pb.third], 'speed') ?? 50]);
       if (p._ball.dist >= 235 && p._ball.dist < 305) c.mid.push([playingRating(st.players[pb.third], 'speed') ?? 50, went]);
       if (p.type === 'sac_fly') c.safe++;
     }
@@ -62,7 +64,10 @@ const c = measure('normal');
 console.log(`    ${N} games: runs a team-game ${(c.runs / N / 2).toFixed(2)}, sacrifice flies a team-game ${(c.sf / N / 2).toFixed(3)}`);
 check(`no run scores on the inning's third out (${c.sfThirdOut})`, c.sfThirdOut === 0);
 check(`no runner scores on an infield pop (${c.popScored} of ${c.pop3})`, c.pop3 > 20 && c.popScored === 0);
-check(`runner on third, a catchable outfield fly: sent ${pc(c.sent, c.r3)} (MLB about 78%)`, c.r3 > 120 && r(c.sent, c.r3) > 0.70 && r(c.sent, c.r3) < 0.88);
+// (the sim's own send chance over the situations that came up — no dice noise; the sends that happened, too, loosely)
+const expect = (run) => c.situations.reduce((t, [d, sp]) => t + tagSendChance(d, sp, run), 0) / c.situations.length;
+check(`runner on third, a catchable outfield fly: sent ${Math.round(expect(STRATEGY.run.normal) * 100)}% by the sim's chance over ${c.situations.length} (MLB about 78%); ${pc(c.sent, c.r3)} were`,
+  c.r3 > 120 && expect(STRATEGY.run.normal) > 0.70 && expect(STRATEGY.run.normal) < 0.88 && r(c.sent, c.r3) > 0.62 && r(c.sent, c.r3) < 0.95);
 check(`…safe on ${pc(c.safe, c.sent)} of sends (MLB about 97%)`, r(c.safe, c.sent) > 0.93 && r(c.safe, c.sent) <= 0.995);
 check(`…deeper flies sent more (300+ feet ${pc(c.deep[1], c.deep[0])}; under 260 ${pc(c.shallow[1], c.shallow[0])})`, r(c.deep[1], c.deep[0]) > 0.9 && r(c.shallow[1], c.shallow[0]) < 0.6);
 const mids = [...c.mid].sort((a, b) => a[0] - b[0]), half = Math.floor(mids.length / 2);
@@ -71,7 +76,10 @@ check(`…faster runners sent more on the middle flies, 235–305 feet (faster h
 const L = r(c.byF.LF[1], c.byF.LF[0]), C = r(c.byF.CF[1], c.byF.CF[0]), R = r(c.byF.RF[1], c.byF.RF[0]);
 check(`runner on second to an open third: LF ${pc(c.byF.LF[1], c.byF.LF[0])}, CF ${pc(c.byF.CF[1], c.byF.CF[0])}, RF ${pc(c.byF.RF[1], c.byF.RF[0])} (MLB about 12/47/55%)`, L < 0.25 && C > 0.35 && C < 0.62 && R > 0.42 && R < 0.68 && L < C && C <= R + 0.05);
 check(`first to second: rare (${pc(c.r1go, c.r1)})`, r(c.r1go, c.r1) > 0.01 && r(c.r1go, c.r1) < 0.15);
+const em = expect(STRATEGY.run.more), en = expect(STRATEGY.run.normal), el = expect(STRATEGY.run.less);
+check(`the running game, the same flies: Run More ${Math.round(em * 100)}% · Normally ${Math.round(en * 100)}% · Run Less ${Math.round(el * 100)}% sent from third`, em > en && en > el);
+SM.mutate(s => { s.userTeam.strategy = { ...(s.userTeam.strategy || {}), run: 'more' }; for (const t of s.leagueTeams) t.strategy = { ...(t.strategy || {}), run: 'more' }; });
 const more = measure('more'), less = measure('less');
-check(`the running game: Run More ${pc(more.sent, more.r3)} · Normally ${pc(c.sent, c.r3)} · Run Less ${pc(less.sent, less.r3)} sent from third`, r(more.sent, more.r3) > r(c.sent, c.r3) && r(c.sent, c.r3) > r(less.sent, less.r3));
+check(`…and in the games: Run More ${pc(more.sent, more.r3)} vs Run Less ${pc(less.sent, less.r3)} sent`, r(more.sent, more.r3) > r(less.sent, less.r3));
 console.log(`\n${fail ? 'FAILED' : 'ALL PASSED'} — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

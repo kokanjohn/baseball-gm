@@ -41,7 +41,7 @@ await page.evaluate(async ({ theme, MIN }) => {
 await page.waitForSelector('#live-game-wrap .lgv-radar-btn', { timeout: 20000 });
 const venue = await page.evaluate(async () => { const SM = await import('/baseball-gm/store/StateManager.js'); const s = SM.get(); const g = s.schedule[s.currentGameIndex || 0]; return g.venueId || (g.isHome ? 'user' : g.opponentId); });
 const line = (await page.textContent('#live-game-wrap .lgv-wx-line')).replace(/\s+/g, ' ').trim();
-check(`the live game shows its weather with a Radar button (“${line}”)`, /Radar$/.test(line));
+check(`the live game shows its weather with a Radar button (“${line}”)`, /Radar(Live View)?$/.test(line));   // (r229 the Live View button beside it)
 await page.screenshot({ path: `${out}/live-radar-btn-${theme}.png` });
 await page.click('#live-game-wrap .lgv-radar-btn');
 await page.waitForSelector('#radar-sheet.open', { timeout: 5000 });

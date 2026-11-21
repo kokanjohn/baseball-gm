@@ -5,8 +5,8 @@
  *     the right side easiest, the third baseman and the pitcher hardest; never left standing on third after scoring;
  *   - a runner on second alone takes third on a groundout mostly on the right side;
  *   - wild pitches about 0.3 a team-game, by the pitcher's control; runs on them;
- *   - intentional walks about one every six team-games, mostly late; only with first base open and a runner in scoring
- *     position; in the words.
+ *   - intentional walks about one every six team-games, mostly late; mostly with first base open and a runner in
+ *     scoring position (r229: the other base states allowed, rare); in the words.
  */
 import { seedRandom } from '../../tools/harness/shims.js';
 import * as SM from '../../store/StateManager.js';
@@ -21,7 +21,7 @@ const T0 = st.schedule.find(g => !g.isSpring).gameTime;
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => { if (ok) pass++; else fail++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${!ok && info ? `\n      ${info}` : ''}`); };
 const N = 600;
-const c = { phantom: 0, ibbBad: 0, wpCtl: [[0, 0], [0, 0]], wp: 0, wpRuns: 0, ibb: 0, ibbLate: 0, go3: 0, go3s: 0, go2: 0, go2a: 0, goBy: {}, runs: 0, bb: 0, k: 0, h: 0 };
+const c = { phantom: 0, ibbBy: {}, wpCtl: [[0, 0], [0, 0]], wp: 0, wpRuns: 0, ibb: 0, ibbLate: 0, go3: 0, go3s: 0, go2: 0, go2a: 0, goBy: {}, runs: 0, bb: 0, k: 0, h: 0 };
 for (let i = 0; i < N; i++) {
   const lg = i % 2 === 1;
   const home = lg ? st.leagueTeams[i % st.leagueTeams.length] : st.userTeam, away = st.leagueTeams[(i + 3) % st.leagueTeams.length];
@@ -31,7 +31,7 @@ for (let i = 0; i < N; i++) {
   for (const p of plays) {
     if (p._halfInning !== ph) { pb = { first: null, second: null, third: null }; po = 0; ph = p._halfInning; }
     if (p.type === 'wild_pitch') { c.wp++; c.wpRuns += p.runs; }
-    if (p.type === 'walk' && /intentionally/.test(p.description)) { c.ibb++; if (p.inning >= 7) c.ibbLate++; if (pb.first || !(pb.second || pb.third)) c.ibbBad++; }
+    if (p.type === 'walk' && /intentionally/.test(p.description)) { c.ibb++; if (p.inning >= 7) c.ibbLate++; const k = pb.first && pb.second && pb.third ? 'loaded' : !pb.first && !pb.second && !pb.third ? 'empty' : pb.first ? 'firstTaken' : 'usual'; c.ibbBy[k] = (c.ibbBy[k] || 0) + 1; }
     // (a runner who scored isn't still on a base)
     if (p.runs > 0 && p._basesAfter && Object.values(p._basesAfter).some(id => id && Object.values(p._statDeltas || {}).flat().length && (p._statDeltas[id] || []).some(d => d.stat === 'r'))) c.phantom++;
     // wild pitches by control: each plate appearance with someone on, the pitcher's control
@@ -63,6 +63,8 @@ check(`…more from pitchers with less control (control under 55: ${(r(c.wpCtl[0
 check(`…runs score on them (${c.wpRuns})`, c.wpRuns > 0);
 check(`intentional walks ${(c.ibb / tg).toFixed(2)} a team-game (MLB about 0.17)`, c.ibb / tg > 0.1 && c.ibb / tg < 0.26);
 check(`…mostly late (${pc(c.ibbLate, c.ibb)} in the 7th on)`, r(c.ibbLate, c.ibb) > 0.5);
-check(`…only with first base open and a runner on second or third (${c.ibbBad} otherwise)`, c.ibbBad === 0);
+// (r229 §122.108 any base state is allowed — MLB has no rule against it — weighted by how often managers choose it)
+check(`…mostly with first base open and a runner on second or third (${pc(c.ibbBy.usual || 0, c.ibb)}; first taken ${c.ibbBy.firstTaken || 0}, bases empty ${c.ibbBy.empty || 0}, loaded ${c.ibbBy.loaded || 0})`,
+  r(c.ibbBy.usual || 0, c.ibb) >= 0.75 && (c.ibbBy.loaded || 0) <= 1);
 console.log(`\n${fail ? 'FAILED' : 'ALL PASSED'} — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -41,6 +41,7 @@ import {
 } from '../formatters.js';
 import { createRadarCard, MAP_H as RADAR_MAP_H } from '../components/RadarCard.js';
 import { openRadarSheet, venueOf } from '../components/RadarSheet.js';
+import { openLiveView } from '../components/LiveView.js';   // r229 §122.108
 import { wxState, weatherLine, liveWeatherLine, gameNotes, elapsedLabel, startStatus, postponedToday, timeLabel, dayLabel, parkNowLine } from '../components/WeatherStatus.js';
 import { weatherToldOf } from '../../engine/GameEngine.js';
 import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
@@ -87,6 +88,7 @@ export function mount() {
   wire('game:tick',         _onTick);
   // §105 the live game's Radar button (the card redraws, so one delegated listener).
   document.getElementById('dashboard-content')?.addEventListener('click', _onRadarButton);
+  document.getElementById('dashboard-content')?.addEventListener('click', _onLiveViewButton);   // r229
   wire('game:committed',    () => { _firstPitchSounded = false; _stopCountdown(); refresh(); });
   wire('game:phaseChanged', () => refresh());
   wire('roster:changed',    () => refresh());
@@ -133,6 +135,7 @@ export function unmount() {
   }
   window.removeEventListener('resize', _fitRadar);
   document.getElementById('dashboard-content')?.removeEventListener('click', _onRadarButton);
+  document.getElementById('dashboard-content')?.removeEventListener('click', _onLiveViewButton);
   _radar?.dispose();
   _radar = null;
   _mounted = false;
@@ -683,6 +686,22 @@ function _radarSlot(game) {
   return `<div id="dash-radar-slot" data-focus="${_escape(venueOf(game))}"></div>`;
 }
 
+/** r229 §122.108 the Live View button: our game on the field (not the All-Star Game). */
+function _liveViewBtn(game) {
+  if (!game || game.isAllStar) return '';
+  return `<button type="button" class="lgv-view-btn" data-lv-time="${game.gameTime}">Live View</button>`;
+}
+
+function _onLiveViewButton(e) {
+  const b = e.target.closest?.('.lgv-view-btn');
+  if (!b) return;
+  e.stopPropagation();
+  App.playClick();
+  const t = Number(b.dataset.lvTime);
+  const game = (StateManager.get().schedule || []).find(g => g.gameTime === t);
+  if (game) openLiveView(game);
+}
+
 function _onRadarButton(e) {
   const b = e.target.closest?.('.lgv-radar-btn');
   if (!b) return;
@@ -832,7 +851,7 @@ function _wxBanner(game, ds) {
     // §105 the radar is a tap away during the game too: the weather it's played in, and a Radar button.
     const line = _liveLine(game, ds);
     return `<div class="lgv-wx-line"><span>${_escape(line)}</span>
-      <button type="button" class="lgv-radar-btn" data-radar-focus="${_escape(venueOf(game))}">Radar</button></div>`;
+      <button type="button" class="lgv-radar-btn" data-radar-focus="${_escape(venueOf(game))}">Radar</button>${_liveViewBtn(game)}</div>`;
   }
   const clock = w.kind === 'delay' || w.kind === 'start-delay'
     ? ` · <span data-wx-since="${w.sinceMs}">${elapsedLabel(Date.now() - w.sinceMs)}</span>` : '';
@@ -840,7 +859,7 @@ function _wxBanner(game, ds) {
   return `<div class="lgv-wx-banner lgv-wx-${w.kind}">
       <div class="lgv-wx-title">${_escape(w.title)}${clock}</div>
       <div class="lgv-wx-sub">${_escape(w.sub)}</div>
-    </div>${radar}`;
+    </div>${radar}${_liveViewBtn(game) ? `<div class="lgv-view-row">${_liveViewBtn(game)}</div>` : ''}`;
 }
 
 function _renderLiveGameCard(game, state, view = null, ds = null, footer = '') {
@@ -1603,6 +1622,8 @@ function _injectCSS() {
     .lgv-delay{color:#f97316;border-color:rgba(249,115,22,.4);}
     .pbp-play.pbp-weather .pbp-play-text{color:#f97316;font-weight:600;}
     .lgv-wx-line{font-size:11px;color:var(--muted);padding:6px 14px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:28px;}
+    .lgv-view-btn{flex-shrink:0;font:inherit;font-size:11px;font-weight:700;letter-spacing:.3px;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;margin-left:6px;}
+    .lgv-view-row{display:flex;justify-content:flex-end;padding:6px 14px 0;}
     .lgv-radar-btn{flex-shrink:0;font:inherit;font-size:11px;font-weight:700;letter-spacing:.3px;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;}
     .lgv-radar-btn:active{transform:scale(.96);}
     .lgv-wx-banner{margin:8px 12px 4px;padding:8px 10px;border-radius:10px;border:1px solid rgba(249,115,22,.35);background:rgba(249,115,22,.08);}

@@ -525,6 +525,8 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
       userBats ? gs.oppPitcher : gs.userPitcher, gs, players, fieldMod * gs.env.hitMod,
       userBats, isSpring, `${isTop ? 'TOP' : 'BOT'}_${gs.inning}`, userBats ? 'userLineupIdx' : 'oppLineupIdx',
       gs.inning, walkoffRuns, resume);
+    // r229 §122.108 who was where in the field this half (the Live View): on the half's first play. A label only.
+    if (hp.length && _fielders) hp[0]._field = _fieldIds(_fielders);
     plays.push(...hp);
     _stampRunningScore(hp, gs.userScore, gs.oppScore, userBats);
     const runs = hp.reduce((sum, p) => sum + playRuns(p), 0);
@@ -725,11 +727,19 @@ function _wildPitch(bases, players, outs, pitcher) {
  * on second or third, the batter clearly better than the one on deck; late and close, or with two outs.
  */
 function _intentionalWalk(batter, onDeck, bases, outs, inning, batRuns, fieldRuns) {
-  if (!batter || !onDeck || bases.first || !(bases.second || bases.third)) return false;
-  if ((batter.ovr || 0) - (onDeck.ovr || 0) < IBB.gap) return false;
+  if (!batter || !onDeck) return false;
+  // r229 §122.108 any time is allowed (MLB has no rule against it); the base state is how often managers choose it:
+  // first base open with a runner in scoring position the usual case, first taken rare, bases empty rare and only for
+  // a much better hitter, bases loaded (walking in a run) almost never.
+  const gap = (batter.ovr || 0) - (onDeck.ovr || 0);
   const late = inning >= IBB.lateInning && Math.abs(batRuns - fieldRuns) <= IBB.closeRuns;
-  const p = late ? IBB.late : outs === 2 ? IBB.early : 0;
-  return p > 0 && _roll() < p;
+  const base = late ? IBB.late : outs === 2 ? IBB.early : 0;
+  if (!base) return false;
+  const loaded = bases.first && bases.second && bases.third;
+  const empty = !bases.first && !bases.second && !bases.third;
+  const w = loaded ? IBB.loaded : empty ? IBB.empty : bases.first ? IBB.firstTaken : 1;
+  const need = loaded ? IBB.gapLoaded : empty ? IBB.gapEmpty : bases.first ? IBB.gapFirstTaken : IBB.gap;
+  return gap >= need && _roll() < base * w;
 }
 
 function _attemptStolenBase(bases, players, outs, inning, gs) {
@@ -1334,6 +1344,18 @@ export function plateAppearanceRates({ contact, power, speed, stuff, control }, 
  *   extraOuts   — additional outs beyond the primary batter out (e.g. DP = 1 extra)
  *   playMod     — override play type for display (e.g. 'fielders_choice', 'sac_fly')
  */
+/**
+ * r227 §122.106 the chance a runner on third is sent home on a caught outfield fly (TAG_UP.home): how deep (feet), the
+ * runner's speed, the batting club's running game (STRATEGY.run[…]). Exported for the checks.
+ */
+export function tagSendChance(dist, speed, run = null) {
+  const pts = TAG_UP.home.send;
+  let v = pts[pts.length - 1][1];
+  if (dist <= pts[0][0]) v = pts[0][1];
+  else for (let i = 1; i < pts.length; i++) if (dist <= pts[i][0]) { const [a, va] = pts[i - 1], [b, vb] = pts[i]; v = va + (vb - va) * (dist - a) / (b - a); break; }
+  return Math.max(0, Math.min(1, v + TAG_UP.home.sendPerSpeed * ((speed || 50) - 50) + (run?.tagSend || 0)));
+}
+
 /** r228 §122.107 a runner who isn't forced moves up on a groundout (GROUND_ADV): by where it was fielded, speed, the running game. */
 function _groundAdv(to, atBat, runnerId, players) {
   const at = atBat.at && GROUND_ADV[to][atBat.at] != null ? atBat.at : 'SS';
@@ -1573,12 +1595,12 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
         for (let i = 1; i < pts.length; i++) if (x <= pts[i][0]) { const [a, va] = pts[i - 1], [b, vb] = pts[i]; return va + (vb - va) * (x - a) / (b - a); }
         return pts[pts.length - 1][1];
       };
-      const sendMod = run.tagSend || 0, outMod = (run.tagOut || 1) * arm;
+      const sendMod = run.tagSend || 0, outMod = (run.tagOut || 1) * arm;   // (tagSendChance: the same, exported)
       const caught = outs + 1;   // (the catch is an out)
       // third to home: a sacrifice fly, or thrown out at the plate
       if (bases.third) {
         const H = TAG_UP.home, s3 = spd(bases.third);
-        if (_roll() < p01(along(H.send, ball.dist) + H.sendPerSpeed * (s3 - 50) + sendMod)) {
+        if (_roll() < tagSendChance(ball.dist, s3, run)) {
           const safe = 1 - (1 - p01(along(H.safe, ball.dist) + H.safePerSpeed * (s3 - 50))) * outMod;
           if (_roll() < safe) { runsScored++; runnerIds.push(bases.third); newBases.third = null; playMod = 'sac_fly'; }
           else { extraOuts++; thrownOut = { id: bases.third, at: 'home' }; newBases.third = null; }
@@ -1865,7 +1887,7 @@ function _plannedSubstitution(slots, slotIdx, batter, players, inning) {
   if (!sub || !isAvailable(sub)) return null;
   slots[slotIdx] = { id: sub.id, subbed: false, sub: true };
   return {
-    playIndex: 0, batterId: sub.id, pitcherId: null, type: 'pinch_hit',
+    playIndex: 0, batterId: sub.id, pitcherId: null, type: 'pinch_hit', _for: batter?.id || null,   // (r229 whom)
     description: `${sub.name} pinch hits for ${batter?.name || 'the starter'}`,
     rbi: 0, isScoring: false, isBigPlay: false,
     cumOurScore: 0, cumTheirScore: 0, _timestamp: 0, _statDeltas: {},
@@ -1972,6 +1994,7 @@ function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
     batterId:     benchCandidate.id,
     pitcherId:    null,
     type:         'pinch_hit',
+    _for:         currentPlayer.id || null,   // r229 §122.108 whom (the Live View's batting order)
     description:  `${subName} pinch hits for ${starterName}`,
     rbi:          0,
     isScoring:    false,
@@ -3138,6 +3161,13 @@ function _fieldPlay(atBat, isUserBatting) {
 //   _out  = { id, base } a runner thrown out;  _relay = [ids] the double play's relay
 
 const _OF_SPOT = { left: 'LF', center: 'CF', right: 'RF' };
+/** r229 §122.108 the fielders by position, as ids: { C, 1B, 2B, 3B, SS, LF, CF, RF }. */
+function _fieldIds(F) {
+  const out = {};
+  for (const k of ['C', '1B', '2B', '3B', 'SS']) if (F.byPos?.[k]) out[k] = F.byPos[k].id;
+  for (const f of F.byPos?.OF || []) out[_OF_SPOT[f.where] || 'CF'] = f.id;
+  return out;
+}
 function _spotOf(f) { return f ? (f.slot === 'OF' ? _OF_SPOT[f.where] || 'CF' : f.slot) : (_pickedPos === 'P' ? 'P' : null); }
 const _ANG = { P: 0, C: 0, '1B': 34, '2B': 13, SS: -13, '3B': -34, LF: -28, CF: 0, RF: 28 };
 const _IFD = { P: 58, C: 14, '1B': 108, '2B': 142, SS: 142, '3B': 108 };

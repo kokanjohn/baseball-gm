@@ -14024,3 +14024,64 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - check-coaches, check-compose-strategy, sim-season and multi-season pass.
 
 **Fresh team:** not needed.
+
+## §122.108 — r229: the Live View (release 2); intentional walks in any base state
+### The user's decisions
+- **The button:** "Live View" (not "Full View"), on our live game card. Our games only.
+- **What the view shows:**
+  - The runners on base.
+  - The batter, on deck and in the hole.
+  - The fielders at their positions by last name, the pitcher included.
+  - A simple box score: R/H/E, plus the batter's and the pitcher's lines.
+- **Each new play:** the ball travels and the runners move; the path stays until the next play.
+- **Intentional walks:** MLB has no rule restricting them, so first base open stops being a rule. It becomes a weight for how often managers choose it. Rolled into this release.
+
+### Intentional walks (`_intentionalWalk`, `IBB`)
+- **Allowed in any base state,** weighted × the chance (r228: late and close 45%, otherwise 13% with two outs). Each state needs a gap to the batter on deck:
+  - First open with a runner on second or third: ×1, gap 4.
+  - First taken: ×0.06, gap 8.
+  - Bases empty: ×0.015, gap 10.
+  - Bases loaded (walking in a run): ×0.002, gap 12.
+- **Measured** (600 games): 0.18 a team-game; 98% with first open and a runner in scoring position, 4 with first taken.
+
+### Saved on the plays (labels only; no rolls, no change to any game)
+- `_field = { C, 1B, 2B, 3B, SS, LF, CF, RF }` on each half's first play (`_fieldIds(_fielders)`): who was where.
+- `_for` on a pinch hit: whom they batted for. Injury substitutions already carried `_injury.subId`.
+
+### The Live View (`ui/components/LiveView.js`)
+- **The button:** `.lgv-view-btn` on our live game card, beside Radar in the weather line, or under the weather banner during a delay. Not on the All-Star Game. Delegated like Radar; removed on unmount.
+- **The view:** full screen, Done to close.
+  - **Header:** the score, the half and outs, and a status pill (Live / the weather's / Final).
+  - **The field (SVG):** grass, the fence (`fenceAt`), dirt, the bases and the mound.
+  - **Fielders:** the nine by last name (the half's `_field`; for a game from before r229, the fielding club's lineup slots with the outfield left, center, right). The pitcher on the mound. The catcher's name under the plate, so it doesn't sit on the batter's.
+  - **Runners:** each base's runner by name, beside the base and away from the fielders.
+  - **The batter:** their name by the plate.
+  - **Below the field:** the last play in words, then "At bat" (with today's line: 1-for-2, HR, RBI, BB, K), "On deck", "In the hole", and "Pitching" (IP, H, ER, BB, K, BF), then R/H/E for both teams.
+  - Every name opens the player card.
+- **Where the facts come from** (`liveViewState`, from the revealed plays, on the card's own clock):
+  - **At bat:** the next plate appearance in this half; an announced pinch hitter counts.
+  - **On deck and in the hole:** the batting order (`liveLineups`, with the pinch hits and injury substitutions so far).
+  - **The pitcher:** the fielding club's latest so far. A change not yet announced isn't shown. At the very start, the one about to throw the first pitch.
+  - **The box score:** `accumulateBox`; batters faced counted from the plays.
+- **Each new play:**
+  - The ball travels from the plate to its spot (`_ball`) over about 0.9–1.7 seconds. A fly rises and falls over its shadow. The path is drawn behind it, dashed on the ground.
+  - The landing mark appears when the ball arrives, coloured by result: hit, out, home run, error.
+  - The path stays until the next play.
+  - Runners move base to base (a CSS transition). A batter reaching starts from the plate. A runner who scored runs home and fades; one put out fades.
+- **Plays from before r226** (no spot saved): placed at the fielder's position.
+- It updates on `game:tick` and `game:committed`, using the `wire()` pattern; it stops listening on close.
+
+### Checks
+- **test-live-view-ui** (new; dark and light), all against the game's own plays:
+  - The card's button; nine fielders by name with the pitcher.
+  - The fielders the sim had in the field this half.
+  - The batter is the next plate appearance's; on deck and in the hole follow in the order.
+  - The pitcher is the fielding club's latest, with a line; R/H/E.
+  - A hit: the last play in words, the path ending at its spot, the runners by name.
+  - A game from before r229 still shows nine; Done closes it.
+- **check-sim-plays:** intentional walks mostly with first open and a runner in scoring position (at least 75%), loaded at most once.
+- **check-tag-ups:** the MLB comparison and the running-game ordering now use the sim's own send chance over the flies that came up (`tagSendChance`, exported and used by the sim; the same formula), so dice noise doesn't decide them. On fresh dice the realized sends were 78, 81 and 79%. The realized More vs Less is checked too.
+- **test-compose-ui:** the weather line now ends with Live View after Radar.
+- check-ball-placement, check-coaches, sim-season and multi-season pass.
+
+**Fresh team:** not needed. A game started before r229 shows the fielders from the lineups and finds pinch hitters' replacements by name.

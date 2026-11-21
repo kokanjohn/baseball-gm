@@ -311,10 +311,13 @@ export const GROUND_ADV = Object.freeze({
 // r228 wild pitches: before a batter, with anyone on base, this often (× 1 + perControl × (50 − the pitcher's control),
 // at least ×minMult); every runner moves up a base (a run is earned). MLB: about 0.3 a team-game.
 export const WILD_PITCH = Object.freeze({ perPA: 0.021, perControl: 0.02, minMult: 0.4 });
-// r228 intentional walks, when the game calls for it (no manager's decision): first base open, a runner on second or
-// third, the batter clearly better than the one on deck — late and close (the 7th on, within two runs) at `late`, any
-// other time with two outs at `early`. MLB: about one every six team-games.
-export const IBB = Object.freeze({ late: 0.45, early: 0.13, lateInning: 7, closeRuns: 2, gap: 4 });
+// r228 intentional walks, when the game calls for it (no manager's decision): the batter clearly better than the one on
+// deck — late and close (the 7th on, within two runs) at `late`, any other time with two outs at `early`. MLB: about one
+// every six team-games. r229: allowed in any base state, weighted (first open with a runner in scoring position the
+// usual case).
+export const IBB = Object.freeze({ late: 0.45, early: 0.13, lateInning: 7, closeRuns: 2, gap: 4,
+  // r229 §122.108 the other base states (× the chance, and a bigger gap to the batter on deck)
+  firstTaken: 0.06, gapFirstTaken: 8, empty: 0.015, gapEmpty: 10, loaded: 0.002, gapLoaded: 12 });
 
 // r227 §122.106 tag-ups on a caught fly, fewer than two outs (none on the inning's third out; none on an infield pop).
 // By how deep it was caught (feet, r226's spot), the runner's speed (± per point from 50), the batting club's running
