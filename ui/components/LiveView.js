@@ -145,9 +145,15 @@ const BASE = { first: pt(45, 90), second: pt(0, 127.3), third: pt(-45, 90), home
 
 function _fieldSvg() {
   const fence = [];
-  for (let a = -45; a <= 45; a += 3) fence.push(xy(pt(a, fenceAt(a))));
+  for (let a = -45; a <= 45; a += 1.5) fence.push(xy(pt(a, fenceAt(a))));   // (r231 finer: a smooth arc)
+  // (r231 the dirt's edge: a circle around the mound, as on a real infield — 110 feet from the mound, about 170 from
+  //  the plate to straightaway center, 144 along the lines)
   const dirt = [];
-  for (let a = -45; a <= 45; a += 3) dirt.push(xy(pt(a, 158)));   // (the arc, past second base)
+  const ARC = 110, MOUND = 60.5;
+  for (let a = -45; a <= 45; a += 2) {
+    const s = Math.sin(a * Math.PI / 180), c = Math.cos(a * Math.PI / 180);
+    dirt.push(xy(pt(a, MOUND * c + Math.sqrt(ARC * ARC - MOUND * MOUND * s * s))));
+  }
   const diamond = [pt(0, 0), pt(45, 90), pt(0, 127.3), pt(-45, 90)].map(xy).join(' ');
   const bag = (p) => `<rect x="${(p[0] - 4.5).toFixed(1)}" y="${(p[1] - 4.5).toFixed(1)}" width="9" height="9" transform="rotate(45 ${xy(p).replace(',', ' ')})" class="lv-bag"/>`;
   const [mx, my] = pt(0, 60.5);   // (the mound)

@@ -3172,8 +3172,12 @@ function _spotOf(f) { return f ? (f.slot === 'OF' ? _OF_SPOT[f.where] || 'CF' : 
 const _ANG = { P: 0, C: 0, '1B': 34, '2B': 13, SS: -13, '3B': -34, LF: -28, CF: 0, RF: 28 };
 const _IFD = { P: 58, C: 14, '1B': 108, '2B': 142, SS: 142, '3B': 108 };
 const _OFS = ['LF', 'CF', 'RF'];
-/** The fence at an angle: 330 down the lines, 405 to center. */
-export function fenceAt(angle) { return 330 + 75 * (1 - Math.min(45, Math.abs(angle)) / 45); }
+/**
+ * The fence at an angle: 330 down the lines, 405 to center. r231 §122.111 a smooth arc (about 383 in the gaps) — it had
+ * been straight from each pole to a point in center.
+ */
+export function fenceAt(angle) { return 330 + 75 * Math.cos(2 * rad2(Math.min(45, Math.abs(angle)))); }
+const rad2 = (a) => a * Math.PI / 180;
 const _clampA = (a) => Math.max(-44, Math.min(44, a));
 
 function _ballOf(ab, type, key, pitcher, thrownOut) {

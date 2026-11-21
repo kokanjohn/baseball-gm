@@ -14124,3 +14124,20 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - test-live-view-ui (dark and light) passes.
 
 **Fresh team:** not needed.
+
+## §122.111 — r232: a smooth fence; the dirt arc centred on the mound
+### The user's decisions (from r231's screenshots)
+- The dirt arc's apex reaches further past second base.
+- The outfield wall is a clean arc, with no point at straightaway centre.
+
+### Changed
+- **The fence (`SimEngine.fenceAt`):**
+  - A smooth arc: 330 + 75 × cos(2 × angle), giving 330 down the lines, 383 in the gaps, 405 to centre. It had been straight from each pole to a point in centre.
+  - It's the sim's fence, the one every ball's spot uses (r226: home runs over it, flyouts short of it, doubles and triples near it) and the tag-ups' first-to-second depth. So the drawing and the spots agree.
+  - Game results shift very slightly: fly balls in the gaps can carry a little deeper. Measured on check-tag-ups' fly balls, the send chance from third went 85% → 86% (MLB about 78%; within the checked band).
+- **The dirt (`LiveView`):** its edge is a circle 110 feet around the mound, as on a real infield: about 170 feet from the plate to straightaway centre, 144 along the lines. The fence is drawn every 1.5°.
+
+### Checks
+- check-ball-placement (home runs over the fence, nothing else past it, against the new fence), check-tag-ups, check-sim-plays, test-live-view-ui (dark and light), sim-season and multi-season pass.
+
+**Fresh team:** not needed.
