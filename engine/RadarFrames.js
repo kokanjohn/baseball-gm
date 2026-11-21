@@ -21,7 +21,7 @@ export const LOOP_WINDOWS = Object.freeze({
   next24h: { key: 'next24h', label: 'Next 24 hrs', fromMin: 0,    toMin: 1440, stepMin: 60 },
 });
 export const LOOP_ORDER = Object.freeze(['past2h', 'next6h', 'next24h']);
-export const DEFAULT_LOOP = 'past2h';
+export const DEFAULT_LOOP = 'next6h';   // (r233 §122.112 the radar opens on the next six hours; was the past two)
 const NOW_STEP_MIN = 10;   // the latest radar picture is at the last 10-minute mark
 
 /** Zoom levels: the width of the view in km (same as the base map's). */

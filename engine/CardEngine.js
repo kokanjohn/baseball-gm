@@ -1619,7 +1619,7 @@ function _deliverOpenSpotsCard(atMs) {
         + `If ${open.length > 1 ? 'they\'re' : 'it\'s'} still open at ${_clock(fillAt)}, an hour before first pitch, I'll go with ${plan}.`
         + (coming.length ? ` ${_list(coming)} ${coming.length > 1 ? 'report' : 'reports'} at midnight and ${coming.length > 1 ? 'land' : 'lands'} on the bench, so you could wait for that and move them in yourself.` : '')
         + ` Or set it however you like in Team.`,
-    yesLabel: 'Do it that way now',
+    yesLabel: open.length > 1 ? 'Fill the Spots' : 'Fill the Spot',
     noLabel: "I'll set it in Team",
     expiresAtMs: fillAt,
     _raw: { onYes: 'openspots_fill', onNo: 'openspots_defer', onAuto: 'openspots_auto' },
@@ -2919,6 +2919,8 @@ export function scheduleFirstDay(context) {
     if (!def) return;
     const inst = _createInstance(def, context || {}, StateManager.get());
     if (!inst) return;
+    // r233 §122.112 a message about the first game is due before its first pitch (not in two games)
+    if (def._beforeFirstGame) { inst.expiresAt = null; inst.expiresAtMs = first.gameTime - 10 * 60_000; }
     const extra = def._gmTeamId ? { _gmTeamId: def._gmTeamId, _gmSeason: st.seasonNum || 1 } : {};
     const card = _deliverAt({ ...inst, ...extra, _firstDay: true, _rosterKey: `firstday:${def.id}:${def._gmTeamId || ''}` }, at);
     if (card) parked.push(card);
@@ -6599,9 +6601,13 @@ function _applyCardAction(action, instance, atMs, feasible = null) {
   // it can't happen any more.
   if (!(feasible ?? handler.feasible(st, instance))) return;
   let events = [];
+  // r233 §122.112 a spot this decision opens (a starter sent to a program, rested, benched) is filled now, the
+  // manager's way, from who's on hand. Spots already open before it are still the GM's to fill (r153).
+  const openBefore = openSpots(st).any;
   StateManager.mutate(s => {
     events = handler.apply(s, instance, atMs) || [];
     applyRosterMutation(s, reconcileRoster(s, 'user'));
+    if (!openBefore && openSpots(s).any) applyRosterMutation(s, reconcileRoster(s, 'user', { fill: true, atMs }));
     s.userTeam.finances.payroll = computePayroll(s);
   });
   // Follow-ups the action set in motion (§73: a workout's result, a scouting

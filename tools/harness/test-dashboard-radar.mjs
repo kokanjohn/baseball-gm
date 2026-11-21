@@ -3,13 +3,17 @@
 //   node tools/harness/test-dashboard-radar.mjs outDir [theme]
 import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
+import { pinEnv } from './ui-env.mjs';   // (r233 the pinned world, like every UI test since §122.69)
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
 const [out = '.', theme = 'dark'] = process.argv.slice(2);
+// (r233 a taller screen: at 844 the dashboard has grown past room for the card, which then steps aside for its Radar
+//  button as designed — §100 — so this test of the card itself uses a screen with room for it)
 let ok = true;
 const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${!cond && info ? ' — ' + info : ''}`); };
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, serviceWorkers: 'block' });
+const ctx = await browser.newContext({ viewport: { width: 390, height: 1000 }, deviceScaleFactor: 3, serviceWorkers: 'block', timezoneId: 'America/New_York' });
+await pinEnv(ctx);
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
@@ -47,7 +51,7 @@ check(`tapping opens the full radar on the same park (${sheetFocus})`, sheetFocu
 const t1 = Date.now();
 await page.waitForFunction(() => !document.querySelector('.rs-status')?.textContent, null, { timeout: 30000 });
 const ms = Date.now() - t1;
-check(`its Past 2 hrs loop is ready at once from the card's frames (${ms} ms)`, ms < 1200);
+check(`its default loop (the next 6 hrs) is ready at once from the card's frames (${ms} ms)`, ms < 1200);
 await page.waitForTimeout(600);
 await page.screenshot({ path: `${out}/dash-sheet-${theme}.png` });
 await page.click('.rs-done');

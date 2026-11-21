@@ -17,13 +17,13 @@
 
 import { createFrameSource } from './RadarFrameSource.js';
 import { createRadarRenderer, formatFrameTime } from './RadarRenderer.js';
-import { frameTimes } from '../../engine/RadarFrames.js';
+import { frameTimes, DEFAULT_LOOP, LOOP_WINDOWS } from '../../engine/RadarFrames.js';
 import { weatherContext } from '../../engine/WeatherClimate.js';
 import { cityOf } from '../../engine/WeatherMap.js';
 
 const FRAME_MS = 600, DWELL_MS = 2500, REFRESH_MS = 60_000;
 export const MAP_H = 180, MIN_MAP_H = 90;
-const LOOP = 'past2h', ZOOM = 1;
+const LOOP = DEFAULT_LOOP, ZOOM = 1;   // (r233 the full radar's default, so it opens at once: the next six hours)
 
 const _esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -39,7 +39,7 @@ export function createRadarCard({ onOpen = () => {}, nowMs = null } = {}) {
     <div class="rc-head"><span class="rc-title">Radar</span><span class="rc-place"></span>
       <span class="rc-time"></span><span class="rc-tag"></span></div>
     <div class="rc-map"><canvas></canvas></div>
-    <div class="rc-foot"><span>Past 2 hrs</span><span class="rc-open">Tap for the full radar</span></div>`;
+    <div class="rc-foot"><span>${LOOP_WINDOWS[LOOP].label}</span><span class="rc-open">Tap for the full radar</span></div>`;
   const canvas = root.querySelector('canvas');
   const renderer = createRadarRenderer(canvas);
   let draws = 0;

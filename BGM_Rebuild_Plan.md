@@ -14141,3 +14141,36 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - check-ball-placement (home runs over the fence, nothing else past it, against the new fence), check-tag-ups, check-sim-plays, test-live-view-ui (dark and light), sim-season and multi-season pass.
 
 **Fresh team:** not needed.
+
+## §122.112 — r233: testing notes, batch 1 (a new team's first day; the radar's default)
+### The user's notes and what changed
+- **The radar's default view** is the next 6 hours, not the past 2. `RadarFrames.DEFAULT_LOOP = 'next6h'`. The dashboard's radar card uses the same loop (and says so), so the full radar still opens at once from the card's frames.
+- **The head trainer's first-day message** (`fd_trainer_heavy`):
+  - "The other way," → "Otherwise,".
+  - It's due before the first game's first pitch, not in two games.
+  - Its reply: "The program starts now — X sits the first game and gets to work…" (was "starts in the morning").
+- **First-game deadlines:** every first-day message about the first game is now due 10 minutes before its first pitch (`_beforeFirstGame`, applied when `scheduleFirstDay` parks it). These are both trainer messages, the bat order, both ticket messages and the batting-order talk.
+- **Filling an opened spot:** starting the program sat the player but left the lineup spot open, though a bench player could play it.
+  - Root cause: after a message's action, `_applyCardAction` tidied the roster without filling (r153: open spots wait for the GM until an hour before first pitch).
+  - Now a spot that the decision itself opened is filled at once, the manager's way (`reconcileRoster(…, { fill: true })`).
+  - Spots already open before it are still the GM's to fill.
+- **The open-spot message's button:** "Do it that way now" → "Fill the Spot" / "Fill the Spots".
+- **Spring field prep** doesn't fit the first day.
+  - It was one of a new team's seed messages (`NEW_TEAM_SEED_CARDS` had `sp1`), which is why it came at the first game.
+  - Removed from the seeds; `sp1` is retired from the spring pool.
+  - It's now a winter message (`wtn_field_prep`, "Field prep before spring").
+- **The uniforms for the first game** felt like a winter decision and were due in 2 games. Removed from the first day (`fd_equip_uniforms`); it's now a winter message (`wtn_uniforms`, "Which uniforms for Opening Day?").
+
+### Found along the way
+- **test-dashboard-radar was stale.** It predated the pinned test world (§122.69) and was written when the dashboard was shorter. At 390×844 the radar card now correctly steps aside for the next-game card's Radar button (§100: not enough room), which the test's own 844px section confirms.
+- It now pins the world, and checks the card itself on a 1000px-tall screen.
+
+### Checks
+- **check-first-day** (now 35):
+  - The spot is filled from the bench at once.
+  - The first-game messages are due before first pitch; the others keep their games.
+  - The uniforms aren't a first-day message; they and the field prep are winter messages; `sp1` is retired.
+  - The trainer's words.
+- check-open-spots, check-winter, check-card-pools, check-message-voice, check-weather, test-dashboard-radar, test-radar-sheet (dark and light), sim-season and multi-season pass.
+
+**Fresh team:** not needed. A new team's first day shows the changes.

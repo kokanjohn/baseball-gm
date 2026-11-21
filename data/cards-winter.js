@@ -175,6 +175,26 @@ export const WINTER_POOL = [
    body:"The mail keeps coming, even in winter — cards, drawings, a few strong opinions about the lineup. The most common question by far: when do tickets go on sale.",
    yesLabel:'Understood',noLabel:'Understood',yesEffect:{},noEffect:{}},
 
+  // r233 §122.112 two decisions that belong to the winter, not the first day of spring
+  {id:'wtn_uniforms',_winter:'winter',autoResolve:'yes',type:'normal',tag:'OPERATIONS',sender:'Equipment Mgr.',avatar:'🧢',
+   subject:"Which uniforms for Opening Day?",
+   preview:"The order for next season's uniforms goes in soon…",
+   body:"The order for next season's uniforms goes in soon, and I need to know which set goes in the lockers on Opening Day. Our uniform sponsor has offered {misc_cost_xs} to debut the new set that day. The fans love the throwbacks, and the stands would be full of them.",
+   yesLabel:'The Sponsor\'s Set',noLabel:'The Throwbacks',
+   yesEffect:{atmo:-1},noEffect:{atmo:3},
+   yesMsg:"The new set it is. The sponsor's check is on the way.",
+   noMsg:"Throwbacks for Opening Day. The fans will love it. The sponsor won't call.",
+   _revenueToken:'misc_cost_xs'},
+
+  {id:'wtn_field_prep',_winter:'winter',autoResolve:'no',type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'⚾',
+   subject:"Field prep before spring",
+   preview:"The grounds crew wants to start on the field before spring…",
+   body:"The grounds crew wants to start on the field before spring — regrading the warning track, resodding the infield corners and testing the irrigation. Full prep runs {grounds_crew_cost}. A partial job saves money but leaves the field below standard for Opening Day.",
+   yesLabel:'Full Prep',noLabel:'Partial Job',
+   yesEffect:{morale:2,atmo:3},noEffect:{atmo:-2},
+   yesMsg:"Full prep it is. The ballpark will be ready.",noMsg:"Partial prep. A few rough edges heading into the season.",
+   _budgetCost:'grounds_crew_cost'},
+
   {id:'wtn_field',_winter:'winter',autoResolve:'yes',type:'normal',tag:'FACILITIES',sender:'Head Groundskeeper',avatar:'🌱',_toastOnly:true,
    subject:"The field is put away for the winter",
    preview:"The field is put away for the winter…",

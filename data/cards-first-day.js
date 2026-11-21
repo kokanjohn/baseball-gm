@@ -16,13 +16,15 @@
  * Some staff introduce themselves (always with a real task); others skip the introductions. The manager never
  * asks us to set the lineup (that's the manager's call), only about a specific situation.
  * Card shape is the pool's (cards-pool.js); tokens resolve the same way.
+ * r233 §122.112 `_beforeFirstGame`: about the first game, so due before its first pitch (not in two games). The
+ * uniforms for the first game moved to the winter (cards-winter.js: wtn_uniforms).
  */
 
 export const FIRST_DAY_CORE = Object.freeze({
 
   // ── The trainer ──
   trainer: [
-    {id:'fd_trainer_surgery',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'MEDICAL',sender:'Head Trainer',avatar:'🩹',
+    {id:'fd_trainer_surgery',_beforeFirstGame:true,autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'MEDICAL',sender:'Head Trainer',avatar:'🩹',
      _promise:{no:{kind:'worn_down',afterDays:4,player:'active_hitter'}},
      subject:"Introductions, and {active_hitter_name}'s knee",
      preview:"I run the training room. First thing you should know about…",
@@ -33,31 +35,21 @@ export const FIRST_DAY_CORE = Object.freeze({
      noMsg:"{active_hitter_name} plays. I'll be watching that knee.",
      onYes:'rest_active_hitter',_restGames:1,_ttl:2},
 
-    {id:'fd_trainer_heavy',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'MEDICAL',sender:'Head Trainer',avatar:'🩹',
+    {id:'fd_trainer_heavy',_beforeFirstGame:true,autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'MEDICAL',sender:'Head Trainer',avatar:'🩹',
      _promise:{no:{kind:'worn_down',afterDays:5,player:'active_hitter'}},
      subject:"Hello from the training room, and a question about {active_hitter_name}",
      preview:"Welcome. I'll keep this short, because I need an answer…",
-     body:"Welcome. I'll keep this short, because I need an answer: {active_hitter_name} reported to camp heavier than we'd like and is already favoring a hamstring. I want a conditioning program that keeps {active_hitter_name} out of the first game. The other way, {active_hitter_name} plays and works it off as we go, and a hamstring like that can go on us.",
+     body:"Welcome. I'll keep this short, because I need an answer: {active_hitter_name} reported to camp heavier than we'd like and is already favoring a hamstring. I want a conditioning program that keeps {active_hitter_name} out of the first game. Otherwise, {active_hitter_name} plays and works it off as we go, and a hamstring like that can go on us.",
      yesLabel:'Start the Program',noLabel:'Let Them Play It Off',
      yesEffect:{morale:-1,ovr:1},noEffect:{morale:1},
-     yesMsg:"The program starts in the morning. {active_hitter_name} isn't thrilled, but the work is the work.",
+     yesMsg:"The program starts now — {active_hitter_name} sits the first game and gets to work. Not thrilled, but the work is the work.",
      noMsg:"Playing it off. I'll keep the hamstring wrapped and an eye on it.",
      onYes:'rest_active_hitter',_restGames:1,_ttl:2},
   ],
 
   // ── The equipment manager ──
   equipment: [
-    {id:'fd_equip_uniforms',autoResolve:'yes',type:'normal',tag:'OPERATIONS',sender:'Equipment Mgr.',avatar:'🧢',
-     subject:"Which uniforms for the first game?",
-     preview:"No time for introductions: I need to know which set goes in the lockers…",
-     body:"No time for introductions: I need to know which set goes in the lockers for the first game. Our uniform sponsor has offered {misc_cost_xs} to see the new set on the field that day. The fans love the throwbacks, and the stands would be full of them.",
-     yesLabel:'The Sponsor\'s Set',noLabel:'The Throwbacks',
-     yesEffect:{atmo:-1},noEffect:{atmo:3},
-     yesMsg:"The new set it is. The sponsor's check is on the way.",
-     noMsg:"Throwbacks in the lockers. The fans will love it. The sponsor won't call.",
-     _revenueToken:'misc_cost_xs',_ttl:2},
-
-    {id:'fd_equip_bats',autoResolve:'yes',type:'normal',tag:'OPERATIONS',sender:'Equipment Mgr.',avatar:'🧢',
+    {id:'fd_equip_bats',_beforeFirstGame:true,autoResolve:'yes',type:'normal',tag:'OPERATIONS',sender:'Equipment Mgr.',avatar:'🧢',
      subject:"Hello, and a bat order before the first game",
      preview:"I'm the one who keeps everything in the lockers. Here's what's short…",
      body:"I'm the one who keeps everything in the lockers. Before the first game: half the hitters are down to their last few bats, and the maker we use can rush an order for {misc_cost_xs}. The standard order comes after the first week, and until then some of them swing whatever's in the rack.",
@@ -70,7 +62,7 @@ export const FIRST_DAY_CORE = Object.freeze({
 
   // ── The ticket office ──
   tickets: [
-    {id:'fd_tickets_opener',autoResolve:'no',type:'normal',tag:'MARKETING',sender:'Ticket Office',avatar:'🎟️',
+    {id:'fd_tickets_opener',_beforeFirstGame:true,autoResolve:'no',type:'normal',tag:'MARKETING',sender:'Ticket Office',avatar:'🎟️',
      subject:"The first home game — fill it, or sell it?",
      preview:"We're skipping the formalities: the first game is close and we have seats left…",
      body:"We're skipping the formalities: the first game is close and we have seats left. Half-price seats would pack the park for your first day and cost us about {misc_cost_xs} at the gate. Full price keeps the money, and the TV shot will show empty seats.",
@@ -80,7 +72,7 @@ export const FIRST_DAY_CORE = Object.freeze({
      noMsg:"Full price. We'll sell what we sell.",
      _budgetCost:'misc_cost_xs',_ttl:2},
 
-    {id:'fd_tickets_giveaway',autoResolve:'no',type:'normal',tag:'MARKETING',sender:'Ticket Office',avatar:'🎟️',
+    {id:'fd_tickets_giveaway',_beforeFirstGame:true,autoResolve:'no',type:'normal',tag:'MARKETING',sender:'Ticket Office',avatar:'🎟️',
      subject:"A giveaway for your first game?",
      preview:"Welcome. We need one decision from you before the gates open…",
      body:"Welcome. We need one decision from you before the gates open: a giveaway for the first home game. Caps for the first ten thousand through the gates run {misc_cost_xs}, and people remember the first game they got something at. Without one, it's just another spring game.",
@@ -116,7 +108,7 @@ export const FIRST_DAY_CORE = Object.freeze({
 
   // ── The manager (a specific situation, never the lineup itself) ──
   manager: [
-    {id:'fd_mgr_order',autoResolve:'no',autoResolveTax:{manConf:-1},type:'normal',tag:'CULTURE',sender:"{manager_name} (Manager)",avatar:'📋',
+    {id:'fd_mgr_order',_beforeFirstGame:true,autoResolve:'no',autoResolveTax:{manConf:-1},type:'normal',tag:'CULTURE',sender:"{manager_name} (Manager)",avatar:'📋',
      subject:"{active_hitter_name} and the batting order",
      preview:"Not the lineup — that's mine — but you should hear this before the first game…",
      body:"Not the lineup — that's mine — but you should hear this before the first game. {active_hitter_name} came to my office wanting to hit higher in the order and wasn't happy with my answer. I'm keeping the order the way I have it. If you back me, I'll tell {active_hitter_name} it came from both of us. If you'd rather I give it a look, I'll move {active_hitter_name} up and see.",

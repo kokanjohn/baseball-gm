@@ -1445,7 +1445,8 @@ export const DECISIONS_POOL = [
   // All gated with _requiresSpring:true — only appear during March pre-season
 
   // FACILITIES / LOGISTICS (10)
-  {id:'sp1',_hosting:{yes:10,no:0},autoResolve:'no',_weight:1.2,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'⚾',
+  // (r233 §122.112 retired from the spring: field prep belongs to the winter — cards-winter.js wtn_field_prep)
+  {id:'sp1',_retired:true,_hosting:{yes:10,no:0},autoResolve:'no',_weight:1.2,type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'⚾',
    subject:"Spring field prep — we need a green light",
    preview:"The grounds crew is ready to start spring prep…",
    body:"The grounds crew is ready to start spring prep on the playing surface — regrading the warning track, resodding the infield corners and testing the irrigation. Full prep runs {grounds_crew_cost}. A partial job saves money but leaves the field below standard for Opening Day.",

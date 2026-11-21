@@ -6,7 +6,9 @@
  *   - three other clubs' GMs over the first spring (not the club already calling), named, each its own club;
  *     the answer moves our standing with that front office (and an unanswered one is a no);
  *   - the scouting director's "send it over" puts the free-agent report on Scouting's clock;
- *   - the trainer's "hold them out" sits the player a game.
+ *   - the trainer's "hold them out" sits the player a game, and the spot is filled now from the bench (r233);
+ *   - r233: a message about the first game is due before its first pitch; the uniforms and the field prep come in the
+ *     winter; the trainer's words.
  */
 import { clock, seedRandom } from './shims.js';
 import * as SM from '../../store/StateManager.js';
@@ -16,6 +18,12 @@ import { NEW_TEAM_SEED_CARDS } from '../../data/constants.js';
 import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS } from '../../data/cards-first-day.js';
 import { rapportOf } from '../../engine/TradeEngine.js';
 import { inQuietHours } from '../../engine/CardScheduler.js';
+import { openSpots } from '../../engine/RosterEngine.js';
+import { WINTER_POOL } from '../../data/cards-winter.js';
+import { DECISIONS_POOL } from '../../data/cards-pool.js';
+const openSpotsAny = () => openSpots(SM.get()).any;
+const FIRST_DAY_DEFS = new Map([...Object.values(FIRST_DAY_CORE).flat(), ...FIRST_DAY_SECONDARY].map(c => [c.id, c]));
+const POOLS_ALL = DECISIONS_POOL;
 
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => { if (ok) pass++; else fail++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${!ok && info ? `\n      ${info}` : ''}`); };
@@ -109,6 +117,26 @@ console.log('\nThe first-day decisions');
   CE.resolve(tr.instanceId, 'yes');
   const p = S().players[id];
   check(`"Hold them out": ${p.name} sits a game`, p.unavailable?.reason === 'rest' && p.unavailable.gamesLeft === 1, JSON.stringify(p.unavailable || null));
+  // r233 §122.112 the spot that opened is filled now, from the bench, the manager's way
+  const u = S().userTeam, slot = u.lineupSlots[p.unavailable.slot];
+  check(`…and the spot is filled now from the bench (${slot?.slot}: ${S().players[slot?.playerId]?.name || 'open'})`,
+    !!slot?.playerId && slot.playerId !== id && !openSpotsAny());
+}
+
+// ── r233 §122.112 what's due when, and what belongs to the winter ──
+console.log('\nDue before the first game; winter decisions');
+{
+  const { first } = await newTeam(10, 9);
+  const fd = (S().scheduledCards || []).filter(c => c._firstDay);
+  const firstGameCards = fd.filter(c => FIRST_DAY_DEFS.get(c.cardId)?._beforeFirstGame);
+  check(`a message about the first game is due before its first pitch (${firstGameCards.map(c => c.cardId).join(', ')})`,
+    firstGameCards.length > 0 && firstGameCards.every(c => c.expiresAt == null && c.expiresAtMs === first - 10 * 60_000));
+  check('the others keep their games', fd.filter(c => !FIRST_DAY_DEFS.get(c.cardId)?._beforeFirstGame && !c._gmTeamId).every(c => c.expiresAtMs == null || c.expiresAtMs > first));
+  check('the uniforms aren\'t a first-day message any more', !FIRST_DAY_DEFS.has('fd_equip_uniforms'));
+  check('…they come in the winter, as does the field prep', WINTER_POOL.some(c => c.id === 'wtn_uniforms' && c._winter === 'winter') && WINTER_POOL.some(c => c.id === 'wtn_field_prep' && c._winter === 'winter'));
+  check('the spring field prep is retired', POOLS_ALL.some(c => c.id === 'sp1' && c._retired));
+  const heavy = FIRST_DAY_DEFS.get('fd_trainer_heavy');
+  check('the trainer: "Otherwise", and the program starts now', /Otherwise, /.test(heavy.body) && !/The other way/.test(heavy.body) && /starts now/.test(heavy.yesMsg));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

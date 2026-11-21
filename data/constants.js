@@ -42,7 +42,7 @@ export const STRETCH_RUN_FINAL_GAMES         = 5;   // "final N games" milestone
 //   sp_hint1/3    — league facility-standards + fan-experience benchmarking: the
 //                   first "the league is watching" signals toward All-Star hosting
 // plus ONE real trade proposal from TradeEngine (CardEngine.deliverSeedTradeOffer).
-export const NEW_TEAM_SEED_CARDS = Object.freeze(['sp1', 'sp2', 'sp_hint1', 'sp_hint3']);
+export const NEW_TEAM_SEED_CARDS = Object.freeze(['sp2', 'sp_hint1', 'sp_hint3']);   // (r233 §122.112 not 'sp1', the field prep: a winter decision now)
 
 // ─────────────────────────────────────────────────────────────
 // SEASON PHASES (state machine values — Section 5)
