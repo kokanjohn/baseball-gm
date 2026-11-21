@@ -1002,7 +1002,7 @@ const _PBP_ICONS = {
   walk:'○', hbp:'⚠', strikeout:'✕',
   groundout:'▲', flyout:'▲',
   double_play:'▲▲', fielders_choice:'FC', sac_fly:'SF', sac_bunt:'SB',
-  error:'E', stolen_base:'SB', caught_stealing:'CS', passed_ball:'PB',
+  error:'E', stolen_base:'SB', caught_stealing:'CS', passed_ball:'PB', wild_pitch:'WP',
   pitching_change:'🔄', pinch_hit:'🔁', injury:'!',
   game_start: '⚾',
   weather_delay:'⏸', weather_resume:'▶', game_suspended:'⏸', game_resumed:'▶',

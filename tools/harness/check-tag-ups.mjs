@@ -20,7 +20,7 @@ const st = SM.get(); const norms = leagueNorms([st.userTeam, ...st.leagueTeams],
 const T0 = st.schedule.find(g => !g.isSpring).gameTime;
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => { if (ok) pass++; else fail++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${!ok && info ? `\n      ${info}` : ''}`); };
-const N = 500;
+const N = 900;   // (r228 fewer runners stranded on third: a larger sample for the speed check)
 const measure = (runStyleKey) => {
 SM.mutate(s => { s.userTeam.strategy = { ...(s.userTeam.strategy || {}), run: runStyleKey }; for (const t of s.leagueTeams) t.strategy = { ...(t.strategy || {}), run: runStyleKey }; });
 const c = { deep: [0, 0], shallow: [0, 0], mid: [], r3: 0, sent: 0, safe: 0, out3rd: 0, sf: 0, pop3: 0, popScored: 0, r2: 0, r2go: 0, r2out: 0, byF: { LF: [0, 0], CF: [0, 0], RF: [0, 0] }, r1: 0, r1go: 0, runs: 0, sfThirdOut: 0 };
@@ -40,7 +40,7 @@ for (let i = 0; i < N; i++) {
       const went = p.type === 'sac_fly' || outHome;
       if (went) c.sent++;
       const b = p._ball.dist >= 300 ? c.deep : p._ball.dist < 260 ? c.shallow : null; if (b) { b[0]++; if (went) b[1]++; }
-      if (p._ball.dist >= 240 && p._ball.dist < 300) c.mid.push([playingRating(st.players[pb.third], 'speed') ?? 50, went]);
+      if (p._ball.dist >= 235 && p._ball.dist < 305) c.mid.push([playingRating(st.players[pb.third], 'speed') ?? 50, went]);
       if (p.type === 'sac_fly') c.safe++;
     }
     if ((p.type === 'flyout' || p.type === 'sac_fly') && p._ball && !['LF', 'CF', 'RF'].includes(p._ball.at) && pb.third && po < 2) { c.pop3++; if (p.type === 'sac_fly') c.popScored++; }
@@ -67,7 +67,7 @@ check(`…safe on ${pc(c.safe, c.sent)} of sends (MLB about 97%)`, r(c.safe, c.s
 check(`…deeper flies sent more (300+ feet ${pc(c.deep[1], c.deep[0])}; under 260 ${pc(c.shallow[1], c.shallow[0])})`, r(c.deep[1], c.deep[0]) > 0.9 && r(c.shallow[1], c.shallow[0]) < 0.6);
 const mids = [...c.mid].sort((a, b) => a[0] - b[0]), half = Math.floor(mids.length / 2);
 const slowR = r(mids.slice(0, half).filter(x => x[1]).length, half), fastR = r(mids.slice(half).filter(x => x[1]).length, mids.length - half);
-check(`…faster runners sent more on the middle flies, 240–300 feet (faster half ${Math.round(fastR * 100)}%, slower half ${Math.round(slowR * 100)}% of ${mids.length})`, mids.length >= 40 && fastR > slowR);
+check(`…faster runners sent more on the middle flies, 235–305 feet (faster half ${Math.round(fastR * 100)}%, slower half ${Math.round(slowR * 100)}% of ${mids.length})`, mids.length >= 80 && fastR > slowR);
 const L = r(c.byF.LF[1], c.byF.LF[0]), C = r(c.byF.CF[1], c.byF.CF[0]), R = r(c.byF.RF[1], c.byF.RF[0]);
 check(`runner on second to an open third: LF ${pc(c.byF.LF[1], c.byF.LF[0])}, CF ${pc(c.byF.CF[1], c.byF.CF[0])}, RF ${pc(c.byF.RF[1], c.byF.RF[0])} (MLB about 12/47/55%)`, L < 0.25 && C > 0.35 && C < 0.62 && R > 0.42 && R < 0.68 && L < C && C <= R + 0.05);
 check(`first to second: rare (${pc(c.r1go, c.r1)})`, r(c.r1go, c.r1) > 0.01 && r(c.r1go, c.r1) < 0.15);

@@ -64,7 +64,7 @@ bad('grounders fielded in the infield (outs, double plays, fielder\'s choices): 
 bad('doubles and triples: deep (beyond 260 feet)', bip.filter(p => ['double', 'triple'].includes(p.type) && p._ball.dist < 260));
 bad('flyouts to the outfield: catchable (190 feet to the fence)', bip.filter(p => p.type === 'flyout' && OF.has(p._ball.at) && (p._ball.dist < 190 || p._ball.dist >= fence(p._ball))));
 bad('sacrifice flies: caught in the outfield, never on an infield pop (r227 the tag-ups)', bip.filter(p => p.type === 'sac_fly' && !OF.has(p._ball.at)));
-bad('bunts: in front of the plate', bip.filter(p => p.type === 'sac_bunt' && (p._ball.flight !== 'bunt' || p._ball.dist > 60)));
+bad('bunts (and a bunt turned into a double play): in front of the plate', bip.filter(p => (p.type === 'sac_bunt' || / — double play$/.test(p.description) && p._ball?.flight === 'bunt') && (p._ball.flight !== 'bunt' || p._ball.dist > 60)));
 bad('on the ground or in the air: "grounds" is on the ground, "flies out" in the air', bip.filter(p => p._ball && ((/grounds (out|into)/.test(p.description) && p._ball.flight !== 'ground') || (/flies out|pops out/.test(p.description) && p._ball.flight === 'ground'))));
 
 // the gems, the errors, the throws, the relay

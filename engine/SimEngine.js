@@ -78,7 +78,7 @@ import {
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
 import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost, exposure } from './Positions.js';
-import { DEFENSE_SIM as DS, TAG_UP } from '../data/constants.js';   // r205 §122.83, r227 §122.106
+import { DEFENSE_SIM as DS, TAG_UP, GROUND_ADV, WILD_PITCH, IBB } from '../data/constants.js';   // r205 §122.83, r227 §122.106, r228 §122.107
 import { battingOrder, strategyOf, runStyle, hookStyle } from './Strategy.js';   // r169
 import { lateClosePoints } from './ManagerEngine.js';   // §122.64
 import { dice } from './Dice.js';   // r226 §122.105 where the ball went: its own stream, never the game's
@@ -697,6 +697,41 @@ function _passedBall(bases, players, outs, pitcher) {
   };
 }
 
+/**
+ * r228 §122.107 a wild pitch: with anyone on base, now and then (WILD_PITCH, by the pitcher's control) — every runner
+ * moves up a base; a runner on third scores (earned). Returns the play, or null.
+ */
+function _wildPitch(bases, players, outs, pitcher) {
+  if (!pitcher || !(bases.first || bases.second || bases.third)) return null;
+  const ctl = _effectiveSR(pitcher, 'control', playingRating(pitcher, 'control')) || 50;
+  if (_roll() >= WILD_PITCH.perPA * Math.max(WILD_PITCH.minMult, 1 + WILD_PITCH.perControl * (50 - ctl))) return null;
+  const scored = bases.third ? [bases.third] : [];
+  const deltas = {};
+  for (const id of scored) (deltas[id] ||= []).push({ stat: 'r', delta: 1 });
+  if (scored.length) (deltas[pitcher.id] ||= []).push({ stat: 'er', delta: scored.length });
+  const lead = players[bases.third || bases.second || bases.first];
+  return {
+    playIndex: 0, batterId: null, pitcherId: pitcher.id,
+    type: 'wild_pitch',
+    description: scored.length ? `Wild pitch by ${pitcher.name} — ${lead?.name || 'the runner'} scores` : `Wild pitch by ${pitcher.name} — the runners move up`,
+    runs: scored.length, rbi: 0, isScoring: scored.length > 0, isBigPlay: false, outsAfter: outs,
+    _basesAfter: { first: null, second: bases.first || null, third: bases.second || null },
+    cumOurScore: 0, cumTheirScore: 0, _timestamp: 0, _statDeltas: deltas,
+  };
+}
+
+/**
+ * r228 §122.107 an intentional walk, when the game calls for it (IBB — no manager's decision): first base open, a runner
+ * on second or third, the batter clearly better than the one on deck; late and close, or with two outs.
+ */
+function _intentionalWalk(batter, onDeck, bases, outs, inning, batRuns, fieldRuns) {
+  if (!batter || !onDeck || bases.first || !(bases.second || bases.third)) return false;
+  if ((batter.ovr || 0) - (onDeck.ovr || 0) < IBB.gap) return false;
+  const late = inning >= IBB.lateInning && Math.abs(batRuns - fieldRuns) <= IBB.closeRuns;
+  const p = late ? IBB.late : outs === 2 ? IBB.early : 0;
+  return p > 0 && _roll() < p;
+}
+
 function _attemptStolenBase(bases, players, outs, inning, gs) {
   // Pick the lead runner eligible for stealing
   // Runner on second stealing third is slightly less common than 1st→2nd
@@ -826,6 +861,23 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       }
     }
 
+    // ── r228 §122.107 a wild pitch, between batters (anyone on base) ──
+    if (!isSpring) {
+      const wp = _wildPitch(bases, players, outs, pitcher);
+      if (wp) {
+        wp._halfInning = halfKey;
+        wp.inning = parseInt(halfKey.split('_')[1]) || 1;
+        wp.half = half;
+        let runs = wp.runs;
+        if (halfRuns + runs >= walkoffRuns) { walkedOff = true; runs = Math.max(0, walkoffRuns - halfRuns); wp.runs = runs; wp.isScoring = runs > 0; }
+        halfRuns += runs;
+        plays.push(wp);
+        bases = wp._basesAfter;
+        if (walkedOff) break;
+        continue;
+      }
+    }
+
     // ── Stolen base attempt (between at-bats) ─────────────────
     if (outs < 2 && (bases.first || bases.second) && !isSpring) {
       const sbPlay = _attemptStolenBase(bases, players, outs, inning, gs);
@@ -900,7 +952,9 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     const batRuns = (isUserBatting ? gs.userScore : gs.oppScore) + halfRuns, fieldRuns = isUserBatting ? gs.oppScore : gs.userScore;
     const mgr = !isSpring && !gs.exhibition && inning >= 7 && Math.abs(batRuns - fieldRuns) <= 2
       ? { bat: gs.mgr?.[isUserBatting ? 'user' : 'opp'] || 0, pitch: gs.mgr?.[isUserBatting ? 'opp' : 'user'] || 0 } : null;
-    const atBat = simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
+    // r228 §122.107 an intentional walk when the game calls for it; otherwise the at-bat
+    const ibb = !isSpring && _intentionalWalk(activeBatter, players[slots[gs[batIdxKey] % slots.length]?.id], bases, outs, inning, batRuns, fieldRuns);
+    const atBat = ibb ? { type: 'walk', ibb: true } : simulateAtBat(activeBatter, pitcher, bases, outs, players, fieldMod,
       { inning, isSpring, norms: gs.norms, pitcherTired, relief: shortStint, mgr,
         scoutHit: gs.scout ? (isUserBatting ? gs.scout.bat : gs.scout.pitch) : 1,
         hrMod: gs.env?.hrMod, hitEnv: gs.env?.hitMod, walkMod: gs.env?.walkMod });
@@ -1280,6 +1334,14 @@ export function plateAppearanceRates({ contact, power, speed, stuff, control }, 
  *   extraOuts   — additional outs beyond the primary batter out (e.g. DP = 1 extra)
  *   playMod     — override play type for display (e.g. 'fielders_choice', 'sac_fly')
  */
+/** r228 §122.107 a runner who isn't forced moves up on a groundout (GROUND_ADV): by where it was fielded, speed, the running game. */
+function _groundAdv(to, atBat, runnerId, players) {
+  const at = atBat.at && GROUND_ADV[to][atBat.at] != null ? atBat.at : 'SS';
+  const spd = _effectiveSR(players[runnerId], 'speed', playingRating(players[runnerId], 'speed')) || 50;
+  const p = GROUND_ADV[to][at] + GROUND_ADV[`${to}PerSpeed`] * (spd - 50) + (_runBat?.tagSend || 0);
+  return _roll() < Math.max(0, Math.min(1, p));
+}
+
 function _advanceBases(bases, atBat, batter, players, outs = 0) {
   const speed = _effectiveSR(batter, 'speed', playingRating(batter, 'speed'));
   let newBases   = { first: bases.first, second: bases.second, third: bases.third };
@@ -1448,33 +1510,43 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
           }
           playMod = 'double_play';
         } else if (_roll() < SIM_FC_PROB) {
-          // Fielder's choice — the runner from first is forced out at second,
-          // the batter reaches first. The batter is not out (playMod tells the
-          // half-inning loop), but the play records ONE out: the runner's.
-          // Runners ahead move up on the force; the runner on third scores
-          // (fewer than two outs here).
+          // Fielder's choice — the runner from first is forced out at second, the batter reaches first. The batter is
+          // not out (playMod tells the half-inning loop), but the play records ONE out: the runner's. Runners ahead
+          // move up on the force.
           playMod   = 'fielders_choice';
           extraOuts = 1;
-          if (bases.third) { runsScored++; runnerIds.push(bases.third); }
+          // r228 §122.107 the runner on third: forced home only with second taken too; otherwise by the grounder
+          const r3home = bases.third && (bases.second || _groundAdv('home', atBat, bases.third, players));
+          if (r3home) { runsScored++; runnerIds.push(bases.third); }
           newBases = {
             first:  batter.id,
             second: null,
-            third:  bases.second || null,
+            third:  bases.second || (bases.third && !r3home ? bases.third : null),
           };
           break;
         } else {
-          // Standard groundout — batter out at first, every runner moves up a base
-          if (bases.third) { runsScored++; runnerIds.push(bases.third); }
+          // Standard groundout — batter out at first, the forced runners move up a base; r228 §122.107 a runner on
+          // third not forced (second open) scores by the grounder, or holds
+          const r3home = bases.third && (bases.second || _groundAdv('home', atBat, bases.third, players));
+          if (r3home) { runsScored++; runnerIds.push(bases.third); }
           newBases = {
             first:  null,
             second: bases.first,
-            third:  bases.second || null,
+            third:  bases.second || (bases.third && !r3home ? bases.third : null),
           };
         }
+      } else if (outs < 2) {
+        // r228 §122.107 no one on first, nobody forced: the runner on third scores by the grounder (where it was
+        // fielded, speed), or holds; then the runner on second takes an open third the same way, or holds
+        newBases = { ...bases };
+        if (bases.third && _groundAdv('home', atBat, bases.third, players)) {
+          runsScored++; runnerIds.push(bases.third); newBases.third = null;
+        }
+        if (bases.second && !newBases.third && _groundAdv('third', atBat, bases.second, players)) {
+          newBases.third = bases.second; newBases.second = null;
+        }
       } else {
-        // No one on first — standard groundout
-        if (bases.third && outs < 2) { runsScored++; runnerIds.push(bases.third); }
-        // Runners hold (no force)
+        // the third out: nobody moves
         newBases = { ...bases };
       }
       break;
@@ -2912,7 +2984,7 @@ function _basePlayCall(atBat, batter, pitcher, type) {
     case 'triple':          return `${bn} triples`;
     case 'double':          return `${bn} doubles`;
     case 'single':          return `${bn} singles`;
-    case 'walk':            return `${bn} walks`;
+    case 'walk':            return atBat.ibb ? `${bn} is intentionally walked` : `${bn} walks`;
     case 'hbp':             return `${bn} hit by pitch`;
     case 'strikeout':       return `${bn} strikeout — ${pn}`;
     case 'groundout':       return `${bn} grounds out`;
@@ -3098,7 +3170,7 @@ function _placeBall(ab, type, r) {
     const angle = _clampA(Number(base) + span(-12, 12));
     return keep({ at: null, flight: r() < 0.25 ? 'line' : 'fly', angle, dist: fenceAt(angle) + span(8, 55) });
   }
-  if (type === 'sac_bunt') {
+  if (type === 'sac_bunt' || ab.type === 'sac_bunt') {   // (r228 a bunt that went wrong — a double play — is still a bunt)
     const at = pickW({ P: 0.4, '3B': 0.3, '1B': 0.3 });
     return keep({ at, flight: 'bunt', angle: _ANG[at] * 0.7 + span(-4, 4), dist: span(25, 55) });
   }

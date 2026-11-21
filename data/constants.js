@@ -300,6 +300,22 @@ export const SIM_H_SPEED_TAG_THRESHOLD      = 75;    // speed above this → tag
 export const SIM_THROWOUT_PLATE_BASE        = 0.28;  // base prob of being thrown out at plate
 export const SIM_THROWOUT_EXTRA_BASE        = 0.22;  // base prob thrown out taking extra base
 
+// r228 §122.107 runners on a groundout (the batter out at first, fewer than two outs): a runner on third who isn't
+// forced scores by where it was fielded (the right side easiest, the third baseman and the pitcher hardest) and
+// speed; a runner on second with first open takes third mostly on a grounder to the right side. The batting club's
+// running game moves both (STRATEGY.run[…].tagSend). Otherwise they hold.
+export const GROUND_ADV = Object.freeze({
+  home:  Object.freeze({ '1B': 0.62, '2B': 0.62, SS: 0.45, '3B': 0.22, P: 0.18 }), homePerSpeed: 0.006,
+  third: Object.freeze({ '1B': 0.80, '2B': 0.80, SS: 0.26, '3B': 0.06, P: 0.12 }), thirdPerSpeed: 0.006,
+});
+// r228 wild pitches: before a batter, with anyone on base, this often (× 1 + perControl × (50 − the pitcher's control),
+// at least ×minMult); every runner moves up a base (a run is earned). MLB: about 0.3 a team-game.
+export const WILD_PITCH = Object.freeze({ perPA: 0.021, perControl: 0.02, minMult: 0.4 });
+// r228 intentional walks, when the game calls for it (no manager's decision): first base open, a runner on second or
+// third, the batter clearly better than the one on deck — late and close (the 7th on, within two runs) at `late`, any
+// other time with two outs at `early`. MLB: about one every six team-games.
+export const IBB = Object.freeze({ late: 0.45, early: 0.13, lateInning: 7, closeRuns: 2, gap: 4 });
+
 // r227 §122.106 tag-ups on a caught fly, fewer than two outs (none on the inning's third out; none on an infield pop).
 // By how deep it was caught (feet, r226's spot), the runner's speed (± per point from 50), the batting club's running
 // game, and the outfielder's arm. Calibrated to MLB: runners on third sent on about 78% of catchable outfield flies,

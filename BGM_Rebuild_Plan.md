@@ -13969,3 +13969,58 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - check-compose-strategy, sim-season and multi-season pass.
 
 **Fresh team:** not needed.
+
+## §122.107 — r228: groundouts, wild pitches, intentional walks
+### The user's decisions
+- Realistic runner movement on groundouts. Wild pitches. Intentional walks when the game situation calls for one, with no manager decision: the rate comes from real life.
+- Its own release, before the Live View (now r229).
+- The answer to "do tag-ups apply to league games": yes. League games use the same sim. Every ball in play gets a fielder, and every sacrifice fly in 200 league games was an outfield catch.
+
+### Gaps reviewed (§ the user's question)
+- **Already in the sim:** hits, home runs, strikeouts, walks, hit-by-pitch, groundouts, flyouts, double plays, fielder's choices, errors, steals and caught stealing, sacrifice bunts and flies, extra bases on hits, pinch hitters, pitching changes, injuries.
+- **Fixed or added here:** groundouts, wild pitches, intentional walks.
+- **Left out:**
+  - Line-drive double plays (rare).
+  - Pickoffs, balks and triple plays (rare; low value).
+  - Steal attempts: about 0.5 a team-game against MLB's about 0.7 since 2023. Tuning only; not done.
+
+### Groundouts (`_advanceBases`, `_groundAdv`, `GROUND_ADV`)
+- **Before, with first base open and fewer than two outs:**
+  - A runner on third always scored, *and stayed on third*: a phantom runner, so a run counted and the runner was still there.
+  - A runner on second never moved.
+  - On a standard groundout or a fielder's choice with first taken, an unforced runner on third always scored.
+- **Now, a runner on third who isn't forced** (second open) scores on the grounder or holds. It depends on where it was fielded (1B/2B 62%, SS 45%, 3B 22%, P 18%), ±0.6% per speed point from 50, and the running game (`tagSend`). A forced runner scores as before.
+- **A runner on second with first open** takes an open third the same way (1B/2B 80%, SS 26%, 3B 6%, P 12%) or holds.
+- **The third out:** nobody moves.
+
+### Wild pitches (`_wildPitch`, `WILD_PITCH`)
+- Before each batter, with anyone on base: 2.1% × (1 + 0.02 × (50 − the pitcher's control)), at least ×0.4.
+- Every runner moves up a base. A runner on third scores, the run is earned (charged to the pitcher), and walk-offs count.
+- Play type `wild_pitch`, shown as "WP" in the play-by-play: "Wild pitch by X — Y scores" / "— the runners move up". None in spring.
+
+### Intentional walks (`_intentionalWalk`, `IBB`)
+- **When:** first base open, a runner on second or third, and the batter rated at least 4 higher than the one on deck.
+- **How often:** 45% of the time late and close (the 7th on, within two runs); otherwise 13% with two outs.
+- A walk with `ibb`, "X is intentionally walked". It counts as a walk, as in MLB. None in spring.
+
+### Measured (600 games, half ours, half the league's; MLB in brackets)
+- **A runner on third not forced, groundout, fewer than two outs:** scores 57% (about half to two-thirds). By fielder: 1B/2B 71%, SS 57%, 3B 33%.
+- **A runner on second alone:** takes third on a groundout 49%.
+- **Wild pitches:** 0.29 a team-game (about 0.3). More from pitchers with less control (2.3% vs 1.4% of chances).
+- **Intentional walks:** 0.18 a team-game (about 0.17), 69% in the 7th on.
+- **Runs a team-game:** 4.65 (r227: 4.71). The phantom runs are gone, offset by the wild-pitch runs. Walks 3.35 → 3.56 with the intentional walks.
+
+### Also fixed
+- A failed sacrifice bunt that became a double play had no spot (r226 `_placeBall` read only the final type).
+
+### Checks
+- **check-sim-plays** (new, 10):
+  - No runner scores and stays on base.
+  - Groundouts: runner on third, by side; runner on second.
+  - Wild pitches: the rate, by control, runs on them.
+  - Intentional walks: the rate, mostly late, only with first open and a runner in scoring position.
+- **check-tag-ups:** 900 games. Fewer runners are stranded on third now, so the speed comparison needs the larger sample.
+- **check-ball-placement:** bunts include a bunt turned into a double play.
+- check-coaches, check-compose-strategy, sim-season and multi-season pass.
+
+**Fresh team:** not needed.
