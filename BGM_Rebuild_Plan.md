@@ -13915,3 +13915,57 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - **No game plays out differently:** sim-season (seed 1) and multi-season (3 seasons) on r225 and on r226, diffed. Identical, apart from a timing line.
 
 **Fresh team:** not needed.
+
+## §122.106 — r227: tag-ups, realistic; no run on the third out
+### The user's decisions
+- Tag-ups are handled realistically, taking the runner's speed into account and matching real life.
+- All three tag-ups are modelled: third to home, second to third, first to second.
+- The club's running game (Run More / Normally / Less) changes how often runners are sent.
+- Hitters don't get a batting side; home runs stay spread across the fields (§122.105).
+- This release comes before the Live View (now r228).
+
+### What was wrong (`_advanceBases`, flyout)
+- **Runs on the inning's third out:** the tag from third had no two-out check, so a run scored on the third out (25 of 67 sacrifice flies in 300 games).
+- **Infield pops scored runners:** one speed cutoff (75) decided it, whoever caught it, so infield pops and the catcher's catches scored runners too.
+- **Too few sends on real flies:** only 27% of runners on third scored on outfield flies with fewer than two outs.
+- **Second to third** was a coin flip, and **first to second** didn't exist.
+
+### Now (`TAG_UP`; the batting club's `STRATEGY.run[…].tagSend / tagOut`)
+- **When tag-ups can happen:** only with fewer than two outs (the catch is an out), and only on a catch by an outfielder. On an infield pop, or the catcher's, nobody moves.
+- **The depth is now an input to the outcome.** A caught fly is placed before the runners move (`_pre`: r226's spot, from the ball's own stream). Its depth decides the tag-ups, so this release changes game results on purpose.
+- **Third to home:**
+  - Sent by depth (from 2% at 215 feet to 100% at 340), ±0.6% per speed point from 50, and the running game (Run More +10, Run Less −12).
+  - Safe by depth (70% to 99.5%), ±0.12% per speed point. The chance of being out is × the outfielder's arm (r205 `armMult`) × the running game (×1.3 / ×0.8).
+  - Out at home is the runner thrown out (`_out`, "thrown out at home by …").
+- **Second to third,** only to an open third while the inning goes on:
+  - By field at 300 feet (LF 14%, CF 42%, RF 53%), deeper sends more (+0.8% a foot, up to ×1.6), plus speed and the running game.
+  - Out about 5%, × the arm × the running game.
+- **First to second,** only within 35 feet of the fence and to an open second: 30% ± speed and the running game; out about 6%.
+- **Caught flyouts in the outfield** are now placed from 225 feet to 10 feet short of the fence. Before, they were 245 to 335, with sacrifice flies placed after the fact.
+
+### Measured (500 games; MLB from Baseball Prospectus)
+
+| | Game | MLB |
+|---|---|---|
+| Runner on third, a catchable outfield fly, fewer than two outs: sent | 82% | about 78% |
+| Safe, of those sent | 97% | about 97% |
+| Second to an open third, by field: LF / CF / RF | 19 / 51 / 57% | about 12 / 47 / 55% (nobody out) |
+| First to second | 8% | rare |
+
+- Runs a team-game: about 4.0, as before.
+- Sacrifice flies a team-game: 0.11 → 0.15.
+
+### Checks
+- **check-tag-ups** (new, 9):
+  - No run on the third out.
+  - No runner scores on an infield pop.
+  - Sent from third about as in MLB, and safe about as in MLB.
+  - Deeper flies sent more; faster runners sent more on the middle flies (240–300 feet).
+  - Second to third by field.
+  - First to second rare.
+  - The running game: Run More > Normally > Run Less.
+- **check-ball-placement:** sacrifice flies are caught in the outfield, never on an infield pop. (r226's known issue is gone.)
+- **check-coaches:** the baserunning bench coach's speed now also shows in tag-ups (a runner who tagged to third has no steal to try), so the check counts bases taken (steals and tag-ups): 0.60 vs 0.59 a game.
+- check-compose-strategy, sim-season and multi-season pass.
+
+**Fresh team:** not needed.

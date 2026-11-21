@@ -299,6 +299,26 @@ export const SIM_H_SPEED_TAG_THRESHOLD      = 75;    // speed above this → tag
 // Runner advancement — throw-out probabilities
 export const SIM_THROWOUT_PLATE_BASE        = 0.28;  // base prob of being thrown out at plate
 export const SIM_THROWOUT_EXTRA_BASE        = 0.22;  // base prob thrown out taking extra base
+
+// r227 §122.106 tag-ups on a caught fly, fewer than two outs (none on the inning's third out; none on an infield pop).
+// By how deep it was caught (feet, r226's spot), the runner's speed (± per point from 50), the batting club's running
+// game, and the outfielder's arm. Calibrated to MLB: runners on third sent on about 78% of catchable outfield flies,
+// safe on about 97% of sends (Baseball Prospectus); runners on second tag to third mostly on flies to center and
+// right (LF ≈12%, CF ≈47%, RF ≈55% on a fly with nobody out); first to second only on the deepest.
+//   [dist, value] points, interpolated.
+export const TAG_UP = Object.freeze({
+  home: Object.freeze({
+    send: [[215, 0.02], [240, 0.22], [265, 0.62], [290, 0.90], [315, 0.98], [340, 1.0]],
+    safe: [[215, 0.70], [240, 0.80], [265, 0.90], [290, 0.965], [315, 0.99], [340, 0.995]],
+    sendPerSpeed: 0.006, safePerSpeed: 0.0012,
+  }),
+  third: Object.freeze({
+    field: Object.freeze({ LF: 0.14, CF: 0.42, RF: 0.53 }),   // at a fly of `atDist`
+    atDist: 300, perFoot: 0.008, sendPerSpeed: 0.006, out: 0.05, outPerSpeed: 0.0008,
+  }),
+  second: Object.freeze({ fromFence: 35, send: 0.30, sendPerSpeed: 0.008, out: 0.06, outPerSpeed: 0.0008 }),
+  // (the running game: STRATEGY.run[…].tagSend / tagOut)
+});
 export const SIM_SPEED_THROWOUT_DIVISOR     = 800;   // speed reduces throwout prob by speed/this
 
 // Stolen base mechanics
@@ -2061,7 +2081,8 @@ export const LEAGUE_POSITIONS = Object.freeze({
  *   hook  the starter's innings wanted (±) and batters before tiring (±)
  */
 export const STRATEGY = Object.freeze({
-  run: Object.freeze({ less: { attempt: 0.45, speedShift: 8, success: 0.04 }, normal: { attempt: 1, speedShift: 0, success: 0 }, more: { attempt: 1.7, speedShift: -8, success: -0.07 } }),
+  // (r227 tagSend/tagOut: tag-ups on a caught fly — TAG_UP)
+  run: Object.freeze({ less: { attempt: 0.45, speedShift: 8, success: 0.04, tagSend: -0.12, tagOut: 0.8 }, normal: { attempt: 1, speedShift: 0, success: 0, tagSend: 0, tagOut: 1 }, more: { attempt: 1.7, speedShift: -8, success: -0.07, tagSend: 0.10, tagOut: 1.3 } }),
   hook: Object.freeze({ quick: { innings: -1, bf: -3 }, normal: { innings: 0, bf: 0 }, long: { innings: 1, bf: 3 } }),
 });
 

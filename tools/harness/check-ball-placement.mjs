@@ -8,7 +8,8 @@
  *   - the gems and their direction match the words; the error's kind; a runner thrown out and where (the words);
  *     the double play's relay (the words);
  *   - the same game, the same spots; home runs to all fields.
- * (That no game plays out differently is shown by sim-season and multi-season before and after: identical.)
+ * (r226: no game played out differently — sim-season and multi-season identical before and after. r227: a caught fly's
+ *  depth now decides the tag-ups — check-tag-ups.)
  */
 import { seedRandom } from './shims.js';
 import * as SM from '../../store/StateManager.js';
@@ -62,13 +63,7 @@ bad('nothing else leaves the park', bip.filter(p => p.type !== 'hr' && p._ball &
 bad('grounders fielded in the infield (outs, double plays, fielder\'s choices): within 165 feet', bip.filter(p => ['groundout', 'double_play', 'fielders_choice'].includes(p.type) && p._ball.flight === 'ground' && p._ball.dist > 165));
 bad('doubles and triples: deep (beyond 260 feet)', bip.filter(p => ['double', 'triple'].includes(p.type) && p._ball.dist < 260));
 bad('flyouts to the outfield: catchable (190 feet to the fence)', bip.filter(p => p.type === 'flyout' && OF.has(p._ball.at) && (p._ball.dist < 190 || p._ball.dist >= fence(p._ball))));
-bad('sacrifice flies: deep (within 75 feet of the fence), or an infielder going back into shallow outfield', bip.filter(p => p.type === 'sac_fly' && p._ball.at !== 'C'
-  && (OF.has(p._ball.at) ? p._ball.dist < fence(p._ball) - 76 : !(p._ball.flight === 'fly' && p._ball.dist >= 140))));
-{ // (known, the sim's: its tag-up rule predates the fielders — a fast runner on third scores on any catch, even an infield
-  //  pop or the catcher's. Placed where it was caught; the outcome is the sim's.)
-  const sf = bip.filter(p => p.type === 'sac_fly'), inf = sf.filter(p => !OF.has(p._ball.at));
-  console.log(`    (known, the sim's tag-up rule: ${inf.length} of ${sf.length} sacrifice flies were caught in the infield, ${sf.filter(p => p._ball.at === 'C').length} by the catcher)`);
-}
+bad('sacrifice flies: caught in the outfield, never on an infield pop (r227 the tag-ups)', bip.filter(p => p.type === 'sac_fly' && !OF.has(p._ball.at)));
 bad('bunts: in front of the plate', bip.filter(p => p.type === 'sac_bunt' && (p._ball.flight !== 'bunt' || p._ball.dist > 60)));
 bad('on the ground or in the air: "grounds" is on the ground, "flies out" in the air', bip.filter(p => p._ball && ((/grounds (out|into)/.test(p.description) && p._ball.flight !== 'ground') || (/flies out|pops out/.test(p.description) && p._ball.flight === 'ground'))));
 

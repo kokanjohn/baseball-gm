@@ -38,7 +38,6 @@ import {
   SIM_H_SPEED_SB_THRESHOLD,
   SIM_H_SPEED_STRETCH_THRESHOLD,
   SIM_H_SPEED_DOUBLE_SCORE_THRESHOLD,
-  SIM_H_SPEED_TAG_THRESHOLD,
   SIM_THROWOUT_PLATE_BASE,
   SIM_THROWOUT_EXTRA_BASE,
   SIM_SPEED_THROWOUT_DIVISOR,
@@ -79,7 +78,7 @@ import {
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
 import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost, exposure } from './Positions.js';
-import { DEFENSE_SIM as DS } from '../data/constants.js';   // r205 §122.83
+import { DEFENSE_SIM as DS, TAG_UP } from '../data/constants.js';   // r205 §122.83, r227 §122.106
 import { battingOrder, strategyOf, runStyle, hookStyle } from './Strategy.js';   // r169
 import { lateClosePoints } from './ManagerEngine.js';   // §122.64
 import { dice } from './Dice.js';   // r226 §122.105 where the ball went: its own stream, never the game's
@@ -911,7 +910,10 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     gs[isUserBatting ? 'oppPitchCount' : 'userPitchCount']++;
 
     // r205 §122.83 the ball in play goes to a fielder: hit or out, an error, the arms
-    const fieldedAB = _fielders ? _fieldPlay(atBat, isUserBatting) : atBat;
+    let fieldedAB = _fielders ? _fieldPlay(atBat, isUserBatting) : atBat;
+    // r227 §122.106 a caught fly's spot first (its own stream, as r226): how deep it was decides the tag-ups
+    const ballKey = `${halfKey}|${plays.length}|${activeBatter.id}`;
+    if (fieldedAB.type === 'flyout' && !fieldedAB.error) fieldedAB = { ...fieldedAB, _pre: _placeBall(fieldedAB, 'flyout', dice(_ballKey || 'game', 'ball', ballKey)) };
     let { newBases, runsScored, runnerIds, extraOuts, playMod, thrownOut } =
       _advanceBases(bases, fieldedAB, activeBatter, players, outs);
     bases = newBases;
@@ -968,7 +970,7 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       type:         effectiveType,
       description:  _buildDescription(fieldedAB, activeBatter, pitcher, playMod, { rbi, runs: runsScored, thrownOut, players }),
       ...(fd ? { _fielderId: fd.id } : {}),
-      ...(_ballOf(fieldedAB, effectiveType, `${halfKey}|${plays.length}|${activeBatter.id}`, pitcher, thrownOut)),   // r226 §122.105
+      ...(_ballOf(fieldedAB, effectiveType, ballKey, pitcher, thrownOut)),   // r226 §122.105
       runs:         runsScored,
       rbi,
       isScoring,
@@ -1487,32 +1489,44 @@ function _advanceBases(bases, atBat, batter, players, outs = 0) {
         newBases = { first: batter.id, second: bases.first || null, third: bases.second || null };
         break;
       }
-      // Tag-up logic: runners can advance after catch if fast enough
-      // Third: tag-up to score (sac fly)
+      // r227 §122.106 tag-ups after the catch (TAG_UP): none on the inning's third out, none on an infield pop; by how
+      // deep it was caught, the runner's speed, the batting club's running game, and the outfielder's arm.
+      const ball = atBat._pre;
+      if (outs >= 2 || !ball || !['LF', 'CF', 'RF'].includes(ball.at)) break;
+      const run = _runBat || {};
+      const spd = (id) => _effectiveSR(players[id], 'speed', playingRating(players[id], 'speed')) || 50;
+      const p01 = (x) => Math.max(0, Math.min(1, x));
+      const along = (pts, x) => {
+        if (x <= pts[0][0]) return pts[0][1];
+        for (let i = 1; i < pts.length; i++) if (x <= pts[i][0]) { const [a, va] = pts[i - 1], [b, vb] = pts[i]; return va + (vb - va) * (x - a) / (b - a); }
+        return pts[pts.length - 1][1];
+      };
+      const sendMod = run.tagSend || 0, outMod = (run.tagOut || 1) * arm;
+      const caught = outs + 1;   // (the catch is an out)
+      // third to home: a sacrifice fly, or thrown out at the plate
       if (bases.third) {
-        const runner3 = players[bases.third];
-        const rs3 = _effectiveSR(runner3, 'speed', playingRating(runner3, 'speed')) || 50;
-        if (rs3 >= SIM_H_SPEED_TAG_THRESHOLD) {
-          runsScored++;
-          runnerIds.push(bases.third);
-          newBases.third = null;
-          if (runsScored > 0) playMod = 'sac_fly'; // will be used for stat purposes
+        const H = TAG_UP.home, s3 = spd(bases.third);
+        if (_roll() < p01(along(H.send, ball.dist) + H.sendPerSpeed * (s3 - 50) + sendMod)) {
+          const safe = 1 - (1 - p01(along(H.safe, ball.dist) + H.safePerSpeed * (s3 - 50))) * outMod;
+          if (_roll() < safe) { runsScored++; runnerIds.push(bases.third); newBases.third = null; playMod = 'sac_fly'; }
+          else { extraOuts++; thrownOut = { id: bases.third, at: 'home' }; newBases.third = null; }
         }
       }
-      // Second: can tag up to third on a deep fly
-      if (bases.second && outs < 2) {
-        const runner2 = players[bases.second];
-        const rs2 = _effectiveSR(runner2, 'speed', playingRating(runner2, 'speed')) || 50;
-        // 50% chance runner on second tries to advance to third on deep fly
-        if (rs2 >= 60 && _roll() < 0.50) {
-          if (_roll() < throwoutProb(SIM_THROWOUT_EXTRA_BASE, rs2)) {
-            extraOuts++; // thrown out at third
-            thrownOut = { id: bases.second, at: 'third' };
-            newBases.second = null;
-          } else {
-            newBases.third  = bases.second;
-            newBases.second = null;
-          }
+      // second to third: only to an open third, while the inning goes on
+      if (bases.second && !newBases.third && caught + extraOuts < 3) {
+        const T = TAG_UP.third, s2 = spd(bases.second);
+        const depth = Math.max(0, Math.min(1.6, 1 + (ball.dist - T.atDist) * T.perFoot));
+        if (_roll() < p01(T.field[ball.at] * depth + T.sendPerSpeed * (s2 - 50) + sendMod)) {
+          if (_roll() < p01(T.out - T.outPerSpeed * (s2 - 50)) * outMod) { extraOuts++; thrownOut = thrownOut || { id: bases.second, at: 'third' }; newBases.second = null; }
+          else { newBases.third = bases.second; newBases.second = null; }
+        }
+      }
+      // first to second: only on the deepest
+      if (bases.first && !newBases.second && caught + extraOuts < 3 && ball.dist >= fenceAt(ball.angle) - TAG_UP.second.fromFence) {
+        const F = TAG_UP.second, s1 = spd(bases.first);
+        if (_roll() < p01(F.send + F.sendPerSpeed * (s1 - 50) + sendMod)) {
+          if (_roll() < p01(F.out - F.outPerSpeed * (s1 - 50)) * outMod) { extraOuts++; thrownOut = thrownOut || { id: bases.first, at: 'second' }; newBases.first = null; }
+          else { newBases.second = bases.first; newBases.first = null; }
         }
       }
       break;
@@ -3061,7 +3075,7 @@ export function fenceAt(angle) { return 330 + 75 * (1 - Math.min(45, Math.abs(an
 const _clampA = (a) => Math.max(-44, Math.min(44, a));
 
 function _ballOf(ab, type, key, pitcher, thrownOut) {
-  const ball = _placeBall(ab, type, dice(_ballKey || 'game', 'ball', key));
+  const ball = ab._pre || _placeBall(ab, type, dice(_ballKey || 'game', 'ball', key));   // (r227 a caught fly: placed before the tag-ups)
   const out = {};
   if (ball) out._ball = ball;
   if (thrownOut) out._out = { id: thrownOut.id, base: thrownOut.at };
@@ -3123,9 +3137,7 @@ function _placeBall(ab, type, r) {
     return keep({ at, flight: bloop ? 'fly' : 'line', angle: _ANG[at] + span(-12, 12), dist: front ? span(185, 215) : bloop ? span(170, 210) : span(180, 240), ...(front ? { gem: 'front' } : {}) });
   }
   if (t === 'flyout' || type === 'sac_fly') {
-    at = at || (type === 'sac_fly' ? of() : pickW(DS.fly) === 'OF' ? of() : pickW({ SS: 0.3, '2B': 0.3, '3B': 0.25, '1B': 0.1, C: 0.05 }));
-    if (!isOF(at) && type === 'sac_fly')   // (a run scored on it: the infielder going back into shallow outfield)
-      return keep({ at, flight: 'fly', angle: _ANG[at] + span(-8, 8), dist: (_IFD[at] || 100) + span(35, 60) });
+    at = at || (pickW(DS.fly) === 'OF' ? of() : pickW({ SS: 0.3, '2B': 0.3, '3B': 0.25, '1B': 0.1, C: 0.05 }));
     if (!isOF(at)) {
       const leap = ab.conv === 'save' && ab.gem;
       return keep({ at, flight: leap ? 'line' : 'pop', angle: _ANG[at] + span(-8, 8), dist: at === 'C' ? span(12, 35) : _IFD[at] + span(-10, 30), ...(leap ? { gem: 'leap' } : {}) });
@@ -3135,8 +3147,7 @@ function _placeBall(ab, type, r) {
     if (ab.conv === 'save' && ab.gem) return ab.was === 'double'
       ? keep({ at, flight: 'fly', angle, dist: fence - span(2, 8), gem: 'wall' })
       : keep({ at, flight: 'line', angle, dist: span(195, 240), gem: 'dive' });
-    if (type === 'sac_fly') return keep({ at, flight: 'fly', angle, dist: fence - span(30, 75) });
-    return keep({ at, flight: 'fly', angle, dist: Math.min(fence - 25, span(245, 335)) });
+    return keep({ at, flight: 'fly', angle, dist: span(225, fence - 10) });   // (r227 caught anywhere from shallow to the track)
   }
   if (t === 'double') {
     if (at && !isOF(at)) {   // down the line, past the corner infielder

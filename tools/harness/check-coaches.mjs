@@ -43,14 +43,25 @@ check('two coaches on one-year deals (a decision the first winter)', Coach.COACH
 const mkStaff = (q, specs) => Object.fromEntries(Coach.COACH_ROLES.map(r => [r, { name: r, quality: q, specialty: specs[r] }]));
 const SPEC = { pitchingCoach: 'command', hittingCoach: 'contact', benchCoach: 'baserunning' };
 const run = (staff, label) => {
-  const t = { us: 0, them: 0, w: 0, bb: 0, sb: 0, err: 0, bs: 0, svo: 0 };
+  const t = { us: 0, them: 0, w: 0, bb: 0, sb: 0, tag: 0, err: 0, bs: 0, svo: 0 };
   for (let i = 0; i < N; i++) {
     const opp = st.leagueTeams[i % st.leagueTeams.length];
     const g = { isHome: i % 2 === 0, gameTime: T0 + i * 86_400_000, weather: null, fieldCondition: null };
     const r = generatePlays(g, user, opp, players, { phase: st.phase, isSpring: false, norms, staff: staff && Coach.staffEffects(staff), rand: dice('check-coaches', i), injuryYear: baseballYear(st) });   // §118 the same dice for every staff, game by game: only the coach differs
     const end = r.plays.filter(p => p.cumOurScore != null).pop();
     t.us += end.cumOurScore; t.them += end.cumTheirScore; if (end.cumOurScore > end.cumTheirScore) t.w++;
+    let pb = { first: null, second: null, third: null }, ph = null;   // (r227 the bases before each play: tag-ups)
     for (const p of r.plays) {
+      if (p._halfInning !== ph) { pb = { first: null, second: null, third: null }; ph = p._halfInning; }
+      // r227 §122.106 a base taken on a caught fly (a tag-up) by one of ours
+      if (p.type === 'flyout' || p.type === 'sac_fly') {
+        const a = p._basesAfter || {};
+        for (const [from, to] of [['third', null], ['second', 'third'], ['first', 'second']]) {
+          const id = pb[from]; if (!id || players[id]?.teamId !== 'user') continue;
+          if (to ? a[to] === id : (p.type === 'sac_fly' && !Object.values(a).includes(id))) t.tag++;
+        }
+      }
+      if (p._basesAfter) pb = p._basesAfter;
       if (p.type === 'walk' && players[p.pitcherId]?.teamId === 'user') t.bb++;
       if (p.type === 'stolen_base' && players[p.runnerId || Object.keys(p._statDeltas || {})[0]]?.teamId === 'user') t.sb++;
       if ((p.type === 'error' || p.playMod === 'error' || /reaches on error/.test(p.description || '')) && players[p.batterId]?.teamId !== 'user') t.err++;
@@ -62,7 +73,7 @@ const run = (staff, label) => {
     }
   }
   const f = (x) => (x / N).toFixed(2);
-  console.log(`    ${label.padEnd(8)} runs ${f(t.us)} – ${f(t.them)} allowed, win ${(t.w / N).toFixed(3)}, walks ${f(t.bb)}, steals ${f(t.sb)}, errors ${f(t.err)}, BS ${t.bs}/${t.svo}`);
+  console.log(`    ${label.padEnd(8)} runs ${f(t.us)} – ${f(t.them)} allowed, win ${(t.w / N).toFixed(3)}, walks ${f(t.bb)}, steals ${f(t.sb)}, tag-ups ${f(t.tag)}, errors ${f(t.err)}, BS ${t.bs}/${t.svo}`);
   return t;
 };
 
@@ -77,7 +88,8 @@ check(`an elite staff scores more and allows fewer than a poor one (+${((elite.u
 check(`the effect is real but modest: elite vs poor ≈ ${per162(elite, poor).toFixed(1)} wins a season (2–9)`, per162(elite, poor) >= 2 && per162(elite, poor) <= 9);
 check(`neutral sits between (wins: poor ${poor.w}, neutral ${none.w}, elite ${elite.w})`, poor.w <= none.w + N * 0.01 && none.w <= elite.w + N * 0.01);
 check(`a command pitching coach cuts walks (${(elite.bb / N).toFixed(2)} vs ${(poor.bb / N).toFixed(2)})`, elite.bb < poor.bb);
-check(`a baserunning bench coach brings more steals (${(elite.sb / N).toFixed(2)} vs ${(poor.sb / N).toFixed(2)})`, elite.sb >= poor.sb);
+// (r227 the coach's speed shows on the tag-ups too — a runner who tagged to third has no steal to try: bases taken, both)
+check(`a baserunning bench coach takes more bases: steals and tag-ups (${((elite.sb + elite.tag) / N).toFixed(2)} vs ${((poor.sb + poor.tag) / N).toFixed(2)} a game)`, elite.sb + elite.tag >= poor.sb + poor.tag);
 {
   const v = Coach.staffEffects(Object.fromEntries(Coach.COACH_ROLES.map(r => [r, { vacant: true }])));
   check(`an empty chair coaches like a weak coach (every rating point ≤ 0, errors ×${v.errorMult.toFixed(2)}; vacant won ${empty.w}, neutral ${none.w} — noise at this size)`,
