@@ -14108,3 +14108,19 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - test-live-view-ui (dark and light) and test-compose-ui pass.
 
 **Fresh team:** not needed.
+
+## §122.110 — r231: the Live View's foul territory; the catcher under the plate
+### The user's decisions (from r230's screenshots)
+- Foul territory shows outside the chalk lines, so there's no pointed wedge under home plate.
+- The catcher's name is centred below home plate, in line with the pitcher and centre field.
+
+### Changed (`ui/components/LiveView.js`)
+- **Foul territory:** the whole drawing area is grass (`lv-foul`, a shade darker than fair territory). Fair territory and the fence are drawn over it.
+- **The dirt:** the infield dirt runs from the plate along the lines to the arc. Home plate has its own dirt circle (15 feet), replacing the pointed wedge.
+- **The catcher:** 19 feet behind the plate, the name centred under the dot, in line with the pitcher and centre field.
+- **Fixed:** the page is a flex column and was squeezing its items, so the last-play line overlapped the first row. Items no longer shrink; the page scrolls.
+
+### Checks
+- test-live-view-ui (dark and light) passes.
+
+**Fresh team:** not needed.

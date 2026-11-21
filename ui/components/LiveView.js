@@ -29,7 +29,7 @@ const PA_TYPES = new Set(['single', 'double', 'triple', 'hr', 'walk', 'hbp', 'st
 const HIT = new Set(['single', 'double', 'triple', 'hr']);
 const POS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'];
 // Where each fielder stands (degrees from straight away, feet from the plate).
-const STAND = { P: [0, 60.5], C: [0, -14], '1B': [38, 112], '2B': [17, 148], SS: [-17, 148], '3B': [-38, 112], LF: [-28, 275], CF: [0, 315], RF: [28, 275] };
+const STAND = { P: [0, 60.5], C: [0, -19], '1B': [38, 112], '2B': [17, 148], SS: [-17, 148], '3B': [-38, 112], LF: [-28, 275], CF: [0, 315], RF: [28, 275] };
 
 /** The fielders from a lineup's slots (a game from before r229): C … the outfield left, center, right in order. */
 function _fieldFromSlots(team) {
@@ -152,9 +152,11 @@ function _fieldSvg() {
   const bag = (p) => `<rect x="${(p[0] - 4.5).toFixed(1)}" y="${(p[1] - 4.5).toFixed(1)}" width="9" height="9" transform="rotate(45 ${xy(p).replace(',', ' ')})" class="lv-bag"/>`;
   const [mx, my] = pt(0, 60.5);   // (the mound)
   return `
+    <rect class="lv-foul" x="0" y="${TOP}" width="${W}" height="${H - TOP}"/>
     <polygon class="lv-grass" points="${xy(pt(0, 0))} ${fence.join(' ')}"/>
     <polyline class="lv-fence" points="${fence.join(' ')}"/>
-    <polygon class="lv-dirt" points="${xy(pt(0, -14))} ${xy(pt(-45, 20))} ${dirt.join(' ')} ${xy(pt(45, 20))}"/>
+    <polygon class="lv-dirt" points="${xy(pt(0, 0))} ${dirt.join(' ')}"/>
+    <circle class="lv-dirt" cx="${HX}" cy="${HY}" r="${(15 * IN).toFixed(1)}"/>
     <polygon class="lv-infield" points="${diamond}"/>
     <line class="lv-line" x1="${HX}" y1="${HY}" x2="${xy(pt(-45, fenceAt(45))).split(',')[0]}" y2="${xy(pt(-45, fenceAt(45))).split(',')[1]}"/>
     <line class="lv-line" x1="${HX}" y1="${HY}" x2="${xy(pt(45, fenceAt(45))).split(',')[0]}" y2="${xy(pt(45, fenceAt(45))).split(',')[1]}"/>
@@ -340,6 +342,7 @@ function _css() {
     .lv-overlay{position:fixed;inset:0;z-index:1000;background:var(--bg);display:flex;opacity:0;transform:translateY(16px);transition:opacity .2s ease,transform .2s ease;}
     .lv-overlay.open{opacity:1;transform:none;}
     .lv-panel{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:max(8px,env(safe-area-inset-top)) 0 max(12px,env(safe-area-inset-bottom));}
+    .lv-panel > *{flex-shrink:0;}   /* (a long page scrolls; nothing in it is squeezed) */
     .lv-head{display:flex;align-items:center;gap:10px;padding:6px 14px 2px;}
     .lv-score{display:flex;align-items:baseline;gap:8px;font-size:18px;font-weight:700;color:var(--text);}
     .lv-score b{font-size:22px;font-weight:800;}
@@ -352,7 +355,7 @@ function _css() {
     [data-theme="light"] .lv-pill.lv-live{background:#dcfce7;color:#166534;}
     .lv-field{padding:0 6px;}
     .lv-field svg{display:block;width:100%;height:auto;max-height:52vh;}
-    .lv-grass{fill:#2f6e43;} .lv-fence{fill:none;stroke:#1d4a2c;stroke-width:3;}
+    .lv-grass{fill:#2f6e43;} .lv-foul{fill:#29603b;} .lv-fence{fill:none;stroke:#1d4a2c;stroke-width:3;}
     .lv-dirt{fill:#9a7348;} .lv-infield{fill:#a98053;stroke:#f1f1f1;stroke-width:1;stroke-opacity:.7;}
     .lv-line{stroke:#f1f1f1;stroke-width:1;opacity:.85;}
     .lv-mound{fill:#a77d51;stroke:#8a6440;} .lv-bag{fill:#fafafa;} .lv-plate{fill:#fafafa;}
