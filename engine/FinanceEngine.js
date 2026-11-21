@@ -269,8 +269,7 @@ export function payrollOf(state, teamId = 'user') {
  *            deal from this one: 1 = this season only), retiring (one of ours who has told us), next { salary,
  *            years, replaces } (a new deal from next season: an extension, the agent's ask) }
  *   away     shares we keep paying on players we traded away, this season: { id, name, teamId, pct, pays }
- *   staff    the coaching staff, highest paid first: { key, name, salary, left }
- *   totals   { players (= payrollOf), staff (a year), nextSeason (players committed for next season: deals that run
+ *   totals   { players (= payrollOf), nextSeason (players committed for next season: deals that run
  *            past this one or start then, none for a player retiring) }
  * In the winter the deals are counted from next season (`left` from the season about to start).
  */
@@ -299,13 +298,10 @@ export function payrollBreakdown(state) {
     away.push({ id: p.id, name: p.name, teamId: p.teamId, pct: r.pct, pays: Math.round((p.contractSalary || 0) * r.pct) });
   }
   away.sort((a, b) => b.pays - a.pays);
-  const staff = Object.entries(u?.coachingStaff || {}).filter(([, c]) => c && !c.vacant && c.name)
-    .map(([key, c]) => ({ key, name: c.name, salary: c.salary || 0, left: Math.max(0, (c.contractExpiry ?? season) - from + 1) }))
-    .sort((a, b) => b.salary - a.salary);
   // next season: a new deal's salary, else this one's if it runs on (and the player isn't retiring)
   const nextSeason = winter ? null : players.reduce((a, x) => a + (x.next ? x.next.salary : (x.left >= 2 && !x.retiring ? x.salary : 0)), 0);
-  return { players, away, staff, winter,
-           totals: { players: payrollOf(state, 'user'), staff: staffAnnual(u), nextSeason } };
+  // (r225 the staff are paid from the funds too, but apart from the payroll: not in it)
+  return { players, away, winter, totals: { players: payrollOf(state, 'user'), nextSeason } };
 }
 
 /**

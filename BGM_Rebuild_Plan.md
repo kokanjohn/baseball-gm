@@ -13845,3 +13845,18 @@ A Compose topic for Scouting to find out whether a veteran on another club, or a
 - check-contracts, check-deal-sheet, check-frontoffice, check-retirement, test-team-roster-ui, sim-season and multi-season pass.
 
 **Fresh team:** not needed.
+
+## §122.104 — r225: the payroll breakdown without the staff
+### The user's decision
+Staff salaries are paid from club funds on the same paydays as the players, but they aren't part of the payroll figure or its target. So the breakdown leaves them out, and everything in it adds up to the payroll on the card. Staff pay stays visible in two places: This season → Money out → Coaching staff, and each person's sheet on the Staff tab.
+
+### Changed
+- `payrollBreakdown` no longer returns `staff`, or `totals.staff`.
+- The sheet has two sections: Players, and Traded away when there's one.
+
+### Checks
+- check-payroll-breakdown: no staff.
+- test-payroll-ui: the sections, with no staff.
+- check-frontoffice passes.
+
+**Fresh team:** not needed.

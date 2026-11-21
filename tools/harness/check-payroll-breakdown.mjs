@@ -1,6 +1,6 @@
 /**
  * tools/harness/check-payroll-breakdown.mjs — r224 §122.103 the payroll, person by person.
- *   - the player rows and the shares on players traded away add up to the payroll; highest paid first; staff apart;
+ *   - the player rows and the shares on players traded away add up to the payroll; highest paid first; no staff (r225);
  *   - a share another club keeps paying (a trade): we pay the rest, and it says who pays what;
  *   - a share we keep paying on a player we traded away: its own row;
  *   - how long: this season only / N seasons left; a player who has told us they're retiring: this season only, and
@@ -31,8 +31,7 @@ console.log('The sheet');
   check(`the rows add up to the payroll (${sum} vs ${b.totals.players})`, Math.abs(sum - b.totals.players) <= b.players.length);
   check(`everyone paid is listed (${b.players.length})`, b.players.length === S().userTeam.rosterIds.filter(id => Finance.isPaid(S().players[id])).length);
   check('highest paid first', b.players.every((x, i, a) => i === 0 || a[i - 1].pays >= x.pays));
-  check(`the staff apart, highest first (${b.staff.length}; ${b.totals.staff})`, b.staff.length >= 4 && b.staff.every((x, i, a) => i === 0 || a[i - 1].salary >= x.salary)
-    && b.staff.reduce((a, x) => a + x.salary, 0) === b.totals.staff);
+  check('no staff (r225: paid apart from the payroll)', !('staff' in b) && !('staff' in b.totals));
 }
 
 console.log('\nTrades');

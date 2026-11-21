@@ -1,5 +1,5 @@
 // r224 §122.103 In the real app: Team → Finances → the Payroll card says it can be selected; selecting it opens the
-// breakdown — players (highest paid first, a share another club pays, a player retiring), traded away, staff —
+// breakdown — players (highest paid first, a share another club pays, a player retiring), traded away (no staff) —
 // and a player opens their card.
 //   node tools/harness/test-payroll-ui.mjs outDir [theme]
 import { createRequire } from 'node:module';
@@ -56,7 +56,7 @@ const sheet = await page.evaluate(() => ({
   rows: [...document.querySelectorAll('.pay-row')].map(r => r.textContent.replace(/\s+/g, ' ').trim()),
   sub: document.querySelector('#ts-swap-modal .modal-header')?.textContent.replace(/\s+/g, ' ').trim(),
 }));
-check(`sections: ${sheet.heads.join(' | ')}`, /^Players/.test(sheet.heads[0] || '') && sheet.heads.some(h => /^Traded away/.test(h)) && sheet.heads.some(h => /^Staff/.test(h)));
+check(`sections: ${sheet.heads.join(' | ')} (no staff)`, /^Players/.test(sheet.heads[0] || '') && sheet.heads.some(h => /^Traded away/.test(h)) && !sheet.heads.some(h => /^Staff/.test(h)));
 check(`the header: “${sheet.sub}”`, /this season · .* committed for next season/.test(sheet.sub || ''));
 const topRow = sheet.rows.find(r => r.startsWith(set.topName));
 check(`a share another club pays: “${topRow}”`, new RegExp(`The ${set.club} pay 25% of`).test(topRow || ''));
@@ -64,9 +64,6 @@ const retRow = sheet.rows.find(r => r.startsWith(set.retName));
 check(`a player retiring: “${retRow}”`, /This season only · retiring/.test(retRow || ''));
 check('traded away: our share', sheet.rows.some(r => r.startsWith(set.awayName) && /we pay 40% this season/.test(r)));
 await page.screenshot({ path: `${out}/payroll-sheet-${theme}.png` });
-await page.evaluate(() => document.querySelector('.pay-head:last-of-type')?.scrollIntoView({ block: 'start' }));
-await page.waitForTimeout(200);
-await page.screenshot({ path: `${out}/payroll-sheet-staff-${theme}.png` });
 await page.click(`.pay-row[data-pid="${set.ret}"]`);
 await page.waitForTimeout(600);
 const pc = await page.evaluate(() => document.body.innerText.includes('Retiring after the season'));

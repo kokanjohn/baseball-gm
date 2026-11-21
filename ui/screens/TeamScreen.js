@@ -913,8 +913,8 @@ const STAFF_LABELS = { manager: 'Manager', pitchingCoach: 'Pitching Coach', hitt
 
 /**
  * r224 §122.103 the payroll, person by person: players (what we pay, highest first; a share another club keeps
- * paying; how long; retiring; a new deal from next season), the shares we pay on players we traded away, and
- * the staff. A player opens their card.
+ * paying; how long; retiring; a new deal from next season) and the shares we pay on players we traded away (r225 not
+ * the staff: they're paid apart from the payroll). A player opens their card.
  */
 function _openPayrollSheet(state) {
   const b = Finance.payrollBreakdown(state);
@@ -935,14 +935,11 @@ function _openPayrollSheet(state) {
     ], ` data-pid="${x.id}"`)).join('');
   const away = b.away.map(x => row(_escape(x.name), formatMoney(x.pays),
     [_escape(`Now with the ${club(x.teamId)} · we pay ${pctW(x.pct)} this season`)])).join('');
-  const staff = b.staff.map(x => row(`${_escape(x.name)} <span class="pay-pos">${_escape(STAFF_LABELS[x.key] || '')}</span>`, formatMoney(x.salary),
-    [_escape(seasons(x.left))])).join('');
   const awayTotal = b.away.reduce((a, x) => a + x.pays, 0);
   const html = `<div class="pay-sheet">
       <div class="pay-head"><span>Players</span><span>${formatMoney(b.players.reduce((a, x) => a + x.pays, 0))}</span></div>
       ${players || '<div class="pay-sub">Nobody on the payroll.</div>'}
       ${away ? `<div class="pay-head"><span>Traded away</span><span>${formatMoney(awayTotal)}</span></div>${away}` : ''}
-      ${staff ? `<div class="pay-head"><span>Staff</span><span>${formatMoney(b.totals.staff)}</span></div>${staff}` : ''}
     </div>`;
   const sub = b.winter ? `${formatMoney(b.totals.players)} in player salaries`
     : `${formatMoney(b.totals.players)} this season · ${formatMoney(b.totals.nextSeason)} committed for next season`;
