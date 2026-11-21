@@ -208,7 +208,7 @@ export function buildStep(m, state, ctx, atMs) {
     const best = (t?.rosterIds || []).map(id => state.players[id]).filter(p => p && isAvailable(p)).sort((a, b) => (b.ovr || 0) - (a.ovr || 0));
     const bat = best.find(p => p.pos !== 'SP' && p.pos !== 'RP'), arm = best.find(p => p.pos === 'SP');
     const dir = u.coachingStaff?.scoutingDirector;
-    const scout = { ...base(`${key}:scout`), cardId: 'stretch_preview_scout', sender: dir && !dir.vacant ? dir.name : 'Pro Scouting', avatar: '🔭', tag: 'SCOUTING',
+    const scout = { ...base(`${key}:scout`), cardId: 'stretch_preview_scout', sender: dir && !dir.vacant ? dir.name : 'Scouting', avatar: '🔭', tag: 'SCOUTING',
       subject: `The ${round}: the ${opp.name}`,
       preview: `Our read on the ${opp.name}…`,
       body: `The ${round} against the ${opp.name} (${opp.wins}–${opp.losses}) starts today${ser.bestOf > 1 ? `, best of ${ser.bestOf}` : ', one game, win or go home'}. ${bat ? `The bat to worry about is ${bat.name} (OVR ${bat.ovr}).` : ''} ${arm ? `${arm.name} (OVR ${arm.ovr}) is their best arm.` : ''} ${host ? 'Every game is at our place.' : 'Every game is at theirs.'}`.replace(/\s+/g, ' ').trim(),

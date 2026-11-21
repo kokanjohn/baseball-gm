@@ -155,7 +155,7 @@ export function buildStep(key, state, ctx, atMs) {
     const who = names.length ? ` The best of what's out there: ${names.map(({ p, t }) => `${p.name} (${posLabel(p)}, OVR ${p.ovr}, ${t.name})`).join(' and ')}.` : '';
     const price = buyers > sellers ? 'More clubs are buying than selling, so prices will climb as the deadline gets closer.' : buyers < sellers ? 'More clubs are selling than buying, so prices should come down late.' : 'Buyers and sellers are about even.';
     const what = stance === 'sell' ? 'start calling the buyers about our veterans now, before they spend elsewhere' : stance === 'buy' ? 'get our scouts on the rentals now and have a deal ready before the rush' : 'keep our scouts on the market so we know what\'s there';
-    return { ...base, sender: u.coachingStaff?.scoutingDirector?.vacant ? 'Pro Scouting' : (u.coachingStaff?.scoutingDirector?.name || 'Pro Scouting'), avatar: '🔭', tag: 'SCOUTING',
+    return { ...base, sender: u.coachingStaff?.scoutingDirector?.vacant ? 'Scouting' : (u.coachingStaff?.scoutingDirector?.name || 'Scouting'), avatar: '🔭', tag: 'SCOUTING',
       subject: 'The deadline market',
       preview: `${sellers} clubs selling, ${buyers} buying…`,
       body: `Here's the market ten days out: ${sellers} club${sellers === 1 ? '' : 's'} selling, ${buyers} buying.${who} ${price} I'd like to ${what}. It costs us extra scouting time.`,
@@ -200,7 +200,7 @@ export function buildStep(key, state, ctx, atMs) {
       const d = shortlistDeal(state, dl.focus);
       if (!d) return null;
       const dir = u.coachingStaff?.scoutingDirector;
-      return { ...base, sender: dir && !dir.vacant ? dir.name : 'Pro Scouting', avatar: '🔭', _targetPlayerId: d.player.id,
+      return { ...base, sender: dir && !dir.vacant ? dir.name : 'Scouting', avatar: '🔭', _targetPlayerId: d.player.id,
         subject: `The shortlist: ${d.player.name}`,
         preview: `We got ahead of it, and here's the one I'd go after…`,
         body: `We got ahead of the market, and here's the one I'd go after: ${d.player.name} (${posLabel(d.player)}, OVR ${d.player.ovr}) of the ${d.team.name}, on a deal that ends this season. The ${d.team.name} are out of it. I think ${d.send.name} (${posLabel(d.send)}, OVR ${d.send.ovr}) gets it done. We can make the offer now, before the rush.`,
@@ -262,7 +262,7 @@ export function buildStep(key, state, ctx, atMs) {
     const body = deals.length
       ? `The deadline is today, and the phones won't stop. On the table right now: ${deals.map(d => d.label).join('; ')}. Anything we want done has to be done before today's game ends.`
       : `The deadline is today, and the phones are quiet for us. If there's a move you want to make, it has to be done before today's game ends.`;
-    return { ...base, sender: 'Pro Scouting', avatar: '⏱', type: 'urgent',
+    return { ...base, sender: 'Scouting', avatar: '⏱', type: 'urgent',
       subject: 'Deadline day', preview: deals.length ? `${deals.length} deal${deals.length === 1 ? '' : 's'} on the table…` : 'The phones are quiet…', body,
       yesLabel: 'Got It', noLabel: null, autoResolve: 'yes', expiresAtMs: DUE(atMs, 14), _news: true, _raw: {} };
   }

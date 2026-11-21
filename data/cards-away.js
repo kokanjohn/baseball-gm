@@ -55,7 +55,7 @@ export const OFFDAY_POOL = [
    yesMsg:"{leader_player_name} has the group together. We'll send pictures.",noMsg:"We passed this time. They'll ask again.",
    _relYes:{ldr_nm:1}},
 
-  {id:'od5',autoResolve:'no',_weight:0.8,type:'normal',tag:'SCOUTING',sender:'Scouting Dept.',avatar:'🔭',
+  {id:'od5',autoResolve:'no',_weight:0.8,type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    _minGames:20,_oncePerSeason:true,_promise:{yes:{kind:'college_look',when:'fa_opens'}},
    subject:"Come see a player with us today",
    preview:"There's a college game an hour away today…",

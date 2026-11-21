@@ -24,7 +24,7 @@ export const WINTER_POOL = [
    yesMsg:"Told them. They left the room lighter.",noMsg:"Told them. They didn't like it, but they heard it.",
    _relYes:{pl_nm:2},_relNo:{pl_nm:-1,mgr_nm:1}},
 
-  {id:'wt_scouts_october',_winter:'out',autoResolve:'no',type:'normal',tag:'SCOUTING',sender:'Scouting Dept.',avatar:'🔭',
+  {id:'wt_scouts_october',_winter:'out',autoResolve:'no',type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:"Scouts at the rest of the postseason?",
    preview:"We'd like to keep two scouts on the road through October…",
    body:"We'd like to keep two scouts on the road through the rest of the postseason — {misc_cost_xs} in travel. Half the players in this winter's free-agent class are still playing, and October is where you see who they really are. We'd come back with a read on the market before it opens. Or we bring everyone home and work from video.",
@@ -59,7 +59,7 @@ export const WINTER_POOL = [
    yesEffect:{atmo:2},noEffect:{},
    yesMsg:"Booked. A car picks you up at five.",noMsg:"Passed. They'll ask again next year."},
 
-  {id:'wtn_series',_winter:'out',_winterMax:2,_needsSeries:true,autoResolve:'yes',type:'normal',tag:'SCOUTING',sender:'Pro Scouting',avatar:'📺',_toastOnly:true,
+  {id:'wtn_series',_winter:'out',_winterMax:2,_needsSeries:true,autoResolve:'yes',type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'📺',_toastOnly:true,
    subject:"The postseason, without us",
    preview:"{series_line}",
    body:"{series_line} We're watching every game; most of the clubs still playing have players in this winter's free-agent class.",
@@ -135,7 +135,7 @@ export const WINTER_POOL = [
    yesMsg:"Approved. The unveiling will be at the fan fest.",noMsg:"Keeping what we have.",
    _budgetCost:'misc_cost_sm'},
 
-  {id:'wt_analyst',_winter:'any',autoResolve:'no',type:'normal',tag:'STAFF',sender:'Pro Scouting',avatar:'📊',
+  {id:'wt_analyst',_winter:'any',autoResolve:'no',type:'normal',tag:'STAFF',sender:'Scouting',avatar:'📊',
    subject:"A winter hire for the numbers",
    preview:"We'd like to add an analyst for the winter…",
    body:"We'd like to add an analyst for the winter — someone to go through every pitch we threw this year and tell us what we're missing. It's {misc_cost_xs} for the contract. The coaches are skeptical; they think they already know.",

@@ -85,7 +85,7 @@ export const FIRST_DAY_CORE = Object.freeze({
 
   // ── The scouting director ──
   scouting: [
-    {id:'fd_scout_market',autoResolve:'no',type:'normal',tag:'SCOUTING',sender:'Scouting Dept.',avatar:'🔭',
+    {id:'fd_scout_market',autoResolve:'no',type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
      subject:"Introductions — and a first look at the market",
      preview:"I run our scouting. Before anything else, I'd like to show you what's out there…",
      body:"I run our scouting, and I'm looking forward to working with you. Before anything else, I'd like to show you who's still unsigned and worth a look at the positions where we're thin. Say the word and I'll have it to you soon. If you'd rather settle in first, it'll keep.",
@@ -95,7 +95,7 @@ export const FIRST_DAY_CORE = Object.freeze({
      noMsg:"Understood. Ask me anytime.",
      onYes:'fd_fa_look',_ttl:2},
 
-    {id:'fd_scout_holes',autoResolve:'no',type:'normal',tag:'SCOUTING',sender:'Scouting Dept.',avatar:'🔭',
+    {id:'fd_scout_holes',autoResolve:'no',type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
      subject:"Where we're thin, and who's out there",
      preview:"We'll do introductions later. Where we're thin…",
      body:"We'll do introductions later. I've been through the roster, and there are spots where we're thin. There are still players out there who could help, and they won't be out there long. I can put the list together now, or we can see how camp shakes out first.",

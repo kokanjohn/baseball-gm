@@ -39,7 +39,7 @@ import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatK } from '../../engine/CardTokens.js';
 import { FA_WATCH, PHASE } from '../../data/constants.js';
 import { askScoutingButton, askScouting } from '../components/AskScouting.js';   // r208 §122.86
-import { senderLabel } from '../../engine/Senders.js';   // r212 §122.90
+import { senderLabel, fromScouting } from '../../engine/Senders.js';   // r212 §122.90, r235 §122.114
 import { newGms, gmsToWelcome } from '../../engine/FirstDay.js';
 import { askable as retireAskable } from '../../engine/Retirement.js';   // r223 §122.102
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
@@ -157,7 +157,7 @@ const COMPOSE_CHANNELS = [
   },
   {
     id:       'scouting',
-    label:    'Scouting / Dev',
+    label:    'Scouting Director',   // r235 §122.114 (was "Scouting / Dev": the Staff tab's name for the job)
     icon:     '🔭',
     role:     'Front Office',
     priority: 'medium',
@@ -501,7 +501,7 @@ function _renderReading(card, inbox, state) {
       </div>
       <div class="mr-body">${_paragraphs(card.body || card.preview || '', _messagePlayers(card, state))}</div>
       ${dealOfCard(state, card) ? `<button class="btn-revise btn-deal" data-deal-sheet="${card.instanceId}">See the Deal</button>` : ''}
-      ${card.resolved ? '' : askScoutingButton(state, { instanceId: card.instanceId })}
+      ${card.resolved || fromScouting(card, state) ? '' : askScoutingButton(state, { instanceId: card.instanceId })}
       <div class="mr-reply">
         <div class="mr-reply-h">
           <span>Your decision</span>

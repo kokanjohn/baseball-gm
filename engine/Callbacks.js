@@ -108,7 +108,7 @@ export const CALLBACKS = [
     fits: (st, e) => { const p = st.players[e.p]; if (!ours(st, e.p)) return null; const x = since(p, e.at); return enough(p, x) ? { x } : null; },
     build: (st, e, { x }) => {
       const p = st.players[e.p], t = club(st, e.tm);
-      return news({ sender: 'Pro Scouting', avatar: '📊', tag: 'TRADE', _targetPlayerId: p.id,
+      return news({ sender: 'Scouting', avatar: '📊', tag: 'TRADE', _targetPlayerId: p.id,
         subject: `${p.name}, since the trade`, preview: `Since coming over${t ? ` from the ${t.name}` : ''} in ${monthOf(e.at)}…`,
         body: `Since coming over${t ? ` from the ${t.name}` : ''} in ${monthOf(e.at)}, ${p.name} ${doing(p, x)}. ${good(p, x) ? 'So far the trade looks like a good one.' : bad(p, x) ? 'It hasn\'t worked yet. We\'re watching it.' : 'About what we expected.'}` });
     } },
@@ -123,7 +123,7 @@ export const CALLBACKS = [
     },
     build: (st, e, { x }) => {
       const p = st.players[e.p], t = club(st, p.teamId);
-      return news({ sender: 'Pro Scouting', avatar: '📊', tag: 'ROSTER',
+      return news({ sender: 'Scouting', avatar: '📊', tag: 'ROSTER',
         subject: `${p.name}, with the ${t.name}`, preview: `${p.name}, who left us in the winter, is playing for the ${t.name}…`,
         body: `${p.name}, who we let go in the winter, ${doing(p, x)} for the ${t.name} this season. ${good(p, x) ? 'It stings a little.' : bad(p, x) ? 'It looks like the right call.' : 'About what we thought they\'d be.'}` });
     } },
@@ -138,7 +138,7 @@ export const CALLBACKS = [
     },
     build: (st, e, { x }) => {
       const p = st.players[e.p];
-      return news({ sender: 'Pro Scouting', avatar: '📊', tag: 'ROSTER', _targetPlayerId: p.id,
+      return news({ sender: 'Scouting', avatar: '📊', tag: 'ROSTER', _targetPlayerId: p.id,
         subject: `${p.name}'s new deal`, preview: `The deal we gave ${p.name} in the winter…`,
         body: `The deal we gave ${p.name} in the winter: ${line(p, x)} so far. ${good(p, x) ? 'Money well spent.' : bad(p, x) ? 'Not what we paid for, yet.' : 'About what we paid for.'}` });
     } },
@@ -189,7 +189,7 @@ export const CALLBACKS = [
     },
     build: (st, e, { x }) => {
       const p = st.players[e.p];
-      return news({ sender: 'Pro Scouting', avatar: '📊', tag: 'ROSTER', _targetPlayerId: p.id,
+      return news({ sender: 'Scouting', avatar: '📊', tag: 'ROSTER', _targetPlayerId: p.id,
         subject: `${p.name}, since we signed them`, preview: `${p.name}, signed in the winter…`,
         body: `${p.name}, who we signed in the winter, ${doing(p, x)} so far. ${good(p, x) ? 'The signing looks like a good one.' : bad(p, x) ? 'Not what we signed them for, yet.' : 'About what we expected.'}` });
     } },

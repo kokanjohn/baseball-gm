@@ -210,7 +210,7 @@ export const DECISIONS_POOL = [
   },
 
   {id:'dl3',_retired:true,autoResolve:'no',autoResolveTax:{morale:-2},_minGames:70,_maxGames:72,_requiresRegular:true,_oncePerSeason:true,
-   type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+   type:'urgent',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Last chance — deadline target available, window closing',
    preview:'A legitimate upgrade is available but they need an answer before the deadline…',
    body:'Scouts flagged a real upgrade — {acq_hitter_name} ({acq_hitter_pos}, OVR {acq_hitter_ovr}) of the {rival_team}. Their GM wants a decision before the deadline closes, and wants {trade_prospect_desc} from our farm in return. After tomorrow this deal is gone.',
@@ -282,7 +282,7 @@ export const DECISIONS_POOL = [
   },
 
 
-  {id:'t1',_retired:true,autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t1',_retired:true,autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},_maxGames:72,type:'normal',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Trade offer: upgrade our {acq_pitcher_pos}',
    preview:'Rival club offering a proven arm — costs vary…',
    body:"{trade_set_drop_pi}The {rival_team} GM just called. They want {drop_pitcher_desc} and are offering {acq_pitcher_name} ({acq_pitcher_pos}, {acq_pitcher_hand}) . {t1_acq_note}",
@@ -290,7 +290,7 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:5},noEffect:{morale:-3},
    yesMsg:'Pitcher acquired! Staff getting stronger.',noMsg:'Trade declined. Sticking with what we have.',
    onYes:'trade_acquire_pitcher',_usesTradeToken:true,_ttl:2,_expireMsg:'Trade deadline passed — rival filled the need elsewhere. Deal is dead.',_expireFx:{morale:-4},_tradeRivalChance:0.10,_weight:0.6,_rosterContract:'roster:acquire:pitcher'},
-  {id:'t2',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t2',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Trade offer: {acq_hitter_pos} available — rival club',
    preview:'Versatile backup available — window is short…',
    body:"{trade_set_drop_hi}{rival_team} is making {acq_hitter_name} ({acq_hitter_pos}) available for {trade_cost}. {t2_acq_note} To make room, {drop_hitter_desc} would be moved off the bench.",
@@ -320,7 +320,7 @@ export const DECISIONS_POOL = [
    onYes:'sign_acquire_hitter',_usesSignToken:true,_rosterContract:'roster:acquire:hitter'},
   // ── Tier-aware variants of base cards ────────────────────────────────────
   // s1_hi: Tier 4+ — veteran pursues us as a destination, not a discounted deal
-  {id:'s1_hi',autoResolve:'no',autoResolveTax:{morale:-1},_minTier:4,type:'good',tag:'SIGNING',sender:"Pro Scouting",relay:"{acq_hitter_name}'s agent",avatar:'📋',
+  {id:'s1_hi',autoResolve:'no',autoResolveTax:{morale:-1},_minTier:4,type:'good',tag:'SIGNING',sender:"Scouting",relay:"{acq_hitter_name}'s agent",avatar:'📋',
    subject:"{acq_hitter_name} wants to come here",
    preview:"{acq_hitter_name}'s agent reached out to us directly…",
    body:"{acq_hitter_name}'s agent reached out to us directly. A veteran {acq_hitter_pos} ({acq_hitter_age}, OVR {acq_hitter_ovr}), not looking for the highest bidder — {acq_hitter_name} specifically wants this franchise. The reputation we've built is drawing players who want to win here. The deal would be {sign_cost}.",
@@ -358,7 +358,7 @@ export const DECISIONS_POOL = [
    _revenueToken:'rev_amount',_budgetCost:{no:'misc_cost_xs'}},
 
 
-  {id:'s2',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'SIGNING',sender:"Scouting Dept.",avatar:'✍️',
+  {id:'s2',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'SIGNING',sender:"Scouting",avatar:'✍️',
    subject:"A pitching prospect — {sign_cost}",
    preview:"We found an unsigned arm with real upside…",
    body:"We found {acq_pitcher_name} ({acq_pitcher_pos}) — an unsigned arm with {s2_pitch_type}. Raw, but high-upside. One flag: {s2_concern}. {acq_pitcher_name} could replace {drop_pitcher_desc}, currently one of the lowest-rated pitchers on the staff. The signing bonus is {sign_cost}. If we pass, another club signs them.",
@@ -599,7 +599,7 @@ export const DECISIONS_POOL = [
    noMsg:"Passed. Some opportunities are not worth the exposure.",
    _budgetCost:'misc_cost_xs'},
 
-  {id:'tier_fa_interest',autoResolve:'no',autoResolveTax:{morale:-1},_weight:0.6,type:'good',tag:'ROSTER',sender:'Scouting Dept.',relay:"a veteran's agent",avatar:'🔍',
+  {id:'tier_fa_interest',autoResolve:'no',autoResolveTax:{morale:-1},_weight:0.6,type:'good',tag:'ROSTER',sender:'Scouting',relay:"a veteran's agent",avatar:'🔍',
    _minTier:3,_requiresRegular:true,_oncePerSeason:true,_minGames:30,_maxGames:80,
    subject:"A marquee free agent — the agent called us first",
    preview:"A decorated veteran is weighing next season — and the agent called us…",
@@ -632,7 +632,7 @@ export const DECISIONS_POOL = [
    noMsg:"Acknowledged privately. Understood — the work speaks for itself.",
    _revenueToken:'rev_amount'},
 
-  {id:'sc1',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'SCOUTING',sender:'International Scouting',avatar:'🔭',
+  {id:'sc1',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:"A scouting trip to {intl_country}",
    preview:"{scout_name} wants to lead a targeted trip to {intl_country}…",
    body:"{scout_name} wants to lead a targeted scouting trip to {intl_country}. The budget is {misc_cost_lg}, and we're confident we can surface two or three prospects the larger-market clubs are sleeping on. The window is narrow — rival clubs are circling the same region.",
@@ -641,7 +641,7 @@ export const DECISIONS_POOL = [
    yesMsg:"We're on the way. Expect new international leads over the next few games.",
    noMsg:"Local focus only. Other clubs get the jump on international talent.",
    onYes:'scouting_intl_trip',_budgetCost:'misc_cost_lg'},
-  {id:'sc2',autoResolve:'no',type:'good',tag:'SCOUTING',sender:'Scouting Dept.',avatar:'🔍',
+  {id:'sc2',autoResolve:'no',type:'good',tag:'SCOUTING',sender:'Scouting',avatar:'🔍',
    subject:"An unattached prospect — act now",
    preview:"{acq_pitcher_name} is available, and we like the arm…",
    body:"We flagged an opportunity: {acq_pitcher_name} ({acq_pitcher_pos}, {acq_pitcher_hand}), a free agent, is available {prospect_slide_reason}. We can sign them for {sign_cost} — an aggressive but fair number. {acq_pitcher_name} could replace {drop_pitcher_desc}, currently one of the lowest-rated arms on the staff. If we pass, another club signs them.",
@@ -652,10 +652,10 @@ export const DECISIONS_POOL = [
   {id:'b1',autoResolve:'no',_requiresRegular:true,autoResolveTax:{morale:-1},_minGames:10,type:'urgent',tag:'BULLPEN',sender:"{manager_name} (Manager)",avatar:'⚾',
    subject:"The bullpen needs help",
    preview:"{era_10day} ERA in relief over the last 10 days. I want another arm…",
-   body:"{season_context}, and our relievers have a {era_10day} ERA over the last 10 days, with {drop_pitcher_desc} hit hardest. I want another arm. Pro Scouting can work the phones for a reliever who would pitch the late innings for us and come back with a package to offer. Or we ride it out with the arms we have.",
+   body:"{season_context}, and our relievers have a {era_10day} ERA over the last 10 days, with {drop_pitcher_desc} hit hardest. I want another arm. Scouting can work the phones for a reliever who would pitch the late innings for us and come back with a package to offer. Or we ride it out with the arms we have.",
    yesLabel:'Work the Phones',noLabel:'Ride It Out',
    yesEffect:{morale:1},noEffect:{morale:-3},
-   yesMsg:"Pro Scouting is working the phones. Thank you.",noMsg:"We'll ride it out with the arms we have.",
+   yesMsg:"Scouting is working the phones. Thank you.",noMsg:"We'll ride it out with the arms we have.",
    onYes:'lt_find_rp',_requiresBullpenERA:5.5,_ttl:1,_expireMsg:'No decision made — the bullpen stays as it is.',_expireFx:{morale:-3}},
   {id:'b2',autoResolve:'no',type:'normal',tag:'BULLPEN',sender:'Player Dev.',avatar:'⚾',
    subject:"Waiver claim: a {dfa_player_pos} just DFA'd",
@@ -767,7 +767,7 @@ export const DECISIONS_POOL = [
    yesLabel:'Accept the Deal',noLabel:'Protect the Vendor',
    yesEffect:{morale:2,atmo:3},noEffect:{atmo:1},
    yesMsg:"Done. The fans love the partnership; the food vendor is annoyed.",noMsg:"Passed. The vendor relationship stays intact.",_revenueToken:'rev_amount'},
-  {id:'t3',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t3',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Trade offer: {acq_hitter_name} ({acq_hitter_pos}) for a bench hitter',
    preview:'Contender offers {acq_hitter_name} ({acq_hitter_pos}) for {drop_hitter_desc} — positional swap…',
    body:"{trade_set_drop_hi}{rival_team} wants {drop_hitter_desc} and is offering {acq_hitter_name} ({acq_hitter_pos}) . {t3_swap_note}",
@@ -775,7 +775,7 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:3},noEffect:{},
    yesMsg:'{acq_hitter_name} acquired. Bench upgraded.',noMsg:'Trade declined. Bench stays as-is.',
    onYes:'trade_acquire_hitter',_usesTradeToken:true,_ttl:2,_expireMsg:'Trade window closed — other club moved on.',_expireFx:{morale:-3},_tradeRivalChance:0.10,_weight:0.6,_rosterContract:'roster:acquire:hitter'},
-  {id:'t4',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t4',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},_maxGames:72,_requiresRegular:true,type:'urgent',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'{trade_want_rental}{acq_pitcher_name} ({acq_pitcher_pos}) available — trade offer',
    preview:'Contender offering {acq_pitcher_name} ({acq_pitcher_pos}) — pitching help available…',
    body:"{trade_set_drop_pi}{rival_team} wants {drop_pitcher_desc} and is offering {acq_pitcher_name} ({acq_pitcher_pos}, {acq_pitcher_hand}) . {acq_pitcher_name} is {t4_acq_note}.{t4_contract_note}",
@@ -785,7 +785,7 @@ export const DECISIONS_POOL = [
    onYes:'trade_acquire_pitcher',_usesTradeToken:true,_ttl:2,_expireMsg:'Rental deadline passed — contender traded pitcher elsewhere.',_expireFx:{morale:-5},_tradeRivalChance:0.10,_weight:0.6,_rosterContract:'roster:acquire:pitcher'},
   // ── INBOUND TRADE OFFERS (rival clubs call us) ──────────────────────────────
   // t5: Contender wants our active pitcher — sends weaker arm + cash back
-  {id:'t5',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t5',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Inbound offer — rival wants {active_pitcher_name} ({active_pitcher_pos})',
    preview:'Contender calling about {active_pitcher_name} — rival offering cash and a return arm…',
    body:'{trade_set_send_pi}{rival_team} wants {active_pitcher_name} ({active_pitcher_pos}) and is offering {acq_pitcher_name} ({acq_pitcher_pos}, {acq_pitcher_hand}) . {t5_value_note}.',
@@ -797,7 +797,7 @@ export const DECISIONS_POOL = [
    _rosterContract:'roster:send:pitcher'},
 
   // t6: Rebuilding club wants our veteran hitter — sends young hitter + cash
-  {id:'t6',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t6',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Inbound offer — {active_hitter_name} ({active_hitter_pos}) requested',
    preview:'Rebuilding club offering cash and a young bat for {active_hitter_name}…',
    body:'{trade_set_send_hi}{rival_team} wants {active_hitter_name} ({active_hitter_pos}) and is offering {acq_hitter_name} ({acq_hitter_pos}) . {t6_value_note}.',
@@ -809,7 +809,7 @@ export const DECISIONS_POOL = [
    _rosterContract:'roster:send:hitter'},
 
   // t7: Pure salary dump — rival wants our pitcher, cash only, no player back
-  {id:'t7',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t7',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Cash offer — rival wants {active_pitcher_name} outright',
    preview:'Rival club offering straight cash for {active_pitcher_name} — no player back…',
    body:'{trade_set_send_pi}{rival_team} wants {active_pitcher_name} ({active_pitcher_pos}) and is offering {trade_cost} in straight cash — no player back. Roster spot opens up and club funds get a boost. Whether that trade-off works depends on how replaceable this arm is.',
@@ -821,7 +821,7 @@ export const DECISIONS_POOL = [
    _rosterContract:'roster:send:pitcher'},
 
   // t8: Swap with cash sweetener — rival wants our hitter, offers weaker hitter + cash
-  {id:'t8',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t8',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Swap offer — {active_hitter_name} for {acq_hitter_name} + cash',
    preview:'Club offering {acq_hitter_name} ({acq_hitter_pos}) plus cash — they want {active_hitter_name}…',
    body:'{trade_set_send_hi}{rival_team} wants {active_hitter_name} ({active_hitter_pos}) and is offering {acq_hitter_name} ({acq_hitter_pos}) . {t8_value_note}.',
@@ -833,7 +833,7 @@ export const DECISIONS_POOL = [
    _rosterContract:'roster:send:hitter'},
 
   // t9: Prospect package — rival wants our veteran, sends two prospects, no cash
-  {id:'t9',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'🔄',
+  {id:'t9',_retired:true,autoResolve:'no',_requiresRegular:true,_maxGames:72,type:'normal',tag:'TRADE',sender:'Scouting',avatar:'🔄',
    subject:'Prospect haul — rival wants {active_hitter_name} ({active_hitter_pos})',
    preview:'Club offering two prospects for {active_hitter_name} — youth for experience…',
    body:'{trade_set_send_hi}{rival_team} wants {active_hitter_name} ({active_hitter_pos}). They\'re offering two prospects — {acq_hitter_name} ({acq_hitter_pos}) and {farm_hitter_name} ({farm_hitter_pos}) — no cash. {t9_value_note}.',
@@ -852,7 +852,7 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:3},noEffect:{},
    yesMsg:"Thank you. {acq_hitter_name} is on the way.",noMsg:"Understood. We'll find another club.",
    onYes:'sign_acquire_hitter',_usesSignToken:true,_rosterContract:'roster:acquire:hitter'},
-  {id:'s5',autoResolve:'no',type:'normal',tag:'SIGNING',sender:"Pro Scouting",avatar:'✍️',
+  {id:'s5',autoResolve:'no',type:'normal',tag:'SIGNING',sender:"Scouting",avatar:'✍️',
    subject:"{dfa_player_name} ({dfa_player_pos}) is available",
    preview:"{dfa_player_name} was just designated — {dfa_preview_dest}…",
    body:"A veteran {dfa_player_pos}, {dfa_player_name} ({dfa_player_age}, OVR {dfa_player_ovr}), was just designated for assignment and is open to a short-term deal. {dfa_player_name} would slot into {dfa_dest} and add depth. The signing cost is {sign_cost}.",
@@ -1006,7 +1006,7 @@ export const DECISIONS_POOL = [
    yesLabel:'Send the Players',noLabel:'Too Busy Right Now',
    yesEffect:{morale:2,atmo:3,ovr:-1},noEffect:{morale:-2,atmo:-2},
    yesMsg:"Career day was a hit. The workout was missed, but spirits are high.",noMsg:"Declined. The players who wanted to go are quietly disappointed."},
-  {id:'sc3',autoResolve:'no',autoResolveTax:{morale:-1},type:'good',tag:'SCOUTING',sender:'International Scouting',avatar:'🔭',
+  {id:'sc3',autoResolve:'no',autoResolveTax:{morale:-1},type:'good',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:"A {intl_player_type} from {intl_country} — a workout invite?",
    preview:"We flagged a {intl_player_age}-year-old {intl_player_type} from {intl_country}…",
    body:"We flagged {intl_player_name}, a {intl_player_age}-year-old {intl_player_type} from {intl_country}. Flying them over for a formal workout costs {misc_cost_sm} — if they impress, we get exclusive negotiating rights for 30 days. Workouts don't always go as hoped, but the upside here is real.",
@@ -1014,7 +1014,7 @@ export const DECISIONS_POOL = [
    yesEffect:{ovr:2,morale:3},noEffect:{ovr:-1},
    yesMsg:"Workout booked. We're optimistic.",noMsg:"Passed. Another club may move in.",
    onYes:'intl_workout',_budgetCost:'misc_cost_sm'},
-  {id:'sc3_sign',autoResolve:'no',autoResolveTax:{morale:-1},type:'good',tag:'SCOUTING',sender:'International Scouting',avatar:'🔭',
+  {id:'sc3_sign',autoResolve:'no',autoResolveTax:{morale:-1},type:'good',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:"{intl_player_name} ({intl_player_pos}) — ready to sign",
    preview:"{intl_player_name} turned heads in the workout…",
    body:"{intl_player_name} ({intl_player_pos}) turned heads in the workout — {intl_player_age} years old with clear upside. Our 30-day exclusive window is closing. Signing costs {sign_cost}. International talent at this level rarely comes at this price.",
@@ -1023,7 +1023,7 @@ export const DECISIONS_POOL = [
    yesMsg:"{intl_player_name} signed. The international pipeline is paying off.",noMsg:"Window closed. Another club will pounce.",
    onYes:'sign_intl_player',_usesSignToken:true,_ttl:3,_intlFollowupOnly:true,
    _expireMsg:'Exclusive window expired — {intl_player_name} signed with a rival.',_expireFx:{morale:-4,ovr:-1},_rosterContract:'roster:acquire:intl'},
-  {id:'sc3_fail',autoResolve:'no',type:'normal',tag:'SCOUTING',sender:'International Scouting',avatar:'🔭',
+  {id:'sc3_fail',autoResolve:'no',type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:"{intl_player_name} — a disappointing workout",
    preview:"We came away underwhelmed…",
    body:"{intl_player_name} didn't show what the first reports suggested. The command issues and the inconsistent athleticism worried us. We can cut ties now, or take a flyer on the raw tools at a heavily discounted rate — sometimes players develop late.",
@@ -1031,7 +1031,7 @@ export const DECISIONS_POOL = [
    yesEffect:{morale:-1},noEffect:{},
    yesMsg:"Low-risk flyer taken. We'll develop them.",noMsg:"Cut ties. The scouting budget absorbed the miss.",
    onYes:'sign_intl_flyer',_budgetCost:'misc_cost_xs',_intlFollowupOnly:true,_rosterContract:'roster:acquire:intl'},
-  {id:'sc4',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'SCOUTING',sender:'Amateur Scouting',avatar:'🔭',
+  {id:'sc4',autoResolve:'no',autoResolveTax:{morale:-1},type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:"A tip — a {college_pos} in the {indie_league_name}",
    preview:"{scout_name} got a tip about a {college_pos} flying under the radar…",
    body:"{scout_name} got a tip about a {college_pos} in the {indie_league_name} who is flying under the radar. Sending a scout costs {misc_cost_sm} in travel and evaluation fees. If the tip holds up, this could be one of the steals of the offseason.",
@@ -1618,7 +1618,7 @@ export const DECISIONS_POOL = [
    _budgetCost:'misc_cost_sm',_rawBudgetCostNo:20,
    _requiresSpring:true,_requiresHome:true,_oncePerSeason:true},
 
-  {id:'sp15',autoResolve:'no',autoResolveTax:{morale:-1},_weight:0.8,type:'good',tag:'SCOUTING',sender:'Scouting Dept.',avatar:'🔭',
+  {id:'sp15',autoResolve:'no',autoResolveTax:{morale:-1},_weight:0.8,type:'good',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:'{nri_subject}',
    preview:'{nri_preview}',
    body:'{nri_body}',
@@ -1881,7 +1881,7 @@ export const FOLLOWUP_POOL = [
   }},
 
 
-  {type:'tier_fa_followup', card:{id:'tier_fa_followup_card',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},type:'good',tag:'ROSTER',sender:'Scouting Dept.',relay:"the veteran's agent",avatar:'🔍',
+  {type:'tier_fa_followup', card:{id:'tier_fa_followup_card',_retired:true,autoResolve:'no',autoResolveTax:{morale:-1},type:'good',tag:'ROSTER',sender:'Scouting',relay:"the veteran's agent",avatar:'🔍',
     subject:"The marquee free agent's agent called back",
     preview:"We're at the top of the short list heading into the offseason…",
     body:"The agent called back: we're at the top of the short list heading into the offseason. No commitment yet — that happens after the season. But the signal is clear: if we want this player, we're in position. This is what a franchise at our level can do now.",
@@ -1930,7 +1930,7 @@ export const FOLLOWUP_POOL = [
 
 
   // dl_passed rival activity followup — fires 1-2 games after deadline
-  {type:'dl_rival_activity', card:{id:'dl_rival_activity_card',_retired:true,autoResolve:'no',type:'normal',tag:'TRADE',sender:'Scout Dept.',avatar:'📰',
+  {type:'dl_rival_activity', card:{id:'dl_rival_activity_card',_retired:true,autoResolve:'no',type:'normal',tag:'TRADE',sender:'Scouting',avatar:'📰',
     subject:"Deadline recap — what our division rivals did",
     preview:"A quick look at what moved in the division at the deadline…",
     body:"We put together a quick look at what moved in the division at the deadline; the full list is in League → Moves. Nothing to decide here — the clubhouse is focused on the stretch run.",
@@ -2362,7 +2362,7 @@ export const BETWEEN_GAMES_POOL = [
   // Fire on calendar days with no scheduled game between series.
   // Frame: GM is in the front office, team is in transit.
 
-  {id:'bg1',autoResolve:'yes',_weight:1.4,type:'normal',tag:'SCOUTING',sender:'Scouting Dept.',avatar:'🔭',
+  {id:'bg1',autoResolve:'yes',_weight:1.4,type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:"Travel day — advance report on {next_opponent}",
    preview:"We have a full breakdown on {next_opponent} ready…",
    body:"We have a full breakdown on {next_opponent} ready ahead of the series. We can deliver it as a coaching staff briefing ({misc_cost_xs} to prep the materials and run the session), or as a lighter player-facing report the coaches hand out informally. The full briefing gives our staff a genuine edge. The informal report costs nothing but loses some of the tactical depth.",
@@ -2461,7 +2461,7 @@ export const BETWEEN_GAMES_POOL = [
 
   // ── LEAGUE RECAP CARDS (_requiresTravelDay or between-series) ─────────────
 
-  {id:'bg11',autoResolve:'yes',_weight:0.9,type:'normal',tag:'SCOUTING',sender:'Scouting Dept.',avatar:'🔭',
+  {id:'bg11',autoResolve:'yes',_weight:0.9,type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
    subject:"Around the league — a move worth knowing about",
    preview:"{bg11_team} made a significant move…",
    body:"{bg11_team} made a significant move: {bg11_move_description}. We flagged it because {bg11_relevance}. No action needed — but it changes the calculus on {bg11_implication}. Worth knowing.",
@@ -2641,7 +2641,7 @@ export const COMPOSE_RESPONSE_POOL = {
 
   sc_prospect: {
     id:'compose_sc_prospect', autoResolve:'yes', type:'normal', tag:'SCOUTING',
-    sender:'Scouting Dept.', avatar:'🔭',
+    sender:'Scouting', avatar:'🔭',
     subject:"Young player report — {active_farm_name}",
     body:"Our report on {active_farm_name}: the tools are there — the question is the adjustment curve. Left-handed pitching has been less of a problem over the last month, which was our biggest concern coming in. We want to see another three weeks before making a recommendation. The trajectory is positive.",
     yesLabel:'Noted', yesEffect:{}, yesMsg:"Prospect report reviewed.",
@@ -2649,7 +2649,7 @@ export const COMPOSE_RESPONSE_POOL = {
 
   sc_free_agents: {
     id:'compose_sc_free_agents', autoResolve:'yes', type:'normal', tag:'SCOUTING',
-    sender:'Scouting Dept.', avatar:'🔭',
+    sender:'Scouting', avatar:'🔭',
     subject:"Free agents worth a look",
     body:"We went through the free-agent list. Nobody jumped out this time; we'll keep looking.",
     yesLabel:'Noted', yesEffect:{}, yesMsg:"Free-agent report reviewed.",
@@ -2657,7 +2657,7 @@ export const COMPOSE_RESPONSE_POOL = {
 
   sc_opponent: {
     id:'compose_sc_opponent', autoResolve:'yes', type:'normal', tag:'SCOUTING',
-    sender:'Scouting Dept.', avatar:'🔭',
+    sender:'Scouting', avatar:'🔭',
     subject:"Next opponent — scouting summary",
     body:"Our summary on the next opponent: their offense is built around three hitters who account for most of their production. The rest of the lineup is patchwork. Their bullpen has a reliable setup arm, but the closer has been shaky — opponents are hitting .290 in save situations. The Game 1 starter has a pronounced platoon split worth noting.",
     yesLabel:'Noted', yesEffect:{}, yesMsg:"Opponent scouting reviewed.",
@@ -2674,7 +2674,7 @@ export const COMPOSE_RESPONSE_POOL = {
 
   sc_trade: {
     id:'compose_sc_trade', autoResolve:'yes', type:'normal', tag:'TRADE',
-    sender:'Scouting Dept.', avatar:'🔭',
+    sender:'Scouting', avatar:'🔭',
     subject:'The trade on the table',
     body:"We're looking over the deal and will report back.",
     yesLabel:'Noted', yesEffect:{}, yesMsg:'Noted.',
@@ -2692,7 +2692,7 @@ export const COMPOSE_RESPONSE_POOL = {
   // r209 §122.87 an offer we're putting together (from the trade screen): written as it comes back (ComposeReplies sc_offer)
   sc_offer: {
     id:'compose_sc_offer', autoResolve:'yes', type:'normal', tag:'TRADE',
-    sender:'Scouting Dept.', avatar:'🔭',
+    sender:'Scouting', avatar:'🔭',
     subject:'The offer we\'re putting together',
     body:"We're looking over the offer and will report back.",
     yesLabel:'Noted', yesEffect:{}, yesMsg:'Noted.',

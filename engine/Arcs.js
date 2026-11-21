@@ -130,7 +130,7 @@ export const ARCS = [
     steps: [
       { build(st, arc) {
         const p = st.players[arc.who.p];
-        return news({ sender: 'Scouting Dept.', avatar: '🔭', tag: 'SCOUTING', _targetPlayerId: p.id,
+        return news({ sender: 'Scouting', avatar: '🔭', tag: 'SCOUTING', _targetPlayerId: p.id,
           subject: `About ${p.name}`, preview: `We think ${p.name} is better than they've shown…`,
           body: `We think ${p.name} is better than they've shown. The bat speed in batting practice is real, and the at-bats off the bench have been better than the results. It's a small sample. We wanted it on the record.` });
       } },

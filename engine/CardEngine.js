@@ -1956,7 +1956,7 @@ function _rosterConditionCards(delivered, atMs) {
     _withdraw(x => x.instanceId === c.instanceId);
     Negotiation.callOff(c._talkTeamId, atMs);
     if (_deliverNotice(`talk:off:${talk.id}:${talk.round}`, {
-      cardId: 'trade_off', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞',
+      cardId: 'trade_off', tag: 'TRADE', sender: 'Scouting', avatar: '📞',
       subject: `The deal with ${name} is off`,
       preview: `Things changed before it could be done: ${reason}.`,
       body: `${name} called: ${c.cardId === 'talk_counter' ? 'they had a counter ready' : 'they were ready to do the deal'}, but things changed before it could be done — ${reason}. The talks are closed for now; we can start over with a new offer.`,
@@ -2266,7 +2266,7 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
     cardId:          `trade_${proposingTeamId}`,
     type:            'normal',
     tag:             'TRADE',
-    sender:          direct ? `${teamName} front office` : 'Pro Scouting',
+    sender:          direct ? `${teamName} front office` : 'Scouting',
     avatar:          '📞',
     _voice:          direct ? 'club' : 'scouting',
     subject:         subject || own?.subject || (kind === 'call' ? `${teamName} want ${target?.name}`
@@ -4984,7 +4984,7 @@ function _applyFinanceAction(action, instance, atMs) {
     // §122 no taker: releasing is still on the table.
     const key = `owner:noTaker:${instance.instanceId}`;
     if (!_cardsWithKey(st, key).length) _deliverAt(_rosterCard(st, {
-      cardId: 'owner_no_taker', tag: 'OWNERSHIP', sender: 'Pro Scouting', avatar: '📞', type: 'urgent',
+      cardId: 'owner_no_taker', tag: 'OWNERSHIP', sender: 'Scouting', avatar: '📞', type: 'urgent',
       _rosterKey: key, _targetPlayerId: pid,
       subject: `No club can take ${p.name}'s contract`,
       preview: `We called around — nobody has ${formatK(p.contractSalary || 0)} of room right now. Release ${p.name}?`,
@@ -5071,7 +5071,7 @@ export function deliverTalkReply(teamId, r, atMs) {
   const name = team.name;
   const grade = rapportGrade(rapportOf(state, teamId));
   const key = `talk:${teamId}:${talk.id}:${r.decision}:${talk.round}`;
-  const base = { tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', _talkTeamId: teamId, _talkId: talk.id, _talkRound: talk.round, _rosterKey: key };
+  const base = { tag: 'TRADE', sender: 'Scouting', avatar: '📞', _talkTeamId: teamId, _talkId: talk.id, _talkRound: talk.round, _rosterKey: key };
   if (r.decision === 'accept') {
     return _deliverAt(_rosterCard(state, { ...base, cardId: 'talk_accepted', type: 'good', _dealOffer: { teamId, offer: talk.offer },   // r198 the deal table
       subject: `${name} accepted our offer`,
@@ -5134,7 +5134,7 @@ function _applyTalkAction(action, instance, atMs) {
   const res = Negotiation.act(teamId, map[action], atMs);
   if (res && res.ok === false && res.reason) {
     _deliverNotice(`talk:off:${instance.instanceId}`, {
-      cardId: 'trade_off', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', type: 'normal',
+      cardId: 'trade_off', tag: 'TRADE', sender: 'Scouting', avatar: '📞', type: 'normal',
       subject: 'The deal can\'t go through',
       preview: `The deal is off: ${res.reason}.`,
       body: `We went to finalize it, but the deal is off: ${res.reason}.`,
@@ -5173,7 +5173,7 @@ function _sameRole(p, target) {
  * (their GM's answer comes on the clock), adjust it in the composer first,
  * or pass.
  */
-function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, after = '', atMs, sender = 'Pro Scouting', extra = {} }) {
+function _deliverIdea(st, { key, teamId, deal, subject, preview, lead, after = '', atMs, sender = 'Scouting', extra = {} }) {
   const team = (st.leagueTeams || []).find(t => t.id === teamId);
   if (!team || !deal) return null;
   const offer = LeagueTrades.userOffer(deal);
@@ -5275,7 +5275,7 @@ function _leagueTradeCards(tx, atMs) {
       const cost = Math.max(10, Math.round(ADVANCE_SCOUT.costK * scale / 5) * 5);
       StateManager.mutate(s => { s.tradeDesk = { ...(s.tradeDesk || {}), lastRivalMs: atMs }; });
       return _deliverAt(_rosterCard(st, {
-        cardId: 'lt_scout', tag: 'SCOUTING', sender: 'Pro Scouting', avatar: '🔎', type: 'normal',
+        cardId: 'lt_scout', tag: 'SCOUTING', sender: 'Scouting', avatar: '🔎', type: 'normal',
         subject: `${rival.name} got better`,
         preview: `${rival.name} added ${_ref(star)} from ${B.name}. We see them next in ${Math.max(1, Math.round((series.firstAt - atMs) / 86_400_000))} days.`,
         body: `${rival.name}, in our division, traded for ${_ref(star)} from ${B.name}. `
@@ -5328,7 +5328,7 @@ function _leagueTradeCards(tx, atMs) {
  * another club who fills it and would start for us, with the package their
  * GM should take — an offer to make, adjust or pass on, a few hours later.
  */
-function _workThePhones({ key, spec, what, atMs, sender = 'Pro Scouting', subjectNone }) {
+function _workThePhones({ key, spec, what, atMs, sender = 'Scouting', subjectNone }) {
   const st = StateManager.get();
   const at = atMs + Math.round((3 + eventRand() * 4) * 3600_000);
   const opt = LeagueTrades.bestOption(st, _fitsFor(spec, st), at, { excludeIds: new Set(spec.excludeId ? [spec.excludeId] : []) });
@@ -5386,7 +5386,7 @@ export function deliverMeetingsTargets(atMs) {
   if (!target) {
     StateManager.mutate(s => {
       s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('trade', s.userTeam.abbr,
-        `Winter meetings: the holes Pro Scouting was asked to fill are filled. Nothing to chase.`, atMs)]);
+        `Winter meetings: the holes the scouts were asked to fill are filled. Nothing to chase.`, atMs)]);
     });
     return 0;
   }
@@ -5412,7 +5412,7 @@ export function deliverMeetingsTargets(atMs) {
     used.add(opt.teamId);
     const t = (cur.leagueTeams || []).find(x => x.id === opt.teamId), p = cur.players[opt.playerId];
     const c = _deliverIdea(cur, {
-      key: `os:meet:${cur.seasonNum}:${i}`, teamId: opt.teamId, deal: opt.deal, atMs: at, sender: 'Pro Scouting',
+      key: `os:meet:${cur.seasonNum}:${i}`, teamId: opt.teamId, deal: opt.deal, atMs: at, sender: 'Scouting',
       subject: `Winter meetings: ${p.name} for ${words}`,
       preview: `${_ref(p)} of ${t.name}${i ? ', the second option' : ' is the best fit we found'}.`,
       lead: `${why} We talked to every club here. ${i ? 'The second-best option' : 'The best fit'}: ${_dealRef(cur, p)} of ${t.name}${isRental(p, cur) ? ', in the last year of the contract' : ''}.`,
@@ -5451,7 +5451,7 @@ function _fitsFor(spec, st) {
  * (checks at every day's trade desk for two weeks and calls with the first
  * fit), or we drop it. Unanswered, it's dropped.
  */
-function _deliverWatchCard(key, { subject, preview, body, spec, what, atMs, cardId = 'lt_none', sender = 'Pro Scouting', extra = {} }) {
+function _deliverWatchCard(key, { subject, preview, body, spec, what, atMs, cardId = 'lt_none', sender = 'Scouting', extra = {} }) {
   const st = StateManager.get();
   if (_cardsWithKey(st, key).length) return null;
   return _deliverAt(_rosterCard(st, {
@@ -5491,7 +5491,7 @@ export function runWatches(atMs) {
       if (opt) {
         const t = (cur.leagueTeams || []).find(x => x.id === opt.teamId), p = cur.players[opt.playerId];
         hit = !!_deliverIdea(cur, {
-          key: `${w.key}:found`, teamId: opt.teamId, deal: opt.deal, atMs: atMs + Math.round((1 + eventRand() * 3) * 3600_000), sender: w.sender || 'Pro Scouting',
+          key: `${w.key}:found`, teamId: opt.teamId, deal: opt.deal, atMs: atMs + Math.round((1 + eventRand() * 3) * 3600_000), sender: w.sender || 'Scouting',
           subject: `Found: ${p.name}`,
           preview: `${_ref(p)} of ${t.name} — the fit we've been watching for.`,
           lead: `We've been watching for ${w.what}. ${_dealRef(cur, p)} of ${t.name} now fits${isRental(p, cur) ? ', in the last year of the contract' : ''}.`,
@@ -5503,7 +5503,7 @@ export function runWatches(atMs) {
   StateManager.mutate(s => {
     s.tradeDesk = { ...(s.tradeDesk || {}), watches: keep };
     if (ended.length) s.activityFeed = pruneActivityFeed([...(s.activityFeed || []),
-      ...ended.map(w => buildActivityFeedEntry('milestone', s.userTeam.abbr, `Pro Scouting stopped watching for ${w.what} — nobody fit`, atMs))]);
+      ...ended.map(w => buildActivityFeedEntry('milestone', s.userTeam.abbr, `The scouts stopped watching for ${w.what} — nobody fit`, atMs))]);
   });
   return found;
 }
@@ -5547,7 +5547,7 @@ function _applyLeagueTradeAction(action, instance, atMs) {
     const res = Negotiation.proposeTrade(instance._ideaTeamId, instance._ideaOffer, atMs, { round: instance._ideaRound ?? null });
     if (!res.ok) {
       _deliverNotice(`lt:unsent:${instance.instanceId}`, {
-        cardId: 'lt_unsent', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞',
+        cardId: 'lt_unsent', tag: 'TRADE', sender: 'Scouting', avatar: '📞',
         subject: 'The offer couldn\'t go out',
         preview: `It couldn't be sent: ${res.reason}.`,
         body: `We went to make the offer, but it couldn't be sent: ${res.reason}.`,
@@ -5559,7 +5559,7 @@ function _applyLeagueTradeAction(action, instance, atMs) {
     const cost = instance._ltCostK || 0;
     if (!Finance.canSpend(StateManager.get(), cost)) {
       _deliverNotice(`lt:noscout:${instance.instanceId}`, {
-        cardId: 'lt_noscout', tag: 'SCOUTING', sender: 'Pro Scouting', avatar: '🔎',
+        cardId: 'lt_noscout', tag: 'SCOUTING', sender: 'Scouting', avatar: '🔎',
         subject: 'No advance scout this time', preview: 'Club funds can\'t cover the trip.',
         body: 'Club funds can\'t cover the advance scout\'s trip right now.',
       }, atMs);
@@ -5659,7 +5659,7 @@ export function deliverPriorityCard(atMs, expiresAtMs) {
     W.didnt.length ? `What didn't: ${_listWords(W.didnt)}.` : '',
     W.stars.length ? `${W.stars.length > 1 ? 'The players who carried us' : 'The player who carried us'}: ${_listWords(W.stars)}.` : '',
     W.letdown ? `The one I expected more from: ${W.letdown}.` : '',
-    `Going into the winter, the biggest hole${b ? 's are' : ' is'} ${b ? `${a.long} and ${b.long}` : a.long}. Tell me which one we go after first, and Pro Scouting will build the free-agent list around it.`,
+    `Going into the winter, the biggest hole${b ? 's are' : ' is'} ${b ? `${a.long} and ${b.long}` : a.long}. Tell me which one we go after first, and the scouts will build the free-agent list around it.`,
   ].filter(Boolean);
   const card = _rosterCard(state, {
     cardId: 'os_priority', tag: 'COACHING', sender: mgr, avatar: '📋', type: 'normal',
@@ -6018,7 +6018,7 @@ export function deliverFreeAgentCards(atMs, springAt) {
     const age = computeAge(p.dob, baseballYear(state) + 1);
     const from = (state.leagueTeams || []).find(x => x.id === p._faFrom)?.name || (p._faFrom === 'user' ? 'us' : null);
     const card = _rosterCard(state, {
-      cardId: 'os_free_agent', tag: 'FREE_AGENT', sender: 'Pro Scouting', avatar: '🔎', type: 'good',
+      cardId: 'os_free_agent', tag: 'FREE_AGENT', sender: 'Scouting', avatar: '🔎', type: 'good',
       _rosterKey: `os:fa:${p.id}:${state.seasonNum}`, _targetPlayerId: p.id,
       subject: `Free agent: ${p.name}`,
       preview: `${posLabel(p)}, OVR ${p.ovr}, ${age} — ${t.reason}.`,
@@ -6290,7 +6290,7 @@ function _faPosCard(st, p, ev, fit) {
   const at = (ev.atMs ?? atMsNow()) + 2 * 3600_000;
   const where = ev.pos === 'SP' ? 'as a starter' : ev.pos === 'RP' ? 'in relief' : `at ${ev.pos}`;
   return !!_deliverAt(_rosterCard(st, {
-    cardId: 'fa_pos', tag: 'SCOUTING', sender: 'Pro Scouting', avatar: '🔎', type: 'normal',
+    cardId: 'fa_pos', tag: 'SCOUTING', sender: 'Scouting', avatar: '🔎', type: 'normal',
     _targetPlayerId: p.id, _playerIds: drop ? [drop.id] : [], _dropId: drop?.id || null,
     subject: `${p.name} is working out ${where}`,
     preview: `A free agent who fits: ${_ref(p)}.`,
@@ -6355,7 +6355,7 @@ function _claimLostCard(st, lost, winner, atMs) {
   // Nobody now: the trade market, watched.
   if (!tradeWindow(st).open) return false;
   return !!_deliverWatchCard(key, {
-    cardId: 'claim_lost', sender: 'Pro Scouting',
+    cardId: 'claim_lost', sender: 'Scouting',
     subject: `Claim lost: ${lost.name}`,
     preview: 'Nobody on waivers or in free agency fits the spot right now.',
     body: `${lead} Nobody on waivers or in free agency fits the spot right now.`,
@@ -6680,7 +6680,7 @@ function _deliverWatchAlert(p, claim) {
   const t = FreeAgency.termsFor(state, p);
   const ask = `${formatK(t.salary || 0)} a year${t.bonus ? ` and a ${formatK(t.bonus)} bonus` : ''}`;
   const card = _rosterCard(state, {
-    cardId: 'watch_alert', tag: 'SCOUTING', sender: d && !d.vacant ? `${d.name}, Scouting Director` : 'Pro Scouting', avatar: '🔎', type: 'urgent',
+    cardId: 'watch_alert', tag: 'SCOUTING', sender: d && !d.vacant ? `${d.name}, Scouting Director` : 'Scouting', avatar: '🔎', type: 'urgent',
     _rosterKey: `watch:${p.id}:${claim.madeAtMs}`, _targetPlayerId: p.id,
     subject: `${p.name} is drawing calls`,
     preview: `${club} is moving to sign ${p.name}. We have until ${When.untilFull(claim.atMs, claim.madeAtMs)} to sign first.`,
@@ -6738,7 +6738,7 @@ function _deliverIndieReport(playerId, atMs) {
   const terms = signingTerms(state, p);
   const age = computeAge(p.dob, baseballYear(state));
   const card = _rosterCard(state, {
-    cardId: 'indie_report', tag: 'SCOUTING', sender: 'Amateur Scouting', avatar: '🔭', type: 'good',
+    cardId: 'indie_report', tag: 'SCOUTING', sender: 'Scouting', avatar: '🔭', type: 'good',
     _rosterKey: `indie:${playerId}`, _targetPlayerId: playerId, _tokenPlayers: { indie_player: playerId },
     subject: `Scouting report: ${p.name}`,
     preview: `${_who(p)}, ${age} — ${p._indieLeague || 'independent ball'}.`,
@@ -7181,7 +7181,7 @@ function _applyRosterAction(instance, choice, state, { atMs = clockNow(), feasib
       const blocked = tradeBlockers(offer, state, atMs, proposer);
       if (blocked) {
         _deliverNotice(`trade:off:${instance.instanceId}`, {
-          cardId: 'trade_off', tag: 'TRADE', sender: 'Pro Scouting', avatar: '📞', type: 'normal',
+          cardId: 'trade_off', tag: 'TRADE', sender: 'Scouting', avatar: '📞', type: 'normal',
           subject: 'The trade can\'t go through',
           preview: `The deal is off: ${blocked}.`,
           body: `We went to finalize it, but the deal is off: ${blocked}.`,

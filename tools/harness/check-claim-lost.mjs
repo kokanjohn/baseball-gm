@@ -79,7 +79,7 @@ clearMarket();
 SM.mutate(s => { waive(s, lost3.id, A, now - 3600_000); s.players[lost3.id]._userClaim = true; });
 c = lose(lost3.id, now);
 console.log(`    ${c?.subject} — ${c?.body}`);
-check('lost, nobody on waivers or in free agency: Pro Scouting offers to keep watching', !!c && c.yesLabel === 'Keep Watching' && c.noLabel === 'Drop It' && c.sender === 'Pro Scouting', JSON.stringify(c && { y: c.yesLabel, s: c.sender }));
+check('lost, nobody on waivers or in free agency: Pro Scouting offers to keep watching', !!c && c.yesLabel === 'Keep Watching' && c.noLabel === 'Drop It' && c.sender === 'Scouting', JSON.stringify(c && { y: c.yesLabel, s: c.sender }));
 
 const GENDERED = /\b(he|him|his|she|her|guys?|men|man)\b/i;
 check('gender-neutral', !SM.get().inbox.filter(x => x.cardId === 'claim_lost').some(x => GENDERED.test(x.body)));

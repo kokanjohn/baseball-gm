@@ -114,6 +114,9 @@ if (got.sc.id) {
   }));
   check(`the counter is a decision (${view.buttons.join(' · ')})`, ['Counter with This', 'Not Now', 'Adjust It First'].every(l => view.buttons.includes(l)));
   check('…with a link per player', await page.$$eval('.msg-player', bs => bs.length >= 2));
+  // r235 §122.114 the director's own read on the deal: no Ask Scouting on it (it is Scouting's answer)
+  const fromDir = await page.evaluate(() => ({ ask: !!document.querySelector('#inbox-content [data-ask-scouting]'), who: document.querySelector('#inbox-content .mr-from, #inbox-content .mr-sender')?.textContent?.trim() || '' }));
+  check(`Scouting's own message has no Ask Scouting (from "${fromDir.who}")`, !fromDir.ask);
   await page.screenshot({ path: `${out}/trade-reply-director-${theme}.png`, fullPage: true });
   // r202 the deal table: the counter first, and a switch to the deal as offered.
   await page.click(`[data-deal-sheet="${got.sc.id}"]`); await page.waitForTimeout(500);

@@ -564,7 +564,7 @@ async function runOffseasonChecks() {
     console.log(`  meetings: ${targets.length} target card(s): ${targets.map(c => `${c.subject} (day ${c._day})`).join(' | ') || 'none'}; ${calls.length} trade call(s) to us on days 6–7`);
     for (const c of targets.slice(0, 1)) console.log(`    “${c.body.slice(0, 520)}…”`);
     const feed = [...offseasonFeed, ...(st.activityFeed || []).map(e => e.text || '')];
-    const filledAll = feed.some(t => /holes Pro Scouting was asked to fill are filled/.test(t));
+    const filledAll = feed.some(t => /holes the scouts were asked to fill are filled/.test(t));
     check(`meetings: Pro Scouting brings targets for the winter's priority on day 6 (or says it's filled)`,
           filledAll || (targets.length >= 1 && targets.every(c => c._day === 6)));
     const offers = targets.filter(c => c.cardId === 'lt_offer');
@@ -1389,7 +1389,7 @@ async function checkRemindersAndWatches() {
   const restore = () => SM.mutate(s => { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, structuredClone(snap)); });
   const now = clock.get();
   SM.mutate(s => { s.inbox = [...s.inbox, { instanceId: 'h-watch-1', cardId: 'lt_none', resolved: false, autoResolve: 'roster', subject: 'h',
-    sender: 'Pro Scouting', yesLabel: 'Keep Watching', noLabel: 'Drop It', _rosterKey: 'h:watch:1', _watch: { spec: { type: 'need', need: { kind: 'sp' }, minOvr: 999 }, what: 'an impossible starter' },
+    sender: 'Scouting', yesLabel: 'Keep Watching', noLabel: 'Drop It', _rosterKey: 'h:watch:1', _watch: { spec: { type: 'need', need: { kind: 'sp' }, minOvr: 999 }, what: 'an impossible starter' },
     _raw: { onYes: 'lt_watch', onNo: 'lt_pass', onAuto: 'lt_pass' } }]; });
   resolveCard('h-watch-1', 'yes');
   st = SM.get();
@@ -1689,12 +1689,12 @@ function checkOffersToUs(st) {
   const club = gm.offers.filter(o => o.voice === 'club'), scout = gm.offers.filter(o => o.voice === 'scouting');
   check(`offers to us: some come through Pro Scouting, some from the club itself (${scout.length} / ${club.length})`,
         gm.offers.length < 6 || (scout.length >= 1 && club.length >= 1));
-  const ANALYSIS = /Our read|Pro Scouting|By Impact|payroll|ownership's target|We can take it|\bthey\b.*\bwant\b/i;
+  const ANALYSIS = /Our read|Pro Scouting|Scouting Director|By Impact|payroll|ownership's target|We can take it|\bthey\b.*\bwant\b/i;
   const badClub = club.filter(o => !/front office$/.test(o.sender) || ANALYSIS.test(o.body) || !/\b(we|We|We'll|We'd|We're|us)\b/.test(o.body));
   check('offers to us: a club writing itself speaks for itself, with none of our analysis', badClub.length === 0,
         badClub.slice(0, 2).map(o => `${o.sender}: ${o.body}`).join(' | '));
-  const badScout = scout.filter(o => o.sender !== 'Pro Scouting' || (!/Our read/.test(o.body) && o.kind !== 'sale' && !/called back/.test(o.body)));
-  check('offers to us: Pro Scouting signs the offers that carry its read', badScout.length === 0,
+  const badScout = scout.filter(o => o.sender !== 'Scouting' || (!/Our read/.test(o.body) && o.kind !== 'sale' && !/called back/.test(o.body)));
+  check('offers to us: Scouting (the director) signs the offers that carry its read', badScout.length === 0,
         badScout.slice(0, 2).map(o => `${o.sender}: ${o.body}`).join(' | '));
   check('offers to us: no rotation "turns" in the wording', gm.offers.every(o => !/\bturn in\b|rotation turn/.test(o.body)),
         gm.offers.filter(o => /\bturn in\b|rotation turn/.test(o.body)).slice(0, 1).map(o => o.body).join(''));

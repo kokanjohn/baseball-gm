@@ -14,7 +14,7 @@ import * as SM from '../../store/StateManager.js';
 import { startNewGame } from '../../engine/GameEngine.js';
 import * as CE from '../../engine/CardEngine.js';
 import { buildCardContext } from '../../engine/GameEngine.js';
-import { senderLabel, stampSender } from '../../engine/Senders.js';
+import { senderLabel, stampSender, fromScouting } from '../../engine/Senders.js';
 import { gmTurnover, newGms, gmsToWelcome, greetedThisSeason, tradedWith, cpuGmName, GM_TURNOVER } from '../../engine/FirstDay.js';
 import { rapportOf } from '../../engine/TradeEngine.js';
 import { dice } from '../../engine/Dice.js';
@@ -41,7 +41,9 @@ console.log('Who it\'s from');
     [`${cs.scoutingDirector.name}, Scouting Director`, `${cs.scoutingDirector.name}, Scouting Director`],
     [`${cs.manager.name} (Manager)`, `${cs.manager.name}, Manager`],
     ['Morello (Gulfport Mullets GM)', 'Morello, Gulfport Mullets GM'],
-    ['Pro Scouting', 'Pro Scouting'], ['Ticket Office', 'Ticket Office'], ['Team Physician', 'Team Physician'],
+    // r235 §122.114 Scouting (by any of its old names) reads as the director
+    ['Scouting', `${cs.scoutingDirector.name}, Scouting Director`], ['Pro Scouting', `${cs.scoutingDirector.name}, Scouting Director`],
+    ['Scouting Dept.', `${cs.scoutingDirector.name}, Scouting Director`], ['Ticket Office', 'Ticket Office'], ['Team Physician', 'Team Physician'],
     ["Spencer (L)'s agent", "Spencer (L)'s agent"],
   ];
   const bad = cases.filter(([s, want]) => L(s) !== want).map(([s, want]) => `${s} → ${L(s)} (want ${want})`);
@@ -49,6 +51,16 @@ console.log('Who it\'s from');
   const stamped = stampSender({ sender: cs.manager.name }, st);
   const after = structuredClone(st); after.userTeam.coachingStaff.manager = { ...after.userTeam.coachingStaff.manager, name: 'Someoneelse' };
   check(`stamped on arrival: an old message still reads "${senderLabel(stamped, after)}" after the manager changes`, senderLabel(stamped, after) === `${cs.manager.name}, Manager` && senderLabel({ sender: cs.manager.name }, after) === cs.manager.name);
+  // r235 §122.114 Scouting: the director as it arrived; "Scouting" while the job is open; Ask Scouting's test
+  {
+    const sc = stampSender({ sender: 'Scouting' }, st);
+    const moved = structuredClone(st); moved.userTeam.coachingStaff.scoutingDirector = { ...moved.userTeam.coachingStaff.scoutingDirector, name: 'Newname' };
+    const open = structuredClone(st); open.userTeam.coachingStaff.scoutingDirector = { vacant: true };
+    check(`Scouting: the director it came from ("${senderLabel(sc, moved)}") after the director changes`, senderLabel(sc, moved) === `${cs.scoutingDirector.name}, Scouting Director`);
+    check(`…"${senderLabel(stampSender({ sender: 'Scouting' }, open), open)}" while the job is open`, senderLabel(stampSender({ sender: 'Scouting' }, open), open) === 'Scouting');
+    check('…a message from Scouting or the director is from Scouting; others aren\'t', fromScouting({ sender: 'Pro Scouting' }, st) && fromScouting({ sender: cs.scoutingDirector.name }, st)
+      && fromScouting(sc, st) && !fromScouting({ sender: 'Ticket Office' }, st) && !fromScouting({ sender: cs.manager.name }, st));
+  }
   const pushes = CE.getPushSchedule(S(), clock.get()).filter(p => p.kind === 'messages').map(p => ({ ...p, sender: p.title }));
   const push = pushes.filter(p => /, (Owner|Manager|Scouting Director|Pitching Coach|Hitting Coach|Bench Coach)$|GM$/.test(p.sender));
   const bare = pushes.filter(p => Object.values(cs).some(x => x?.name === p.sender) || p.sender === st.userTeam.ownerName || /\)$/.test(p.sender) && !/'s agent$/.test(p.sender));

@@ -179,7 +179,7 @@ export const MONEY_BETWEEN = [
 
   // ── The league around us: a CPU club cutting payroll ─────────────────────
   {id:'mon_cpu_trouble_news',_family:'cpu_trouble',_when:{cpuTrouble:true},_requiresRegular:true,_aboutTroubledTeam:true,
-   autoResolve:'no',type:'normal',tag:'TRADE',sender:"Pro Scouting",avatar:'📰',onYes:'fin_call_club',
+   autoResolve:'no',type:'normal',tag:'TRADE',sender:"Scouting",avatar:'📰',onYes:'fin_call_club',
    subject:"{troubled_team} are cutting payroll",
    preview:"The beat writers have it: {troubled_team}'s owner wants salary off the books…",
    body:"The beat writers have it: {troubled_team}'s owner has ordered payroll cut, and their front office is taking calls. Clubs in that spot sometimes move good players for less than they're worth. We can call and see what's available — or let someone else take the call.",
@@ -188,7 +188,7 @@ export const MONEY_BETWEEN = [
    yesMsg:"We're on the phone with {troubled_team}.",
    noMsg:"We passed. Someone else will call."},
   {id:'mon_cpu_trouble_scout',_family:'cpu_trouble',_when:{cpuTrouble:true,race:'in'},_requiresRegular:true,_aboutTroubledTeam:true,
-   autoResolve:'no',type:'good',tag:'TRADE',sender:'Pro Scouting',avatar:'🔎',onYes:'fin_call_club',
+   autoResolve:'no',type:'good',tag:'TRADE',sender:'Scouting',avatar:'🔎',onYes:'fin_call_club',
    subject:"A seller with a reason to sell: {troubled_team}",
    preview:"We're in the race, and {troubled_team} need to move salary…",
    body:"We're in the race, and {troubled_team} need to move money. That's the best kind of trading partner. We'd like to call before the clubs ahead of us do.",

@@ -94,7 +94,7 @@ CE.leaguePositionNews([{ type: 'LEAGUE_POS', kind: 'fa', playerId: better.id, te
 let card = [...(S().inbox || []), ...(S().scheduledCards || [])].find(c => c.cardId === 'fa_pos' && c._targetPlayerId === better.id);
 if (card) { CE.releaseDueCards(Math.max(clock.get(), card.deliverAtMs + 1000)); clock.set(Math.max(clock.get(), card.deliverAtMs + 1000)); card = CE.getInbox().find(c => c.instanceId === card.instanceId); }
 console.log(`    “${card?.subject}” (${card?.sender}) — ${card?.body}  [${card?.yesLabel} / ${card?.noLabel}]`);
-check('Pro Scouting writes: who, why, the terms, who makes room', !!card && card.sender === 'Pro Scouting' && /would start over/.test(card.body) && /The terms/.test(card.body) && card.yesLabel === `Sign ${better.name}`);
+check('Pro Scouting writes: who, why, the terms, who makes room', !!card && card.sender === 'Scouting' && /would start over/.test(card.body) && /The terms/.test(card.body) && card.yesLabel === `Sign ${better.name}`);
 check('…gender-neutral, and in Pro Scouting\'s voice', !!card && !GEN.test(card.body) && voiceProblems(card, () => null).filter(([r]) => r !== 'deptSelf').length === 0, JSON.stringify(card && voiceProblems(card, () => null)));
 if (card) {
   const drop = card._dropId;

@@ -14197,3 +14197,29 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
   - The half's last out shows for a few seconds, then its words and path clear.
 
 **Fresh team:** not needed.
+
+## §122.114 — r235: one name for Scouting (the director); no "Ask Scouting" on Scouting's own reads
+### The user's decisions
+- **Option 1:** every scouting message is from the scouting director by name, as the coaches' are.
+- **Option a:** "Ask Scouting" doesn't appear on a message from Scouting, which already carries its read.
+
+### Before
+- The scouting staff signed six ways: "Pro Scouting" (about 23), "Scouting Dept." (16), "Scout Dept." (11), "International Scouting" (4), "Amateur Scouting" (2), and the director by name in a few places.
+- Compose called the channel "Scouting / Dev"; the Staff tab calls the job "Scouting Director".
+
+### Now
+- **Written as `'Scouting'`:** every scouting message, in the pools and the engine. The words that named "Pro Scouting" say "the scouts" / "Scouting".
+- **Shown as the director** (`Senders.senderLabel`): "Ferreira, Scouting Director".
+  - `stampSender` stamps the director it arrived under (`_senderName`, `_senderRole`), so an old message keeps the name after a change.
+  - A message from before r235, under any of the old names, shows the current director.
+  - While the job is vacant: "Scouting".
+- **Compose:** the channel is "Scouting Director" (the development program stays in it).
+- **"Ask Scouting"** is hidden on a message from Scouting or its director (`Senders.fromScouting`). It stays on offers from other clubs and in the trade composer.
+
+### Checks
+- **check-gm-connections:** Scouting and its old names read as the director; the stamp keeps the director it came from; "Scouting" while the job is open; `fromScouting`.
+- **test-trade-advice-ui:** the director's own read on a deal has no Ask Scouting; another club's offer still does.
+- **sim-season:** offers carrying Scouting's read are signed "Scouting".
+- check-claim-lost, check-league-positions, check-card-pools, check-message-voice, check-deal-sheet, check-trade-advice, test-compose-ui and test-league-positions-ui pass.
+
+**Fresh team:** not needed.

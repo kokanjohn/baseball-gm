@@ -9,6 +9,11 @@
  * The role is stamped when a message arrives (`_senderRole`), so a manager who has since been let go still
  * reads "Hollandale, Manager" on the old messages.
  *
+ * r235 §122.114 Scouting: every scouting message is written as from 'Scouting' (and saves from before carry 'Pro
+ * Scouting', 'Scouting Dept.', 'Scout Dept.', 'International Scouting', 'Amateur Scouting'). It's shown as the
+ * scouting director, "Ferreira, Scouting Director" — the director when it arrived (stamped), or the current one for a
+ * message from before r235 — and as "Scouting" while the job is vacant.
+ *
  * PURE: no StateManager.
  */
 
@@ -17,7 +22,18 @@ const STAFF_ROLES = Object.freeze([
   ['benchCoach', 'Bench Coach'], ['scoutingDirector', 'Scouting Director'],
 ]);
 
-const PAREN = /^(.+?) \(([^()]+)\)$/;   // "Hollandale (Manager)", "Morello (Gulfport Mullets GM)"
+const PAREN = /^(.+?) \(([^()]+)\)$/;
+
+/** r235 §122.114 the scouting department's names, then and now. */
+const SCOUTING = new Set(['Scouting', 'Pro Scouting', 'Scouting Dept.', 'Scout Dept.', 'International Scouting', 'Amateur Scouting']);
+const _director = (state) => { const d = state?.userTeam?.coachingStaff?.scoutingDirector; return d && !d.vacant && d.name ? d.name : null; };
+
+/** A message from the scouting department (by whatever name it was written), or from the scouting director. */
+export function fromScouting(card, state) {
+  const s = String(card?.sender || '').trim();
+  if (SCOUTING.has(s)) return true;
+  return (card?._senderRole || roleOf(s, state)) === 'Scouting Director' || /, Scouting Director$/.test(s);
+}   // "Hollandale (Manager)", "Morello (Gulfport Mullets GM)"
 
 /** The role of the person a sender names, from the club as it stands (null: not one of our people, or a department). */
 export function roleOf(sender, state) {
@@ -35,6 +51,10 @@ export function roleOf(sender, state) {
 export function senderLabel(card, state) {
   const s = String(card?.sender || '').trim();
   if (!s) return '';
+  if (SCOUTING.has(s)) {   // r235 the director (when it arrived, else now), or the department while the job is open
+    const who = card._senderName !== undefined ? card._senderName : _director(state);
+    return who ? `${who}, Scouting Director` : 'Scouting';
+  }
   if (s.includes(',')) return s;
   const m = s.match(PAREN);
   if (m) return `${m[1]}, ${m[2]}`;
@@ -50,6 +70,10 @@ export function senderName(card, state) {
 /** Stamp the role on a message as it arrives (the club as it stands then). */
 export function stampSender(card, state) {
   if (!card || card._senderRole) return card;
+  if (SCOUTING.has(String(card.sender || '').trim())) {   // r235 the director as it arrives ('' while the job is open)
+    const who = _director(state);
+    return { ...card, _senderName: who || '', ...(who ? { _senderRole: 'Scouting Director' } : {}) };
+  }
   const role = roleOf(card.sender, state);
   return role ? { ...card, _senderRole: role } : card;
 }
