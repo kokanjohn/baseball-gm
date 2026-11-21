@@ -82,6 +82,7 @@ import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost, exposure } from 
 import { DEFENSE_SIM as DS } from '../data/constants.js';   // r205 §122.83
 import { battingOrder, strategyOf, runStyle, hookStyle } from './Strategy.js';   // r169
 import { lateClosePoints } from './ManagerEngine.js';   // §122.64
+import { dice } from './Dice.js';   // r226 §122.105 where the ball went: its own stream, never the game's
 
 // ─────────────────────────────────────────────────────────────
 // WIN PROBABILITY — single source of truth
@@ -186,6 +187,7 @@ function _withDice(context, who, fn) {
 }
 
 function _generatePlays(game, userTeam, opponentTeam, players, context) {
+  _ballKey = `g:${game?.id ?? ''}:${game?.gameTime ?? ''}`;   // r226 §122.105
   const { isSpring = false, phase = PHASE.REGULAR_SEASON, norms = null, exhibition = false, scout = null, staff = null } = context;
   _requireInjuryYear(context, exhibition, 'generatePlays');
   // §102.2 the weather this game is played in: its plan (GameWeather.gameWeatherPlan)
@@ -382,6 +384,7 @@ export function generateResumption(game, userTeam, opponentTeam, players, contex
 }
 
 function _generateResumption(game, userTeam, opponentTeam, players, context) {
+  _ballKey = `r:${game?.id ?? ''}:${game?.gameTime ?? ''}`;   // r226 §122.105
   _requireInjuryYear(context, false, 'generateResumption');
   const { resumeState: R, partOne = [], liveLineups = {}, phase = PHASE.REGULAR_SEASON, isSpring = false, norms = null, staff = null } = context;
   const effOpp = opponentTeam || _buildSyntheticCPUTeam(players);
@@ -965,6 +968,7 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
       type:         effectiveType,
       description:  _buildDescription(fieldedAB, activeBatter, pitcher, playMod, { rbi, runs: runsScored, thrownOut, players }),
       ...(fd ? { _fielderId: fd.id } : {}),
+      ...(_ballOf(fieldedAB, effectiveType, `${halfKey}|${plays.length}|${activeBatter.id}`, pitcher, thrownOut)),   // r226 §122.105
       runs:         runsScored,
       rbi,
       isScoring,
@@ -2865,7 +2869,7 @@ function _fieldCall(atBat, batter, type) {
   switch (type) {
     case 'error': return `${bn} reaches on ${atBat.error === 'throwing' ? `a throwing error by ${fn}` : `an error by ${fn}`} ${at}`;
     case 'groundout':
-      if (atBat.conv === 'save' && atBat.gem) return `${fn} ranges ${['far to the right', 'deep into the hole', 'to the left'][Math.floor(_roll() * 3)]} and throws out ${bn} — a hit taken away`;
+      if (atBat.conv === 'save' && atBat.gem) { atBat._gemDir = Math.floor(_roll() * 3); return `${fn} ranges ${['far to the right', 'deep into the hole', 'to the left'][atBat._gemDir]} and throws out ${bn} — a hit taken away`; }
       return `${bn} grounds out to ${fn} ${at}`;
     case 'flyout':
       if (atBat.conv === 'save' && atBat.gem) return f.slot === 'OF'
@@ -2983,8 +2987,10 @@ function _fieldersOf(lineup, players, norms) {
 /** A fielder for a ball: the position by the weights (P: the pitcher — nobody's glove), an outfielder at random. */
 function _pickFielder(weights) {
   let r = _roll();
+  _pickedPos = null;
   for (const [pos, w] of Object.entries(weights)) {
     if ((r -= w) > 0) continue;
+    _pickedPos = pos;   // (r226 the pitcher's ball has no fielder object: the spot is kept)
     if (pos === 'P') return null;
     if (pos === 'OF') { const of = _fielders.byPos.OF; return of.length ? of[Math.floor(_roll() * of.length)] : null; }
     return _fielders.byPos[pos] || null;
@@ -3001,13 +3007,13 @@ function _pickFielder(weights) {
 function _fieldPlay(atBat, isUserBatting) {
   const t = atBat.type;
   if (!['single', 'double', 'groundout', 'flyout'].includes(t)) {
-    if (t === 'triple') { const f = _pickFielder({ OF: 1 }); return f ? { ...atBat, fielder: f } : atBat; }
+    if (t === 'triple') { const f = _pickFielder({ OF: 1 }); return f ? { ...atBat, fielder: f, at: _spotOf(f) } : atBat; }
     return atBat;
   }
   const ground = t === 'groundout' || (t === 'single' && _roll() < DS.groundSingle);
   const f = t === 'groundout' ? _pickFielder(DS.grounder) : t === 'flyout' ? _pickFielder(DS.fly)
     : t === 'double' ? _pickFielder(DS.double) : _pickFielder(ground ? DS.infieldSingle : { OF: 1 });
-  const out = { ...atBat, fielded: true, fielder: f };
+  const out = { ...atBat, fielded: true, fielder: f, at: _spotOf(f), ground };   // (r226 where, and on the ground or not)
   const mid = [_fielders.byPos.SS, _fielders.byPos['2B']].filter(Boolean);
   out.dpMult = mid.length ? Math.max(0.75, Math.min(1.25, 1 + DS.dp * mid.reduce((a, x) => a + x.d, 0) / mid.length)) : 1;
   if (!f) return out;
@@ -3030,6 +3036,127 @@ function _fieldPlay(atBat, isUserBatting) {
     }
   }
   return out;
+}
+
+// ─────────────────────────────────────────────────────────────
+// r226 §122.105 WHERE THE BALL WENT — saved on the play, for the Live View
+// ─────────────────────────────────────────────────────────────
+// Everything the sim decided is kept as it was decided (who fielded it, which outfielder, on the ground or in the
+// air, the gem and its direction, the error, the runner thrown out and where, the double play's relay). Only the
+// exact spot is placed — inside what was decided: that fielder's area, the depth the outcome needs (a double to
+// the gap or the wall, a sacrifice fly deep enough, a home run over the fence) — from the ball's own stream
+// (Dice: the game and the play), so no roll that decides the game is touched.
+//   _ball = { at ('P'|'C'|'1B'|'2B'|'3B'|'SS'|'LF'|'CF'|'RF'|null), flight ('ground'|'line'|'fly'|'pop'|'bunt'),
+//             angle (degrees from straight away: −45 the third-base line … +45 the first-base line), dist (feet),
+//             gem? ('right'|'hole'|'left'|'wall'|'dive'|'leap'|'front'|'over'|'past'), err? ('throwing'|'fielding') }
+//   _out  = { id, base } a runner thrown out;  _relay = [ids] the double play's relay
+
+const _OF_SPOT = { left: 'LF', center: 'CF', right: 'RF' };
+function _spotOf(f) { return f ? (f.slot === 'OF' ? _OF_SPOT[f.where] || 'CF' : f.slot) : (_pickedPos === 'P' ? 'P' : null); }
+const _ANG = { P: 0, C: 0, '1B': 34, '2B': 13, SS: -13, '3B': -34, LF: -28, CF: 0, RF: 28 };
+const _IFD = { P: 58, C: 14, '1B': 108, '2B': 142, SS: 142, '3B': 108 };
+const _OFS = ['LF', 'CF', 'RF'];
+/** The fence at an angle: 330 down the lines, 405 to center. */
+export function fenceAt(angle) { return 330 + 75 * (1 - Math.min(45, Math.abs(angle)) / 45); }
+const _clampA = (a) => Math.max(-44, Math.min(44, a));
+
+function _ballOf(ab, type, key, pitcher, thrownOut) {
+  const ball = _placeBall(ab, type, dice(_ballKey || 'game', 'ball', key));
+  const out = {};
+  if (ball) out._ball = ball;
+  if (thrownOut) out._out = { id: thrownOut.id, base: thrownOut.at };
+  if (type === 'double_play' && ab.fielder) {
+    const mid = { SS: ['SS', '2B'], '2B': ['2B', 'SS'], '3B': ['3B', '2B'], '1B': ['1B', 'SS'] }[ab.fielder.slot];
+    const relay = mid ? [_fielders?.byPos[mid[0]]?.id, _fielders?.byPos[mid[1]]?.id, _fielders?.byPos['1B']?.id] : null;
+    if (relay && relay.every(Boolean) && new Set(relay).size === 3) out._relay = relay;
+  }
+  return out;
+}
+
+function _placeBall(ab, type, r) {
+  const span = (lo, hi) => lo + r() * (hi - lo);
+  const pickW = (w) => { let x = r() * Object.values(w).reduce((a, b) => a + b, 0); for (const [k, v] of Object.entries(w)) { if ((x -= v) <= 0) return k; } return Object.keys(w)[0]; };
+  const of = () => _OFS[Math.floor(r() * 3)];
+  const keep = (b) => ({ ...b, angle: Math.round(_clampA(b.angle)), dist: Math.round(b.dist),
+    ...(ab.error ? { err: ab.error } : {}) });
+  if (type === 'hr') {
+    const base = pickW({ '-28': 0.37, '0': 0.26, '28': 0.37 });
+    const angle = _clampA(Number(base) + span(-12, 12));
+    return keep({ at: null, flight: r() < 0.25 ? 'line' : 'fly', angle, dist: fenceAt(angle) + span(8, 55) });
+  }
+  if (type === 'sac_bunt') {
+    const at = pickW({ P: 0.4, '3B': 0.3, '1B': 0.3 });
+    return keep({ at, flight: 'bunt', angle: _ANG[at] * 0.7 + span(-4, 4), dist: span(25, 55) });
+  }
+  // what the ball was before any range or error changed the call
+  const t = ab.type;
+  if (!['single', 'double', 'triple', 'groundout', 'flyout'].includes(t) && !['double_play', 'fielders_choice', 'sac_fly', 'error'].includes(type)) return null;
+  let at = ab.at ?? null;
+  const ground = ab.ground ?? (t === 'groundout');
+  const isOF = (x) => _OFS.includes(x);
+  // ── on the ground, fielded in the infield (an out, a double play, a fielder's choice, an infield single, an error)
+  if ((t === 'groundout' || (t === 'single' && ground && !isOF(at) && ab.conv !== 'cost')) && type !== 'sac_fly') {
+    at = at || pickW(DS.grounder);
+    let angle = _ANG[at] + span(-7, 7), dist = _IFD[at] + span(-10, 10) + (t === 'single' ? 8 : 0);
+    let gem = null;
+    if (ab.conv === 'save' && ab.gem && ab._gemDir != null) {
+      gem = ['right', 'hole', 'left'][ab._gemDir];
+      const leftSide = at === 'SS' || at === '3B';
+      if (gem === 'right') angle -= 11; else if (gem === 'left') angle += 11; else { angle += leftSide ? -8 : 8; dist += 15; }
+    }
+    return keep({ at, flight: 'ground', angle, dist, ...(gem ? { gem } : {}) });
+  }
+  // ── on the ground, through the infield (a single through a hole, or one past a diving infielder — the words say
+  //    "gets past a diving …", so on the ground, even when the sim had it in the air)
+  if (t === 'single' && (ground || (ab.conv === 'cost' && at && !isOF(at)))) {
+    const past = ab.conv === 'cost' && !isOF(at) ? at : null;
+    const spot = isOF(at) ? at : past ? ({ SS: 'LF', '3B': 'LF', '2B': 'RF', '1B': 'RF' }[past] || 'CF') : of();
+    const angle = past ? _ANG[past] + span(-6, 6) : _ANG[spot] + span(-12, 12);
+    return keep({ at: isOF(at) ? at : spot, flight: 'ground', angle, dist: span(150, 205), ...(past && ab.gem ? { gem: 'past' } : {}) });
+  }
+  // ── in the air
+  if (t === 'single') {
+    if (!isOF(at) && at) return keep({ at, flight: 'pop', angle: _ANG[at] + span(-8, 8), dist: _IFD[at] + span(15, 45) });
+    at = at || of();
+    const front = ab.conv === 'cost' && ab.gem;
+    const bloop = front || r() < 0.3;
+    return keep({ at, flight: bloop ? 'fly' : 'line', angle: _ANG[at] + span(-12, 12), dist: front ? span(185, 215) : bloop ? span(170, 210) : span(180, 240), ...(front ? { gem: 'front' } : {}) });
+  }
+  if (t === 'flyout' || type === 'sac_fly') {
+    at = at || (type === 'sac_fly' ? of() : pickW(DS.fly) === 'OF' ? of() : pickW({ SS: 0.3, '2B': 0.3, '3B': 0.25, '1B': 0.1, C: 0.05 }));
+    if (!isOF(at) && type === 'sac_fly')   // (a run scored on it: the infielder going back into shallow outfield)
+      return keep({ at, flight: 'fly', angle: _ANG[at] + span(-8, 8), dist: (_IFD[at] || 100) + span(35, 60) });
+    if (!isOF(at)) {
+      const leap = ab.conv === 'save' && ab.gem;
+      return keep({ at, flight: leap ? 'line' : 'pop', angle: _ANG[at] + span(-8, 8), dist: at === 'C' ? span(12, 35) : _IFD[at] + span(-10, 30), ...(leap ? { gem: 'leap' } : {}) });
+    }
+    let angle = _ANG[at] + span(-12, 12);
+    const fence = fenceAt(angle);
+    if (ab.conv === 'save' && ab.gem) return ab.was === 'double'
+      ? keep({ at, flight: 'fly', angle, dist: fence - span(2, 8), gem: 'wall' })
+      : keep({ at, flight: 'line', angle, dist: span(195, 240), gem: 'dive' });
+    if (type === 'sac_fly') return keep({ at, flight: 'fly', angle, dist: fence - span(30, 75) });
+    return keep({ at, flight: 'fly', angle, dist: Math.min(fence - 25, span(245, 335)) });
+  }
+  if (t === 'double') {
+    if (at && !isOF(at)) {   // down the line, past the corner infielder
+      const angle = at === '3B' ? -42 + span(-2, 1) : 42 + span(-1, 2);
+      return keep({ at, flight: 'line', angle, dist: span(265, 315) });
+    }
+    at = at || of();
+    const over = ab.conv === 'cost' && ab.gem;
+    const line = at !== 'CF' && r() < 0.4;
+    const angle = at === 'LF' ? (line ? -41 : -16) + span(-3, 3) : at === 'RF' ? (line ? 41 : 16) + span(-3, 3) : (r() < 0.5 ? -15 : 15) + span(-4, 4);
+    const fence = fenceAt(angle);
+    return keep({ at, flight: r() < 0.5 ? 'line' : 'fly', angle, dist: over ? fence - span(2, 12) : fence - span(5, 45), ...(over ? { gem: 'over' } : {}) });
+  }
+  if (t === 'triple') {
+    at = at || of();
+    const corner = at !== 'CF' && r() < 0.5;
+    const angle = at === 'LF' ? (corner ? -42 : -17) + span(-2, 2) : at === 'RF' ? (corner ? 42 : 17) + span(-2, 2) : (r() < 0.5 ? -14 : 14) + span(-4, 4);
+    return keep({ at, flight: r() < 0.5 ? 'line' : 'fly', angle, dist: fenceAt(angle) - span(2, 25) });
+  }
+  return null;
 }
 
 /** Where a fielder plays, in words: "at short", "in center". */
@@ -3135,6 +3262,8 @@ let _fieldDef = null;          // r165 §122.35 the fielding side's defense this
 let _runBat = null;            // r169 the batting side's running game this half (Strategy.runStyle)
 let _userFielding = false;   // our club is in the field this half (the bench coach's defense)
 let _fielders = null;        // r205 §122.83 the fielding side this half: { C: f, SS: f, …, OF: [f, f, f] } (_fieldersOf)
+let _ballKey = '';           // r226 §122.105 this game, for the ball's own stream (_placeBall)
+let _pickedPos = null;       // r226 the spot _pickFielder chose (the pitcher has no fielder object)
 function _coachPoints(player, key) {
   if (!_staff || player?.teamId !== 'user') return 0;
   if (key === 'contact' || key === 'power' || key === 'speed') return _staff.bat?.[key] || 0;

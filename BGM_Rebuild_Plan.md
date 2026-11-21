@@ -13860,3 +13860,58 @@ Staff salaries are paid from club funds on the same paydays as the players, but 
 - check-frontoffice passes.
 
 **Fresh team:** not needed.
+
+## §122.105 — r226: where the ball went, saved on each play (Live View, release 1)
+### The user's decisions (the Live View)
+- **The button:** "Live View", a text button on our live game card (next to Radar). It opens a full-screen view. Our games only.
+- **What it shows:** runners on base by name; the batter, on deck, and in the hole; all nine fielders by last name at their positions, the pitcher included (tap for the card).
+- **Each new play:** the ball travels from the plate to where it was fielded and the runners move, then the path stays until the next play.
+- **A simple box score:** R/H/E for each team, the batter's line today, and the pitcher's line.
+- **Nothing new decides anything.** The view shows what the sim already decided, plus where on the field it happened, placed inside what was decided. Every hit, out and run stays exactly as before.
+
+### Saved on each play (`SimEngine._ballOf` / `_placeBall`)
+- **`_ball = { at, flight, angle, dist, gem?, err? }`** for every ball in play. None for a strikeout, a walk or a hit batter.
+  - `at`: the fielder's spot (P, C, 1B, 2B, 3B, SS, LF, CF, RF; none for a home run).
+  - `flight`: ground, line, fly, pop or bunt.
+  - `angle`: −45 is the third-base line, +45 the first-base line.
+  - `dist`: feet from the plate.
+- **`_out = { id, base }`:** a runner thrown out.
+- **`_relay = [ids]`:** the double play's relay.
+
+### Kept as the sim decided it (until now in the play's words, or rolled and thrown away)
+- The fielder and which outfielder (`_spotOf`: `where` left/center/right).
+- The pitcher's own grounders (`_pickedPos`; the pitcher has no fielder object).
+- A single on the ground or in the air (`ground`).
+- The gem and its direction (`_gemDir`, the same roll the words use).
+- The error's kind, the runner thrown out and the base, and the relay.
+
+### Placed, inside what was decided
+- **Its own stream:** `Dice.dice(_ballKey, 'ball', half|play|batter)`, so no roll that decides the game is touched.
+- **Grounders:** at the fielder (a gem's direction moves the spot). A single through a hole or past a diving infielder rolls into the outfield.
+- **Air singles:** a liner or a bloop in front of the outfielder.
+- **Flyouts:** catchable, 245 feet to the fence minus 25. A robbery at the wall; a diving catch shallow.
+- **Sacrifice flies:** within 75 feet of the fence.
+- **Doubles:** the gap or down the line, near the wall (past the corner infielder for theirs).
+- **Triples:** the gap or the corner, at the wall.
+- **Home runs:** over the fence (`fenceAt`: 330 down the lines, 405 to center) by 8–55 feet, 37% left, 26% center, 37% right. Hitters have no batting side in the game, so there's no pull side.
+- **Bunts:** in front of the plate.
+- **Plays from before r226:** only the fielder is saved, so the view places them in that fielder's area.
+- **Storage:** about 80 bytes a play. Our games keep their plays; league games drop theirs at the final.
+
+### Found: the sim's tag-up rule (not changed; the user's decision)
+- `_advanceBases` scores a fast runner from third on any flyout with fewer than two outs, whoever caught it. That rule predates r205's fielders.
+- So about a third of sacrifice flies (12 of 35 in 150 games) are caught by an infielder, a few by the catcher.
+- The placement draws an infielder's going back into shallow outfield, and the catcher's where it was caught.
+- Fixing the rule would change game results, so it's left to the user.
+
+### Checks
+- **check-ball-placement** (new, 21; 150 games, about 7,600 balls in play):
+  - Every ball in play has a spot, and nothing else does; all fair.
+  - The fielder's spot, and which outfielder, as in the words.
+  - Home runs over the fence and nothing else; grounders in the infield; doubles and triples deep; flyouts catchable; sacrifice flies deep; bunts in front.
+  - Ground or air, as in the words.
+  - Every gem and its direction, as in the words; errors' kind; runners thrown out (who, where); the relay.
+  - The same game, the same spots; home runs to every field.
+- **No game plays out differently:** sim-season (seed 1) and multi-season (3 seasons) on r225 and on r226, diffed. Identical, apart from a timing line.
+
+**Fresh team:** not needed.
