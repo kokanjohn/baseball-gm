@@ -76,6 +76,28 @@ console.log('The off day');
   check(`an off-day message on most off days (${days}/30), about one a day (${off.length} in 30)`, days >= 18 && off.length >= 20 && off.length <= 40);
   check('each on the off day itself, 9am–7pm', off.length > 0 && off.every(({ c, w }) => c.deliverAtMs >= w.startMs && c.deliverAtMs <= w.endMs && dayOf(c.deliverAtMs) === dayOf(w.startMs)),
     off.filter(({ c, w }) => !(c.deliverAtMs >= w.startMs && c.deliverAtMs <= w.endMs)).map(({ c }) => `${c.cardId} ${new Date(c.deliverAtMs)}`).join('; '));
+  // r254 §122.133 a message with a time of day in it arrives by its hour (the golf at one: by 11).
+  const timed = off.filter(({ c }) => Number.isFinite(c._raw?._offDayBy));
+  check(`one with a time of day in it arrives by its hour (${timed.length}: ${[...new Set(timed.map(({ c }) => `${c.cardId} by ${c._raw._offDayBy}`))].join(', ')})`,
+    timed.length > 0 && timed.every(({ c }) => hr(c.deliverAtMs) <= c._raw._offDayBy),
+    timed.filter(({ c }) => hr(c.deliverAtMs) > c._raw._offDayBy).map(({ c }) => `${c.cardId} ${new Date(c.deliverAtMs).toString().slice(16, 21)}`).join('; '));
+  check('the golf invitation says one o\'clock, and the off-day messages with a clock time all carry their hour',
+    OFFDAY_POOL.filter(c => /\b(today|tonight|this afternoon|at (ten|noon|one))\b/i.test(`${c.body} ${c.yesMsg}`) && !c._toastOnly).every(c => Number.isFinite(c._offDayBy)),
+    OFFDAY_POOL.filter(c => /\b(today|tonight|this afternoon|at (ten|noon|one))\b/i.test(`${c.body} ${c.yesMsg}`) && !c._toastOnly && !Number.isFinite(c._offDayBy)).map(c => c.id).join(', '));
+  {
+    // Late in the day (the app opened at 2pm): the golf at one can't come any more; the rest still can.
+    const late = Array.from({ length: 20 }, (_, k) => SM.speculate(() => {
+      seedRandom(3000 + k);
+      at(offIdx);
+      const w = offDayWindow(S(), clock.get(), sched[offIdx].gameTime);
+      clock.set(new Date(w.startMs).setHours(14, 0, 0, 0));
+      SM.mutate(s => { s.cardPlanKey = null; });
+      CE.checkAndDeliver(buildCardContext());
+      return (SM.get().scheduledCards || []).filter(c => c._pool === 'OFFDAY_POOL');
+    })).flat();
+    check(`opened at 2pm: no message whose hour has passed (${late.map(c => c.cardId).join(', ') || 'none'})`,
+      late.every(c => !Number.isFinite(c._raw?._offDayBy) || c._raw._offDayBy > 14));
+  }
   const kinds = new Set(off.map(({ c }) => c.cardId));
   check(`a range of them (${[...kinds].join(', ')})`, kinds.size >= 5);
   check('none on a day with a game', plans(roadIdx, 10).every(p => !p.cards.some(c => c._pool === 'OFFDAY_POOL')));

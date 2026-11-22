@@ -13,8 +13,9 @@
  *
  * None of these repeat a seed or a spring-pool subject (field prep, clubhouse upkeep, the standards review, the
  * fan experience package, the spring travel, media day, a player's role, arm soreness, the camp's intensity).
- * Some staff introduce themselves (always with a real task); others skip the introductions. The manager never
- * asks us to set the lineup (that's the manager's call), only about a specific situation.
+ * Some staff introduce themselves (always with a real task); others skip the introductions. The GM sets who
+ * plays and the batting-order approach; the manager writes the order from it (Strategy.battingOrder), and asks
+ * only about a specific situation (r254 §122.133).
  * Card shape is the pool's (cards-pool.js); tokens resolve the same way.
  * r233 §122.112 `_beforeFirstGame`: about the first game, so due before its first pitch (not in two games). The
  * uniforms for the first game moved to the winter (cards-winter.js: wtn_uniforms).
@@ -52,10 +53,10 @@ export const FIRST_DAY_CORE = Object.freeze({
     {id:'fd_equip_bats',_beforeFirstGame:true,autoResolve:'yes',type:'normal',tag:'OPERATIONS',sender:'Equipment Mgr.',avatar:'🧢',
      subject:"Hello, and a bat order before the first game",
      preview:"I'm the one who keeps everything in the lockers. Here's what's short…",
-     body:"I'm the one who keeps everything in the lockers. Before the first game: half the hitters are down to their last few bats, and the maker we use can rush an order for {misc_cost_xs}. The standard order comes after the first week, and until then some of them swing whatever's in the rack.",
+     body:"I'm the one who keeps everything in the lockers. Before the first game: half the hitters are down to their last few bats. The maker we use can rush an order for {misc_cost_xs}, and it lands tomorrow morning. The standard order comes after the first week, and until then some of them swing whatever's in the rack.",
      yesLabel:'Rush the Order',noLabel:'The Standard Order',
      yesEffect:{morale:3},noEffect:{morale:-2},
-     yesMsg:"Rushed. Fresh bats in every locker before first pitch.",
+     yesMsg:"Rushed. Fresh bats in every locker tomorrow morning.",
      noMsg:"The standard order. A few of them are already arguing over the rack.",
      _budgetCost:'misc_cost_xs',_ttl:2},
   ],
@@ -75,10 +76,10 @@ export const FIRST_DAY_CORE = Object.freeze({
     {id:'fd_tickets_giveaway',_beforeFirstGame:true,autoResolve:'no',type:'normal',tag:'MARKETING',sender:'Ticket Office',avatar:'🎟️',
      subject:"A giveaway for your first game?",
      preview:"Welcome. We need one decision from you before the gates open…",
-     body:"Welcome. We need one decision from you before the gates open: a giveaway for the first home game. Caps for the first ten thousand through the gates run {misc_cost_xs}, and people remember the first game they got something at. Without one, it's just another spring game.",
-     yesLabel:'Order the Caps',noLabel:'No Giveaway',
+     body:"Welcome. We need one decision from you before the gates open. We have ten thousand caps in the warehouse, left from a promotion that fell through last summer. Handing them out at the first home game runs {misc_cost_xs} for the trucks and the extra staff, and people remember the first game they got something at. Without one, it's just another spring game, and the caps keep.",
+     yesLabel:'Give Away the Caps',noLabel:'No Giveaway',
      yesEffect:{atmo:4},noEffect:{atmo:-1},
-     yesMsg:"Caps ordered. The line will be around the block.",
+     yesMsg:"The caps are on the trucks. The line will be around the block.",
      noMsg:"No giveaway. The gates open the usual way.",
      _budgetCost:'misc_cost_xs',_ttl:2},
   ],
@@ -106,16 +107,16 @@ export const FIRST_DAY_CORE = Object.freeze({
      onYes:'fd_fa_look',_ttl:2},
   ],
 
-  // ── The manager (a specific situation, never the lineup itself) ──
+  // ── The manager (a specific situation, never the lineup itself: that's ours) ──
   manager: [
     {id:'fd_mgr_order',_beforeFirstGame:true,autoResolve:'no',autoResolveTax:{manConf:-1},type:'normal',tag:'CULTURE',sender:"{manager_name} (Manager)",avatar:'📋',
      subject:"{active_hitter_name} and the batting order",
-     preview:"Not the lineup — that's mine — but you should hear this before the first game…",
-     body:"Not the lineup — that's mine — but you should hear this before the first game. {active_hitter_name} came to my office wanting to hit higher in the order and wasn't happy with my answer. I'm keeping the order the way I have it. If you back me, I'll tell {active_hitter_name} it came from both of us. If you'd rather I give it a look, I'll move {active_hitter_name} up and see.",
-     yesLabel:'Back the Manager',noLabel:'Give It a Look',
+     preview:"You should hear this before the first game. {active_hitter_name} came to my office…",
+     body:"You should hear this before the first game. {active_hitter_name} came to my office wanting to hit higher in the order and wasn't happy with my answer. You pick the nine and how we build the order; I write it from there, and it says {active_hitter_name} hits where they hit. If you back me, I'll tell {active_hitter_name} it came from both of us. If you'd rather, I'll sit down with {active_hitter_name} again and really listen, and they'll know you asked me to.",
+     yesLabel:'Back the Manager',noLabel:'Hear Them Out',
      yesEffect:{manConf:2,morale:-1},noEffect:{manConf:-2,morale:2},
      yesMsg:"Good. We'll tell {active_hitter_name} together. One voice.",
-     noMsg:"I'll move {active_hitter_name} up and see. My call stands the rest of the way.",
+     noMsg:"I'll sit down with {active_hitter_name} again. The order stays as it's written.",
      _ttl:2},
 
     {id:'fd_mgr_captain',autoResolve:'no',autoResolveTax:{manConf:-1},type:'normal',tag:'CULTURE',sender:"{manager_name} (Manager)",avatar:'📋',

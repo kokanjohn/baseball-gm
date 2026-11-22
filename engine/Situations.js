@@ -138,7 +138,7 @@ export function buildCard(sit, state, atMs) {
       return { ...base, tag: 'MARKETING', sender: 'PR Dept.', avatar: '🎉', _targetPlayerId: p.id, _budgetCost: k, _tokenPlayers: { pl_player: p.id },
         subject: `${p.name}'s ${what}`,
         preview: `${p.name} reached ${sit.mark} last night…`,
-        body: `${p.name} got their ${what} of the season last night. We'd like to mark it at the ballpark tonight — a moment on the scoreboard before the first pitch, and a giveaway at the gates (${_fmt(k)}). The fans love these nights, and so do the players. Or we let the number speak for itself.`,
+        body: `${p.name} got their ${what} of the season last night. We'd like to mark it at the ballpark tonight — a moment on the scoreboard before the first pitch, and a commemorative ticket for every fan, printed here at the ballpark (${_fmt(k)}). The fans love these nights, and so do the players. Or we let the number speak for itself.`,
         yesLabel: 'Mark It Tonight', noLabel: 'Let It Speak',
         yesEffect: { atmo: 2 }, noEffect: {},
         yesMsg: `It's on the scoreboard tonight.`, noMsg: 'Understood. A line in the game notes, then.',
@@ -196,10 +196,10 @@ export function buildCard(sit, state, atMs) {
       return { ...base, tag: 'MARKETING', sender: 'Ticket Office', avatar: '🎟️', _budgetCost: k,
         subject: `The ${sit.opponent} are in town`,
         preview: `We're ${gapWords} in the standings, and they're here this week…`,
-        body: `The ${sit.opponent} are in town, and we're ${gapWords} in the standings. We'd like to make it a rivalry weekend — rally towels at the gates, the old highlights on the scoreboard (${_fmt(k)}). The place would be loud. Or we let the standings sell it.`,
+        body: `The ${sit.opponent} are in town, and we're ${gapWords} in the standings. We'd like to make it a rivalry weekend — the rally towels from storage at the gates, the old highlights on the scoreboard (${_fmt(k)}). The place would be loud. Or we let the standings sell it.`,
         yesLabel: 'Make It a Rivalry Weekend', noLabel: 'Let the Standings Sell It',
         yesEffect: { atmo: 3 }, noEffect: {},
-        yesMsg: 'Towels are ordered.', noMsg: 'The standings will do it.',
+        yesMsg: 'The towels are coming out of storage.', noMsg: 'The standings will do it.',
         autoResolve: 'no', expiresAtMs: Math.min(atMs + 24 * HOUR, sit.gameTime) };
     }
     return { ...base, sender: nm('manager', 'Manager'), avatar: '📋',

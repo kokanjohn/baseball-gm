@@ -14611,3 +14611,33 @@ No fresh team needed.
 **Checks.** check-player-log (10/10): rest, training, lessons, no CPU logging, the status line, training done, lesson end, order, every absence kept, injuries. test-player-history-ui (dark/light): status line, button hidden-then-shown rows, Hide. Season adds "history: our players' time out and work kept" (rest 15, leave 4, training 37, suspended 1, illness 1); season 3,809/3,809, multi-season, check-player-work, check-teaching and the Team/card UI tests pass.
 
 No fresh team needed. Existing saves start logging now; injuries and recent development plans already on record show right away.
+
+---
+
+## §122.133 r254 — Messages fit the time they arrive in
+
+The ticket office asked to "Order the Caps" for a first game a few hours away. An audit of all 384 messages in the data files (and the ones built in Situations, Arcs, Callbacks, StretchStory, DeadlineStory, Promises, WeatherMessages) looked for anything that couldn't happen in the time between when it arrives and when it's about. Pregame messages arrive 45 to 150 minutes before first pitch, the first day's messages can arrive with only hours to go, and off-day messages arrive between 9am and 7pm.
+
+**Moved to the winter** (they take weeks): the Opening Day flyover (`wt_flyover`; flyover requests are due months ahead) and a scarf for every fan on Opening Day (`wt_scarves`). Both are out of the Opening Day morning (`mo_od_flyover` and `mo_od_after_losing` removed).
+
+**Reworded to use what's on hand or to say when:**
+- First game's caps: they're in the warehouse from a promotion that fell through; the cost is the trucks and staff ("Give Away the Caps").
+- Bats: the rush order lands tomorrow morning, not before first pitch.
+- Rivalry night and rivalry weekend: the rally towels come from storage.
+- A milestone night: commemorative tickets printed at the ballpark, not a giveaway ordered that day.
+- Billboard: "It goes up Thursday."
+- Spring complex: the crews need about a week.
+- Season-ticket holders' early gates: from the next spring home game (too late to tell them for today).
+- Last season's banner: already back from the printer.
+
+**Approved work reads as scheduled, not done:** the facility renovation and the new boards go in on the next road trip; the infield is resurfaced during the next road trip (it was offered during a homestand); the recovery area is done by the next homestand; the fundraiser, the youth camp, the clinic and the team outing are on the calendar; the career day; the spring clubhouse work is done before Opening Day. bg5 (early BP for the visitors) had no reply either way; it does now.
+
+**Off days: a time of day means arriving by it.** `_offDayBy` (a local hour) on the off-day messages that name a time or "today": the golf (now a one o'clock tee time, by 11, open 2 hours), the college game with a noon pickup (by 11), the community event (by 11), the full rest day (by 12), the bullpen session this afternoon (by 13), the cage and the flight home (by 14). CardEngine's off-day delivery stops at that hour; a day already past it goes on without the message.
+
+**`springGameIndex`.** `_minSpringGame` / `_maxSpringGame` read a context field that was never set, so a maximum never held (sp6's late jerseys could come after the early home games they were for). `buildCardContext` sets it during spring.
+
+**The manager and the lineup.** "Not the lineup — that's mine" contradicted the game: the GM picks the nine (`lineupSlots`) and the batting-order approach (`Strategy`); the manager writes the order from them. fd_mgr_order now says that. Its other answer, "Give It a Look", promised to move the hitter up, which nothing did; it's "Hear Them Out" now (the manager listens again; the order stands).
+
+**Checks.** New check-message-timing (11 checks; 10 fail on r253): nothing in the 61 messages that can arrive an hour or two ahead orders items, books a flyover or finishes construction the same day; the moves; the reworded messages; no manager calls the lineup theirs; scheduled work reads as scheduled; every decision has a reply either way. check-away-days adds: a message with a time arrives by its hour, every off-day message naming a time carries one, and opened at 2pm none whose hour has passed arrives.
+
+No fresh team needed.

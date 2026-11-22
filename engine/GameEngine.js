@@ -1594,6 +1594,9 @@ export function buildCardContext() {
     gameIndex:          state.currentGameIndex || 0,
     regularSeasonIndex: regularIdx,
     isSpringTraining:   state.phase === PHASE.SPRING_TRAINING,
+    // r254 §122.133 which spring game is next (0-based): `_minSpringGame` / `_maxSpringGame` read it. It was never
+    // set, so a maximum never held (sp6's late jerseys could come after the early home games they were for).
+    springGameIndex:    state.phase === PHASE.SPRING_TRAINING ? currentIdx : undefined,
     isTradeDeadline:    regularIdx >= TRADE_DEADLINE_OPEN && regularIdx <= TRADE_DEADLINE_CLOSE,
     isStretchRun:       regularIdx >= (REGULAR_SEASON_GAME_COUNT - STRETCH_RUN_FINAL_GAMES),
     isOffseason:        state.phase === PHASE.OFFSEASON,

@@ -3,7 +3,7 @@
  * r217 §122.96 Off days and road trips (message plan, release 4).
  *
  *   OFFDAY_POOL     the off day's messages (CardEngine's 'offday' moment: the first whole day with no game before
- *                   the next one, 9am–7pm) — a player's request, an early workout, a bullpen session, a community
+ *                   the next one, 9am–7pm; one with a time of day in it, `_offDayBy`, arrives by that hour, r254) — a player's request, an early workout, a bullpen session, a community
  *                   visit, a scouting trip, another club's GM, the trainer's rest day; and the day's news.
  *   ROAD_POOL       the road's messages (the 'road' moment, when our next game is away): how the park plays, the
  *                   local media, a player's hometown, the hotel, a long trip; and the ballpark's bookings while
@@ -16,7 +16,7 @@
 export const OFFDAY_POOL = [
 
   {id:'od1',autoResolve:'no',_weight:1.0,type:'normal',tag:'CULTURE',sender:'{manager_name} (Manager)',avatar:'📋',
-   _minGames:8,_repeat:{gapDays:21,max:2},
+   _minGames:8,_repeat:{gapDays:21,max:2},_offDayBy:14,
    subject:"{pl_player_name} wants to fly home today",
    preview:"{pl_player_name} asked if they could fly home for the off day…",
    body:"{pl_player_name} asked if they could fly home today — family, and they haven't been back since spring. The flight back lands late tonight, so it's tight, and it's {misc_cost_xs} if the club books it. Saying yes buys a lot of goodwill. Saying no keeps everyone in town and on schedule; they'll understand, even if they won't like it.",
@@ -26,7 +26,7 @@ export const OFFDAY_POOL = [
    _relYes:{pl_nm:2},_relNo:{pl_nm:-2},_budgetCost:'misc_cost_xs'},
 
   {id:'od2',autoResolve:'no',_weight:1.0,type:'normal',tag:'TRAINING',sender:'{hitting_coach_name} (Hitting Coach)',avatar:'🎯',
-   _minGames:10,_repeat:{gapDays:18,max:3},
+   _minGames:10,_repeat:{gapDays:18,max:3},_offDayBy:14,
    subject:"An off-day workout for {active_hitter_name}",
    preview:"{active_hitter_name} wants to come in today and hit…",
    body:"{active_hitter_name} ({active_hitter_pos}) wants to come in today and hit. The swing has been a tick late all week, and an hour in the cage on an empty day is the best chance to fix it. It costs them the day off, and a few of the others will feel they should come in too. Or everyone takes the day, and we work on it in batting practice.",
@@ -36,7 +36,7 @@ export const OFFDAY_POOL = [
    onYes:'offday_session',_trainGain:1},
 
   {id:'od3',autoResolve:'no',_weight:1.0,type:'normal',tag:'TRAINING',sender:'{pitching_coach_name} (Pitching Coach)',avatar:'⚾',
-   _minGames:10,_repeat:{gapDays:18,max:3},
+   _minGames:10,_repeat:{gapDays:18,max:3},_offDayBy:13,
    subject:"A bullpen session for {active_bp_who}",
    preview:"{active_bp_who} has been leaving the breaking ball up…",
    body:"{active_bp_who} ({active_bp_pos}) has been leaving the breaking ball up. I'd like a bullpen session today, with nobody around, to work on the release point. It's a day of rest given up in the middle of the season, and the arm will feel it tomorrow. Or they rest, and we fix it between outings.",
@@ -46,7 +46,7 @@ export const OFFDAY_POOL = [
    onYes:'offday_session',_trainGain:1},
 
   {id:'od4',autoResolve:'no',_weight:0.9,type:'good',tag:'MARKETING',sender:'Community Relations',avatar:'🤝',
-   _repeat:{gapDays:15,max:3},
+   _repeat:{gapDays:15,max:3},_offDayBy:11,
    subject:"A few players for {od_community_event}?",
    preview:"We've been asked to bring a few players to {od_community_event}…",
    body:"We've been asked to bring a few players to {od_community_event} today, with {leader_player_name} leading the group. It's the kind of thing the city remembers, and the players who go always come back glad they did. It's also their one day off, and asking them to give it up has a cost in the clubhouse.",
@@ -56,7 +56,7 @@ export const OFFDAY_POOL = [
    _relYes:{ldr_nm:1}},
 
   {id:'od5',autoResolve:'no',_weight:0.8,type:'normal',tag:'SCOUTING',sender:'Scouting',avatar:'🔭',
-   _minGames:20,_oncePerSeason:true,_promise:{yes:{kind:'college_look',when:'fa_opens'}},
+   _minGames:20,_oncePerSeason:true,_promise:{yes:{kind:'college_look',when:'fa_opens'}},_offDayBy:11,
    subject:"Come see a player with us today",
    preview:"There's a college game an hour away today…",
    body:"There's a college game an hour away today, and one of the players in it will be in this winter's free-agent class. We'd like you to come with us and see them yourself — the travel and the seats are {misc_cost_xs}. A GM in the stands gets us the coaches' time and a closer look, and we'll know that player better than anyone when the winter comes. Or we send one of ours with a radar gun, and we know what everybody knows.",
@@ -66,17 +66,17 @@ export const OFFDAY_POOL = [
    _budgetCost:'misc_cost_xs'},
 
   {id:'od6',autoResolve:'no',_weight:0.8,type:'normal',tag:'TRADE',sender:'{other_gm_name} ({other_gm_club} GM)',avatar:'⛳',
-   _minGames:10,_repeat:{gapDays:30,max:2},_aboutOtherGm:true,onYes:'gm_rapport_yes',onNo:'gm_rapport_no',_rapport:{yes:4,no:-1},
+   _minGames:10,_repeat:{gapDays:30,max:2},_aboutOtherGm:true,onYes:'gm_rapport_yes',onNo:'gm_rapport_no',_rapport:{yes:4,no:-1},_offDayBy:11,
    subject:"Golf today?",
-   preview:"We both have the day off, and I've got a tee time at ten…",
-   body:"We both have the day off, and I've got a tee time at ten. Come play — no business, I promise, though you know how these things go. Fair warning: I take the game more seriously than I should.",
+   preview:"We both have the day off, and I've got a tee time at one…",
+   body:"We both have the day off, and I've got a tee time at one. Come play — no business, I promise, though you know how these things go. Fair warning: I take the game more seriously than I should.",
    yesLabel:'Play the Round',noLabel:"Can't Make It",
    yesEffect:{},noEffect:{},
-   yesMsg:"Ten o'clock. Bring a lot of balls.",noMsg:"Another time, then.",
-   _expiresAfterMs:4*3600000},
+   yesMsg:"One o'clock. Bring a lot of balls.",noMsg:"Another time, then.",
+   _expiresAfterMs:2*3600000},
 
   {id:'od7',autoResolve:'no',_weight:0.8,type:'normal',tag:'HEALTH',sender:'Head Trainer',avatar:'🩹',
-   _minGames:30,_repeat:{gapDays:20,max:2},
+   _minGames:30,_repeat:{gapDays:20,max:2},_offDayBy:12,
    subject:"A real day of rest",
    preview:"The legs are heavy after the last stretch…",
    body:"The legs are heavy after the last stretch. We'd like the whole team out of the building today — no early work, no treatment unless it's needed — and a later report time tomorrow. Everyone comes back fresher. The coaches would rather keep tomorrow's early work; they think the edge is in the routine.",

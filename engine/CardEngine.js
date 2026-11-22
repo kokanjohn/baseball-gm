@@ -2488,7 +2488,13 @@ function _scheduleCards(instances, state, game = null) {
       timed.push({ ...c, _gameTime: T, deliverAtMs: Math.max(nowMs + lead, T - (45 + eventRand() * 105) * 60_000), expiresAtMs: T });
     } else if (c._moment === 'offday' && c._offDay) {
       // r217 §122.96 the off day's messages: during that day's working hours.
-      const { startMs, endMs } = c._offDay;
+      const { startMs } = c._offDay;
+      let { endMs } = c._offDay;
+      // r254 §122.133 a message with a time of day in it (a tee time at one, a pickup at noon) arrives by
+      // `_offDayBy` (local hour); past that, the day has gone on without it.
+      const by = c._raw?._offDayBy;
+      if (Number.isFinite(by)) { const d = new Date(startMs); d.setHours(by, 0, 0, 0); endMs = Math.min(endMs, d.getTime()); }
+      if (endMs <= startMs) continue;
       const at = startMs + Math.floor(eventRand() * Math.max(0, endMs - startMs));
       const { _offDay, ...card } = c;
       const ttl = c._expiresAfterMs || c._raw?._expiresAfterMs;

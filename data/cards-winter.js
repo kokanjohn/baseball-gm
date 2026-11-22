@@ -108,6 +108,25 @@ export const WINTER_POOL = [
    yesMsg:"Fan fest is on the calendar.",noMsg:"We'll wait for spring.",
    _budgetCost:'misc_cost_sm'},
 
+  // r254 §122.133 two Opening Day decisions that take weeks to set up: out of the Opening Day morning, into the winter
+  {id:'wt_flyover',_winter:'winter',autoResolve:'no',type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'✈️',
+   subject:"An Opening Day flyover?",
+   preview:"The requests for Opening Day flyovers are due this month…",
+   body:"The requests for Opening Day flyovers are due this month, and they take weeks to approve. A flyover for the anthem runs {misc_cost_sm}. It's a big moment and the crowd will remember it. Keeping the ceremony on the ground saves the money, and nobody will miss what they didn't expect.",
+   yesLabel:'Request the Flyover',noLabel:'Keep It on the Ground',
+   yesEffect:{atmo:4},noEffect:{},
+   yesMsg:"Requested. We'll have the approval before spring.",noMsg:"A clean, simple ceremony, then.",
+   _budgetCost:'misc_cost_sm'},
+
+  {id:'wt_scarves',_winter:'winter',autoResolve:'no',type:'normal',tag:'CULTURE',sender:'Community Relations',avatar:'🎟️',
+   subject:"A scarf for every fan on Opening Day?",
+   preview:"If we order now, every fan gets a scarf at the gate on Opening Day…",
+   body:"If we order now, the scarves are here in time for every fan at the gate on Opening Day ({misc_cost_xs}): a small thank-you for sticking with us, and it wins back the ones who were thinking about it. Saving it keeps the money, but the fans who come back will notice nobody thanked them.",
+   yesLabel:'Order the Scarves',noLabel:'Save It',
+   yesEffect:{atmo:4},noEffect:{atmo:-1},
+   yesMsg:"Ordered. They'll be in the warehouse by spring.",noMsg:"Saved.",
+   _budgetCost:'misc_cost_xs'},
+
   {id:'wt_clubhouse',_winter:'winter',autoResolve:'no',type:'normal',tag:'FACILITIES',sender:'Facilities Mgmt.',avatar:'🔧',
    subject:"The clubhouse, over the winter",
    preview:"The clubhouse is empty until spring — a good time for work…",
