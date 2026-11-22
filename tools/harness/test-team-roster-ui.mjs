@@ -50,6 +50,9 @@ const made = await page.evaluate(async (theme) => {
   const rp = SM.get().userTeam.rosterIds.map(P).find(p => p.group === 'bp');
   SM.mutate(s => { Object.assign(s.players[rp.id], IE.beginInjury(s.players[rp.id], now, 'moderate', Math.random)); Object.assign(s.players[rp.id], IE.placeOnILUpdate(s.players[rp.id])); });
   SM.mutate(s => RE.applyRosterMutation(s, RE.reconcileRoster(s, 'user', { atMs: now })));
+  // r247 the outfielders stored worst first (the screen shows them best first)
+  SM.mutate(s => { const ofs = s.userTeam.lineupSlots.filter(sl => sl.slot === 'OF');
+    const ids = ofs.map(x => x.playerId).sort((a, b) => (s.players[a]?.ovr || 0) - (s.players[b]?.ovr || 0)); ofs.forEach((x, i) => { x.playerId = ids[i]; }); });
   const App = await import('/baseball-gm/ui/App.js'); await App.init();
   return { ss, ssName: P(ss).name, fa: fa.id, faName: fa.name, signed: signed.ok, rp: rp.id, rpName: rp.name, fillsNow,
            hasHitIL: SM.get().userTeam.rosterIds.map(P).some(p => !['SP', 'RP'].includes(p.pos) && p.group === 'il') };
@@ -77,6 +80,10 @@ check('pitchers: the stat columns, then IMP', JSON.stringify(Pt.head) === JSON.s
 check('hitters by slot: C 1B 2B 3B SS OF OF OF DH, then the bench',
       H.rows.slice(0, 9).map(r => r.slot).join(' ') === 'C 1B 2B 3B SS OF OF OF DH' && H.rows.slice(9).every(r => ['Bench', 'IL', 'H', 'C', '1B', '2B', '3B', 'SS', 'OF', 'DH'].includes(r.slot)),
       H.rows.map(r => r.slot).join(' '));
+// r247 §122.126 the outfielders best first
+{ const of = await page.evaluate(() => [...document.querySelector('.tr-block').querySelectorAll('.tr-row')].slice(5, 8)
+    .map(r => +(r.querySelector('.tr-ovr .rating-num')?.textContent) || -1));
+  check(`the outfielders by OVR, highest first (${of.join(', ')})`, of.length === 3 && of.every((x, i) => i === 0 || of[i - 1] >= x)); }
 const ssRow = H.rows[4];
 check('the open SS slot waits: "Empty", tap to fill', ssRow.empty && ssRow.name === 'Empty', JSON.stringify(ssRow));
 const benched = H.rows.find(r => r.player === made.ss);

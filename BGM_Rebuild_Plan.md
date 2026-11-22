@@ -14474,3 +14474,13 @@ No fresh team needed.
 **Checks.** test-oop-move-ui, test-pitcher-move-ui, test-team-roster-ui and test-lineup-days-ui (dark and light) are updated to the new layout and pass, as do check-open-spots and check-lineup-move.
 
 No fresh team needed.
+
+---
+
+## §122.126 r247 — The outfielders on the Team screen, best first
+
+The three OF rows in the lineup are shown by OVR, highest at the top, with an open OF slot last (TeamScreen `_ofByOvr`). This is display only: `lineupSlots` keeps its C/1B/2B/3B/SS/OF/OF/OF/DH order, and each row keeps its own slot index (an empty OF still fills the right slot). It applies to every day on the strip.
+
+**Checks.** test-team-roster-ui stores the outfielders worst first and checks they show best first (this failed on r246: 58, 61, 76). test-lineup-days-ui and test-oop-move-ui pass.
+
+No fresh team needed.

@@ -312,6 +312,16 @@ function _dayCtx(state) {
   return { game, games, live, locked: false, next, slots: next ? (state.userTeam.lineupSlots || []) : (lineupFor(state, game) || []) };
 }
 
+/** r247 §122.126 the lineup in its order, the three OF slots sorted by OVR (highest first, an open one last). */
+function _ofByOvr(slots, players) {
+  const rows = slots.map((sl, i) => ({ sl, i }));
+  const of = rows.filter(r => r.sl.slot === 'OF');
+  const ovr = (r) => (r.sl.playerId ? (players[r.sl.playerId]?.ovr ?? -1) : -2);
+  const sorted = [...of].sort((a, b) => ovr(b) - ovr(a) || a.i - b.i);
+  let k = 0;
+  return rows.map(r => (r.sl.slot === 'OF' ? sorted[k++] : r));
+}
+
 /** MOVE for a hitter on the chosen day (a pitcher: the staff, as ever). */
 function _optsFor(state, playerId) {
   const g = _dayAt != null ? (state.schedule || []).find(x => x.gameTime === _dayAt) : null;
@@ -380,7 +390,9 @@ function _renderPlayers(state) {
   const hitIL     = ours.filter(p => !isP(p) && p.group === PLAYER_GROUP.IL);
   const hitMove = (p) => !day.locked && _optsFor(state, p.id).length > 0;
   const hitRows = [
-    ...slots.map((sl, i) => {
+    // r247 §122.126 the outfielders shown best first (OVR; an open one last). Display only: lineupSlots keeps its
+    // C/1B/2B/3B/SS/OF/OF/OF/DH order, and each row keeps its own slot index.
+    ..._ofByOvr(slots, players).map(({ sl, i }) => {
       const p = sl.playerId ? players[sl.playerId] : null;
       return p ? _row(state, p, sl.slot, impScores[p.id], { oop: !!(sl.emergency || sl.oop), movable: hitMove(p), out: _outThatDay(state, p, day) })
                : _emptyRow(sl.slot, { slotIdx: i, locked: day.locked });
