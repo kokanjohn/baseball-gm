@@ -122,7 +122,7 @@ check('…within seconds (the worker, not a one-minute wait)', (regs.length > n0
 await page.click('#settings-btn');
 await page.waitForTimeout(400);
 const toggles = await page.$$eval('.push-alert-toggle', els => els.map(e => ({ k: e.dataset.alert, on: e.checked })));
-check('Settings shows the five kinds, all on', toggles.length === 5 && toggles.every(t => t.on), JSON.stringify(toggles));
+check('Settings shows the six kinds (r250 Game Start first), all on', toggles.length === 6 && toggles[0].k === 'start' && toggles.every(t => t.on), JSON.stringify(toggles));
 const sec = await page.evaluateHandle(() => document.getElementById('notif-status').closest('.settings-section'));
 await sec.asElement().scrollIntoViewIfNeeded();
 await page.waitForTimeout(200);
@@ -131,6 +131,13 @@ await page.click('.push-alert-toggle[data-alert="final"] + .toggle-track');
 await page.waitForTimeout(2500);
 check('Final Score off → no final in the registered schedule', !gameItems(regs.at(-1)).some(i => i.id.endsWith(':final'))
       && await page.evaluate(async () => (await import('/baseball-gm/store/StateManager.js')).get().push.alerts.final === false));
+
+// r250 §122.129 Game Start off → no first-pitch push
+const hadStart = gameItems(regs.at(-1)).some(i => i.id.endsWith(':start'));
+await page.click('.push-alert-toggle[data-alert="start"] + .toggle-track');
+await page.waitForTimeout(2500);
+check(`Game Start off → no first-pitch push in the registered schedule (it was there: ${hadStart})`, hadStart && !gameItems(regs.at(-1)).some(i => i.id.endsWith(':start'))
+      && await page.evaluate(async () => (await import('/baseball-gm/store/StateManager.js')).get().push.alerts.start === false));
 
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();

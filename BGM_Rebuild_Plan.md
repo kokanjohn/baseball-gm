@@ -14513,3 +14513,20 @@ The GM's call: every ballpark mows its own pattern and has its own dimensions. D
 **Checks.** test-live-view-ui (dark and light) passes.
 
 No fresh team needed.
+
+---
+
+## §122.129 r250 — A push at first pitch, with a Settings switch
+
+**The push.** `PUSH_ALERTS.start` (GamePushes). From the look-ahead, at the moment of the game's `game_start` play: that's the real first pitch, so after a start held for weather it comes when the game actually starts, not at the scheduled time.
+- Title: "First pitch: Rails vs Anchors" ("@" on the road).
+- Body: "Pineda vs Escobedo on the mound." (our starter, then theirs; just ours if theirs isn't known; else the matchup).
+- Tag `g:{gameTime}:start`. None for a game called off before it starts (`L.postponed`).
+
+**The switch.** Settings → Notifications → **Game Start** ("First pitch, with the starting pitchers"), under Game Reminder. It uses `state.push.alerts.start` and is on unless turned off, as the other kinds are.
+
+**Checks.**
+- check-game-pushes (70 games): every first pitch had its push at its exact moment (67 games played; 2 starts held for weather, pushed at the held start), each naming our starter. Turning all the game kinds off now includes Game Start.
+- test-game-pushes-ui: Settings shows six kinds, Game Start first, all on. Turning Game Start off takes the first-pitch push out of the registered schedule.
+
+No fresh team needed.

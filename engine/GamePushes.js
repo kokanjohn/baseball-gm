@@ -4,6 +4,7 @@
  * OWNS: turning the look-ahead (engine/LookAhead.js — our next game as it will
  *   happen, from seeded dice) into push items for the worker's schedule, so
  *   the phone hears about the game as it happens with the app closed:
+ *     - r250 first pitch (when it really comes: a start held for weather starts later)
  *     - our player hurt on a play
  *     - the final score
  *   §122.58 the weather (a start held, a delay, play resuming, a game called
@@ -27,6 +28,7 @@
 /** The kinds a GM can turn off, as Settings shows them (and the inbox's). */
 export const PUSH_ALERTS = Object.freeze({
   messages:  'messages',    // inbox cards (CardEngine.getPushSchedule)
+  start:     'start',       // r250 §122.129 first pitch: the game is on (after a held start, when it really starts)
   weather:   'weather',     // the weather's messages: start held, delays, play resumes (§122.58)
   calledOff: 'calledOff',   // the weather's messages: postponed, called, suspended (§122.58)
   injury:    'injury',      // our player hurt during a game
@@ -67,6 +69,18 @@ export function gamePushes(state, L, nowMs) {
 
   // ── The game, play by play ────────────────────────────────────
   const plays = (L.plays || []).filter(p => Number.isFinite(p._timestamp));
+
+  // r250 §122.129 first pitch: the game_start play's moment (the real start, after any hold), with the starters
+  const start = plays.find(p => p.type === 'game_start');
+  if (start) {
+    const name = (id) => state.players?.[id]?.name || null;
+    const fieldsFirst = L.isHome;   // (the home club pitches the top of the 1st)
+    const ourSP = plays.find(p => p.pitcherId && p.half && (p.half === 'TOP') === fieldsFirst)?.pitcherId;
+    const theirSP = plays.find(p => p.pitcherId && p.half && (p.half === 'TOP') !== fieldsFirst)?.pitcherId;
+    const body = name(ourSP) && name(theirSP) ? `${name(ourSP)} vs ${name(theirSP)} on the mound.`
+      : name(ourSP) ? `${name(ourSP)} on the mound.` : `${match}.`;
+    add(PUSH_ALERTS.start, start._timestamp, `${key}:start`, `First pitch: ${us} ${L.isHome ? 'vs' : '@'} ${them}`, body);
+  }
   let score = { us: 0, them: 0 };
   for (const p of plays) {
     if (p.type !== 'weather_delay' && p.type !== 'weather_resume' && Number.isFinite(p.cumOurScore)) {

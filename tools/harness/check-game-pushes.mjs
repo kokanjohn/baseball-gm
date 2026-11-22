@@ -23,7 +23,7 @@ const check = (name, ok, info = '') => {
   if (ok) pass++; else fail++;
   console.log(`  ${ok ? '\x1b[32mPASS\x1b[0m' : '\x1b[31mFAIL\x1b[0m'}  ${name}${!ok && info ? ` — ${info}` : ''}`);
 };
-const GAME_KINDS = new Set(['weather', 'calledOff', 'injury', 'final']);
+const GAME_KINDS = new Set(['weather', 'calledOff', 'injury', 'final', 'start']);   // (r250 start: first pitch)
 
 seedRandom(SEED);
 await startNewGame({ archetypeId: 'contender', gmName: 'Test GM', city: 'Testville', nickname: 'Testers',
@@ -48,7 +48,7 @@ for (let n = 0; n < N; n++) {
   const items = all0.filter(i => GAME_KINDS.has(i.kind) && String(i.id).startsWith('g:'));
   // The toggles, once: all off → no game pushes; final off → no final.
   if (!toggled && items.length) {
-    const off = structuredClone(SM.get()); off.push.alerts = { weather: false, calledOff: false, injury: false, final: false };
+    const off = structuredClone(SM.get()); off.push.alerts = { weather: false, calledOff: false, injury: false, final: false, start: false };
     const noFinal = structuredClone(SM.get()); noFinal.push.alerts = { final: false };
     const msgOff = structuredClone(SM.get()); msgOff.push.alerts = { messages: false };
     toggled = {
@@ -90,6 +90,8 @@ for (let n = 0; n < N; n++) {
     if (p.type === 'injury' && SM.get().players[p._injury.playerId]?.teamId === 'user') real.push({ kind: 'injury', at: p._timestamp, what: `hurt ${p._injury.playerId}` });
     if (p.type === 'game_suspended') real.push({ kind: 'calledOff', at: p._timestamp, what: 'suspended', resume: g.status === GAME_STATUS.SUSPENDED ? g.gameTime : null });
     if (p.type === 'game_end') real.push({ kind: 'final', at: p._timestamp, what: `final ${p.cumOurScore}-${p.cumTheirScore}` });
+    // r250 §122.129 first pitch (after a held start, the real one)
+    if (p.type === 'game_start') real.push({ kind: 'start', at: p._timestamp, what: `start${p._timestamp > T0 ? ' (held)' : ''}`, sp: p.pitcherId });
   }
   const future0 = real.filter(r => r.at > from);
   // §122.51 at home the grounds crew's messages carry the weather, §122.58 on the road the traveling party's: each
@@ -120,6 +122,10 @@ for (let n = 0; n < N; n++) {
     // r149 the makeup reads relative to the push ("tomorrow at 4:05 PM"), never a calendar date.
     if (r.makeup && !it.body.includes(`Makeup: ${When.untilFull(r.makeup, r.at)}`)) bad.push(`game ${g0.index}: postponed push without the real makeup time (${it.body})`);
     if (r.resume && !it.body.includes(new Date(r.resume).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }))) bad.push(`game ${g0.index}: suspended push without the real resume date (${it.body})`);
+    if (r.kind === 'start') {
+      tally[r.what.includes('held') ? 'startHeld' : 'startOnTime'] = (tally[r.what.includes('held') ? 'startHeld' : 'startOnTime'] || 0) + 1;
+      if (!/^First pitch: /.test(it.title) || !it.body.includes(SM.get().players[r.sp]?.name || '???')) bad.push(`game ${g0.index}: start push without the starter (${it.title} — ${it.body})`);
+    }
     if (r.kind === 'final') {
       const [u, t] = r.what.split(' ')[1].split('-');
       if (!it.title.includes(` ${u}, `) || !it.title.endsWith(` ${t}`)) bad.push(`game ${g0.index}: final push ${it.title} vs real ${u}-${t}`);
