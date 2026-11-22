@@ -146,11 +146,10 @@ const BASE = { first: pt(45, 90), second: pt(0, 127.3), third: pt(-45, 90), home
 
 function _fieldSvg() {
   // r248 §122.127 drawn like the radar's map: flat tones from its palette (land, relief, the warm "flat" for the
-  // dirt), thin lines, the fence a border line with its distances marked like the map's water labels, the
-  // outfield's mowing in faint bands like its terrain. (Grass green and dirt brown are gone.)
+  // dirt), thin lines, the fence a border line. (Grass green and dirt brown are gone.) r249 §122.128 no mowing
+  // and no fence distances: every park mows and measures its own way, and this field is no park in particular.
   const fence = [];
   for (let a = -45; a <= 45; a += 1.5) fence.push(xy(pt(a, fenceAt(a))));   // (r231 finer: a smooth arc)
-  const arc = (ft) => { const out = []; for (let a = -45; a <= 45; a += 1.5) out.push(xy(pt(a, Math.min(ft, fenceAt(a))))); return out; };
   // (r231 the dirt's edge: a circle around the mound, as on a real infield — 110 feet from the mound, about 170 from
   //  the plate to straightaway center, 144 along the lines)
   const dirt = [];
@@ -159,13 +158,6 @@ function _fieldSvg() {
     const s = Math.sin(a * Math.PI / 180), c = Math.cos(a * Math.PI / 180);
     dirt.push(xy(pt(a, MOUND * c + Math.sqrt(ARC * ARC - MOUND * MOUND * s * s))));
   }
-  // the outfield's mowing: bands every 30 ft out from the dirt, alternate ones a shade lighter
-  const bands = [];
-  for (let d = 180, k = 0; d < 420; d += 30, k++) {
-    if (k % 2) continue;
-    const outer = arc(d + 30), inner = arc(d).reverse();
-    bands.push(`<polygon class="lv-mow" points="${outer.join(' ')} ${inner.join(' ')}"/>`);
-  }
   // the warning track: the last 12 ft inside the fence
   const track = [];
   for (let a = -45; a <= 45; a += 1.5) track.push(xy(pt(a, fenceAt(a) - 12)));
@@ -173,21 +165,11 @@ function _fieldSvg() {
   const bag = (p) => `<rect x="${(p[0] - 3.6).toFixed(1)}" y="${(p[1] - 3.6).toFixed(1)}" width="7.2" height="7.2" transform="rotate(45 ${xy(p).replace(',', ' ')})" class="lv-bag"/>`;
   const [mx, my] = pt(0, 60.5);   // (the mound)
   const foulEnd = (sgn) => pt(sgn * 45, fenceAt(45));
-  // the fence's distances, just beyond it: the lines, the gaps, center
-  // (the lines' numbers a little in from the corners, so they clear the foul lines and the edges)
-  const marks = [-45, -22.5, 0, 22.5, 45].map(a => {
-    const corner = Math.abs(a) === 45;
-    const [x, y] = pt(corner ? Math.sign(a) * 39 : a, fenceAt(a) + (corner ? 16 : 14));
-    const anchor = 'middle';
-    return `<text x="${x.toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="${anchor}" class="lv-dist">${Math.round(fenceAt(a))}</text>`;
-  }).join('');
   return `
     <rect class="lv-foul" x="0" y="${TOP}" width="${W}" height="${H - TOP}"/>
     <polygon class="lv-grass" points="${xy(pt(0, 0))} ${fence.join(' ')}"/>
-    ${bands.join('')}
     <polygon class="lv-track" points="${fence.join(' ')} ${[...track].reverse().join(' ')}"/>
     <polyline class="lv-fence" points="${fence.join(' ')}"/>
-    ${marks}
     <polygon class="lv-dirt" points="${xy(pt(0, 0))} ${dirt.join(' ')}"/>
     <circle class="lv-dirt" cx="${HX}" cy="${HY}" r="${(15 * IN).toFixed(1)}"/>
     <polygon class="lv-infield" points="${diamond}"/>
@@ -401,17 +383,16 @@ function _css() {
     .lv-pill.lv-live{background:#14532d;color:#86efac;}
     [data-theme="light"] .lv-pill.lv-live{background:#dcfce7;color:#166534;}
     /* r248 §122.127 the field in the radar map's palette (RadarMap PALETTE), dark and light */
-    .lv-overlay{--f-land:#1c2029;--f-fair:#232833;--f-mow:#262c38;--f-edge:#2d3340;--f-dirt:#312d28;--f-dirt-edge:#3d3832;
-      --f-track:#29272a;--f-fence:#454d63;--f-line:#9aa3b6;--f-dist:#5b6a82;--f-bag:#e8ecf4;--f-label:#d3d8e3;--f-halo:rgba(10,12,18,.92);
+    .lv-overlay{--f-land:#1c2029;--f-fair:#232833;--f-edge:#2d3340;--f-dirt:#312d28;--f-dirt-edge:#3d3832;
+      --f-track:#29272a;--f-fence:#454d63;--f-line:#9aa3b6;--f-bag:#e8ecf4;--f-label:#d3d8e3;--f-halo:rgba(10,12,18,.92);
       --f-batter:#ffffff;--f-run:#facc15;--f-run-label:#fde68a;--f-out:#cbd5e1;}
-    [data-theme="light"] .lv-overlay{--f-land:#e9e7e1;--f-fair:#dedad0;--f-mow:#e2ded5;--f-edge:#cfc9bb;--f-dirt:#e7dccb;--f-dirt-edge:#d4c6b0;
-      --f-track:#ddd2c1;--f-fence:#a6a397;--f-line:#ffffff;--f-dist:#6d8399;--f-bag:#ffffff;--f-label:#2a2e38;--f-halo:rgba(246,244,239,.95);
+    [data-theme="light"] .lv-overlay{--f-land:#e9e7e1;--f-fair:#dedad0;--f-edge:#cfc9bb;--f-dirt:#e7dccb;--f-dirt-edge:#d4c6b0;
+      --f-track:#ddd2c1;--f-fence:#a6a397;--f-line:#ffffff;--f-bag:#ffffff;--f-label:#2a2e38;--f-halo:rgba(246,244,239,.95);
       --f-batter:#111318;--f-run:#eab308;--f-run-label:#854d0e;--f-out:#475569;}
     .lv-field{padding:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--f-land);}
     .lv-field svg{display:block;width:100%;height:auto;max-height:52vh;}
-    .lv-foul{fill:var(--f-land);} .lv-grass{fill:var(--f-fair);} .lv-mow{fill:var(--f-mow);}
+    .lv-foul{fill:var(--f-land);} .lv-grass{fill:var(--f-fair);}
     .lv-track{fill:var(--f-track);} .lv-fence{fill:none;stroke:var(--f-fence);stroke-width:2;stroke-linejoin:round;}
-    .lv-dist{font:italic 600 8px -apple-system,system-ui,sans-serif;fill:var(--f-dist);}
     .lv-dirt{fill:var(--f-dirt);stroke:var(--f-dirt-edge);stroke-width:.8;}
     .lv-infield{fill:var(--f-fair);stroke:var(--f-line);stroke-width:.8;stroke-opacity:.45;}
     .lv-line{stroke:var(--f-line);stroke-width:.9;opacity:.5;}

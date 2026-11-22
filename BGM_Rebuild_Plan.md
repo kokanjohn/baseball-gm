@@ -14503,3 +14503,13 @@ Nothing about what's shown changed: the same scale, spots, names, paths and runn
 **Checks.** test-live-view-ui (dark and light, 20 each) passes unchanged.
 
 No fresh team needed.
+
+---
+
+## §122.128 r249 — The Live View field: no mowing stripes, no fence distances
+
+The GM's call: every ballpark mows its own pattern and has its own dimensions. Drawing either would mean details for each park, changing with where the game is played, which isn't needed. So the outfield is one flat tone, and the fence carries no numbers. The field stays generic: the sim's own fence arc (`fenceAt`), the warning track, the dirt, the lines. Removed: the mowing bands, the distance labels, and their CSS and colour variables (`--f-mow`, `--f-dist`).
+
+**Checks.** test-live-view-ui (dark and light) passes.
+
+No fresh team needed.
