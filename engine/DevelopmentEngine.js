@@ -26,6 +26,7 @@
  * passes (inside StateManager.mutate) and return events.
  */
 
+import { logAway, logPlanStart, logPlanDone } from './PlayerLog.js';   // r253 §122.132
 import { dice, diceSeed, diceId } from './Dice.js';
 import {
   PLAYER_GROUP,
@@ -136,6 +137,7 @@ export function startPlan(draft, playerId, { gain, focus = null, source = 'card'
     carry: Object.fromEntries(keys.map(k => [k, 0])),
   };
   draft.developmentPlans = [...(draft.developmentPlans || []), plan];
+  logPlanStart(draft, plan, atMs, { days: p.unavailable?.reason === 'training' && p.unavailable.untilMs ? Math.round((p.unavailable.untilMs - atMs) / 86_400_000) : 0 });   // r253
   return plan;
 }
 
@@ -201,6 +203,7 @@ export function applyDevelopment(draft, atMs) {
     if (plan.steps.every(s => s.done)) {
       plan.status = 'done';
       plan.doneAt = atMs;
+      logPlanDone(draft, plan, p.subRatings, atMs);   // r253
       events.push({ type: 'DEV_DONE', playerId: p.id, teamId: p.teamId, planId: plan.id,
                     planned: plan.planned, realized: plan.realized, profile: plan.profile, source: plan.source, atMs,
                     owner: plan.owner || null, keys: plan.keys, from: plan.from || null,
@@ -284,6 +287,7 @@ export function setUnavailable(draft, playerId, { reason, games = 0, untilMs = n
     slot: slot >= 0 ? slot : (prev?.slot ?? null),
     rotationIndex: rot >= 0 ? rot : (prev?.rotationIndex ?? null),
   };
+  logAway(draft, playerId, { reason, games, untilMs }, atMs);   // r253 §122.132 the player card's History
   return { type: 'UNAVAILABLE', playerId, reason, games, atMs };
 }
 

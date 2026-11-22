@@ -21,6 +21,7 @@
  * draft the caller passes (inside StateManager.mutate) and return events.
  */
 
+import { logTeach } from './PlayerLog.js';   // r253 §122.132
 import { PLAYER_WORK, PLAYER_GROUP, POSITION_RULES } from '../data/constants.js';
 import { difficulty, familiarity, eligibleAt, startsAt, addFamiliarity, FIELD_POSITIONS, isPitcher as isP, pitchRoles, stretchOf, addStretch } from './Positions.js';
 import { dice, diceSeed, withDice, eventRand } from './Dice.js';
@@ -309,6 +310,7 @@ export function startTeaching(draft, { playerId, pos, odds }, atMs) {
     id, playerId, pos, status: 'active', startAt: atMs, days, odds, gained: 0,
     steps: Array.from({ length: days }, (_, i) => ({ atMs: atMs + (i + 1) * DAYMS, done: false, took: null })),
   });
+  logTeach(draft, playerId, pos, false, atMs);   // r253 §122.132
   return [{ type: 'TEACH_STARTED', playerId, pos, days }];
 }
 
@@ -330,6 +332,7 @@ export function teachSteps(draft, atMs) {
   const out = [];
   const end = (reason) => {
     t.status = 'done'; t.endAt = atMs;
+    if (reason !== 'gone') logTeach(draft, t.playerId, t.pos, true, atMs, { learned: !!p && eligibleAt(p).includes(t.pos) });   // r253
     out.push({ type: 'TEACH_DONE', playerId: t.playerId, pos: t.pos, gained: Math.round(t.gained * 1000) / 1000,
                took: t.steps.filter(s => s.took).length, days: t.steps.filter(s => s.done).length, reason, atMs });
   };

@@ -24,6 +24,9 @@
  */
 
 import { knownRetiring } from '../../engine/Retirement.js';   // r222 §122.101
+import { statusOf } from '../../engine/PlayerStatus.js';   // r253 §122.132
+import { historyOf } from '../../engine/PlayerLog.js';
+import * as When from '../../engine/When.js';
 import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatOVR, formatAge, formatSalary, formatIMP, formatAVG, formatERA } from '../formatters.js';
 import { getImpLabel, lastSeasonIMP } from '../../engine/IMPEngine.js';
@@ -84,6 +87,11 @@ export function openPlayerCard(playerId, state) {
 
   // Wire close
   document.getElementById('player-card-close')?.addEventListener('click', closePlayerCard);
+  document.getElementById('pc-hist-btn')?.addEventListener('click', (e) => {   // r253
+    const list = document.getElementById('pc-hist-list');
+    list.hidden = !list.hidden;
+    e.currentTarget.textContent = list.hidden ? e.currentTarget.textContent.replace(/^Hide/, 'Show') : e.currentTarget.textContent.replace(/^Show/, 'Hide');
+  });
   // §85 open the trade composer from this player
   document.getElementById('pc-trade')?.addEventListener('click', async () => {
     const st = StateManager.get();
@@ -152,6 +160,7 @@ function _renderCard(player, playerId, state) {
           <span class="pc-age">${formatAge(player.dob, baseballYear(StateManager.get()))} yrs</span>
         </div>
         <div class="pc-team">${_escape(teamName)}</div>
+        ${_statusLine(player, state)}
         ${_roleLine(player, state)}
         ${player.trait ? `<div class="pc-trait">${_escape(TRAIT_WORDS[player.trait] || player.trait)}</div>` : ''}
         ${(player.allStarSeasons || []).length ? `<div class="pc-trait" style="color:#c9971c;">★ ${player.allStarSeasons.length > 1 ? `${player.allStarSeasons.length}× ` : ''}All-Star${(player.allStarMvps || []).length ? ` · ${player.allStarMvps.length > 1 ? `${player.allStarMvps.length}× ` : ''}ASG MVP` : ''}</div>` : ''}
@@ -184,11 +193,33 @@ function _renderCard(player, playerId, state) {
     ${isOwnPlayer ? _renderRelationship(player) : ''}
 
 
+    <!-- r253 §122.132 what's happened to them with us: behind a button -->
+    ${_renderHistory(player, state)}
+
     <!-- §85 trade talks: start from any player's card -->
     ${_tradeButton(player, state)}
     <!-- §96 sign a free agent, or claim a player off waivers -->
     ${_marketButton(player, state)}
   `;
+}
+
+/** r253 §122.132 a status now (hurt, suspended, resting, away training …): one line, red (amber: playing through it). */
+function _statusLine(player, state) {
+  const st = statusOf(state, player);
+  return st ? `<div class="pc-status pc-status-${st.tone}">${_escape(st.full)}</div>` : '';
+}
+
+/** r253 §122.132 the History: rests and time out, training and how it went, lessons, injuries — behind a button. */
+function _renderHistory(player, state) {
+  const h = historyOf(state, player);
+  if (!h.length) return '';
+  const now = Date.now();
+  return `<div class="pc-section pc-history">
+      <button type="button" class="pc-hist-btn" id="pc-hist-btn">Show history (${h.length})</button>
+      <div class="pc-hist-list" id="pc-hist-list" hidden>
+        ${h.map(x => `<div class="pc-hist-row"><span class="pc-hist-when">${_escape(When.agoDay(x.at, now))}</span><span class="pc-hist-what">${_escape(x.text)}</span></div>`).join('')}
+      </div>
+    </div>`;
 }
 
 /** §96 what a free agent asks of us. */
@@ -634,6 +665,13 @@ function _injectCSS() {
       background:var(--chip-accent-bg);padding:1px 6px;border-radius:4px;display:inline-block;}
     .pc-trait{font-size:11px;color:var(--muted);font-style:italic;margin-top:2px;}
     .pc-section{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);}
+    .pc-status{font-size:12px;font-weight:700;margin-top:4px;} .pc-status-bad{color:var(--danger);} .pc-status-warn{color:#d49b00;}
+    .pc-hist-btn{display:block;width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text);font:inherit;font-size:13px;font-weight:600;cursor:pointer;}
+    .pc-hist-list{margin-top:10px;}
+    .pc-hist-row{display:flex;gap:10px;padding:6px 2px;border-bottom:1px solid var(--border);font-size:13px;}
+    .pc-hist-row:last-child{border-bottom:none;}
+    .pc-hist-when{flex:0 0 92px;color:var(--muted);font-size:12px;}
+    .pc-hist-what{flex:1;color:var(--text);}
     .pc-section:last-child{border-bottom:none;}
     .pc-section-label{font-size:10px;font-weight:700;letter-spacing:2px;
       text-transform:uppercase;color:var(--muted);margin-bottom:8px;}

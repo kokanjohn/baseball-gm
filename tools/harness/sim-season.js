@@ -2657,6 +2657,10 @@ async function main() {
   // §106 the staff write back in every part of the year (here: wherever the run ended — the offseason after a full one).
   composeAudit(SM.get(), clock.get() + 40 * 60_000, `end (${SM.get().phase})`);
   if (composeMid) await checkComposeTruth(composeMid.st, composeMid.at);
+  // r253 §122.132 the player card's History over a season: our players' time out is kept
+  { const st = SM.get(); const ours = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(Boolean);
+    const kinds = {}; for (const p of ours) for (const x of p.log || []) kinds[x.kind] = (kinds[x.kind] || 0) + 1;
+    check(`history: our players' time out and work kept (${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join(', ')})`, (kinds.rest || 0) > 0); }
   check(`compose: every topic writes a clean reply from the live club (${composeStats.n} replies across the run; slowest ${composeStats.maxMs.toFixed(0)} ms)`,
         composeStats.bad.length === 0 && composeStats.slow === 0, composeStats.bad.slice(0, 3).join(' | '));
   check(`messages name real players: ${namedStats.cards} messages and replies, ${namedStats.named} players named, every one in the league (a scouts' report: on the market as it lands)`,

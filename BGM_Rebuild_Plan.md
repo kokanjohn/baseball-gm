@@ -14594,3 +14594,20 @@ No fresh team needed.
 **Checks.** test-player-work-ui: a player away training shows "3 days"; tapped, the toast says "Away training. Back Thursday." and the card stays closed. The Team screen tests, the crew-messages, message-pushes and compose UI tests pass.
 
 No fresh team needed.
+
+---
+
+## §122.132 r253 — The player card: status line and History
+
+**Status line.** Under the team line, the card shows the player's status in words, from r252's `statusOf` (same text as the Team screen toast): "Away training. Back Thursday.", "Suspended: 2 more games.", "On the IL…", etc., colored by tone (`.pc-status-{tone}`). Nothing shows when the player is available.
+
+**History, behind a button.** Near the bottom of the card (before the trade button), "Show history (N)" opens a dated list, newest first ("Today", "5 days ago"); the button flips to "Hide history (N)". Absent when there's nothing to show.
+
+**The record: `engine/PlayerLog.js`** (pure, precached).
+- `p.log`, kept for **our players only** (save size), the last 60 entries `{t, kind, text}`.
+- Written at the source: `setUnavailable` → `logAway` ("Rested (1 game)", "Out sick (…)", "Sat down", "On leave", "Suspended", "Pitched a sim game"; training is logged by its plan instead); `startPlan` → `logPlanStart` ("Training: contact with the hitting coach (2 days away)" / "Development program: …"); plan done → `logPlanDone` ("Training done: contact 47 → 53", or "…didn't move"); teaching start/end → `logTeach` ("Learning C" / "Learned C" / "Lessons at C done").
+- `historyOf(state, p)` merges `p.log` with `p.injuryLog` ("Hurt: wrist inflammation (14 days)", now the last 20, was 8) and finished `developmentPlans` from before the log existed.
+
+**Checks.** check-player-log (10/10): rest, training, lessons, no CPU logging, the status line, training done, lesson end, order, every absence kept, injuries. test-player-history-ui (dark/light): status line, button hidden-then-shown rows, Hide. Season adds "history: our players' time out and work kept" (rest 15, leave 4, training 37, suspended 1, illness 1); season 3,809/3,809, multi-season, check-player-work, check-teaching and the Team/card UI tests pass.
+
+No fresh team needed. Existing saves start logging now; injuries and recent development plans already on record show right away.
