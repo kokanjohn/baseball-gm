@@ -2355,7 +2355,7 @@ function _assignPitcherDecisions(plays, userScore, oppScore, isHome, starterOuts
  * _assignTimestamps(plays, game, wx, gameState)
  * The clock for every play (§102.2). A game is paced by its progress: ten
  * playing minutes a half-inning, spread by outs (nine innings ≈ three hours;
- * a walk-off ends early, extra innings run long). The weather's delays sit at
+ * a walk-off ends early, extra innings run long; r257 each game at its own pace, `tempo`). The weather's delays sit at
  * exactly the moments its plan has them, and add their length to everything
  * after. Each play also gets `_playMin` (playing minutes). A suspended game's
  * plays after the suspension get no clock here (`_resumeMin` instead): it's
@@ -2364,6 +2364,7 @@ function _assignPitcherDecisions(plays, userScore, oppScore, isHome, starterOuts
 function _assignTimestamps(plays, game, wx, gameState) {
   const HALF = GAME_WEATHER.HALF_MIN, MIN = 60_000;
   const startAt = wx ? wx.startAt : (game.gameTime || 0);
+  const tempo = wx?.tempo || 1;   // r257 §122.136 the game's own pace (its weather plan's)
   const n = plays.length;
   const m = new Array(n).fill(null);
   const isAnchor = (p) => !!(p._wx && !p._wx.pre);
@@ -2414,7 +2415,7 @@ function _assignTimestamps(plays, game, wx, gameState) {
     if (play._wx?.pre) { p._timestamp = play._wx.startT; return p; }
     if (split) { p._timestamp = null; p._resumeMin = Math.round((m[i] - mSplit) * 100) / 100; return p; }
     if (play.type === 'weather_resume') add += play._wx.endT - play._wx.startT;
-    let t = startAt + m[i] * MIN + add;
+    let t = startAt + m[i] * MIN * tempo + add;
     if (play.type === 'weather_delay') t = play._wx.startT;   // the plan's moment (the same, by construction)
     if (play.type === 'game_suspended') { t = callT ?? t; split = true; mSplit = m[i]; }
     if (play.type === 'game_end' && gameState?.ruling?.outcome === 'final' && callT != null) t = callT;
@@ -2435,7 +2436,7 @@ function _weatherSetup(weather, game) {
   const events = plan.delays.filter(d => d.startT >= plan.startAt).map(d => ({ ...d }));
   if (plan.outcome === 'called' && events.length) Object.assign(events[events.length - 1], { call: true, calledBy: plan.calledBy });
   return { startAt: plan.startAt, pre: plan.delays.filter(d => d.startT < plan.startAt), events, next: 0,
-           env: weather.conditions || [], log: [] };
+           env: weather.conditions || [], log: [], tempo: plan.tempo || 1 };   // r257 the game's pace
 }
 
 /**
@@ -2622,7 +2623,7 @@ export function resumeTimeline(resumePlays, plan, suspendedPlay) {
       out.push({ ..._weatherPlay('weather_resume', d, here), cumOurScore: prev.cumOurScore, cumTheirScore: prev.cumTheirScore, _timestamp: d.endT });
       add += d.endT - d.startT;
     }
-    out.push({ ...p, _timestamp: Math.round(startAt + m * 60_000 + add) });
+    out.push({ ...p, _timestamp: Math.round(startAt + m * 60_000 * (plan.tempo || 1) + add) });
   }
   return out;
 }

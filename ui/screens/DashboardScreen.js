@@ -564,6 +564,9 @@ function _renderDashboard(state) {
   const springTotal  = springGames.length;
   const isSpring     = phase === 'SPRING_TRAINING';
   const gamesPlayed  = wins + losses;
+  const springW = team.springWins || 0, springL = team.springLosses || 0;
+  // r257 in spring the cards count the spring games (the season's start at 0–0 on Opening Day)
+  const cardW = isSpring ? springW : wins, cardL = isSpring ? springL : losses;
 
   let bannerGame, bannerRecord;
   const POST = { PLAYOFF_BRACKET_BUILD: 'POSTSEASON', WILD_CARD: 'WILD CARD', FIRST_ROUND: 'FIRST ROUND',
@@ -573,10 +576,12 @@ function _renderDashboard(state) {
     bannerGame   = POST[phase];
     bannerRecord = `${wins}–${losses} season · ${team.postseasonWins || 0}–${team.postseasonLosses || 0} postseason`;
   } else if (isSpring) {
-    bannerGame   = springPlayed === 0 ? 'SPRING TRAINING' : `SPRING GAME ${springPlayed}`;
-    bannerRecord = springPlayed === 0 ? 'First game coming up' : `${springPlayed} of ${springTotal}`;
+    // r257 §122.136 the game being played or next up (it was the count played: "Spring Game 1" after game 1)
+    const n = Math.min(springPlayed + 1, springTotal);
+    bannerGame   = springPlayed >= springTotal ? 'SPRING COMPLETE' : `SPRING GAME ${n}`;
+    bannerRecord = springPlayed >= springTotal ? `${springW}–${springL} · Spring record` : `${n} of ${springTotal}${springPlayed ? ` · ${springW}–${springL}` : ''}`;
   } else {
-    bannerGame   = gamesPlayed === 0 ? 'OPENING DAY' : `GAME ${gamesPlayed}`;
+    bannerGame   = gamesPlayed === 0 ? 'OPENING DAY' : `GAME ${gamesPlayed + 1}`;
     bannerRecord = `${wins}–${losses}${ties ? `–${ties}` : ''} · Season record`;
   }
 
@@ -599,12 +604,12 @@ function _renderDashboard(state) {
         <div class="stat-card c-green" id="dash-wins-card"
           style="flex-direction:column;align-items:center;justify-content:center;padding:10px 8px;cursor:pointer;">
           <div class="stat-label" style="text-align:center;">Wins</div>
-          <div class="stat-value">${wins}</div>
+          <div class="stat-value">${cardW}</div>
         </div>
         <div class="stat-card c-red" id="dash-losses-card"
           style="flex-direction:column;align-items:center;justify-content:center;padding:10px 8px;cursor:pointer;">
           <div class="stat-label" style="text-align:center;">Losses</div>
-          <div class="stat-value">${losses}</div>
+          <div class="stat-value">${cardL}</div>
         </div>
         <div class="stat-card ${ovrClass}" id="dash-rating-card"
           style="flex-direction:column;align-items:center;justify-content:center;padding:10px 8px;cursor:pointer;">
@@ -1440,10 +1445,12 @@ function _fitRadar() {
 function _openGameLogModal(state, filter) {
   document.getElementById('dash-game-log-overlay')?.remove();
 
+  // r257 the games the card counts: the spring's in spring, the season's after (it listed both)
+  const spring = state.phase === 'SPRING_TRAINING';
   const committed = (state.schedule || []).filter(g =>
-    g._committed && (filter === 'wins' ? g.result === 'win' : g.result === 'loss')
+    g._committed && (spring ? g.isSpring : !g.isSpring && !g.isPlayoff) && (filter === 'wins' ? g.result === 'win' : g.result === 'loss')
   );
-  const title = `${filter === 'wins' ? 'Wins' : 'Losses'} (${committed.length})`;
+  const title = `${spring ? 'Spring ' : ''}${filter === 'wins' ? 'Wins' : 'Losses'} (${committed.length})`;
   const MONTHS = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
   const rows = !committed.length

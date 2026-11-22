@@ -25,7 +25,8 @@
  *
  * The plan is in real time plus "playing minutes": SimEngine paces a game at
  * ten playing minutes a half-inning (nine innings = PLAY_MIN), and the plan
- * turns playing minutes into the clock. A plan covers PLAN_MAX_MIN of play
+ * turns playing minutes into the clock at the game's own pace (r257 `tempo`,
+ * `gameTempo`: some games move, some drag). A plan covers PLAN_MAX_MIN of play
  * (13½ innings) — a game uses as much of it as it lasts, so a delay or call
  * the plan has after the game is over simply never happens. Whether a called
  * game is official or suspended depends on the innings and score at that
@@ -178,6 +179,16 @@ export function crewTrouble(ctx, venueId, field = null) {
   };
 }
 
+/**
+ * r257 §122.136 a game's pace: wall-clock minutes per playing minute, the same for anyone who asks (the venue and
+ * the first pitch decide it). Two draws averaged: most games near the middle, a few quick ones and a few long ones.
+ */
+export function gameTempo(ctx, venueId, gameTime) {
+  const vk = hashString(String(venueId)), k = Math.round((gameTime || 0) / MIN);
+  const u = (hash01(ctx.seed, 7401, vk, k) + hash01(ctx.seed, 7402, vk, k)) / 2;
+  return Math.round((GW.TEMPO_MIN + (GW.TEMPO_MAX - GW.TEMPO_MIN) * u) * 1000) / 1000;
+}
+
 // ── The game, five minutes at a time ────────────────────────────────────────
 
 /**
@@ -200,6 +211,7 @@ function _run(ctx, sample, gameTime, state, opts = {}) {
   const delays = (state.delays || []).map(d => ({ ...d }));
   const until = opts.until ?? GW.PLAN_MAX_MIN;
   const hardEnd = gameTime + 18 * 60 * MIN;
+  const tempo = opts.tempo || 1;   // r257 the game's pace: five minutes on the clock is 5 / tempo playing minutes
 
   const finish = (outcome, extra = {}) => {
     if (delay) delays.push({ ...delay, endT: t });
@@ -217,9 +229,10 @@ function _run(ctx, sample, gameTime, state, opts = {}) {
         delay = { startT: t, atPlayMin: played, reason: why, mm: 0, lastLightning: s.lightning ? t : -Infinity, dryFrom: null, resumeAt: null };
       } else {
         if (startAt == null) startAt = t;   // first pitch: the first playable moment (a stop before it is a delayed start)
-        played += GW.STEP_MIN;
+        played += GW.STEP_MIN / tempo;
         t += STEP;
-        if (played >= until) return { outcome: PLAN_OUTCOME.PLAYED, delays, startAt, endT: t, played };
+        // (the span ends exactly where its last playing minute falls on the clock, not at the next five-minute step)
+        if (played >= until) return { outcome: PLAN_OUTCOME.PLAYED, delays, startAt, endT: Math.round(t - (played - until) * tempo * MIN), played: until };
         continue;
       }
     }
@@ -354,7 +367,8 @@ function _forecastSaysNo(ctx, venue, gameTime, state, issueT, F = NO_FIELD, P = 
   const look = () => sample;
   const st = state || _pregame(sample, gameTime, F, { look }).state;
   const notStarted = st.startAt == null;
-  const r = _run(fctx, sample, gameTime, st, { field: F, patience: P, look, until: notStarted ? GW.OFFICIAL_PLAY_MIN : Math.min(GW.PLAN_MAX_MIN, st.played + GW.STEP_MIN) });
+  const r = _run(fctx, sample, gameTime, st, { field: F, patience: P, look, tempo: gameTempo(ctx, venue.teamId, gameTime),
+                                                until: notStarted ? GW.OFFICIAL_PLAY_MIN : Math.min(GW.PLAN_MAX_MIN, st.played + GW.STEP_MIN) });
   if (r.outcome !== PLAN_OUTCOME.PLAYED) return r;
   // (A first pitch this late is as good as none: the club calls it rather than keep everyone waiting.)
   if (notStarted && r.startAt - gameTime >= P.callLate * MIN) return { ...r, outcome: PLAN_OUTCOME.POSTPONED, reason: r.delays[0]?.reason ?? STOP_REASON.RAIN };
@@ -416,7 +430,8 @@ export function gameWeatherPlan(ctx, game, opts = {}) {
   // r170 our park's field (drainage, the game's prep): null elsewhere
   const F = gameParams(game), field = game.field || null;
   const P = patienceOf(game);
-  const base = { v: PLAN_VERSION, venueId: venue.teamId, gameTime, playMin: GW.PLAY_MIN, field, fieldKey: fieldKey(field), planKey: planKey(game), patience: P.key };
+  const tempo = gameTempo(ctx, venue.teamId, gameTime);   // r257
+  const base = { v: PLAN_VERSION, venueId: venue.teamId, gameTime, playMin: GW.PLAY_MIN, tempo, field, fieldKey: fieldKey(field), planKey: planKey(game), patience: P.key };
   const sample = _sampler(ctx, venue.x, venue.y);
   const luck = crewTrouble(ctx, venue.teamId, field);
   const trouble = (k) => Math.round(luck(k) * (1 - F.troubleCut));
@@ -458,7 +473,7 @@ export function gameWeatherPlan(ctx, game, opts = {}) {
         delay: { startT: gameTime, atPlayMin: 0, reason: STOP_REASON.FIELD, mm: 0, lastLightning: -Infinity, dryFrom: gameTime, resumeAt: null, fieldOnly: true } }
     : pg.state;
   const r = _run(ctx, sample, gameTime, start, {
-    field: F, patience: P, trouble, look,
+    field: F, patience: P, trouble, look, tempo,
     crew: (st) => _forecastSaysNo(ctx, venue, gameTime, st, st.t, F, P),
   });
   const out = {
@@ -532,7 +547,7 @@ export function projectGame(ctx, game, plan, atT, opts = {}) {
     ? { t: gameTime, phase: 'delay', played: 0, startAt: null,
         delay: { startT: gameTime, atPlayMin: 0, reason: STOP_REASON.FIELD, mm: 0, lastLightning: -Infinity, dryFrom: gameTime, resumeAt: null, fieldOnly: true } }
     : pg.state;
-  const r = _run(ctx, sample, gameTime, start, { field: F, patience: P, trouble, look, until: opts.until ?? GW.STEP_MIN });
+  const r = _run(ctx, sample, gameTime, start, { field: F, patience: P, trouble, look, tempo: plan?.tempo || gameTempo(ctx, venue.teamId, gameTime), until: opts.until ?? GW.STEP_MIN });
   const late = r.startAt != null && r.startAt - gameTime >= P.callLate * MIN;
   return { outcome: r.outcome, startAt: r.startAt, delays: r.delays.map(_cleanDelay), played: r.played, late, reason: r.reason ?? r.delays[0]?.reason ?? null };
 }
@@ -544,7 +559,7 @@ export function projectGame(ctx, game, plan, atT, opts = {}) {
  */
 export function playClock(plan, playMin) {
   if (plan.startAt == null) return null;
-  let t = plan.startAt + playMin * MIN;
+  let t = plan.startAt + playMin * MIN * (plan.tempo || 1);   // r257 the game's pace
   for (const d of plan.delays) if (d.atPlayMin > 0 && d.atPlayMin <= playMin && d.startT >= plan.startAt) t += d.endT - d.startT;
   return t;
 }

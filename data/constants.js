@@ -637,6 +637,9 @@ export const WEATHER_OFFICIAL_INNINGS        = 5;     // innings completed → g
 export const GAME_WEATHER = Object.freeze({
   STEP_MIN:            5,     // the venue is checked every 5 minutes
   PLAY_MIN:            180,   // nine innings of playing time: SimEngine paces each half-inning at 10 minutes
+  // r257 §122.136 each game's own pace: wall-clock minutes per playing minute (a quick game ≈ 2:35, a long one ≈ 3:30)
+  TEMPO_MIN:           0.84,
+  TEMPO_MAX:           1.14,
   HALF_MIN:            10,
   PLAN_MAX_MIN:        270,   // a plan covers up to 13½ innings of play (the game uses as much as it lasts)
   OFFICIAL_PLAY_MIN:   100,   // ≈ 5 innings of playing time (the sim decides by the actual innings)

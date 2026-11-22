@@ -35,7 +35,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r256';
+export const APP_VERSION = 'tfo-v2-r257';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -258,7 +258,12 @@ export function updateHeader(state) {
   if (seasonEl) {
     const gameIdx = state.currentGameIndex || 0;
     const phase   = formatPhaseLabel(state.phase);
-    seasonEl.textContent = `S${state.seasonNum || 1} · ${phase} · G${gameIdx + 1}`;
+    // r257 §122.136 the game's number within its part of the year (the dashboard banner's): spring games count
+    // the spring, the season's its own (Opening Day was "G11"); none in the postseason.
+    const sched = state.schedule || [], g = sched[gameIdx];
+    const kind = (x) => (x?.isPlayoff ? 'p' : x?.isSpring ? 's' : 'r');
+    const n = g && kind(g) !== 'p' ? sched.slice(0, gameIdx).filter(x => kind(x) === kind(g)).length + 1 : null;
+    seasonEl.textContent = `S${state.seasonNum || 1} · ${phase}${n ? ` · G${n}` : ''}`;
   }
 
   if (tierEl) {

@@ -14693,3 +14693,24 @@ No fresh team needed.
 - check-emergencies picks a stormy night's weather for the storm versions.
 
 No fresh team needed.
+
+---
+
+## §122.136 r257 — Each game at its own pace; the dashboard's game number
+
+**Recent: every first spring game ended "12m ago".** A game's clock was ten playing minutes a half-inning for every game (§102.2), so a day's games that started together ended within a minute or two of each other (only a skipped bottom of the ninth or extra innings moved them). Now every game has its own pace: `GameWeather.gameTempo(ctx, venueId, gameTime)` gives wall-clock minutes per playing minute, from 0.84 to 1.14 (`GAME_WEATHER.TEMPO_MIN/MAX`). It is two seeded draws averaged, so most games sit near the middle, with a few quick ones and a few long ones. Nine innings take about 2:30 to 3:25.
+- It's on the weather plan (`plan.tempo`). The plan's run counts five minutes on the clock as 5 / tempo playing minutes, `playClock` multiplies by it, SimEngine's `_assignTimestamps` and `resumeTimeline` use the plan's, and the forecast checks and `projectGame` use the same pace. So a delay still sits exactly where the plan has it, and the game's plays and its weather agree.
+- Playing minutes still map to innings (ten a half), so everything that reads innings from them (official after five, the weather's place in the game) is unchanged.
+- A played plan's span now ends exactly at its last playing minute, not at the next five-minute step.
+- Plans already made (saved games) have no tempo and keep the old pace (1).
+
+**The banner named the last game played.** After spring game 1 it still said "SPRING GAME 1 · 1 of 10". It now names the game being played or next up: "SPRING GAME 2 · 2 of 10 · 1–0" (and "SPRING COMPLETE" after the tenth). In the season it's "GAME N+1" after N, with "OPENING DAY" first.
+- The header's "G" number counts within the part of the year: spring games count the spring, and the season counts its own (Opening Day was "G11", after the ten spring games). There's none in the postseason.
+- In spring the Wins and Losses cards show the spring record (they stayed 0). Their list shows the spring's games ("Spring Wins (1)"), and after Opening Day only the season's (it had mixed both).
+
+**Checks.**
+- New check-game-pace: games with no weather take 2:32 to 3:15 here (2:25 to 3:50 allowed). Games that start together end at their own times (5 games over 41 minutes). Recent shows each final at its own minute. Every game's pace is its plan's, the same every time.
+- New test-spring-banner-ui (dark and light).
+- check-weather, check-game-sim-weather, check-weather-story and check-weather-decisions pass with the pace.
+
+No fresh team needed. Games planned from now on get their own pace.
