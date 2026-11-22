@@ -20,7 +20,7 @@ import { formatK } from './CardTokens.js';
 import { scoutEye as directorEye, scoutLooks } from './CoachEngine.js';
 import { dealByKey, fieldRead, suggestCounter, COUNTER_MARGIN, shopPlayer } from './TradeAdvice.js';
 import { evaluateTrade, remainingShare, yearsAfterThis, rapportGrade, rapportOf, wouldStart, scoutRead, tradeBlockers, ourSideBlocker } from './TradeEngine.js';
-import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teachRead, stretchRead } from './PlayerWork.js';
+import { coachRead, programRead, restRead, healthRead, isPitcher as isArm, teachRead, stretchRead, whoRead, WHO_SKILLS } from './PlayerWork.js';
 import { PLAYER_WORK, POSITION_RULES } from '../data/constants.js';
 import { posLabel, pitchRoles, primaryPos } from './Positions.js';   // r163 §122.35, r206
 import { strategyOf, battingOrder, recommendOrder, styleChoices, ORDER_STYLES, RUN_STYLES, HOOK_STYLES, penRolesOf } from './Strategy.js';   // r169
@@ -1025,7 +1025,7 @@ const TOPIC_LABELS = {
   bc_tactics: 'the running game', pc_bullpen: 'the bullpen', pc_roles: 'the bullpen roles', tix_attendance: 'attendance',
   tix_promo: 'a promotion', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
-  sc_retire: 'a player\'s plans', hc_work: 'the work', pc_work: 'the work', bc_defense: 'the glove work', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
+  sc_retire: 'a player\'s plans', hc_work: 'the work', pc_work: 'the work', bc_defense: 'the glove work', bc_work: 'the work', bc_who: 'who to work with', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
 };
 
 
@@ -1407,18 +1407,25 @@ const busyWords = (f, plan, who) => {
   return `${who} working with ${p?.name || 'another player'} on ${plan.keys.join(' and ')} right now, with about ${plural(days, 'day')} to go.`;
 };
 
-/** The hitting or pitching coach on working with one player on one skill. */
-function coachWork(f, r, who, arg) {
+/**
+ * The hitting or pitching coach (or the bench coach, the glove) on working with one player on one skill.
+ * r251 §122.130 asked of the Bench Coach (all the development work is theirs to set up): a skill that's the hitting
+ * or pitching coach's is still that coach's work, so the reply names them ("Diaz can fold it in…") where the coach
+ * answering for themself says "I".
+ */
+function coachWork(f, r, who, arg, { via = false } = {}) {
   const st = f.state, read = arg?.playerId ? coachRead(st, arg.playerId, arg.skill, f.atMs) : null;
   const p = arg?.playerId ? st.players[arg.playerId] : null;
   if (!read) return { body: [`${p?.name || 'That player'} isn't with the club right now, so there's nothing to work on.`], memo: {}, topic: 'that player' };
   const { skill, value } = read, name = p.name;
   const topic = `${name}'s ${skill}`;
+  const other = via && read.coach !== 'benchCoach' ? (f.u.coachingStaff?.[read.coach]?.name || (read.coach === 'hittingCoach' ? 'The hitting coach' : 'The pitching coach')) : null;
+  const I = other || 'I', Im = other ? `${other} is` : "I'm", me = other || 'me', Ill = other ? `${other} will` : "I'll";
   if (p.isInjured) return { body: [`${name} is hurt. The work waits until ${name} is back.`], memo: { playerId: p.id }, topic };
   if (read.busy) {
     const mine = read.busy.playerId === p.id;
-    return { body: [mine ? `I'm already working with ${name} on ${read.busy.keys.join(' and ')}. One thing at a time.`
-                         : `${busyWords(f, read.busy, "I'm")} I take one player at a time, so I can start with ${name} once that's done.`],
+    return { body: [mine ? `${Im} already working with ${name} on ${read.busy.keys.join(' and ')}. One thing at a time.`
+                         : `${busyWords(f, read.busy, Im)} ${other ? `${other} takes` : 'I take'} one player at a time, so ${other ? `${other} can` : 'I can'} start with ${name} once that's done.`],
              memo: { playerId: p.id }, topic };
   }
   if (read.already) return { body: [`${name} already has a plan on ${skill} running. Let it land first.`], memo: { playerId: p.id }, topic };
@@ -1427,9 +1434,9 @@ function coachWork(f, r, who, arg) {
   if (skill === 'defense' && primaryPos(p) === 'DH') out.push(`${name} is our DH, so this only pays off if ${name} plays the field.`);
   const spot = isArm(p) ? (p.pos === 'SP' ? 'between starts' : 'in the bullpen sessions') : 'before games';
   if (read.kind === 'tweaks') {
-    out.push(`This doesn't need time away. I'll fold it into the work we already do ${spot}: extra reps and a couple of adjustments. ${name} stays available, and it costs us nothing.`);
+    out.push(`This doesn't need time away. ${Ill} fold it into the work we already do ${spot}: extra reps and a couple of adjustments. ${name} stays available, and it costs us nothing.`);
   } else {
-    out.push(`This needs focused work: ${plural(read.days, 'day')} away from the club with me at the complex, about ${formatK(read.costK)} for the extra ${skill === 'defense' ? 'field' : 'cage'} and staff time.`);
+    out.push(`This needs focused work: ${plural(read.days, 'day')} away from the club with ${me} at the complex, about ${formatK(read.costK)} for the extra ${skill === 'defense' ? 'field' : 'cage'} and staff time.`);
     out.push(windowWords(f, name, read.window));
     out.push(`The offer stands for ${plural(PLAYER_WORK.offerDays, 'day')}, so you can pick the day.`);
   }
@@ -1440,7 +1447,7 @@ function coachWork(f, r, who, arg) {
       playerId: p.id, onYes: 'coach_work', yesLabel: read.kind === 'tweaks' ? 'Start the Work' : 'Start the Work Now', noLabel: 'Not Now',
       work: { skill, owner: read.coach, days: read.days, gain: read.gain, source: read.coach === 'hittingCoach' ? 'hc_work' : read.coach === 'benchCoach' ? 'bc_defense' : 'pc_work' },
       costK: read.costK || 0, expiresInMs: PLAYER_WORK.offerDays * 86_400_000,
-      yesMsg: read.kind === 'tweaks' ? `I'll start with ${name} today.` : `${name} is with me for the next ${plural(read.days, 'day')}.`,
+      yesMsg: read.kind === 'tweaks' ? `${Ill} start with ${name} today.` : `${name} is with ${me} for the next ${plural(read.days, 'day')}.`,
       noMsg: 'Understood. Another time.',
     },
   };
@@ -1448,6 +1455,57 @@ function coachWork(f, r, who, arg) {
 W.hc_work = coachWork;
 W.pc_work = coachWork;
 W.bc_defense = (f, r, who, arg) => coachWork(f, r, who, { ...arg, skill: 'defense' });   // r207 §122.85
+// r251 §122.130 the Bench Coach sets up all the development work: any player, any skill (the right coach does it)
+W.bc_work = (f, r, who, arg) => coachWork(f, r, who, arg, { via: true });
+
+/**
+ * r251 §122.130 the Bench Coach on who to work with on one skill: the best three, by the odds or by what it's worth
+ * to the club, each with where it stands, the odds and what it takes; a button for each (who_work).
+ */
+const WHO_SKILL_WORDS = { contact: 'contact', power: 'power', speed: 'speed', defense: 'defense', stuff: 'stuff', control: 'control', stamina: 'stamina' };
+W.bc_who = (f, r, who, arg) => {
+  const st = f.state, skill = arg?.skill, rank = arg?.rank === 'help' ? 'help' : 'likely', where = arg?.where === 'program' && skill !== 'defense' ? 'program' : 'coach';
+  const read = whoRead(st, skill, rank, where, f.atMs);
+  const sw = WHO_SKILL_WORDS[skill] || skill;
+  const topic = skill ? `who to work with on ${sw}` : 'who to work with';
+  if (!read) return { body: ['Tell me which skill and I\'ll tell you who.'], memo: {}, topic };
+  const coachName = read.owner === 'program' ? null : read.owner === 'benchCoach' ? null : (f.u.coachingStaff?.[read.owner]?.name || null);
+  const out = [];
+  const how = rank === 'help' ? `who'd help us most if their ${sw} came along` : `who's most likely to improve their ${sw}`;
+  if (!read.list.length) return { body: [`I looked at ${how}, and there's nobody I'd put on it right now: everyone's hurt, away, already working on it, or has nothing left to find.`], memo: {}, topic };
+  out.push(`You asked ${how}${where === 'program' ? ' at the complex' : ''}. Here's my list, best first.`);
+  const line = (x, i) => {
+    const p = x.p, rd = x.read;
+    const at = WHO_SKILLS.pitcher.includes(skill) ? (st.userTeam.rotation?.order || []).includes(p.id) ? 'in the rotation' : p.group === 'bp' ? 'in the bullpen' : 'on the pitcher bench'
+      : (st.userTeam.lineupSlots || []).some(sl => sl.playerId === p.id) ? 'in the lineup' : 'on the bench';
+    const what = where === 'program' ? `${plural(rd.days, 'day')} at the complex, ${formatK(rd.costK)}`
+      : rd.kind === 'tweaks' ? 'extra reps in practice, no time away, no cost' : `${plural(rd.days, 'day')} away, ${formatK(rd.costK)}`;
+    const room = { lots: 'plenty of room left', some: 'some room left', 'a little': 'a little room left', 'very little': 'very little room left' }[rd.room] || '';
+    return `${i + 1}. ${p.name} (${posLabel(p)}, ${at}): ${sw} ${rd.value}, ${rd.odds} odds, ${room}. ${what[0].toUpperCase()}${what.slice(1)}.`;
+  };
+  out.push(read.list.map(line).join('\n'));
+  if (read.busy) {
+    const bp = f.P(read.busy.playerId);
+    out.push(`${read.owner === 'program' ? 'The complex has' : `${coachName || 'I'} ${coachName ? 'has' : 'have'}`} ${bp?.name || 'another player'} right now, one at a time. Whoever you pick goes next, once that's done.`);
+    return { body: out, memo: { skill, rank, where }, topic };
+  }
+  out.push('Some of it takes right away and some takes weeks, and sometimes it just doesn\'t take. Pick one and I\'ll get it started.');
+  const works = {};
+  for (const x of read.list) {
+    const rd = x.read;
+    works[x.p.id] = { skill, owner: read.owner, days: rd.days || 0, gain: rd.gain, source: where === 'program' ? 'sc_program' : `bc_who`, costK: rd.costK || 0 };
+  }
+  return {
+    body: out, memo: { skill, rank, where }, topic,
+    decision: {
+      team: true, onYes: 'who_work', recommend: false, noLabel: 'Not Now', expiresInMs: PLAYER_WORK.offerDays * 86_400_000,
+      choices: read.list.map(x => ({ key: x.p.id, label: `${where === 'program' ? 'Send' : 'Work with'} ${x.p.name}`,
+        sub: where === 'program' || x.read.kind !== 'tweaks' ? `${plural(x.read.days, 'day')} away, ${formatK(x.read.costK)}` : 'Extra reps, no time away' })),
+      card: { _whoWorks: works },
+      yesMsg: 'Started. I\'ll tell you how it goes.', noMsg: 'Understood. Another time.',
+    },
+  };
+};
 
 /** r167 §122.35 the pitching coach on stretching one pitcher out (sim games). */
 W.pc_stretch = function pitchStretch(f, r, who, arg) {

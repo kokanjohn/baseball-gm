@@ -33,7 +33,7 @@ const TRADE_PASSED = new Set(['trade_decline', 'talk_walk', 'lt_pass', 'talk_bac
 const SIGN = new Set(['os_fa_sign', 'sign_acquire_hitter', 'sign_veteran_hitter', 'sign_acquire_pitcher', 'sign_prospect_pitcher', 'sign_intl_player',
   'sign_intl_flyer', 'sign_dfa', 'fa_pos_sign', 'claim_next', 'os_mgr_hire_a', 'os_mgr_hire_b', 'os_hire_a', 'os_hire_b', 'st_push', 'dl_ahead']);
 const PASS = new Set(['os_fa_pass', 'dl_hold']);
-const DEVELOP = new Set(['train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'offday_session', 'coach_work', 'dev_program', 'teach_position',
+const DEVELOP = new Set(['train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'offday_session', 'coach_work', 'who_work', 'dev_program', 'teach_position',
   'sim_games', 'day_off', 'arm_rest', 'rest_active_hitter', 'bench_active_pitcher', 'audition_promote', 'callup_hitter']);
 
 const add = (d, k, v) => { if (v) d[k] = Math.round(((d[k] || 0) + v) * 100) / 100; };

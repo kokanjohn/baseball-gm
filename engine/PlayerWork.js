@@ -27,6 +27,7 @@ import { dice, diceSeed, withDice, eventRand } from './Dice.js';
 import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { gainMultiplier, roomLeft, activeWork, setUnavailable, startPlan, wearOf, developmentStatus } from './DevelopmentEngine.js';
 import { armLoad } from './PitchingEngine.js';
+import { penRoleOf } from './Strategy.js';   // r251 §122.130
 
 const DAY = 86_400_000, HOUR = 3_600_000;
 const GAME_SPAN = 3.5 * HOUR;   // a game, first pitch to the last out (when a start "after the game" begins)
@@ -150,6 +151,56 @@ export function coachRead(state, playerId, skill, atMs) {
     window: days ? bestStart(state, atMs, days) : null,
   };
 }
+
+/**
+ * r251 §122.130 whoRead(state, skill, rank, where, atMs) — the Bench Coach on who to work with on one skill.
+ *   rank 'likely': who's most likely to improve — the same odds the work rolls on (age, trait, the coach,
+ *                  the room left in the skill).
+ *   rank 'help':   who'd help the team most — the gain those odds expect, times how much the skill is worth
+ *                  where the player plays: a starter more than the bench; power at 1B/DH/OF, speed at CF/SS/2B,
+ *                  the glove at C/SS/CF more than 1B (a DH's not at all); stamina for a starting pitcher, the
+ *                  rotation and the late innings more than the pitcher bench.
+ *   where 'coach' (the skill's coach: tweaks or focused days) or 'program' (a week at the complex; not the glove).
+ * @returns {{ skill, rank, where, owner, busy, list: [{ p, read, score, why }] }} the best three, best first
+ *   (players already on a plan for that skill, hurt or away left out).
+ */
+export const WHO_SKILLS = Object.freeze({ hitter: ['contact', 'power', 'speed', 'defense'], pitcher: ['stuff', 'control', 'stamina'] });
+export function whoRead(state, skill, rank = 'likely', where = 'coach', atMs = Date.now()) {
+  const forArms = WHO_SKILLS.pitcher.includes(skill);
+  if (!forArms && !WHO_SKILLS.hitter.includes(skill)) return null;
+  if (skill === 'defense') where = 'coach';
+  const owner = where === 'program' ? 'program' : skill === 'defense' ? 'benchCoach' : forArms ? 'pitchingCoach' : 'hittingCoach';
+  const u = state.userTeam || {};
+  const slots = u.lineupSlots || [];
+  const slotOf = (p) => slots.find(sl => sl.playerId === p.id)?.slot || null;
+  const rot = u.rotation?.order || [];
+  const weight = (p) => {
+    if (forArms) {
+      const role = rot.includes(p.id) ? 'rotation' : penRoleOf(u, p.id) ? 'late' : p.group === PLAYER_GROUP.BULLPEN ? 'pen' : 'bench';
+      const w = { rotation: 1, late: 0.8, pen: 0.6, bench: 0.25 }[role];
+      return skill === 'stamina' ? w * (role === 'rotation' ? 1.3 : role === 'bench' && p.pos === 'SP' ? 1 : 0.3) : w;
+    }
+    const sl = slotOf(p), w = sl ? 1 : 0.35, at = sl || primaryOf(p);
+    if (skill === 'power') return w * (['1B', 'DH', 'OF'].includes(at) ? 1.15 : 1);
+    if (skill === 'speed') return w * (['OF', 'SS', '2B'].includes(at) ? 1.15 : at === 'C' ? 0.7 : 1);
+    if (skill === 'defense') return w * ({ C: 1.3, SS: 1.3, OF: 1.1, '2B': 1.1, '3B': 1.1, '1B': 0.8, DH: 0 }[at] ?? 1);
+    return w;
+  };
+  const list = (u.rosterIds || []).map(id => state.players?.[id])
+    .filter(p => workable(state, p) && isP(p) === forArms && !p.isInjured && isAvailable(p))
+    .map(p => {
+      const read = where === 'program' ? programRead(state, p.id, skill, atMs) : coachRead(state, p.id, skill, atMs);
+      if (!read || read.already) return null;
+      const mult = gainMultiplier(state, p, owner === 'benchCoach' ? 'benchCoach' : null) * roomLeft(read.value);
+      const score = rank === 'help' ? mult * read.gain * weight(p) : mult;
+      return score > 0 ? { p, read, score } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || a.read.value - b.read.value)
+    .slice(0, 3);
+  return { skill, rank, where, owner, busy: activeWork(state, owner), list };
+}
+const primaryOf = (p) => { const x = (p.positions?.primary || String(p.pos || '').split('/')[0]); return /^(LF|CF|RF)$/.test(x) ? 'OF' : x; };
 
 /**
  * programRead(state, playerId, skill, atMs)

@@ -211,6 +211,25 @@ const work = {
   },
 };
 
+/**
+ * r251 §122.130 the Bench Coach's "who should we work on": the player the GM picked from the list, with the work
+ * the reply described for them (the coach's or the complex's), its cost out of club funds.
+ */
+const whoWork = {
+  feasible(st, c) {
+    const id = pickOf(c), w = c._whoWorks?.[id], p = st.players[id];
+    if (!w || !workable(st, p) || p.isInjured || !isAvailable(p)) return false;
+    if (activeWork(st, w.owner)) return false;
+    if ((st.developmentPlans || []).some(x => x.status === 'active' && x.playerId === p.id && x.keys.includes(w.skill))) return false;
+    return !(w.days > 0) || canSpare(st, p.id);
+  },
+  apply(d, c, atMs) {
+    const id = pickOf(c), w = c._whoWorks[id];
+    if (w.costK) postMoney(d.userTeam.finances, -w.costK, 'cards', `${w.owner === 'program' ? 'Development program' : 'Focused work'}: ${d.players[id]?.name || ''}`, atMs);
+    return startWork(d, { playerId: id, skill: w.skill, owner: w.owner, days: w.days || 0, gain: w.gain, source: w.source }, atMs);
+  },
+};
+
 /** r159 §122.31 a day off the GM asked for: the hitter sits the next game (his wear clears). */
 /** r161 §122.33 rest for one of our arms: a starter skips his next turn, a reliever is down two days. */
 const armRest = {
@@ -737,6 +756,7 @@ export const CARD_ACTIONS = Object.freeze({
   bench_active_hitter:  away((raw) => raw.tag === 'DISCIPLINE' ? 'suspended' : raw.tag === 'HEALTH' ? 'illness' : 'benched', 2),
   train_hitter:         train,
   coach_work:           work,      // r159 §122.31
+  who_work:             whoWork,   // r251 §122.130
   teach_position:       teach,     // r166 §122.35
   fa_pos_sign:          faPosSign, // r168 §122.35
   claim_next:           claimNext, // §122.66

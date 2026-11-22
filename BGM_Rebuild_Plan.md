@@ -14530,3 +14530,48 @@ No fresh team needed.
 - test-game-pushes-ui: Settings shows six kinds, Game Start first, all on. Turning Game Start off takes the first-pitch push out of the registered schedule.
 
 No fresh team needed.
+
+---
+
+## §122.130 r251 — All the development work through the Bench Coach; "Who should we work on…?"
+
+**The decision (the GM's, after a look at what each staffer does).** The bench coach stays: it moves the running game and the defense in the sim, sets how the glove work goes, writes the position messages, and is hired, paid and reviewed like the others. The batting order, the hook and the running game stay as topics, because the GM decides them (`set_strategy`). Development was spread over four people (the Hitting Coach, the Pitching Coach, the Bench Coach for the glove, Scouting for the complex). It now all goes through the **Bench Coach**. Scouting no longer runs training.
+
+**Compose → Bench Coach:**
+- **The running game** (unchanged).
+- **Work with a player on…** (`bc_work`): any player, any skill (a hitter's contact, power, speed or defense; a pitcher's stuff, control or stamina). This replaces "Work with a hitter on…" (hc_work), "Work with a pitcher on…" (pc_work) and "Work with a hitter on defense" (bc_defense). The skill's coach still does the work, and that coach's quality and relationship still set the odds. The reply names them ("…2 days away from the club with Delvecchio at the complex"); the glove is the bench coach's own ("I").
+- **Who should we work on…?** (`bc_who`, new; no cooldown, since the GM can ask about each skill). Three steps: a skill (Hitters: contact, power, speed, defense; Pitchers: stuff, control, stamina), **Rank by** (Most likely to improve / Most help to the team), and **Where** (With the coach / At the complex; none for defense, which is the coach's only).
+  - The reply lists the best three, numbered, each with: position and where they play, the rating, the odds, the room left, and what it takes (extra reps at no cost, or days away and the price).
+  - A button for each: "Work with Molina" / "Send Molina" (`who_work`; the cost comes out of club funds when picked), plus Not Now.
+  - If that coach (or the complex) already has someone, the list comes with who, and no buttons (one at a time).
+- **A development program** (`sc_program`, moved from Scouting, the same work).
+- **Teach a player a position** (unchanged).
+- Stays where it was: "Stretch a pitcher out" (Pitching Coach: it's pitching-specific), and the development check-ins' plan offers (Hitting Coach, Pitching Coach), as shortcuts.
+
+**The ranking (PlayerWork `whoRead`).**
+- **Most likely:** the odds the work rolls on: `gainMultiplier × roomLeft` (age, trait, the coach's quality and relationship, the room left in the skill).
+- **Most help:** those odds × the gain × what the skill is worth where the player plays:
+  - a starter 1, the bench 0.35;
+  - power ×1.15 at 1B/DH/OF; speed ×1.15 at OF/SS/2B, ×0.7 at C;
+  - the glove C/SS 1.3, OF/2B/3B 1.1, 1B 0.8, DH 0;
+  - pitchers: the rotation 1, the closer and setup men 0.8, the rest of the bullpen 0.6, the pitcher bench 0.25; stamina ×1.3 for a starter, ×0.3 for a reliever.
+- Players already on a plan for that skill, hurt or away are left out.
+
+The old topic ids still answer (a message sent before this release gets its reply). `who_work` counts as development for the GM's profile.
+
+**Checks.** check-bench-work (28):
+- `whoRead` for all seven skills, both ways: three, ordered; "most likely" exactly the work's odds.
+- "Most help" leans to the lineup (power) and the rotation (stamina); no DH for the glove; the complex's terms; the glove never at the complex.
+- The reply's numbered three and buttons; picking the second starts that program, with its cost out of club funds and the player away.
+- `bc_work`: power names the hitting coach, control the pitching coach, the glove is "I"; the program from the Bench Coach.
+
+test-player-work-ui (dark and light):
+- the Hitting Coach and Scouting no longer have the work; the Bench Coach's five topics;
+- a hitter's four skills; the reply through the Bench Coach;
+- "Who should we work on…?" (seven skills, rank, where, sent, the reply's three buttons), and a busy coach's list without buttons.
+
+test-teaching-ui is updated.
+
+The season run (3,808 of 3,808) now samples "Who should we work on" with a different skill, ranking and place each time; every reply is clean, the slowest 141 ms. Multi-season, check-player-work, check-defense, check-teaching, check-compose-overlap, test-compose-ui and test-teaching-ui pass.
+
+No fresh team needed.

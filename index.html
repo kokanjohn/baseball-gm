@@ -466,6 +466,11 @@ body[data-turn] .tab-content,body[data-turn] .modal-sheet,body[data-turn] .leagu
 .compose-skill{display:flex;flex-direction:column;align-items:center;gap:2px;font:inherit;font-size:13px;font-weight:600;color:var(--soft);background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 6px;cursor:pointer;}
 .compose-skill .cs-val{font-size:16px;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums;}
 .compose-skill.selected{border-color:var(--accent);color:var(--text);box-shadow:inset 0 0 0 1px var(--accent);}
+/* r251 §122.130 "who should we work on": the skills by group, then two-way choices with a line under each */
+.compose-skills.compose-four{grid-template-columns:repeat(4,1fr);}
+.compose-skills.compose-two{grid-template-columns:repeat(2,1fr);}
+.compose-skill-grp{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:6px 0 4px 14px;}
+.compose-skill .cs-sub{font-size:11px;font-weight:500;color:var(--muted);text-align:center;}
 .compose-send-btn{width:100%;background:var(--accent);color:var(--accent-txt);border:none;
   padding:14px;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:700;
   cursor:pointer;letter-spacing:.5px;text-transform:uppercase;transition:opacity .15s;}

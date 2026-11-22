@@ -38,7 +38,7 @@ await tap('.nav-item[data-tab="decisions"]');
 await tap('#itab-compose');
 await tap('[data-channel="bench_coach"]');
 check('Bench Coach: "Teach a player a position" is a topic', !!(await page.$('[data-topic="bc_teach"]')));
-check('Bench Coach: "Work with a hitter on defense" is a topic (r207)', !!(await page.$('[data-topic="bc_defense"]')));
+check('Bench Coach: "Work with a player on…" is a topic (r251; the glove is one of its skills)', !!(await page.$('[data-topic="bc_work"]')));
 await tap('[data-topic="bc_teach"]');
 await page.selectOption('#compose-player', who.id);
 await page.waitForTimeout(400);

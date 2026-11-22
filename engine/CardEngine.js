@@ -4086,7 +4086,7 @@ function _profileFits(need, prof) {
  * small asks, `spendFreezeUntil`), a community ask (communityFocused), a trade or a signing (aggressive), a player's
  * development (processDriven).
  */
-const _DEV_ACTIONS = new Set(['train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'offday_session', 'coach_work', 'dev_program', 'teach_position', 'sim_games']);
+const _DEV_ACTIONS = new Set(['train_hitter', 'train_pitcher_sp', 'train_pitcher_bp', 'offday_session', 'coach_work', 'who_work', 'dev_program', 'teach_position', 'sim_games']);
 export const profileWeightForChecks = (card, state) => _profileWeight(card, GMP.profile(state), state);
 function _profileWeight(card, prof, state) {
   const W = PROFILE.weight;

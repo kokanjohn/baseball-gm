@@ -56,6 +56,8 @@ let _composeChannel = null;     // currently selected compose channel id
 let _composeTopic   = null;     // currently selected compose topic id
 let _composeDeal    = null;     // r150 the deal a trade topic asks about (its key) — or r151 the player a topic is about
 let _composeSkill   = null;     // r159 the skill a work topic is about
+let _composeRank    = null;     // r251 "who should we work on": 'likely' | 'help'
+let _composeWhere   = null;     // r251 … 'coach' | 'program'
 let _mounted      = false;
 let _listeners    = [];
 
@@ -103,7 +105,7 @@ const COMPOSE_CHANNELS = [
       { id: 'pc_bullpen',    label: 'The bullpen',              desc: 'Who\'s available, the work they\'ve done, and the roles' },
       { id: 'pc_roles',      label: 'A reliever\'s role',        desc: 'Pick a pitcher: name the closer or a setup arm, or leave it to the manager', player: 'relievers', skill: true, choices: 'roles' },
       { id: 'pc_prospect',   label: 'Young pitcher check-in',   desc: 'A report on a young arm — and a development plan if you want one' },
-      { id: 'pc_work',       label: 'Work with a pitcher on…',  desc: 'Pick a pitcher and a skill: the coach decides how much work it takes', player: 'pitchers', skill: true },
+      // (r251 §122.130 "Work with a pitcher on…" is the Bench Coach's now: all the development work in one place)
       { id: 'pc_stretch',    label: 'Stretch a pitcher out',     desc: 'Pick a reliever: sim games to build the length to start', player: 'pitchers' },
     ],
   },
@@ -116,7 +118,7 @@ const COMPOSE_CHANNELS = [
     topics: [
       { id: 'hc_slump',      label: 'Hitter in a slump',        desc: 'Ask about a struggling hitter\'s approach' },
       { id: 'hc_development', label: 'Development check-in',    desc: 'A young hitter\'s progress — and a development plan if you want one' },
-      { id: 'hc_work',       label: 'Work with a hitter on…',   desc: 'Pick a hitter and a skill: the coach decides how much work it takes', player: 'hitters', skill: true },
+      // (r251 §122.130 "Work with a hitter on…" is the Bench Coach's now)
     ],
   },
   {
@@ -140,7 +142,11 @@ const COMPOSE_CHANNELS = [
     priority: 'medium',
     topics: [
       { id: 'bc_tactics',    label: 'The running game',         desc: 'Close games, steals, and how much you want us to run' },
-      { id: 'bc_defense',    label: 'Work with a hitter on defense', desc: 'Pick a hitter: the coach decides how much work it takes', player: 'hitters' },
+      // r251 §122.130 all the development work, here: any player and skill (the skill's coach does it), who to work
+      // with, the complex (from Scouting), a new position
+      { id: 'bc_work',       label: 'Work with a player on…',   desc: 'Pick a player and a skill: the right coach does the work', player: 'any', skill: true, choices: 'work' },
+      { id: 'bc_who',        label: 'Who should we work on…?',  desc: 'Pick a skill: the three players it would do the most for', who: true },
+      { id: 'sc_program',    label: 'A development program',    desc: 'A week at our complex: focused work on one skill', player: 'any', skill: true },
       { id: 'bc_teach',      label: 'Teach a player a position', desc: 'Pick a hitter and a position: extra reps there in practice', player: 'hitters', skill: true, choices: 'positions' },
     ],
   },
@@ -167,7 +173,7 @@ const COMPOSE_CHANNELS = [
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
       { id: 'sc_trade',      label: 'A trade on the table',     desc: 'The director\'s read on a deal: on the field, the value, a counter, the payroll', deal: true },   // r202 §122.79 (the manager's folded in)
       { id: 'sc_shop',       label: 'What could we get for…?',  desc: 'Pick one of our players: the director calls the clubs that could use them', player: true },
-      { id: 'sc_program',    label: 'A development program',    desc: 'Send a player to our complex for focused work on one skill', player: 'any', skill: true },
+      // (r251 §122.130 the development program is the Bench Coach's now)
       { id: 'sc_retire',     label: 'Is … retiring?',           desc: 'Pick a veteran on another club, or a free agent', player: 'league' },   // r223 §122.102
     ],
   },
@@ -209,7 +215,7 @@ export function mount() {
     _composeChannel = null;
     _composeTopic = null;
     _composeDeal = null;
-    _composeSkill = null;
+    _composeSkill = null; _composeRank = null; _composeWhere = null;
   });
 
   const wire = (event, handler) => {
@@ -807,12 +813,22 @@ function _composeTopics(state, ch) {
     const skills = pick ? `<div class="compose-h compose-deal-h">${t.choices === 'positions' ? 'Which position?' : t.choices === 'roles' ? 'Which role?' : 'Work on what?'}</div>
       <div class="compose-skills">${_choicesFor(t, pick).map(c => `<button type="button" class="compose-skill${_composeSkill === c.key ? ' selected' : ''}" data-skill="${c.key}">
         <span class="cs-name">${c.name}</span><span class="cs-val">${c.val}</span></button>`).join('')}</div>` : '';
+    // r251 §122.130 "who should we work on": a skill, how to rank, where
+    const btn = (attr, key, name, sub, on) => `<button type="button" class="compose-skill${on ? ' selected' : ''}" ${attr}="${key}"><span class="cs-name">${name}</span>${sub ? `<span class="cs-sub">${sub}</span>` : ''}</button>`;
+    const grp = (g, cls) => `<div class="compose-skill-grp">${g}</div><div class="compose-skills ${cls}">${WHO_SKILL_LIST.filter(x => x[2] === g).map(([k, n]) => btn('data-skill', k, n, '', _composeSkill === k)).join('')}</div>`;
+    const whoSteps = isSel && !off && t.who ? `
+      <div class="compose-h compose-deal-h">Which skill?</div>
+      ${grp('Hitters', 'compose-four')}${grp('Pitchers', '')}
+      ${_composeSkill ? `<div class="compose-h compose-deal-h">Rank by</div>
+      <div class="compose-skills compose-two">${btn('data-rank', 'likely', 'Most likely to improve', '', _composeRank === 'likely')}${btn('data-rank', 'help', 'Most help to the team', '', _composeRank === 'help')}</div>` : ''}
+      ${_composeSkill && _composeRank && _composeSkill !== 'defense' ? `<div class="compose-h compose-deal-h">Where</div>
+      <div class="compose-skills compose-two">${btn('data-where', 'coach', 'With the coach', 'In practice or days away', _composeWhere === 'coach')}${btn('data-where', 'program', 'At the complex', 'A week away', _composeWhere === 'program')}</div>` : ''}` : '';
     // r197 the Send button right under the topic's last step: where the eye already is.
     const send = isSel && !off ? _composeSendBtn(t) : '';
     return `<div class="compose-topic-btn${isSel ? ' selected' : ''}${off ? ' disabled' : ''}" ${off ? '' : `data-topic="${t.id}"`}>
       <span>${_escape(t.label)}</span>
       <span class="topic-desc">${_escape(note || (st.info ? `${t.desc}. ${st.info}` : t.desc))}</span>
-    </div>${deals}${players}${skills}${send}`;
+    </div>${deals}${players}${skills}${whoSteps}${send}`;
   }).join('');
   return `
     <button type="button" class="compose-back" id="compose-back">‹ All recipients</button>
@@ -823,6 +839,11 @@ function _composeTopics(state, ch) {
 
 /** The picked topic's Send button: ready once every step is chosen, else what's left to pick. */
 function _composeSendBtn(sel) {
+  if (sel.who) {   // r251
+    const ready = !!_composeSkill && !!_composeRank && (_composeSkill === 'defense' || !!_composeWhere);
+    const label = ready ? 'Send Message' : !_composeSkill ? 'Pick a skill' : !_composeRank ? 'Pick how to rank' : 'Pick where';
+    return `<button class="compose-send-btn compose-send-inline" ${ready ? '' : 'disabled'} id="compose-send-btn">${label}</button>`;
+  }
   const canSend = (!(sel.deal || sel.player) || !!_composeDeal) && (!sel.skill || !!_composeSkill);
   const label = canSend ? 'Send Message' : sel.player && !_composeDeal ? 'Pick a player'
     : sel.skill ? (sel.choices === 'positions' ? 'Pick a position' : sel.choices === 'roles' ? 'Pick a role' : 'Pick a skill') : sel.deal === 'gms' ? 'Pick a GM' : 'Pick a deal';
@@ -1007,13 +1028,13 @@ function _attachTabListeners(state) {
       const open = ch.topics.filter(t => { if (t.opens) return false; const st = _topicState(t, StateManager.get()); return !st.waiting && !st.left && !st.none; });
       _composeTopic = open.length === 1 ? open[0].id : null;
       _composeDeal = _onlyDeal(ch, _composeTopic);
-      _composeSkill = null;
+      _composeSkill = null; _composeRank = null; _composeWhere = null;
       refresh();
       _composeToTop();
     });
   });
   document.getElementById('compose-back')?.addEventListener('click', () => {
-    _composeChannel = null; _composeTopic = null; _composeDeal = null; _composeSkill = null;
+    _composeChannel = null; _composeTopic = null; _composeDeal = null; _composeSkill = null; _composeRank = null; _composeWhere = null;
     refresh();
     _composeToTop();
   });
@@ -1028,7 +1049,7 @@ function _attachTabListeners(state) {
         import('../components/TradeComposer.js').then(m => m.openTradeComposer({}));
         return;
       }
-      if (_composeTopic !== el.dataset.topic) { _composeDeal = null; _composeSkill = null; }
+      if (_composeTopic !== el.dataset.topic) { _composeDeal = null; _composeSkill = null; _composeRank = null; _composeWhere = null; }
       _composeTopic = el.dataset.topic;
       const ch = COMPOSE_CHANNELS.find(c => c.id === _composeChannel);
       _composeDeal = _composeDeal || _onlyDeal(ch, _composeTopic);
@@ -1039,10 +1060,12 @@ function _attachTabListeners(state) {
   document.querySelectorAll('[data-deal]').forEach(el => {
     el.addEventListener('click', () => { _composeDeal = el.dataset.deal; refresh(); _composeShowSend(); });
   });
-  document.getElementById('compose-player')?.addEventListener('change', (e) => { _composeDeal = e.target.value || null; _composeSkill = null; refresh(); _composeShowSend(); });
+  document.getElementById('compose-player')?.addEventListener('change', (e) => { _composeDeal = e.target.value || null; _composeSkill = null; _composeRank = null; _composeWhere = null; refresh(); _composeShowSend(); });
   document.querySelectorAll('[data-skill]').forEach(el => {
     el.addEventListener('click', () => { _composeSkill = el.dataset.skill; refresh(); _composeShowSend(); });
   });
+  document.querySelectorAll('[data-rank]').forEach(el => el.addEventListener('click', () => { _composeRank = el.dataset.rank; refresh(); _composeShowSend(); }));     // r251
+  document.querySelectorAll('[data-where]').forEach(el => el.addEventListener('click', () => { _composeWhere = el.dataset.where; refresh(); _composeShowSend(); }));
 
   // Compose send button
   const sendBtn = document.getElementById('compose-send-btn');
@@ -1123,8 +1146,14 @@ function _choicesFor(t, p) {
     const n = startsAt(p, x);
     return { key: x, name: x, val: n ? `${n}/10` : familiarity(p, x) > 0 ? 'practiced' : 'new' };
   });
-  return skillsOf(p).map(k => ({ key: k, name: k[0].toUpperCase() + k.slice(1), val: p.subRatings?.[k] ?? '—' }));
+  // r251 §122.130 the Bench Coach's "work with a player on…": a hitter's glove too
+  const ks = t.choices === 'work' && !['SP', 'RP'].includes(p.pos) && p.subRatings?.defense != null ? [...skillsOf(p), 'defense'] : skillsOf(p);
+  return ks.map(k => ({ key: k, name: k[0].toUpperCase() + k.slice(1), val: p.subRatings?.[k] ?? '—' }));
 }
+
+/** r251 §122.130 the skills "who should we work on" can be about (hitters', then pitchers'). */
+const WHO_SKILL_LIST = [['contact', 'Contact', 'Hitters'], ['power', 'Power', 'Hitters'], ['speed', 'Speed', 'Hitters'], ['defense', 'Defense', 'Hitters'],
+  ['stuff', 'Stuff', 'Pitchers'], ['control', 'Control', 'Pitchers'], ['stamina', 'Stamina', 'Pitchers']];
 
 async function _sendCompose(topicId, channelId, state) {
   const gameIdx = state.currentGameIndex || 0;
@@ -1135,9 +1164,21 @@ async function _sendCompose(topicId, channelId, state) {
   if (topic?.deal && !deal) { App.showToast('That deal is no longer waiting on us.', 'neutral', 2500); refresh(); return; }
   const player = topic?.player ? (_topicState(topic, state).players || []).find(p => p.id === _composeDeal) : null;
   if (topic?.player && !player) { App.showToast(topic.player === true ? 'That player can\'t be traded right now.' : 'That player isn\'t available to ask about.', 'neutral', 2500); refresh(); return; }
+  // r251 §122.130 who should we work on: the skill, how to rank, where (no cooldown: ask about each skill)
+  if (topic?.who) {
+    const sk = _composeSkill, rank = _composeRank, where = sk === 'defense' ? 'coach' : _composeWhere;
+    if (!WHO_SKILL_LIST.some(([k]) => k === sk) || !rank || !where) { App.showToast('Pick a skill, how to rank, and where.', 'neutral', 2500); refresh(); return; }
+    const { deliverComposeCard } = await import('../../engine/CardEngine.js');
+    deliverComposeCard(topicId, channelId, { topicLabel: `Who should we work on for ${sk}?`, arg: { skill: sk, rank, where } });
+    import('../PushClient.js').then(P => P.syncPushSchedule()).catch(() => {});
+    _composeChannel = null; _composeTopic = null; _composeDeal = null; _composeSkill = null; _composeRank = null; _composeWhere = null;
+    App.showToast(`Message sent to ${ch?.label || 'staff'}. You'll hear back.`, 'positive', 2500);
+    refresh(); _composeToTop();
+    return;
+  }
   const skill = topic?.skill ? _composeSkill : null;
   if (topic?.skill && !_choicesFor(topic, player).some(c => c.key === skill)) { App.showToast(topic.choices === 'positions' ? 'Pick a position.' : topic.choices === 'roles' ? 'Pick a role.' : 'Pick a skill to work on.', 'neutral', 2500); refresh(); return; }
-  const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`,
+  const WORK_LABEL = { hc_work: (p) => `Work with ${p.name} on ${skill}`, pc_work: (p) => `Work with ${p.name} on ${skill}`, bc_work: (p) => `Work with ${p.name} on ${skill}`,
                        sc_program: (p) => `A development program for ${p.name}`, mgr_rest: (p) => `A day off for ${p.name}`,
                        doc_health: (p) => `${p.name}'s health`, bc_teach: (p) => `Teach ${p.name} ${skill}`,
                        pc_stretch: (p) => `Stretch ${p.name} out`, bc_defense: (p) => `Work with ${p.name} on defense`, pc_roles: (p) => `${p.name}'s role`,
