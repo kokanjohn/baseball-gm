@@ -145,8 +145,12 @@ const xy = ([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`;
 const BASE = { first: pt(45, 90), second: pt(0, 127.3), third: pt(-45, 90), home: pt(0, 0) };
 
 function _fieldSvg() {
+  // r248 §122.127 drawn like the radar's map: flat tones from its palette (land, relief, the warm "flat" for the
+  // dirt), thin lines, the fence a border line with its distances marked like the map's water labels, the
+  // outfield's mowing in faint bands like its terrain. (Grass green and dirt brown are gone.)
   const fence = [];
   for (let a = -45; a <= 45; a += 1.5) fence.push(xy(pt(a, fenceAt(a))));   // (r231 finer: a smooth arc)
+  const arc = (ft) => { const out = []; for (let a = -45; a <= 45; a += 1.5) out.push(xy(pt(a, Math.min(ft, fenceAt(a))))); return out; };
   // (r231 the dirt's edge: a circle around the mound, as on a real infield — 110 feet from the mound, about 170 from
   //  the plate to straightaway center, 144 along the lines)
   const dirt = [];
@@ -155,21 +159,44 @@ function _fieldSvg() {
     const s = Math.sin(a * Math.PI / 180), c = Math.cos(a * Math.PI / 180);
     dirt.push(xy(pt(a, MOUND * c + Math.sqrt(ARC * ARC - MOUND * MOUND * s * s))));
   }
+  // the outfield's mowing: bands every 30 ft out from the dirt, alternate ones a shade lighter
+  const bands = [];
+  for (let d = 180, k = 0; d < 420; d += 30, k++) {
+    if (k % 2) continue;
+    const outer = arc(d + 30), inner = arc(d).reverse();
+    bands.push(`<polygon class="lv-mow" points="${outer.join(' ')} ${inner.join(' ')}"/>`);
+  }
+  // the warning track: the last 12 ft inside the fence
+  const track = [];
+  for (let a = -45; a <= 45; a += 1.5) track.push(xy(pt(a, fenceAt(a) - 12)));
   const diamond = [pt(0, 0), pt(45, 90), pt(0, 127.3), pt(-45, 90)].map(xy).join(' ');
-  const bag = (p) => `<rect x="${(p[0] - 4.5).toFixed(1)}" y="${(p[1] - 4.5).toFixed(1)}" width="9" height="9" transform="rotate(45 ${xy(p).replace(',', ' ')})" class="lv-bag"/>`;
+  const bag = (p) => `<rect x="${(p[0] - 3.6).toFixed(1)}" y="${(p[1] - 3.6).toFixed(1)}" width="7.2" height="7.2" transform="rotate(45 ${xy(p).replace(',', ' ')})" class="lv-bag"/>`;
   const [mx, my] = pt(0, 60.5);   // (the mound)
+  const foulEnd = (sgn) => pt(sgn * 45, fenceAt(45));
+  // the fence's distances, just beyond it: the lines, the gaps, center
+  // (the lines' numbers a little in from the corners, so they clear the foul lines and the edges)
+  const marks = [-45, -22.5, 0, 22.5, 45].map(a => {
+    const corner = Math.abs(a) === 45;
+    const [x, y] = pt(corner ? Math.sign(a) * 39 : a, fenceAt(a) + (corner ? 16 : 14));
+    const anchor = 'middle';
+    return `<text x="${x.toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="${anchor}" class="lv-dist">${Math.round(fenceAt(a))}</text>`;
+  }).join('');
   return `
     <rect class="lv-foul" x="0" y="${TOP}" width="${W}" height="${H - TOP}"/>
     <polygon class="lv-grass" points="${xy(pt(0, 0))} ${fence.join(' ')}"/>
+    ${bands.join('')}
+    <polygon class="lv-track" points="${fence.join(' ')} ${[...track].reverse().join(' ')}"/>
     <polyline class="lv-fence" points="${fence.join(' ')}"/>
+    ${marks}
     <polygon class="lv-dirt" points="${xy(pt(0, 0))} ${dirt.join(' ')}"/>
     <circle class="lv-dirt" cx="${HX}" cy="${HY}" r="${(15 * IN).toFixed(1)}"/>
     <polygon class="lv-infield" points="${diamond}"/>
-    <line class="lv-line" x1="${HX}" y1="${HY}" x2="${xy(pt(-45, fenceAt(45))).split(',')[0]}" y2="${xy(pt(-45, fenceAt(45))).split(',')[1]}"/>
-    <line class="lv-line" x1="${HX}" y1="${HY}" x2="${xy(pt(45, fenceAt(45))).split(',')[0]}" y2="${xy(pt(45, fenceAt(45))).split(',')[1]}"/>
-    <circle class="lv-mound" cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="8"/>
+    <line class="lv-line" x1="${HX}" y1="${HY}" x2="${foulEnd(-1)[0].toFixed(1)}" y2="${foulEnd(-1)[1].toFixed(1)}"/>
+    <line class="lv-line" x1="${HX}" y1="${HY}" x2="${foulEnd(1)[0].toFixed(1)}" y2="${foulEnd(1)[1].toFixed(1)}"/>
+    <circle class="lv-mound" cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="7"/>
+    <rect class="lv-rubber" x="${(mx - 2.5).toFixed(1)}" y="${(my - 0.6).toFixed(1)}" width="5" height="1.2"/>
     ${bag(BASE.first)}${bag(BASE.second)}${bag(BASE.third)}
-    <polygon class="lv-plate" points="${HX - 3.5},${HY - 3} ${HX + 3.5},${HY - 3} ${HX + 3.5},${HY} ${HX},${HY + 3} ${HX - 3.5},${HY}"/>
+    <polygon class="lv-plate" points="${HX - 3.2},${HY - 2.8} ${HX + 3.2},${HY - 2.8} ${HX + 3.2},${HY} ${HX},${HY + 2.8} ${HX - 3.2},${HY}"/>
     <g class="lv-path-layer"></g>
     <g class="lv-fielder-layer"></g>
     <g class="lv-runner-layer"></g>
@@ -271,10 +298,13 @@ export function openLiveView(game) {
     const b = v.ball, end = pt(b.angle, b.dist), start = BASE.home;
     const cls = b.hr ? 'lv-p-hr' : b.err ? 'lv-p-err' : b.hit ? 'lv-p-hit' : 'lv-p-out';
     const ground = b.flight === 'ground' || b.flight === 'bunt';
-    paths.innerHTML = `<line x1="${start[0]}" y1="${start[1]}" x2="${end[0].toFixed(1)}" y2="${end[1].toFixed(1)}" class="lv-path ${cls}${ground ? ' lv-ground' : ''}"/>`
-      + `<circle cx="${end[0].toFixed(1)}" cy="${end[1].toFixed(1)}" r="3" class="lv-land ${cls}"${animate ? ' opacity="0"' : ''}/>`;
+    // (r248 the path with a soft glow under it, like a storm track; where it lands, a dot and a ring)
+    paths.innerHTML = `<line x1="${start[0]}" y1="${start[1]}" x2="${end[0].toFixed(1)}" y2="${end[1].toFixed(1)}" class="lv-glow ${cls}"/>`
+      + `<line x1="${start[0]}" y1="${start[1]}" x2="${end[0].toFixed(1)}" y2="${end[1].toFixed(1)}" class="lv-path ${cls}${ground ? ' lv-ground' : ''}"/>`
+      + `<g class="lv-landing"${animate ? ' opacity="0"' : ''}><circle cx="${end[0].toFixed(1)}" cy="${end[1].toFixed(1)}" r="7" class="lv-ring ${cls}"/>`
+      + `<circle cx="${end[0].toFixed(1)}" cy="${end[1].toFixed(1)}" r="3" class="lv-land ${cls}"/></g>`;
     balls.innerHTML = `<ellipse class="lv-shadow" rx="3" ry="1.6"/><circle class="lv-ball" r="3"/>`;
-    const sh = balls.querySelector('.lv-shadow'), bl = balls.querySelector('.lv-ball'), line = paths.querySelector('line');
+    const sh = balls.querySelector('.lv-shadow'), bl = balls.querySelector('.lv-ball'), line = paths.querySelector('.lv-path'), glow = paths.querySelector('.lv-glow');
     const at = (t) => {
       const x = start[0] + (end[0] - start[0]) * t, y = start[1] + (end[1] - start[1]) * t;
       const lift = ground ? 0 : Math.sin(Math.PI * t) * (b.flight === 'line' ? 5 : b.hr ? 16 : 12);
@@ -282,10 +312,11 @@ export function openLiveView(game) {
       bl.setAttribute('cx', x.toFixed(1)); bl.setAttribute('cy', (y - lift).toFixed(1));
       bl.setAttribute('r', (3 + lift / 6).toFixed(2));
       line.setAttribute('x2', x.toFixed(1)); line.setAttribute('y2', y.toFixed(1));
+      glow.setAttribute('x2', x.toFixed(1)); glow.setAttribute('y2', y.toFixed(1));
     };
     if (!animate) { at(1); return; }
     const ms = ground ? 900 : b.hr ? 1700 : 1300, t0 = performance.now();
-    const land = paths.querySelector('.lv-land');
+    const land = paths.querySelector('.lv-landing');
     const step = (now) => { const t = Math.min(1, (now - t0) / ms); at(t); if (t < 1) raf = requestAnimationFrame(step); else land?.removeAttribute('opacity'); };
     at(0); raf = requestAnimationFrame(step);
   };
@@ -369,19 +400,34 @@ function _css() {
     .lv-pill{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:6px;background:var(--surface2);color:var(--text);}
     .lv-pill.lv-live{background:#14532d;color:#86efac;}
     [data-theme="light"] .lv-pill.lv-live{background:#dcfce7;color:#166534;}
-    .lv-field{padding:0 6px;}
+    /* r248 §122.127 the field in the radar map's palette (RadarMap PALETTE), dark and light */
+    .lv-overlay{--f-land:#1c2029;--f-fair:#232833;--f-mow:#262c38;--f-edge:#2d3340;--f-dirt:#312d28;--f-dirt-edge:#3d3832;
+      --f-track:#29272a;--f-fence:#454d63;--f-line:#9aa3b6;--f-dist:#5b6a82;--f-bag:#e8ecf4;--f-label:#d3d8e3;--f-halo:rgba(10,12,18,.92);
+      --f-batter:#ffffff;--f-run:#facc15;--f-run-label:#fde68a;--f-out:#cbd5e1;}
+    [data-theme="light"] .lv-overlay{--f-land:#e9e7e1;--f-fair:#dedad0;--f-mow:#e2ded5;--f-edge:#cfc9bb;--f-dirt:#e7dccb;--f-dirt-edge:#d4c6b0;
+      --f-track:#ddd2c1;--f-fence:#a6a397;--f-line:#ffffff;--f-dist:#6d8399;--f-bag:#ffffff;--f-label:#2a2e38;--f-halo:rgba(246,244,239,.95);
+      --f-batter:#111318;--f-run:#eab308;--f-run-label:#854d0e;--f-out:#475569;}
+    .lv-field{padding:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--f-land);}
     .lv-field svg{display:block;width:100%;height:auto;max-height:52vh;}
-    .lv-grass{fill:#2f6e43;} .lv-foul{fill:#29603b;} .lv-fence{fill:none;stroke:#1d4a2c;stroke-width:3;}
-    .lv-dirt{fill:#9a7348;} .lv-infield{fill:#a98053;stroke:#f1f1f1;stroke-width:1;stroke-opacity:.7;}
-    .lv-line{stroke:#f1f1f1;stroke-width:1;opacity:.85;}
-    .lv-mound{fill:#a77d51;stroke:#8a6440;} .lv-bag{fill:#fafafa;} .lv-plate{fill:#fafafa;}
-    .lv-fname,.lv-rname,.lv-batter{font:700 9.5px -apple-system,system-ui,sans-serif;fill:#fff;paint-order:stroke;stroke:rgba(0,0,0,.75);stroke-width:2.6px;cursor:pointer;}
-    .lv-batter{font-size:10.5px;}
+    .lv-foul{fill:var(--f-land);} .lv-grass{fill:var(--f-fair);} .lv-mow{fill:var(--f-mow);}
+    .lv-track{fill:var(--f-track);} .lv-fence{fill:none;stroke:var(--f-fence);stroke-width:2;stroke-linejoin:round;}
+    .lv-dist{font:italic 600 8px -apple-system,system-ui,sans-serif;fill:var(--f-dist);}
+    .lv-dirt{fill:var(--f-dirt);stroke:var(--f-dirt-edge);stroke-width:.8;}
+    .lv-infield{fill:var(--f-fair);stroke:var(--f-line);stroke-width:.8;stroke-opacity:.45;}
+    .lv-line{stroke:var(--f-line);stroke-width:.9;opacity:.5;}
+    .lv-mound{fill:var(--f-dirt);stroke:var(--f-dirt-edge);stroke-width:.8;} .lv-rubber{fill:var(--f-bag);opacity:.8;}
+    .lv-bag{fill:var(--f-bag);stroke:var(--f-edge);stroke-width:.6;} .lv-plate{fill:var(--f-bag);stroke:var(--f-edge);stroke-width:.6;}
+    .lv-fname,.lv-rname,.lv-batter{font:700 9.5px -apple-system,system-ui,sans-serif;fill:var(--f-label);paint-order:stroke;stroke:var(--f-halo);stroke-width:2.8px;stroke-linejoin:round;cursor:pointer;}
+    .lv-batter{font-size:10.5px;font-weight:800;fill:var(--f-batter);}
     .lv-runner{transition:transform .9s ease,opacity .4s ease;}
-    .lv-rdot{fill:#facc15;stroke:#111;stroke-width:1.2;}
-    .lv-rname{fill:#fde68a;}
-    .lv-path{stroke-width:1.6;stroke-linecap:round;opacity:.9;} .lv-ground{stroke-dasharray:3 3;}
-    .lv-p-hit{stroke:#facc15;fill:#facc15;} .lv-p-out{stroke:#e5e7eb;fill:#e5e7eb;} .lv-p-hr{stroke:#f87171;fill:#f87171;} .lv-p-err{stroke:#fb923c;fill:#fb923c;}
+    .lv-rdot{fill:var(--f-run);stroke:var(--f-halo);stroke-width:1.6;}
+    .lv-rname{fill:var(--f-run-label);}
+    .lv-path{stroke-width:1.6;stroke-linecap:round;} .lv-ground{stroke-dasharray:3 3;}
+    .lv-glow{stroke-width:6;stroke-linecap:round;opacity:.22;}
+    .lv-ring{fill:none !important;stroke-width:1.2;opacity:.7;transform-box:fill-box;transform-origin:center;animation:lv-ping 1.6s ease-out 1;}
+    @keyframes lv-ping{from{transform:scale(.4);opacity:1;}to{transform:scale(1);opacity:.7;}}
+    .lv-p-hit{stroke:#facc15;fill:#facc15;} .lv-p-out{stroke:var(--f-out);fill:var(--f-out);} .lv-p-hr{stroke:#f87171;fill:#f87171;} .lv-p-err{stroke:#fb923c;fill:#fb923c;}
+    [data-theme="light"] .lv-p-hit{stroke:#ca8a04;fill:#ca8a04;} [data-theme="light"] .lv-p-hr{stroke:#dc2626;fill:#dc2626;} [data-theme="light"] .lv-p-err{stroke:#ea580c;fill:#ea580c;}
     .lv-ball{fill:#fff;stroke:#333;stroke-width:.8;} .lv-shadow{fill:rgba(0,0,0,.35);}
     .lv-last{padding:14px 14px 4px;font-size:14px;font-weight:600;color:var(--text);min-height:20px;}
     .lv-rows{padding:2px 14px;}

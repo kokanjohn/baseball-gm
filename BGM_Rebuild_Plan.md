@@ -14484,3 +14484,22 @@ The three OF rows in the lineup are shown by OVR, highest at the top, with an op
 **Checks.** test-team-roster-ui stores the outfielders worst first and checks they show best first (this failed on r246: 58, 61, 76). test-lineup-days-ui and test-oop-move-ui pass.
 
 No fresh team needed.
+
+---
+
+## §122.127 r248 — The Live View field, drawn like the radar's map
+
+**Why.** Next to the radar, the Live View's field (bright grass green, brown dirt, a thick dark fence) looked like a different app. The GM was open to dropping the green and brown.
+
+**Now (LiveView `_fieldSvg`, its CSS).** The field is drawn in the radar map's palette (RadarMap's dark and light palettes), as flat tones, thin lines and haloed labels:
+- **Colours:** the stands and foul ground are the map's land; fair territory is its relief tone. The outfield is mowed in faint 30-ft bands (like the map's terrain). The dirt (the infield arc, the home circle, the mound) is the map's warm "flat" tone with a thin edge, and the infield grass inside the base paths is the fair tone.
+- **Lines and markings:** foul lines and base paths are thin, at half strength. A 12-ft warning track sits inside the fence, and the fence is a border-coloured line. Its distances (330 down the lines, 383 in the gaps, 405 to center, from `fenceAt`) are in the map's italic water-label style, just beyond it. The pitching rubber is a small bar on the mound; the bases and plate are small and outlined.
+- **Labels and markers:** names use the map's label colour and halo (the batter is brighter and bolder). Runners are yellow dots with the halo ring, labels in a paler yellow (a darker amber in light).
+- **The ball's path:** a soft glow under the line, like a storm track. Where it lands, a dot and a ring that pings once.
+- **Layout:** the field sits full-bleed between hairlines, as the radar's map does. Theme-aware through `--f-*` variables on the overlay, with light-theme path colours a shade deeper.
+
+Nothing about what's shown changed: the same scale, spots, names, paths and runners.
+
+**Checks.** test-live-view-ui (dark and light, 20 each) passes unchanged.
+
+No fresh team needed.
