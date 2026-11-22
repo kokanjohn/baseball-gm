@@ -14443,3 +14443,14 @@ No fresh team needed.
 The plan from §122.119 is done (r240–r244).
 
 No fresh team needed.
+
+---
+
+## §122.124 r245 — The day strip: the chosen game stays in view; no explanations
+
+- **The scroll.** Choosing a game redraws the screen, and the strip started back at the left, so the last game, chosen after scrolling right, went out of sight. The strip's scroll is now kept across redraws (`_stripScroll`, from its scroll events). After each redraw the chosen chip is brought into view if it's out of it.
+- **No text under the strip.** The explanations ("The next game. …", "Takes the lineup of the game before it. …", "Set for this game. …", "Under way: …") are gone. Under the strip there's only **Same as the day before**, on a game set on its own.
+
+**Checks.** test-lineup-days-ui: no explanation under the strip; "Same as the day before" is there for a game set on its own; the last game chosen after scrolling right stays selected and in view (this failed before the fix: scroll 0, out of view).
+
+No fresh team needed.

@@ -50,7 +50,7 @@ await page.screenshot({ path: `${out}/lineup-days-next-${theme}.png` });
 await tap('.ds-chip:nth-child(2)');
 check('tomorrow chosen', await page.evaluate(() => document.querySelectorAll('.ds-chip')[1]?.classList.contains('on')));
 check(`tomorrow takes the lineup before it (${(await lineup()).join(', ')})`, JSON.stringify(await lineup()) === JSON.stringify(today));
-check(`the note: “${await page.evaluate(() => document.querySelector('.ds-note span')?.textContent)}”`, await page.evaluate(() => /Takes the lineup of the game before it/.test(document.querySelector('.ds-note')?.textContent || '')));
+check('no explanation under the strip (r245)', await page.evaluate(() => !document.querySelector('.ds-note span') && !/Takes the lineup|The next game\./.test(document.querySelector('.ds-wrap')?.textContent || '')));
 
 // MOVE the DH to the bench for tomorrow only
 const dhRow = await page.evaluate(() => [...document.querySelectorAll('.tr-row[data-player]')].slice(0, 9).find(r => r.querySelector('.tr-slot')?.textContent.trim().startsWith('DH'))?.dataset.player);
@@ -63,7 +63,7 @@ let e = await eng();
 check('tomorrow is set on its own, the DH changed', e.own2 && e.g2[8] !== e.next[8]);
 check('the next game\'s lineup is untouched', JSON.stringify(e.next) === JSON.stringify(await page.evaluate(async () => (await import('/baseball-gm/store/StateManager.js')).get().userTeam.lineupSlots.map(s => s.playerId))) && e.next[8] === (await page.evaluate(async (id) => id, dhRow)));
 check('the chip has its mark', await page.evaluate(() => !!document.querySelectorAll('.ds-chip')[1]?.querySelector('.ds-own')));
-check('the note: set for this game', await page.evaluate(() => /Set for this game/.test(document.querySelector('.ds-note')?.textContent || '')));
+check('"Same as the day before" is there for it', await page.evaluate(() => !!document.getElementById('ds-same')));
 await page.screenshot({ path: `${out}/lineup-days-tomorrow-${theme}.png` });
 
 // Back to the next game: unchanged
@@ -76,6 +76,15 @@ await tap('#ds-same');
 e = await eng();
 check('"Same as the day before" puts it back', !e.own2 && JSON.stringify(e.g2) === JSON.stringify(e.next));
 check('…the mark is gone', await page.evaluate(() => !document.querySelectorAll('.ds-chip')[1]?.querySelector('.ds-own')));
+// r245 §122.124 the last game, after scrolling right: chosen, and still in view
+await page.evaluate(() => { const st = document.querySelector('.ds-strip'); st.scrollLeft = st.scrollWidth; });
+await page.waitForTimeout(200);
+await tap('.ds-chip:last-child');
+const vis = await page.evaluate(() => { const st = document.querySelector('.ds-strip'), c = document.querySelector('.ds-chip:last-child');
+  const a = st.getBoundingClientRect(), b = c.getBoundingClientRect();
+  return { on: c.classList.contains('on'), inView: b.left >= a.left - 1 && b.right <= a.right + 1, scroll: Math.round(st.scrollLeft) }; });
+check(`the last game chosen after scrolling right: selected and in view (${JSON.stringify(vis)})`, vis.on && vis.inView && vis.scroll > 0);
+await page.screenshot({ path: `${out}/lineup-days-last-${theme}.png` });
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 process.exit(ok ? 0 : 1);

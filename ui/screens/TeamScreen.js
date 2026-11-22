@@ -49,7 +49,8 @@ import { posLabel, eligibleAt, pitchRoles } from '../../engine/Positions.js';   
 // ─────────────────────────────────────────────────────────────
 
 let _activeTab   = 'players';
-let _dayAt       = null;   // r242 §122.121 the game whose lineup the Players tab shows (first pitch; null: the next game)
+let _dayAt       = null;
+let _stripScroll = 0;      // r245 §122.124 the day strip's scroll, kept across redraws   // r242 §122.121 the game whose lineup the Players tab shows (first pitch; null: the next game)
 let _mounted     = false;
 let _listeners   = [];
 
@@ -349,15 +350,12 @@ function _dayStrip(state, day) {
     </button>`;
   };
   const g = day.game;
-  const note = day.locked ? 'Under way: the lineup it started with. Changes are for the next game.'
-    : day.next ? 'The next game. Days after it take this lineup unless you set them.'
-    : hasOwnLineup(state, g) ? 'Set for this game. The days after it take it unless you set them.'
-    : 'Takes the lineup of the game before it. Any change sets this game on its own.';
+  // r245 §122.124 no explanation under the strip: only "Same as the day before", on a game set on its own
   const same = !day.locked && !day.next && hasOwnLineup(state, g)
-    ? '<button type="button" class="ds-same" id="ds-same">Same as the day before</button>' : '';
+    ? '<div class="ds-note"><button type="button" class="ds-same" id="ds-same">Same as the day before</button></div>' : '';
   return `<div class="ds-wrap">
       <div class="ds-strip">${chips.map(chip).join('')}</div>
-      <div class="ds-note"><span>${note}</span>${same}</div>
+      ${same}
     </div>`;
 }
 
@@ -883,9 +881,22 @@ function _attachListeners(state) {
     else App.showToast('To improve the staff: ' + moves.join(' · '), 'neutral', 5500);
   });
 
-  // r242 §122.121 the day strip
+  // r242 §122.121 the day strip. r245 §122.124 kept where it was across the redraw, the chosen game in view
+  // (redrawn, it started back at the left: the last game chosen went out of sight).
+  const strip = document.querySelector('.ds-strip');
+  if (strip) {
+    strip.scrollLeft = _stripScroll;
+    const on = strip.querySelector('.ds-chip.on');
+    if (on) {
+      const l = on.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft, r = l + on.offsetWidth;
+      if (l < strip.scrollLeft) strip.scrollLeft = Math.max(0, l - 8);
+      else if (r > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = r - strip.clientWidth + 8;
+    }
+    strip.addEventListener('scroll', () => { _stripScroll = strip.scrollLeft; }, { passive: true });
+  }
   document.querySelectorAll('.ds-chip[data-day]').forEach(el => el.addEventListener('click', () => {
     App.playClick();
+    if (strip) _stripScroll = strip.scrollLeft;
     const t = Number(el.dataset.day);
     const nx = nextLineupGame(StateManager.get());
     _dayAt = nx && nx.gameTime === t ? null : t;
@@ -1305,7 +1316,7 @@ function _injectCSS() {
     .ds-open{color:var(--danger);font-size:9px;}
     .ds-game{font-size:11px;color:var(--muted);white-space:nowrap;}
     .ds-sp{font-size:11px;color:var(--muted);white-space:nowrap;}
-    .ds-note{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted);padding:0 2px;}
+    .ds-note{display:flex;justify-content:flex-end;padding:0 2px;}
     .ds-same{flex:0 0 auto;font:inherit;font-size:12px;font-weight:700;padding:5px 10px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer;}
     .tr-oop-mark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin-left:3px;padding:0;border:none;border-radius:50%;background:var(--danger);color:#fff;font-size:10px;font-weight:800;line-height:1;vertical-align:1px;cursor:pointer;}
     .tr-name{width:76px;flex-shrink:0;min-width:0;padding:7px 4px 7px 2px;}
