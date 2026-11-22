@@ -1209,7 +1209,7 @@ export function moveOptions(state, playerId, { ok: okFor = null } = {}) {
       const detail = !occ ? 'Open'
         : at >= 0 && eligibleSlotsFor(occ).includes(slots[at].slot) ? `${occ.name} (${ovr(occ)}) moves to ${slots[at].slot}`
         : `${occ.name} (${ovr(occ)}) to the bench`;
-      out.push({ key: `slot:${j}`, label: sl.slot, detail });
+      out.push({ key: `slot:${j}`, label: sl.slot, detail, occId: occ?.id || null, swap: !!occ && at >= 0 && eligibleSlotsFor(occ).includes(slots[at].slot) });
     });
     // r165 §122.35 out of position: every fielding slot he isn't eligible at (the GM's choice — it stays),
     // with how familiar he is there; listed after the eligible ones.
@@ -1222,14 +1222,14 @@ export function moveOptions(state, playerId, { ok: okFor = null } = {}) {
       const detail = !occ ? `Open — ${how}`
         : at >= 0 && eligibleSlotsFor(occ).includes(slots[at].slot) ? `${how}; ${occ.name} (${ovr(occ)}) moves to ${slots[at].slot}`
         : `${how}; ${occ.name} (${ovr(occ)}) to the bench`;
-      out.push({ key: `oop:${j}`, label: sl.slot, detail, oop: true });
+      out.push({ key: `oop:${j}`, label: sl.slot, detail, oop: true, note: how, occId: occ?.id || null, swap: !!occ && at >= 0 && eligibleSlotsFor(occ).includes(slots[at].slot) });
     });
     if (at >= 0) {
       const seated = new Set(slots.map(sl => sl.playerId).filter(Boolean));
       ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.BENCH_HITTERS && !seated.has(p.id)
         && eligibleSlotsFor(p).includes(slots[at].slot)).sort((a, b) => b.ovr - a.ovr)
-        .forEach(p => out.push({ key: `in:${p.id}`, label: 'Bench', detail: `${p.name} (${ovr(p)}) takes ${slots[at].slot}` }));
-      out.push({ key: 'bench', label: 'Bench', detail: `Leave ${slots[at].slot} open` });
+        .forEach(p => out.push({ key: `in:${p.id}`, label: 'Bench', detail: `${p.name} (${ovr(p)}) takes ${slots[at].slot}`, inId: p.id, slot: slots[at].slot }));
+      out.push({ key: 'bench', label: 'Bench', detail: `Leave ${slots[at].slot} open`, slot: slots[at].slot });
     }
     return out;
   }
@@ -1244,22 +1244,22 @@ export function moveOptions(state, playerId, { ok: okFor = null } = {}) {
   if (!inRot) {
     order.forEach((id, k) => {
       const occ = players[id];
-      if (ok(occ)) out.push({ key: `turn:${k}`, label: 'Rotation', detail: `${how('SP')}${occ.name} (${ovr(occ)}) to the pitcher bench`, ...tag('SP') });
+      if (ok(occ)) out.push({ key: `turn:${k}`, label: 'Rotation', detail: `${how('SP')}${occ.name} (${ovr(occ)}) to the pitcher bench`, occId: occ.id, note: how('SP').replace(/; $/, ''), ...tag('SP') });
     });
-    if (order.length < REQUIRED_SP_COUNT) out.push({ key: 'turn:new', label: 'Rotation', detail: `${how('SP')}Open`.replace('; Open', ' — open'), ...tag('SP') });
+    if (order.length < REQUIRED_SP_COUNT) out.push({ key: 'turn:new', label: 'Rotation', detail: `${how('SP')}Open`.replace('; Open', ' — open'), note: how('SP').replace(/; $/, ''), ...tag('SP') });
   }
   if (!inPen) {
     const pen = ids.map(id => players[id]).filter(p => p && p.group === PLAYER_GROUP.BULLPEN);
     pen.filter(ok).sort((a, b) => reliefValue(b) - reliefValue(a))
-      .forEach(p => out.push({ key: `pen:${p.id}`, label: 'Bullpen', detail: `${how('RP')}${p.name} (${ovr(p)}) to the pitcher bench`, ...tag('RP') }));
-    if (pen.length < ROSTER_LIMITS.BULLPEN) out.push({ key: 'pen:new', label: 'Bullpen', detail: `${how('RP')}Open`.replace('; Open', ' — open'), ...tag('RP') });
+      .forEach(p => out.push({ key: `pen:${p.id}`, label: 'Bullpen', detail: `${how('RP')}${p.name} (${ovr(p)}) to the pitcher bench`, occId: p.id, note: how('RP').replace(/; $/, ''), ...tag('RP') }));
+    if (pen.length < ROSTER_LIMITS.BULLPEN) out.push({ key: 'pen:new', label: 'Bullpen', detail: `${how('RP')}Open`.replace('; Open', ' — open'), note: how('RP').replace(/; $/, ''), ...tag('RP') });
   }
   if (inRot || inPen) {
     const label = inRot ? 'their spot in the rotation' : 'their bullpen spot';
     const want = inRot ? 'SP' : 'RP';
     ids.map(id => players[id]).filter(p => ok(p) && p.group === PLAYER_GROUP.PITCHER_BENCH && pitchRoles(p).includes(want))
       .sort((a, b) => b.ovr - a.ovr)
-      .forEach(p => out.push({ key: `in:${p.id}`, label: 'Pitcher bench', detail: `${p.name} (${ovr(p)}) takes ${label}` }));
+      .forEach(p => out.push({ key: `in:${p.id}`, label: 'Pitcher bench', detail: `${p.name} (${ovr(p)}) takes ${label}`, inId: p.id }));
     out.push({ key: 'bench', label: 'Pitcher bench', detail: inRot ? `Leave ${label} open` : 'Leave a spot in the bullpen open' });
   }
   // the roles he holds first

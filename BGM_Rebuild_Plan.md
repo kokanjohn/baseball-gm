@@ -14454,3 +14454,23 @@ No fresh team needed.
 **Checks.** test-lineup-days-ui: no explanation under the strip; "Same as the day before" is there for a game set on its own; the last game chosen after scrolling right stays selected and in view (this failed before the fix: scroll 0, out of view).
 
 No fresh team needed.
+
+---
+
+## §122.125 r246 — The Move sheet, fewer words
+
+**What the GM saw.** The Move sheet was busy. Each row put a label column ("Bench", "Pitcher bench", "Rotation") in front of a sentence ("Montoya (OVR 61) takes their spot in the rotation", "Cuevas (OVR 79) to the pitcher bench"), with a paragraph under it about the open-spot deadline.
+
+**Now.** Rows are grouped under short headings. Each row is a name or slot, one short line under it, and an OVR number (coloured) where a player is involved, as on the "Fill the slot" sheet.
+- **A hitter:**
+  - **Play at:** each slot ("DH", then "For Cuevas", "Swap with Akiyama" or "Open"), with the OVR of whoever's there.
+  - **Replace at 1B:** the bench bats who can take the slot (name, positions, OVR), then **Leave 1B open**, with "Filled at 12:05 PM if still open" under it. That line is the old paragraph, cut down.
+- **A pitcher:**
+  - **Into the rotation / Into the bullpen** (for a pitcher not there): "For Pineda", or "Open spot", with that pitcher's OVR.
+  - **Replace in the rotation / in the bullpen** (for one who's there): the pitcher-bench arms who can take it, then **Leave the turn open** / **Leave the spot open**, with the fill time.
+- **Out of position (N) / Out of role (N)**: one button, as before. Under it, the same groups; each row's line says how familiar or how stretched out ("Practiced", "Unfamiliar, 2 of 10", "Stretched out 1 of 3"), in amber, instead of an "Out of position" tag on every row.
+- RosterEngine's move options also carry `occId`, `inId`, `swap`, `slot` and `note`, so the sheet doesn't parse sentences. `label` and `detail` are unchanged.
+
+**Checks.** test-oop-move-ui, test-pitcher-move-ui, test-team-roster-ui and test-lineup-days-ui (dark and light) are updated to the new layout and pass, as do check-open-spots and check-lineup-move.
+
+No fresh team needed.

@@ -37,18 +37,19 @@ const tap = async (sel) => { await page.tap(sel); await page.waitForTimeout(400)
 await tap('.nav-item[data-tab="roster"]');
 await tap(`.tr-move[data-move="${S.id}"]`);
 const sheet = await page.evaluate(() => ({
-  visible: [...document.querySelectorAll('.sm-row[data-key]')].filter(r => r.offsetParent).map(r => r.querySelector('.sm-slot-label').textContent.trim()),
+  visible: [...document.querySelectorAll('.sm-row[data-key]')].filter(r => r.offsetParent).map(r => r.querySelector('.sm-pick-name').textContent.trim()),
   btn: document.querySelector('.sm-oop-toggle')?.textContent.trim() || '',
   hidden: document.querySelector('.sm-oop-list')?.hidden,
 }));
 check(`the sheet: the eligible spots shown (${sheet.visible.join(', ')})`, sheet.visible.length > 0 && !sheet.visible.some(x => ['C', '2B', '3B', 'SS', 'OF'].includes(x)));
-check(`…"${sheet.btn}" below them, the rest hidden`, /^Show out-of-position spots \(\d+\)$/.test(sheet.btn) && sheet.hidden === true);
+check(`…"${sheet.btn}" below them, the rest hidden`, /^Out of position \(\d+\)$/.test(sheet.btn) && sheet.hidden === true);
 await page.screenshot({ path: `${out}/oop-move-closed-${theme}.png` });
 await tap('.sm-oop-toggle');
 const open = await page.evaluate(() => [...document.querySelectorAll('.sm-oop-list .sm-row')].map(r => r.innerText.replace(/\s+/g, ' ').trim()));
-check(`tapped: each marked, how familiar he is — ${open.slice(0, 3).join(' | ')}`, open.length >= 5 && open.every(x => /Out of position/i.test(x)) && open.some(x => /^3B .*practiced/i.test(x)) && open.some(x => /unfamiliar/.test(x)));
+// r246 §122.125 under the button, each says how familiar he is there (no "Out of position" on every row)
+check(`tapped: how familiar he is at each — ${open.slice(0, 3).join(' | ')}`, open.length >= 5 && open.every(x => /practiced|unfamiliar/i.test(x)) && open.some(x => /^3B .*practiced/i.test(x)) && open.some(x => /unfamiliar/i.test(x)));
 await page.screenshot({ path: `${out}/oop-move-open-${theme}.png` });
-await tap('.sm-oop-list .sm-row[data-key^="oop:"]:has(.sm-slot-label:text-is("3B"))');
+await tap('.sm-oop-list .sm-row[data-key^="oop:"]:has(.sm-pick-name:text-is("3B"))');
 await page.waitForTimeout(500);
 const row = await page.evaluate((id) => {
   const r = document.querySelector(`.tr-row[data-player="${id}"]`);

@@ -975,17 +975,6 @@ function _attachListeners(state) {
 // MOVE (r153) — one sheet of where a player can go
 // ─────────────────────────────────────────────────────────────
 
-/**
- * r239 §122.118 how long a spot the GM leaves open waits: until the roster deadline, or — the deadline passed
- * (the GM's move holds it) — until first pitch of the game it's for.
- */
-function _openNote(st) {
-  const mgr = _escape(st.userTeam.coachingStaff?.manager?.name || 'the manager');
-  const g = nextLineupGame(st);
-  if (g && managerFillsNow(st, clockNow())) return `An open spot waits until first pitch, at ${_clockText(g.gameTime)}. Then ${mgr} fills it from the bench.`;
-  return `An open spot waits for you until ${_clockText(managerFillAt(st))}, an hour before first pitch. Then ${mgr} fills it from the bench.`;
-}
-
 function _openMoveSheet(playerId) {
   const st = StateManager.get();
   const p = st.players[playerId];
@@ -994,21 +983,58 @@ function _openMoveSheet(playerId) {
   const day = _dayCtx(st);
   const ahead = !day.next && !['SP', 'RP'].includes(p.pos);   // r242 a game set ahead
   const deadline = ahead ? null : managerFillAt(st);
-  const leaves = opts.some(o => o.key === 'bench');
-  const row = (o) => `
-    <div class="sm-row${o.oop ? ' sm-oop' : ''}" data-key="${o.key}">
-      <div class="sm-slot-label${['SP', 'RP'].includes(p.pos) ? ' sm-wide' : ''}">${_escape(o.label)}</div>
-      <div class="sm-slot-sub">${o.oop ? `<span class="sm-oop-tag">Out of ${['SP', 'RP'].includes(p.pos) ? 'role' : 'position'}</span> ` : ''}<span class="${o.detail === 'Open' ? 'sm-empty' : 'sm-current'}">${_escape(o.detail)}</span></div>
-    </div>`;
-  // r165 §122.35 the spots he's eligible at first; out-of-position spots behind a button, clearly lesser choices
-  const elig = opts.filter(o => !o.oop), oop = opts.filter(o => o.oop);
-  // (r167 a pitcher's are out of role)
+  // r246 §122.125 fewer words: grouped under short headings, a name and its OVR where a player comes in, the
+  // fill time on the "leave it open" row (no paragraph), out-of-position/role behind one button.
   const arm = ['SP', 'RP'].includes(p.pos);
-  const oopWord = (show) => `${show ? 'Show' : 'Hide'} out-of-${arm ? 'role' : 'position'} spots`;
-  const rows = elig.map(row).join('')
-    + (oop.length ? `<button class="sm-oop-toggle" type="button">${oopWord(true)} (${oop.length})</button>
-       <div class="sm-oop-list" hidden>${oop.map(row).join('')}</div>` : '')
-    + (leaves && deadline ? `<div class="sm-note">${_openNote(st)}</div>` : '');
+  const P = (id) => st.players[id];
+  const fillTime = deadline ? (managerFillsNow(st, clockNow()) ? nextLineupGame(st)?.gameTime : deadline) : null;
+  const ovrNum = (q) => `<span class="rating-num ${_ovrColor(q.ovr)} sm-pick-ovr">${q.ovr}</span>`;
+  const head = (t) => `<div class="sm-head">${t}</div>`;
+  const tag = (o) => (o.note ? `<span class="sm-note-tag">${_escape(o.note[0].toUpperCase() + o.note.slice(1))}</span>` : '');
+  // a place to go: the spot, and who's there now
+  // (a hitter's: the slot, then who's there; a pitcher's: who's there — the heading is the role)
+  const placeRow = (o, main, { who = true } = {}) => {
+    const occ = o.occId ? P(o.occId) : null;
+    const what = !who ? '' : !occ ? 'Open' : o.swap ? `Swap with ${_escape(occ.name)}` : `For ${_escape(occ.name)}`;
+    const sub = [what, tag(o)].filter(Boolean).join(' · ');
+    return `<div class="sm-row${o.oop ? ' sm-oop' : ''}" data-key="${o.key}">
+      <div class="sm-pick-info"><span class="sm-pick-name">${main}</span>${sub ? `<span class="sm-pick-sub">${sub}</span>` : ''}</div>
+      ${occ ? ovrNum(occ) : ''}
+    </div>`;
+  };
+  // someone coming in for this player
+  const inRow = (o) => { const q = P(o.inId); return `<div class="sm-row" data-key="${o.key}">
+      <div class="sm-pick-info"><span class="sm-pick-name">${_escape(q.name)}</span><span class="sm-pick-sub">${posLabel(q)}</span></div>
+      ${ovrNum(q)}
+    </div>`; };
+  const leaveRow = (o, words) => `<div class="sm-row sm-leave" data-key="${o.key}">
+      <div class="sm-pick-info"><span class="sm-pick-name">${words}</span>${fillTime ? `<span class="sm-pick-sub">Filled at ${_escape(When.clockText(fillTime))} if still open</span>` : ''}</div>
+    </div>`;
+  const by = (f) => opts.filter(f);
+  const groups = [];   // [{ head, rows, oop }]
+  if (!arm) {
+    const at = by(o => o.key === 'bench')[0]?.slot || '';
+    groups.push({ head: 'Play at', rows: by(o => o.key.startsWith('slot:')).map(o => placeRow(o, _escape(o.label))) });
+    groups.push({ head: at ? `Replace at ${_escape(at)}` : 'Replace', rows: [...by(o => o.key.startsWith('in:')).map(inRow), ...by(o => o.key === 'bench').map(o => leaveRow(o, `Leave ${_escape(at)} open`))] });
+    groups.push({ head: 'Play at', rows: by(o => o.key.startsWith('oop:')).map(o => placeRow(o, _escape(o.label))), oop: true });
+  } else {
+    const inRot = (st.userTeam.rotation?.order || []).includes(p.id);
+    const forRole = (kind, title) => {
+      const rs = by(o => o.key.startsWith(`${kind}:`));
+      return [false, true].map(oop => ({ head: title, oop, rows: rs.filter(o => !!o.oop === oop)
+        .map(o => placeRow(o, o.occId ? `For ${_escape(P(o.occId).name)}` : 'Open spot', { who: false })) }));
+    };
+    groups.push(...forRole('turn', 'Into the rotation'), ...forRole('pen', 'Into the bullpen'));
+    groups.push({ head: inRot ? 'Replace in the rotation' : 'Replace in the bullpen',
+      rows: [...by(o => o.key.startsWith('in:')).map(inRow), ...by(o => o.key === 'bench').map(o => leaveRow(o, inRot ? 'Leave the turn open' : 'Leave the spot open'))] });
+  }
+  const block = (g) => (g.rows.length ? head(g.head) + g.rows.join('') : '');
+  const main = groups.filter(g => !g.oop), extra = groups.filter(g => g.oop);
+  const nExtra = extra.reduce((n, g) => n + g.rows.length, 0);
+  const oopWord = (show) => `${show ? 'Out of' : 'Hide out of'} ${arm ? 'role' : 'position'}`;
+  const rows = main.map(block).join('')
+    + (nExtra ? `<button class="sm-oop-toggle" type="button">${oopWord(true)} (${nExtra})</button>
+       <div class="sm-oop-list" hidden>${extra.map(block).join('')}</div>` : '');
   const pos = posLabel(p);
   const forDay = ahead ? ` · ${_escape(When.relDay(day.game.gameTime, clockNow()))}'s game` : '';
   _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}${forDay}`, rows, (overlay) => {
@@ -1019,7 +1045,7 @@ function _openMoveSheet(playerId) {
       App.playClick();
       const list = overlay.querySelector('.sm-oop-list');
       list.hidden = !list.hidden;
-      e.currentTarget.textContent = list.hidden ? `${oopWord(true)} (${oop.length})` : oopWord(false);
+      e.currentTarget.textContent = list.hidden ? `${oopWord(true)} (${nExtra})` : oopWord(false);
     });
   });
 }
@@ -1374,6 +1400,10 @@ function _injectCSS() {
     .sm-pick-name{font-size:13px;font-weight:600;color:var(--text);display:block;}
     .sm-pick-sub{font-size:11px;color:var(--muted);}
     .sm-pick-ovr{font-size:16px !important;flex-shrink:0;}
+    .sm-head{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:14px 20px 6px;}
+    .sm-note-tag{color:#d49b00;}
+    .sm-leave .sm-pick-name{color:var(--soft);}
+    .sm-oop .sm-pick-name{color:var(--soft);}
     .sm-arrow{font-size:16px;color:var(--border);flex-shrink:0;}
 
     /* §122.63 sideways (body[data-wide]): the top folds into one line — title, payroll, OVR, the two bars —
