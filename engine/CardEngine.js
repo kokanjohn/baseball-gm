@@ -148,6 +148,7 @@ import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js'
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt, stretchOf, pitchRoles } from './Positions.js';   // r163 §122.35
 import * as Impact from './DecisionImpact.js';   // r255 §122.134 what a decision changed (the Completed tab)
+import { rainHolds } from './FieldCare.js';        // r256 §122.135 a message that says it rained comes only when it did
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -2679,7 +2680,11 @@ export function deliverMomentCard(moment, context, game = null, timing = 'soon')
   const doneKey = `${state.seasonNum || 1}|${moment}`;
   if (state.momentsDone?.[doneKey]) return false;
   const sit = _momentSituation(state);
-  const versions = (MOMENT_CARDS[moment] || []).filter(c => _fitsMoment(c, sit));
+  // r256 §122.135 a version that says it rained ("the infield is soft") only when it did, at our park, by the
+  // earliest the message can arrive (a pregame message: 150 minutes before first pitch).
+  const by = game && timing === 'pregame' ? game.gameTime - 150 * 60_000 : clockNow();
+  const versions = (MOMENT_CARDS[moment] || []).filter(c => _fitsMoment(c, sit)
+    && (!c._needsRain || ((!c._needsRain.home || !!game?.isHome) && rainHolds(state, c._needsRain, by))));
   if (!versions.length) return false;
   const seen = _seenMoments();
   const inSave = new Set(Object.values(state.momentsDone || {}).map(d => d.cardId));
@@ -4076,6 +4081,8 @@ function _filterEligible(pool, context, state, poolName = null) {
     if (card._requiresDivClose && !(sit.race === 'in')) return false;
     if (card._requiresLossGap && (sit.lossGap < card._requiresLossGap)) return false;
     if (card._when && !fitsSituation(card._when, sit)) return false;
+    // r256 §122.135 a message that says it rained at our park comes only when it did.
+    if (card._needsRain && !rainHolds(state, card._needsRain, clockNow())) return false;
     // One version of a family a season: the family is the card.
     if (card._family && familiesThisSeason.has(card._family)) return false;
 

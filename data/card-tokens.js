@@ -73,11 +73,11 @@ export const CARD_TOKEN_POOLS = Object.freeze({
     'aging ballasts in the center-field towers',
     'uneven light levels in the outfield corners',
   ],
-  sp8_context: [
-    'the travel budget is already stretched this spring',
-    'the CFO wants to see spring costs held flat',
-    'several veterans have asked for the charter after last year',
-    'the commercial itineraries include two early-morning connections',
+  sp8_context: [   // r256 its own sentence: some argue for the charter, some for commercial
+    'The travel budget is already stretched this spring.',
+    'The CFO wants to see spring costs held flat.',
+    'Several veterans have asked for the charter after last year.',
+    'The commercial itineraries include two early-morning connections.',
   ],
   sp9_pitch: [
     'open workouts, player autographs, and a family zone on the back fields',

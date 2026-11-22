@@ -185,10 +185,13 @@ export const MOMENT_CARDS = Object.freeze({
      yesMsg:"One of them doubled in a first big-league at-bat and couldn't stop grinning.",
      noMsg:"The regulars got their two at-bats. The crowd got the names it came for."},
 
-    {id:'mo_spo_weather',type:'normal',tag:'OPERATIONS',sender:'Stadium Ops.',avatar:'🌦️',
-     subject:"Spring opener — the field is soft after rain",
-     preview:"Rain left the infield soft for today's opener…",
-     body:"Rain left the infield soft. We can bring in drying agent and a second crew ({misc_cost_xs}) to have it right by first pitch, and the players will appreciate a safe field. Or the game goes on as the field is — it's spring — and someone could tweak something on a bad hop and be off for a few games.",
+    // r256 §122.135 the groundskeeper's, and only when it rained at our park (at least 0.3" in the 12 hours before)
+    {id:'mo_spo_weather',type:'normal',tag:'OPERATIONS',sender:'Head Groundskeeper',avatar:'🌱',
+     _needsRain:{hours:12,inches:0.3,home:true},
+     _fieldNote:{days:1,yes:"The second crew is working drying agent into the infield after the rain.",no:"We're playing the opener on the soft infield, like you said.",open:"The rain left the infield soft, and I'm waiting on your word about a second crew."},
+     subject:"Spring opener — the infield is soft after the rain",
+     preview:"The rain left the infield soft for today's opener…",
+     body:"The rain left the infield soft. I can bring in drying agent and a second crew ({misc_cost_xs}) to have it right by first pitch, and the players will appreciate a safe field. Or the game goes on as the field is — it's spring — and someone could tweak something on a bad hop and be off for a few games.",
      yesLabel:'Bring in the Crew',noLabel:'Play It As Is',
      yesEffect:{morale:1},noEffect:{ovr:-1},
      yesMsg:"Fast and true by first pitch. Nobody noticed, which is the point.",

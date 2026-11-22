@@ -14666,3 +14666,30 @@ Decisions made before r255 kept nothing, so they show no "What changed".
 - The season adds "what changed: every decision kept, every row whole".
 
 No fresh team needed.
+
+---
+
+## §122.135 r256 — The field's messages agree with the weather and with each other
+
+**What happened.** Stadium Ops said rain had left the infield soft for the spring opener; the GM brought in a crew; the groundskeeper's field report (Compose) said "No complaints from the field." The opener message asserted rain that the weather model never had (it was picked with no weather check), and the report knew nothing of the message.
+
+**1. A message that says it rained comes only when it did.** New card key `_needsRain: { hours, inches, home? }`, read by `FieldCare.rainHolds(state, need, toMs)` (the rain at our park in the hours before, from the save's weather: `rainAtPark`). Honored in the card pools' eligibility, in Opening/spring moments (measured to the earliest a pregame message can arrive, 150 minutes before first pitch), and in `Emergencies.pickEmergency`.
+- The spring opener's soft infield: 0.3" in the 12 hours before, at home.
+- The storm emergencies (the tarp torn, lightning on a light tower): half an inch in the six hours before.
+
+**2. The field is the groundskeeper's.** Every message about the field now comes from the Head Groundskeeper, in their voice: the soft infield, the homestand opener's field note (bg5), the infield resurfacing offer (f4), short-staffed (st3), the event teardown (rv1_field_condition), dragging the infield mid-game, field prep before spring. ill5a is now "My assistant is out sick", since the groundskeeper can't be out sick and still answer Compose. Stadium Ops keeps the building: lights, HVAC, the PA, the clubhouse, the lot (the film crew's overstay no longer mentions the grounds crew; the anthem volunteer comes from the ticket office).
+
+**3. The field report tells the field's messages.** `_fieldNote: { yes, no, open, days }` on every field message: what the groundskeeper says about it afterwards, by how the GM answered (or the default when left; 'open' while it waits). This covers the soft infield, the storm and tarp, the festival, mound, wall, track, scorch and wedding repairs, the teardown, short-staffed, the assistant out sick, the resurfacing, the mid-game drag and the winter prep. `gk_field` takes the newest still-fresh note:
+- It replaces the generic "good shape / no complaints" line.
+- "Not much has changed since I wrote…" isn't said when a field message came since.
+- Its old generic "the X you signed off on is making a difference" leaves these messages out.
+
+**Spring travel (sp8).** "Charter is the professional standard, but several veterans have asked for the charter" read wrong for the contexts that argue for the charter. Each context is now its own sentence after "Charter is the professional standard."
+
+**"a charter flight problem in on the road".** That subject was rewritten in r214 ("Trouble with our charter flight on the road"); no current text has it.
+
+**Checks.**
+- New check-field-messages (8): no Stadium Ops message talks about the field; every field problem from the groundskeeper has its report line; sp8 reads right with every context; a storm emergency only on a night it stormed; the soft infield only after rain (dry openers never, wet openers sometimes); the field report beside it unanswered, yes and no tells it and never says "no complaints".
+- check-emergencies picks a stormy night's weather for the storm versions.
+
+No fresh team needed.

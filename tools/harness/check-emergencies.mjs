@@ -15,6 +15,7 @@ import * as CE from '../../engine/CardEngine.js';
 import { planEmergencies, pickEmergency, nextGameAfter } from '../../engine/Emergencies.js';
 import { EMERGENCIES } from '../../data/cards-emergency.js';
 import { EMERGENCY } from '../../data/constants.js';
+import { rainHolds } from '../../engine/FieldCare.js';   // r256 a storm only on a night it stormed
 import { dice } from '../../engine/Dice.js';
 import { senderLabel } from '../../engine/Senders.js';
 import { voiceProblems } from './voice-rules.mjs';
@@ -88,6 +89,8 @@ console.log('\nAnswered; slept through');
         const at = night0 + (di + 1) * 60_000;
         const g = nextGameAfter(S(), at);
         SM.mutate(s => { const x = s.schedule.find(y => y.gameTime === g.gameTime); x.isHome = def._needs ? def._needs === 'home' : x.isHome; s.emergencies.situations = []; s.emergencies.used = EMERGENCIES.filter(d => d.id !== def.id).map(d => d.id); });
+        // r256 a storm's version: on a weather where it stormed that night (another seed of the same save's weather)
+        for (let k = 0; def._needsRain && k < 400 && !rainHolds(S(), def._needsRain, at); k++) SM.mutate(s => { s.weatherSeed = `storm-${k}`; });
         const m0 = S().userTeam.morale ?? S().userTeam.clubhouseMorale;
         const c = CE.deliverEmergency(at, buildCardContext());
         if (!c || c.cardId !== def.id) { bad.push(`${def.id}: not delivered (${c?.cardId})`); return; }

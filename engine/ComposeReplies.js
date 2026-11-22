@@ -188,8 +188,32 @@ const W = {};
 
 const GROUNDS_WORDS = /field|grounds|tarp|drain|mound|turf|crew|sod|irrigation|ballpark prep|infield|warning track/i;
 
+/**
+ * r256 §122.135 the groundskeeper's own messages, in their field report: the newest one still fresh (its
+ * `_fieldNote.days`), as the GM answered it — yes, no, the default when left, or still waiting ('open'). A field
+ * message and the report agree: never "no complaints" the day the infield was soft.
+ */
+function fieldNote(f) {
+  const DAY = MS_DAY;
+  let best = null;
+  for (const c of f.state.inbox || []) {
+    const n = c._raw?._fieldNote;
+    if (!n) continue;
+    const arrived = c.arrivedAtMs ?? c.deliverAtMs ?? 0;
+    if (!(arrived <= f.atMs)) continue;
+    const path = !c.resolved ? 'open'
+      : c.choice === 'yes' || c.choice === 'no' ? c.choice
+      : c.choice === 'auto' ? (c.autoResolve === 'yes' ? 'yes' : 'no') : null;
+    const at = c.resolved ? (c.resolvedAtMs || arrived) : arrived;
+    if (!path || !n[path] || f.atMs - at > (n.days ?? 2) * DAY) continue;
+    if (!best || at > best.at) best = { at, text: n[path], card: c };
+  }
+  return best;
+}
+
 W.gk_field = (f, r, who) => {
   const out = [];
+  const note = fieldNote(f);   // r256
   const rain24 = f.rainPast(24), rain72 = f.rainPast(72);
   const now = f.nowAt();
   const lastHome = f.lastHomeGame();
@@ -210,9 +234,10 @@ W.gk_field = (f, r, who) => {
     out.push(`It's been hot and dry — ${Math.round(now.tempF)}° out there right now. We're watering the infield skin between innings and twice before first pitch so it doesn't crust over and play fast.`);
   } else if (now.tempF <= 45 && f.season !== 'off') {
     out.push(`It's cold — ${Math.round(now.tempF)}° right now. The mound clay stiffens up in this, so we're working it warm before each game and keeping the bullpen mounds covered overnight.`);
-  } else {
+  } else if (!note) {
     out.push(r() < 0.5 ? `The field is in good shape. Dry, firm, and playing true.` : `No complaints from the field. The surface is dry and the infield is playing true.`);
   }
+  if (note) out.push(note.text);   // r256 what we're dealing with, as you answered it
 
   // The last game played on it.
   const fc = lastHome?.fieldCondition;
@@ -243,12 +268,12 @@ W.gk_field = (f, r, who) => {
   // What the GM did for the crew.
   // (§122.60 not a game day's weather question — batting practice, extra hands: a call for that game, not work done for the crew)
   const mine = f.decisions().filter(d => ['FACILITIES', 'OPERATIONS', 'FINANCE', 'WEATHER'].includes(d.tag) && GROUNDS_WORDS.test(d.subject) && f.atMs - d.at < 120 * MS_DAY
-    && !d.card?._wxDecision);
+    && !d.card?._wxDecision && !d.card?._raw?._fieldNote);   // r256 a field message speaks for itself (the note above)
   const d = mine[0];   // the latest call the GM made on the crew's work
   if (d?.choice === 'yes') out.push(`${Cap(aboutOf(d.subject))} you signed off on ${f.atMs - d.at < 3 * MS_DAY ? 'is already' : 'has been'} making a difference.`);
   else if (d) out.push(`We're still making do without ${aboutOf(d.subject).replace(/^the /, 'the ')} — no complaints, but it's the first thing I'd ask for when there's room in the budget.`);
   const lt = lastTime(f, 'gk_field');
-  if (lt && lt.days <= 3 && rain24 < 0.1) out.unshift(`Not much has changed since I wrote ${f.onWhen(lt.prev.atMs)}.`);
+  if (lt && lt.days <= 3 && rain24 < 0.1 && !(note && note.at > lt.prev.atMs)) out.unshift(`Not much has changed since I wrote ${f.onWhen(lt.prev.atMs)}.`);
   return { body: out, memo: { rain24 } };
 };
 

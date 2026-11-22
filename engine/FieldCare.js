@@ -15,11 +15,15 @@
  *   prepCostK(chance, wetIn)         the crew's price, by the forecast
  *   drainageCostK(level)             the next level's price
  *   roadWindow(state, atMs)          the next stretch away long enough for the drainage work
+ *   rainAtPark(state, fromMs, toMs)  r256 the rain that fell at our park in a span (inches)
+ *   rainHolds(state, need, toMs)     r256 has a message's rain (`_needsRain`) really fallen by `toMs`?
  *
  * Pure: never imports StateManager.
  */
 
 import { FIELD_CARE as FC } from '../data/constants.js';
+import { weatherContext } from './WeatherClimate.js';
+import { rainTotal } from './WeatherConditions.js';
 
 const DAY = 86_400_000;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -103,4 +107,21 @@ export function settleDrainage(draft, atMs) {
   u.facilities = { concourse: 0, training: 0, ...(u.facilities || {}), field: Math.max(u.facilities?.field || 0, w.level) };
   delete u.fieldWork;
   return true;
+}
+
+/** r256 §122.135 the rain that fell at our park between two moments (inches; 20-minute steps). */
+export function rainAtPark(state, fromMs, toMs) {
+  if (!state || !(toMs > fromMs)) return 0;
+  const ctx = weatherContext(state);
+  const pk = ctx.map.parks.user;
+  return rainTotal(ctx, pk.x, pk.y, fromMs, toMs, 20);
+}
+
+/**
+ * r256 §122.135 a message that says it rained ("the infield is soft", "the storm tore the tarp") comes only when it
+ * did: `need` = { hours, inches } — at least that much rain at our park in the hours before `toMs`. No need: true.
+ */
+export function rainHolds(state, need, toMs) {
+  if (!need) return true;
+  return rainAtPark(state, toMs - (need.hours || 12) * 3_600_000, toMs) >= (need.inches || 0.3);
 }

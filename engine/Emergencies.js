@@ -11,6 +11,7 @@
  */
 import { EMERGENCY } from '../data/constants.js';
 import { EMERGENCIES } from '../data/cards-emergency.js';
+import { rainHolds } from './FieldCare.js';   // r256 §122.135 a storm only on a night it stormed
 
 const MIN = 60_000, HOUR = 60 * MIN;
 
@@ -59,7 +60,7 @@ export function pickEmergency(state, atMs, rand) {
   if (!g) return null;
   const used = new Set(state.emergencies?.used || []);
   const sits = new Set(state.emergencies?.situations || []);
-  const fits = EMERGENCIES.filter(d => !d._needs || (d._needs === 'home') === !!g.isHome);
+  const fits = EMERGENCIES.filter(d => (!d._needs || (d._needs === 'home') === !!g.isHome) && rainHolds(state, d._needsRain, atMs));
   let pool = fits.filter(d => !sits.has(d._situation) && !used.has(d.id));
   if (!pool.length) pool = fits.filter(d => !sits.has(d._situation));
   if (!pool.length) pool = fits;

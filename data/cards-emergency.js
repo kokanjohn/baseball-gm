@@ -38,7 +38,9 @@ export const EMERGENCIES = Object.freeze([
    _staffBad:{p:0.35,effect:{morale:-2},msg:"No answer, so I gave {active_hitter_name} the standard few days. Word got around that the front office didn't call back. That stung in the clubhouse."}},
 
   // ── Storm damage before a home game ──
-  {id:'em_storm_tarp',_situation:'storm',_needs:'home',tag:'OPERATIONS',type:'urgent',sender:'Head Groundskeeper',avatar:'⛈️',
+  // r256 §122.135 a storm only on a night it stormed at our park (at least half an inch in the six hours before)
+  {id:'em_storm_tarp',_situation:'storm',_needs:'home',_needsRain:{hours:6,inches:0.5},
+   _fieldNote:{days:1,yes:"The overnight crew pumped out the infield after the storm took the tarp.",no:"The storm took the tarp, and the morning crew is working the infield back.",open:"The storm tore the tarp and the infield took on water; I need your call on the overnight crew."},tag:'OPERATIONS',type:'urgent',sender:'Head Groundskeeper',avatar:'⛈️',
    autoResolve:'no',_budgetCost:'misc_cost_sm',
    subject:"The storm tore the tarp",
    preview:"The wind took the tarp off the infield about an hour ago…",
@@ -50,7 +52,7 @@ export const EMERGENCIES = Object.freeze([
    _staffGood:"No answer, so I waited for the morning crew. We got lucky: the sun came out and the infield dried by first pitch.",
    _staffBad:{p:0.45,effect:{atmo:-3,ownerTrust:-1},msg:"No answer, so I waited for the morning crew. The infield played like mud. Two grounders took bad hops, and the owner's box noticed."}},
 
-  {id:'em_storm_lights',_situation:'storm',_needs:'home',tag:'OPERATIONS',type:'urgent',sender:'Stadium Ops.',avatar:'⛈️',
+  {id:'em_storm_lights',_situation:'storm',_needs:'home',_needsRain:{hours:6,inches:0.5},tag:'OPERATIONS',type:'urgent',sender:'Stadium Ops.',avatar:'⛈️',
    autoResolve:'no',_budgetCost:'misc_cost_sm',
    subject:"Lightning hit a light tower",
    preview:"Lightning hit the left-field light tower. Half the bank is out…",
