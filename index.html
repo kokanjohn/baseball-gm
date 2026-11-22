@@ -411,6 +411,20 @@ body[data-turn] .tab-content,body[data-turn] .modal-sheet,body[data-turn] .leagu
 .mt-decision{margin:8px 16px 8px 68px;padding:10px 12px;border-radius:10px;background:var(--surface2);
   border-left:3px solid #34C97A;color:var(--text);font-size:14px;font-weight:700;line-height:1.4;}
 .mt-reply.auto .mt-decision{border-left-color:#c8821a;}
+/* r255 §122.134 what a decision changed */
+.mt-msg.mi{padding:12px 16px 10px;}
+.mi-h{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;}
+.mi-row{display:flex;align-items:baseline;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:14px;}
+.mi-row:last-child{border-bottom:none;}
+.mi-label{flex:1;min-width:0;color:var(--text);font-weight:600;}
+.mi-sub{display:block;font-size:11px;font-weight:600;color:var(--muted);}
+.mi-none{color:var(--muted);font-weight:500;}
+.mi-val{color:var(--soft);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.mi-d{min-width:48px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.mi-d.up{color:#34C97A;}
+[data-theme="light"] .mi-d.up{color:#17804A;}
+.mi-d.down{color:var(--danger);}
+.mi-text{flex:1.4;color:var(--soft);text-align:right;}
 @media (max-width:360px){.mr-body,.mt-decision{padding-left:16px;margin-left:16px;}.mr-body{margin-left:0;}}
 .empty-inbox{text-align:center;padding:60px 20px;color:var(--muted);font-size:15px;}
 .empty-inbox .big{font-size:48px;margin-bottom:12px;}

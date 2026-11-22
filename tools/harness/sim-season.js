@@ -2661,6 +2661,12 @@ async function main() {
   { const st = SM.get(); const ours = (st.userTeam.rosterIds || []).map(id => st.players[id]).filter(Boolean);
     const kinds = {}; for (const p of ours) for (const x of p.log || []) kinds[x.kind] = (kinds[x.kind] || 0) + 1;
     check(`history: our players' time out and work kept (${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join(', ')})`, (kinds.rest || 0) > 0); }
+  // r255 §122.134 every decision made this season keeps what it changed (the Completed tab)
+  { const st = SM.get(); const done = (st.inbox || []).filter(c => c.resolved && ['yes', 'no', 'auto'].includes(c.choice) && c.noLabel);
+    const kept = done.filter(c => Array.isArray(c._impact)), rows = kept.reduce((n, c) => n + c._impact.length, 0);
+    const odd = kept.flatMap(c => c._impact.filter(r => !r.label || (r.unit !== 'text' && r.unit !== 'pct' && !(Number.isFinite(r.from) && Number.isFinite(r.to) && r.delta === r.to - r.from))).map(r => `${c.cardId}: ${JSON.stringify(r)}`));
+    check(`what changed: every decision kept (${kept.length}/${done.length}, ${rows} rows), every row whole`, done.length > 20 && kept.length === done.length && odd.length === 0,
+      [...done.filter(c => !Array.isArray(c._impact)).map(c => c.cardId).slice(0, 5), ...odd.slice(0, 3)].join(' | ')); }
   check(`compose: every topic writes a clean reply from the live club (${composeStats.n} replies across the run; slowest ${composeStats.maxMs.toFixed(0)} ms)`,
         composeStats.bad.length === 0 && composeStats.slow === 0, composeStats.bad.slice(0, 3).join(' | '));
   check(`messages name real players: ${namedStats.cards} messages and replies, ${namedStats.named} players named, every one in the league (a scouts' report: on the market as it lands)`,

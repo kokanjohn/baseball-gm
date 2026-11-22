@@ -14641,3 +14641,28 @@ The ticket office asked to "Order the Caps" for a first game a few hours away. A
 **Checks.** New check-message-timing (11 checks; 10 fail on r253): nothing in the 61 messages that can arrive an hour or two ahead orders items, books a flyover or finishes construction the same day; the moves; the reworded messages; no manager calls the lineup theirs; scheduled work reads as scheduled; every decision has a reply either way. check-away-days adds: a message with a time arrives by its hour, every off-day message naming a time carries one, and opened at 2pm none whose hour has passed arrives.
 
 No fresh team needed.
+
+---
+
+## §122.134 r255 — Completed messages show what the decision changed
+
+Opening a completed message now shows, under the reply, **What changed**: each number the decision moved, from → to, with the difference (green up, red down).
+- Team rating, team morale, stadium atmosphere, owner trust, manager confidence, the owner's win target.
+- Club funds (in millions, two decimals when the change is under $100K: "$3.30M → $3.27M −$25K").
+- This season's payroll target (±%), local income a season, a ticket promotion ("−15% prices, next 10 home games").
+- A coach's or a named player's view of the GM ("Ruiz's view of you 50 → 56 +6", with the coach's role under it).
+- The players the message is about: what was started for them, from their History (r253: "Rested (1 game)", "Training: contact with the hitting coach (2 days away)"), or their new status when nothing was logged ("Playing through it: stuff down a little for 5 more games.").
+- Players who joined or left the roster.
+- "Later: More comes of this later." when the answer made a promise (`_promise`).
+- "Nothing changed" when the answer moved nothing measurable.
+
+**How it's kept: before and after, not path by path.** A decision's effects land through many paths (soft effects, money, relationships, roster actions, rest and training, an unanswered card's tax). `engine/DecisionImpact.js` (pure, precached) takes a `snapshot` of what the GM can see before the decision and again after every path has run, and `diff` keeps the difference on the card (`card._impact`, `card._impactLater`). CardEngine does it in `resolve` and in both `expire` paths (the roster default and the card default) through `_keepImpact`. Whatever a decision does now or later, the record is what actually changed.
+
+Decisions made before r255 kept nothing, so they show no "What changed".
+
+**Checks.**
+- New check-decision-impact: every first-day decision answered either way keeps each number that moved, exactly (from, to, difference), and adds no row for a number that didn't move. A player sat out or sent to work is named. A promise says more comes later. An unanswered card keeps its default's changes. Money is kept in dollars.
+- New test-decision-impact-ui (dark and light): the rows, the funds row's format, red for a cost, the player rows, and nothing shown for an older decision.
+- The season adds "what changed: every decision kept, every row whole".
+
+No fresh team needed.

@@ -147,6 +147,7 @@ import { clockNow } from './Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt, stretchOf, pitchRoles } from './Positions.js';   // r163 §122.35
+import * as Impact from './DecisionImpact.js';   // r255 §122.134 what a decision changed (the Completed tab)
 
 // ─────────────────────────────────────────────────────────────
 // CARD POOLS — keyed by pool name for lookup
@@ -340,6 +341,7 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
   }
 
   const effects = choice === 'yes' ? (instance.yesEffect || {}) : (instance.noEffect || {});
+  const before = Impact.snapshot(state, instance, clockNow());   // r255 §122.134
 
   // §74: whether the decision can still happen is judged on the world the GM
   // tapped in — before this card's own cost is charged below. (A card's
@@ -415,6 +417,7 @@ export function resolve(instanceId, choice, { pick = null } = {}) {
   _maybeChainFollowup(instance, choice, clockNow());
   _makePromise(instance, choice, clockNow());
   syncWinterOffers(clockNow());   // §122.60 a decision that spent money: an offer it no longer covers is off the table
+  _keepImpact(instanceId, before, choice === 'yes' ? 'yes' : 'no', instance);
   // r154 §95 a decision that changed the club's rating (a release, a call-up)
   // is a point on its history at the moment it was made — not at the next tick.
   const after = StateManager.get(), last = (after.ratingHistory || []).slice(-1)[0];
@@ -575,6 +578,7 @@ export function expire(instanceId, atMs = clockNow()) {
   // r219 §122.98 a decision left to lapse: the staff decided (the profile notes it).
   StateManager.mutate(s => { GMP.recordDecision(s, instance, 'auto', atMs); });
 
+  const before = Impact.snapshot(StateManager.get(), instance, atMs);   // r255 §122.134
   if (instance.autoResolve === 'roster') {
     StateManager.mutate(s => {
       const card = s.inbox.find(c => c.instanceId === instanceId);
@@ -586,6 +590,7 @@ export function expire(instanceId, atMs = clockNow()) {
       }
     });
     _applyRosterAction(instance, 'auto', StateManager.get(), { atMs, auto: true });
+    _keepImpact(instanceId, before, null, instance);
     return;
   }
 
@@ -635,6 +640,22 @@ export function expire(instanceId, atMs = clockNow()) {
   if (instance._emergency && autoPath === 'yes' && onYes && CARD_ACTIONS[onYes]) {
     _applyRosterAction(instance, 'yes', StateManager.get(), { atMs });
   }
+  _keepImpact(instanceId, before, def, instance);
+}
+
+/**
+ * r255 §122.134 what the decision changed, kept on the card for the Completed tab: the difference between what
+ * the GM could see before it and after every path it took (effects, money, people, the roster), plus whether
+ * more comes of it later (a promise it made).
+ */
+function _keepImpact(instanceId, before, choice, instance) {
+  const after = StateManager.get();
+  const rows = Impact.diff(before, Impact.snapshot(after, instance, clockNow()), after);
+  const later = !!(choice && instance?._raw?._promise?.[choice]);
+  StateManager.mutate(s => {
+    const card = (s.inbox || []).find(c => c.instanceId === instanceId);
+    if (card) { card._impact = rows; if (later) card._impactLater = true; }
+  });
 }
 
 /** A decision's money — the exact amounts the card showed — into / out of Club Funds (§78). */

@@ -25,7 +25,7 @@ import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '../../engine/CardEngine.js';
-import { snapshotMetrics } from '../formatters.js';
+import { snapshotMetrics, formatMoney } from '../formatters.js';
 import * as When from '../../engine/When.js';
 import { dealsFor, shoppable, SHOP_AGAIN_MS, scoutingAsked, scoutingDeal } from '../../engine/TradeAdvice.js';
 import { namedPlayers, faLooks } from '../../engine/ComposeReplies.js';
@@ -612,7 +612,34 @@ function _renderThread(card, state) {
         </div>
         <div class="mr-body"><p>${_escape(d.outcome)}</p></div>
       </div>` : ''}
+      ${d.read ? '' : _impactHtml(card)}
     </div>`;
+}
+
+/** r255 §122.134 what the decision changed, and by how much (kept on the card when it was decided). */
+function _impactHtml(card) {
+  const rows = Array.isArray(card._impact) ? card._impact : null;
+  if (!rows) return '';                                   // decided before r255: nothing was kept
+  // Club funds in millions: two decimals when the change is smaller than $100K, so "$3.30M → $3.28M" shows it.
+  const money = (k, fine) => (k < 0 ? '−' : '') + (Math.abs(k) >= 1000 && fine ? `$${(Math.abs(k) / 1000).toFixed(2)}M` : formatMoney(Math.abs(k)));
+  const signed = (n, f = String) => `${n > 0 ? '+' : '−'}${f(Math.abs(n))}`;
+  const line = (r) => {
+    const name = `<span class="mi-label">${_escape(r.label)}${r.sub ? `<span class="mi-sub">${_escape(r.sub)}</span>` : ''}</span>`;
+    if (r.unit === 'text') return `<div class="mi-row">${name}<span class="mi-text">${_escape(r.text || '')}</span></div>`;
+    const tone = r.delta > 0 ? 'up' : 'down';
+    if (r.unit === 'pct') return `<div class="mi-row">${name}<span class="mi-val"></span><span class="mi-d ${tone}">${signed(r.delta)}%</span></div>`;
+    const fine = Math.abs(r.delta) < 100;
+    const v = r.unit === 'k' ? `${money(r.from, fine)} → ${money(r.to, fine)}` : `${r.from} → ${r.to}`;
+    const dd = r.unit === 'k' ? signed(r.delta, formatMoney) : signed(r.delta);
+    return `<div class="mi-row">${name}<span class="mi-val">${v}</span><span class="mi-d ${tone}">${dd}</span></div>`;
+  };
+  const body = rows.length ? rows.map(line).join('') : '<div class="mi-row"><span class="mi-label mi-none">Nothing changed</span></div>';
+  const later = card._impactLater ? '<div class="mi-row"><span class="mi-label">Later</span><span class="mi-text">More comes of this later.</span></div>' : '';
+  return `
+      <div class="mt-msg mi">
+        <div class="mi-h">What changed</div>
+        ${body}${later}
+      </div>`;
 }
 
 // ─────────────────────────────────────────────────────────────
