@@ -25,7 +25,8 @@ import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear, isAvailable } from '../../engine/PlayerFactory.js';
 import { contractIsUp } from '../../engine/OffseasonEngine.js';
-import { developmentStatus, wearOf } from '../../engine/DevelopmentEngine.js';
+import { wearOf } from '../../engine/DevelopmentEngine.js';
+import { statusOf } from '../../engine/PlayerStatus.js';   // r252 §122.131
 import { lastSeasonIMP } from '../../engine/IMPEngine.js';
 import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
@@ -566,13 +567,14 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
       if (x !== 'DH' && n > 0 && !eligibleAt(p).includes(x)) subBits.push(`<span class="tr-learn">${x} ${n}/10</span>`);
     }
     if (next) subBits.push('<span class="tr-next" title="Starts the next game">Next</span>');
-    const st = _statusWord(p);
-    if (st) subBits.push(`<span class="tr-hurt">${st}</span>`);
-    if (out) subBits.push(`<span class="tr-hurt">${out}</span>`);   // r242 can't play that day
+    // r252 §122.131 a status is a short red mark to tap ("1 game", "3 days", "IL"), not words in the column
+    const stat = statusOf(state, p);
+    if (stat) subBits.push(_statBadge(stat.short, `${p.name}: ${stat.full}`, stat.tone));
+    if (out) subBits.push(_statBadge('Out', `${p.name} can't play that day.`));   // r242 can't play that day
     if (pitcher && isAvailable(p) && slot !== 'Bench' && !slot.startsWith('SP')) {
       const arm = armStatus(p, Date.now()).status;
-      if (arm === 'down') subBits.push('<span class="tr-hurt">resting today</span>');
-      if (arm === 'tired') subBits.push('<span class="tr-warn">tired</span>');
+      if (arm === 'down') subBits.push(_statBadge('Rest', `${p.name} is resting today: thrown too much lately to pitch.`));
+      if (arm === 'tired') subBits.push(_statBadge('Tired', `${p.name} is tired: available, but not at full strength.`, 'warn'));
     }
     const cn = _contractNote(p);
     if (cn) subBits.push(cn.replace(/^ · /, ''));
@@ -583,7 +585,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
       <div class="tr-fz">
         <div class="tr-slot${off ? ' tr-oop' : ''}">${slot}${off ? `<button type="button" class="tr-oop-mark" data-oop="${off}" aria-label="Out of position">!</button>` : ''}</div>
         <div class="tr-name">
-          <div class="tr-name-line">${_escape(p.name)}${_dotIndicator(p)}</div>
+          <div class="tr-name-line">${_escape(p.name)}</div>
           <div class="tr-sub">${subBits.join(' · ')}</div>
         </div>
         <div class="tr-wearc">${_wearCell(p)}</div>
@@ -657,20 +659,9 @@ function _rowMarksYear(state, p) {
 }
 
 /** Not available today, in a word (day-to-day, being evaluated, rest, suspended…). */
-function _statusWord(p) {
-  const st = p.injury?.status;
-  if (st === 'evaluating') return 'being evaluated';
-  if (st === 'dtd')        return 'day-to-day';
-  if (p.isInjured)         return 'injured';
-  if (p.isSuspended)       return 'suspended';
-  const away = p.unavailable;
-  if (away) {
-    const what = { rest: 'resting', illness: 'sick', training: 'training', benched: 'sat down', suspended: 'suspended', leave: 'on leave', 'sim game': 'after a sim game' }[away.reason] || 'away';
-    // r159 away for a stretch of days (focused work, a program): back by the clock, not a game count.
-    if (away.untilMs) { const d = Math.max(1, Math.ceil((away.untilMs - Date.now()) / 86_400_000)); return `${what}, ${d} day${d === 1 ? '' : 's'}`; }
-    return `${what}, ${away.gamesLeft} game${away.gamesLeft === 1 ? '' : 's'}`;
-  }
-  return '';
+/** r252 §122.131 a status mark on a row: tap it for what it means (the row's card stays closed). */
+function _statBadge(short, full, tone = 'bad') {
+  return `<button type="button" class="tr-stat tr-stat-${tone}" data-stat="${_escape(full)}">${_escape(short)}</button>`;
 }
 
 function _clockText(ms) {
@@ -978,6 +969,8 @@ function _attachListeners(state) {
       if (e.target.closest('.tr-move')) return;
       const mark = e.target.closest('.tr-oop-mark');
       if (mark) { App.showToast(mark.dataset.oop, 'negative', 4500); return; }
+      const stat = e.target.closest('.tr-stat');   // r252
+      if (stat) { App.showToast(stat.dataset.stat, 'negative', 4500); return; }
       openPlayerCard(el.dataset.player, StateManager.get());
     });
   });
@@ -1173,27 +1166,6 @@ function _showSwapSheet(title, subtitle, rowsHtml, wireRows) {
 }
 
 
-function _dotIndicator(player) {
-  return _allStarMark(player) + _statusDot(player);
-}
-
-/** §75: an All-Star this season. */
-function _allStarMark(player) {
-  const season = StateManager.get()?.seasonNum || 1;
-  return (player.allStarSeasons || []).includes(season)
-    ? `<span class="as-star" title="${(player.allStarMvps || []).includes(season) ? 'All-Star Game MVP' : 'All-Star'}">★</span>` : '';
-}
-
-function _statusDot(player) {
-  if (player._isNewAcquisition) return '<span class="new-player-dot" title="New"></span>';
-  if (player.isSuspended)       return '<span class="suspended-dot" title="Suspended"></span>';
-  if (player.condition)         return '<span class="suspended-dot" title="Playing through it"></span>';
-  // §71: development in progress — a small arrow with what has landed so far.
-  const dev = developmentStatus(StateManager.get(), player.id);
-  if (dev.active) return `<span class="dev-arrow" title="In development">▲${dev.appliedActive >= 0.5 ? Math.round(dev.appliedActive) : ''}</span>`;
-  return '';
-}
-
 function _ovrColor(ovr) {
   if (ovr >= 80) return 'elite';
   if (ovr >= 70) return 'good';
@@ -1311,8 +1283,6 @@ function _injectCSS() {
     .pending-tag.out{color:var(--muted);}
     .oop-note{color:var(--danger);}
     .contract-note{color:var(--warning, #f5a524);font-weight:600;}
-    .dev-arrow{font-size:9px;font-weight:800;color:var(--success, #22c55e);margin-left:4px;}
-    .as-star{font-size:10px;color:#c9971c;margin-left:4px;}
     .player-pos-badge.oop{border-color:var(--danger);color:var(--danger);}
     .swap-btn.full{opacity:.45;}
     .vacancy-row{border:1.5px dashed var(--border);border-radius:8px;margin:4px 12px;
@@ -1388,7 +1358,9 @@ function _injectCSS() {
     .tr-pend{color:var(--warning,#f5a524);font-weight:700;}
     .tr-next{color:#22C55E;font-weight:700;}
     .tr-coming .tr-name-line{color:var(--soft);}
-    .tr-hurt{color:var(--danger);} .tr-warn{color:#fbbf24;} .tr-ly{color:var(--muted);font-style:italic;}
+    .tr-hurt{color:var(--danger);} .tr-warn{color:#fbbf24;}
+    .tr-stat{display:inline-block;padding:0 5px;border-radius:4px;border:1px solid currentColor;background:transparent;font:inherit;font-size:10px;font-weight:800;line-height:14px;cursor:pointer;vertical-align:1px;}
+    .tr-stat-bad{color:var(--danger);} .tr-stat-warn{color:#d49b00;} .tr-ly{color:var(--muted);font-style:italic;}
     .tr-muted{color:var(--muted);font-style:italic;font-weight:500;}
     .tr-empty .tr-fz{background:var(--surface);}
     .tr-need .tr-fz{background:var(--surface);}

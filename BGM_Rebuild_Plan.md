@@ -14575,3 +14575,22 @@ test-teaching-ui is updated.
 The season run (3,808 of 3,808) now samples "Who should we work on" with a different skill, ranking and place each time; every reply is clean, the slowest 141 ms. Multi-season, check-player-work, check-defense, check-teaching, check-compose-overlap, test-compose-ui and test-teaching-ui pass.
 
 No fresh team needed.
+
+---
+
+## §122.131 r252 — One inbox list; status marks to tap; no dots or arrows
+
+**Messages: one list.** The inbox was split into "Important" (urgent, a big moment, or due within six hours) and "Everything else". Now it's one list, newest first, every message shown the same way: the GM opens each to decide what matters (`_inboxOrder`; `_isImportant` and `.ml-section` are gone). The due chips on rows stay: they're facts about a message, not a ranking.
+
+**Team: status marks.** A player's status no longer goes in the name column as words ("resting, 1 …" was cut off). It's a small red mark in a thin outline, and tapping it shows the full words as a toast, with the player card staying closed (`.tr-stat`, as with r237's "!"). Both come from the new `engine/PlayerStatus.js` `statusOf(state, p)` (pure; the player card will use it too):
+- Resting, sick, away training, sat down, on leave, after a sim game: "1 game" / "3 days" → "Snyder: Away training. Back Thursday."
+- Day-to-day "DTD" (when they're back); the IL "IL" (when eligible); being looked at "Eval"; suspended "2 games".
+- Playing through it "Limited" (amber).
+- A reliever's arm: "Rest" (red) and "Tired" (amber).
+- A game set ahead the player misses: "Out".
+
+**No indicators on names.** These are gone: the green "new player" dot, the red suspended dot, the "playing through it" dot, the green ▲ for development work (with the points landed so far), and the All-Star ★ (`_dotIndicator`, `_statusDot`, `_allStarMark`, and the dot CSS in index.html). The status marks above say what matters.
+
+**Checks.** test-player-work-ui: a player away training shows "3 days"; tapped, the toast says "Away training. Back Thursday." and the card stays closed. The Team screen tests, the crew-messages, message-pushes and compose UI tests pass.
+
+No fresh team needed.

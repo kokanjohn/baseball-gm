@@ -9,7 +9,7 @@
  *
  * §115 it reads like a mail app (Gmail / Outlook on a phone): a list of rows
  * (initials, sender, time, subject, a line of preview, labels; bold until
- * opened), with what's due soon under "Important"; tapping a row opens the
+ * opened), newest first in one list (r252: no "Important" section); tapping a row opens the
  * message full-screen (back to the list with "‹ Inbox"), the decision at the
  * bottom like a reply. A completed message opens as its thread: the message,
  * your reply (the decision), and how it turned out.
@@ -17,7 +17,6 @@
  * Rules:
  *   - Card resolution calls CardEngine.resolve() — never direct state writes.
  *   - Compose channels use composeCooldowns from state to prevent repeat use.
- *   - Urgent cards (type === 'urgent') carry an "Urgent" label and sit under Important.
  *   - Inbox tab shows the count of messages waiting, matching the nav badge.
  *   - Compose tab respects Section 8.12 channel map (LOCKED).
  */
@@ -310,16 +309,10 @@ function _renderTabBody(state, inbox) {
 // INBOX TAB — the list (§115)
 // ─────────────────────────────────────────────────────────────
 
-/** Important: urgent, a franchise moment, or due within six hours (Gmail's Priority Inbox, more or less). */
-function _isImportant(card) {
-  if (card.type === 'urgent' || card._prominent) return true;
-  return Number.isFinite(card.expiresAtMs) && card.autoResolve !== 'skip' && card.expiresAtMs - Date.now() < 6 * 3600_000;
-}
-
-/** The inbox newest first, Important on top. */
+/** The inbox newest first. r252 §122.131 one list: no "Important" / "Everything else" — the GM reads each one. */
 function _inboxOrder(inbox) {
   const newest = (a, b) => (b.arrivedAtMs || b.deliveredAt || 0) - (a.arrivedAtMs || a.deliveredAt || 0);
-  return [...inbox.filter(_isImportant).sort(newest), ...inbox.filter(c => !_isImportant(c)).sort(newest)];
+  return [...inbox].sort(newest);
 }
 
 function _renderToDo(inbox, state) {
@@ -328,11 +321,7 @@ function _renderToDo(inbox, state) {
       <div class="ml-empty-h">You're all caught up</div>
     </div>`;
   }
-  const ordered = _inboxOrder(inbox);
-  const important = ordered.filter(_isImportant), rest = ordered.filter(c => !_isImportant(c));
-  const section = (title, cards) => cards.length
-    ? `${important.length && rest.length ? `<div class="ml-section">${title}</div>` : ''}${cards.map(c => _renderRow(c)).join('')}` : '';
-  return `<div class="ml-list">${section('Important', important)}${section('Everything else', rest)}</div>`;
+  return `<div class="ml-list">${_inboxOrder(inbox).map(c => _renderRow(c)).join('')}</div>`;
 }
 
 // §94 when a message reached the inbox — r148 relative, never a calendar date

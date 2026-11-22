@@ -92,8 +92,12 @@ check(`yes: ${who.name} is away for development work`, after?.reason === 'traini
 
 // ── Team: away for days ──
 await tap('.nav-item[data-tab="roster"]');
-const status = await page.evaluate((name) => [...document.querySelectorAll('#tab-roster *')].map(e => e.textContent).find(t => /training, \d+ days?/.test(t) && t.length < 120) || '', who.name);
-check(`Team shows the absence in days ("${status.trim().slice(0, 60)}")`, /training, \d+ days?/.test(status));
+// r252 §122.131 a red mark with the days ("3 days"); tapping it says what it is
+const status = await page.evaluate((id) => { const b = document.querySelector(`.tr-row[data-player="${id}"] .tr-stat`); return { short: b?.textContent.trim() || '', full: b?.dataset.stat || '' }; }, who.id);
+check(`Team marks the absence in days ("${status.short}": “${status.full}”)`, /^\d+ days?$/.test(status.short) && /Away training\. Back /.test(status.full));
+await tap(`.tr-row[data-player="${who.id}"] .tr-stat`);
+const toast = await page.evaluate(() => document.getElementById('toast')?.textContent || '');
+check('…tapped: it says so, and the player card stays closed', /Away training/.test(toast) && !(await page.evaluate(() => !!document.querySelector('#player-card-overlay.open'))));
 
 // ── r251 "Who should we work on…?": a skill, how to rank, where ──
 await tap('.nav-item[data-tab="decisions"]');
