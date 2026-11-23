@@ -458,6 +458,7 @@ export async function startNewGame(config) {
 
     // Phase
     s.phase = PHASE.SPRING_TRAINING;
+    Development.freshSpring(s);   // r259 §122.138 a new club's spring starts fresh (as every spring does)
 
     // Initial standings
     s.standings = computeFullStandings(s);

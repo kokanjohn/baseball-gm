@@ -34,7 +34,7 @@ import { PHASE, PLAYER_GROUP, POSITION_RULES } from '../../data/constants.js';
 import { bullpenRoles, armStatus } from '../../engine/PitchingEngine.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear } from '../../engine/PlayerFactory.js';
-import { wearOf } from '../../engine/DevelopmentEngine.js';
+import { wearToday } from '../../engine/DevelopmentEngine.js';
 import { primaryPos, eligibleAt, keepNeed, familiarity, pitchRoles, stretchOf } from '../../engine/Positions.js';   // r164
 
 // ─────────────────────────────────────────────────────────────
@@ -379,9 +379,11 @@ function _armToday(player, now) {
 }
 function _renderWear(player, isPitcher, state) {
   const now = Date.now();
-  const w = wearOf(player, now);
+  // r259 §122.138 the bar as the Team screen shows it (a reliever's reads today's arm too), and why
+  const w = wearToday(player, now, { reliever: isPitcher && player.group === PLAYER_GROUP.BULLPEN });
   let note;
-  if (isPitcher) note = `${_armToday(player, now)} ${ARM_LINES[w.level]}`;
+  if (w.today) note = `Today: ${w.why || 'pitched recently.'} ${w.today === 'down' ? 'Resting today: not available to pitch.' : 'Available, but tires sooner.'}`;
+  else if (isPitcher) note = `${_armToday(player, now)} ${ARM_LINES[w.level]}`;
   else {
     const caught = (state.userTeam?.lineupSlots || []).some(s => s.slot === 'C' && s.playerId === player.id);
     note = `${w.straight ? `${caught ? 'Caught' : 'Started'} ${w.straight} straight. ` : ''}${WEAR_LINES[w.level]}`;

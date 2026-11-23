@@ -25,10 +25,9 @@ import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
 import { baseballYear, isAvailable } from '../../engine/PlayerFactory.js';
 import { contractIsUp } from '../../engine/OffseasonEngine.js';
-import { wearOf } from '../../engine/DevelopmentEngine.js';
+import { wearToday } from '../../engine/DevelopmentEngine.js';
 import { statusOf } from '../../engine/PlayerStatus.js';   // r252 §122.131
 import { lastSeasonIMP } from '../../engine/IMPEngine.js';
-import { armStatus } from '../../engine/PitchingEngine.js';
 import * as Finance from '../../engine/FinanceEngine.js';
 import { formatMoney, formatOVR, formatAge, formatSalary, formatOPS } from '../formatters.js';
 import { PLAYER_GROUP, ROSTER_LIMITS, PHASE, POSITION_RULES, LINEUP_PLAN } from '../../data/constants.js';
@@ -519,10 +518,12 @@ function _statCells(p, imp) {
  * left and changing color as the wear builds. The word is on the player card (its Wear section);
  * here it's the bar's label for screen readers and the long-press tip.
  */
-function _wearCell(p) {
+function _wearCell(p, { reliever = false } = {}) {
   if (p.group === PLAYER_GROUP.IL) return '';
-  const w = wearOf(p, Date.now());
-  const word = w.level === 'worn' ? 'Worn' : w.word;
+  // r259 §122.138 one bar: a reliever's reads today's arm too (pitched yesterday: Tired; needs a day: Worn down),
+  // no badge beside it. Why is on the player card.
+  const w = wearToday(p, Date.now(), { reliever });
+  const word = w.level === 'worn' && !w.today ? 'Worn' : w.word;
   const tip = `${w.pitcher ? 'Workload' : 'Wear'}: ${word}${!w.pitcher && w.straight ? ` (${w.straight} straight start${w.straight === 1 ? '' : 's'})` : ''}`;
   return `<span class="tr-wear tr-wear-${w.level}" title="${tip}" role="img" aria-label="${tip}">`
     + `<span class="tr-wear-bar"><i style="width:${Math.max(8, Math.round(w.left * 100))}%"></i></span></span>`;
@@ -571,11 +572,6 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
     const stat = statusOf(state, p);
     if (stat) subBits.push(_statBadge(stat.short, `${p.name}: ${stat.full}`, stat.tone));
     if (out) subBits.push(_statBadge('Out', `${p.name} can't play that day.`));   // r242 can't play that day
-    if (pitcher && isAvailable(p) && slot !== 'Bench' && !slot.startsWith('SP')) {
-      const arm = armStatus(p, Date.now()).status;
-      if (arm === 'down') subBits.push(_statBadge('Rest', `${p.name} is resting today: thrown too much lately to pitch.`));
-      if (arm === 'tired') subBits.push(_statBadge('Tired', `${p.name} is tired: available, but not at full strength.`, 'warn'));
-    }
     const cn = _contractNote(p);
     if (cn) subBits.push(cn.replace(/^ · /, ''));
     if (shown.year && _rowMarksYear(state, p)) subBits.push(`<span class="tr-ly">'${String(shown.year).slice(-2)}</span>`);
@@ -588,7 +584,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
           <div class="tr-name-line">${_escape(p.name)}</div>
           <div class="tr-sub">${subBits.join(' · ')}</div>
         </div>
-        <div class="tr-wearc">${_wearCell(p)}</div>
+        <div class="tr-wearc">${_wearCell(p, { reliever: pitcher && !coming && !il && isAvailable(p) && slot !== 'Bench' && !slot.startsWith('SP') })}</div>
         <div class="tr-ovr"><span class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</span></div>
         <div class="tr-act"><button class="tr-move" data-move="${p.id}"${canMove ? '' : ' disabled'}>MOVE</button></div>
       </div>

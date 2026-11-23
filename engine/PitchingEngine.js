@@ -190,26 +190,28 @@ export function armLoad(player, atMs) {
  * armStatus(player, atMs)
  * How his arm is today. A high-stamina arm recovers faster (the outing
  * thresholds scale with stamina).
- * @returns {{ status: 'fresh'|'tired'|'down', lastDays: Number|null }}
+ * r259 §122.138 `why`: the reason in words, for the player card (the Team screen shows it in the wear bar).
+ * @returns {{ status: 'fresh'|'tired'|'down', lastDays: Number|null, why: String|null }}
  */
 export function armStatus(player, atMs) {
   const outs = (player?.arm || []).filter(o => o.at <= atMs).map(o => ({ d: daysSince(o, atMs), bf: o.bf }));
-  if (!outs.length) return { status: 'fresh', lastDays: null };
+  if (!outs.length) return { status: 'fresh', lastDays: null, why: null };
   const k = 0.7 + stamina(player) / 150;                 // stamina 45 → 1.0, 75 → 1.2
   const on = (d) => outs.some(o => o.d === d);
   const lastDays = Math.min(...outs.map(o => o.d));
   let straight = 0;
   for (let d = 1; d <= PITCH_RP_MAX_STRAIGHT_DAYS; d++) if (on(d)) straight++; else break;
-  const down = on(0)                                                      // already pitched today
-    || straight >= PITCH_RP_MAX_STRAIGHT_DAYS                              // a third day in a row
-    || outs.some(o => o.d <= 1 && o.bf >= PITCH_RP_LONG_OUTING_BF * k)
-    || outs.some(o => o.d <= 2 && o.bf >= PITCH_RP_HEAVY_OUTING_BF * k)
-    || outs.some(o => o.d <= 3 && o.bf >= PITCH_RP_START_BF * k);
-  if (down) return { status: 'down', lastDays };
-  const tired = on(1)
-    || outs.filter(o => o.d <= 3).length >= 3
-    || outs.some(o => o.d <= 2 && o.bf >= PITCH_RP_LONG_OUTING_BF * k);
-  return { status: tired ? 'tired' : 'fresh', lastDays };
+  const longAgo = (bf, d) => { const o = outs.filter(x => x.d <= d && x.bf >= bf * k).sort((a, b) => a.d - b.d)[0]; return o ? (o.d === 0 ? 'today' : o.d === 1 ? 'yesterday' : `${o.d} days ago`) : null; };
+  const downWhy = on(0) ? 'Already pitched today.'
+    : straight >= PITCH_RP_MAX_STRAIGHT_DAYS ? `Pitched ${straight} days in a row: never a third.`
+    : longAgo(PITCH_RP_LONG_OUTING_BF, 1) ? `A long outing ${longAgo(PITCH_RP_LONG_OUTING_BF, 1)}.`
+    : longAgo(PITCH_RP_HEAVY_OUTING_BF, 2) ? `A heavy outing ${longAgo(PITCH_RP_HEAVY_OUTING_BF, 2)}.`
+    : longAgo(PITCH_RP_START_BF, 3) ? `A start's worth of batters ${longAgo(PITCH_RP_START_BF, 3)}.` : null;
+  if (downWhy) return { status: 'down', lastDays, why: downWhy };
+  const tiredWhy = on(1) ? 'Pitched yesterday.'
+    : outs.filter(o => o.d <= 3).length >= 3 ? `${outs.filter(o => o.d <= 3).length} outings in the last four days.`
+    : longAgo(PITCH_RP_LONG_OUTING_BF, 2) ? `A long outing ${longAgo(PITCH_RP_LONG_OUTING_BF, 2)}.` : null;
+  return { status: tiredWhy ? 'tired' : 'fresh', lastDays, why: tiredWhy };
 }
 
 /** A starter is ready on his fifth day: four days' rest since his last start. */

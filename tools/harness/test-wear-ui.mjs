@@ -39,8 +39,14 @@ const S = await page.evaluate(async (theme) => {
     // r161 an arm: the first starter tired (workload 14 as of now)
     const sp = s.userTeam.rotation.order[0];
     Object.assign(s.players[sp], { load: 14, loadAt: Date.now(), loadMult: 1 });
+    // r259 §122.138 two relievers: one pitched yesterday (light workload), one the last two days
+    const pen = s.userTeam.rosterIds.map(id => s.players[id]).filter(p => p.group === 'bp' && !p.unavailable && !p.isInjured);
+    const D = 86_400_000, now = Date.now();
+    Object.assign(pen[0], { load: 2, loadAt: now - D, loadMult: 1, arm: [{ at: now - D, bf: 4, outs: 3, start: false }] });
+    Object.assign(pen[1], { load: 4, loadAt: now - D, loadMult: 1, arm: [{ at: now - 2 * D, bf: 4, outs: 3, start: false }, { at: now - D, bf: 4, outs: 3, start: false }] });
+    s._penTest = [pen[0].id, pen[1].id];
   });
-  return { c, worn: others[0], cName: SM.get().players[c].name, sp: SM.get().userTeam.rotation.order[0] };
+  return { c, worn: others[0], cName: SM.get().players[c].name, sp: SM.get().userTeam.rotation.order[0], pen: SM.get()._penTest };
 }, theme);
 await page.evaluate(async () => { const App = await import('/baseball-gm/ui/App.js'); await App.init(); });
 await page.waitForTimeout(800);
@@ -76,6 +82,14 @@ const arms = await page.evaluate((sp) => {
   return { word: (r?.querySelector('.tr-wearc .tr-wear')?.getAttribute('aria-label') || ''), n: block.querySelectorAll('.tr-wearc .tr-wear').length };
 }, S.sp);
 check(`the Pitchers table: the bar too, the worked starter "${arms?.word}"`, /^Workload: Tired/.test(arms?.word || '') && arms.n >= 8);
+// r259 §122.138 a reliever's bar reads today's arm, and no badge beside it
+const pens = await page.evaluate((ids) => ids.map(id => { const r = document.querySelector(`.tr-row[data-player="${id}"]`);
+  return { cls: r?.querySelector('.tr-wear')?.className || '', w: parseInt(r?.querySelector('.tr-wear-bar i')?.style.width || '0'), label: r?.querySelector('.tr-wear')?.getAttribute('aria-label') || '',
+           badges: [...(r?.querySelectorAll('.tr-stat') || [])].map(b => b.textContent.trim()) }; }), S.pen);
+check(`a reliever who pitched yesterday: the bar Tired, orange, half (${pens[0].label}, ${pens[0].w}%), no badge (${pens[0].badges.join(',') || 'none'})`,
+  /tr-wear-tired/.test(pens[0].cls) && pens[0].w === 50 && !pens[0].badges.some(b => /Tired|Rest/.test(b)));
+check(`a reliever who pitched two days running: the bar red, a quarter (${pens[1].label}, ${pens[1].w}%), no badge`,
+  /tr-wear-worn/.test(pens[1].cls) && pens[1].w === 25 && /Needs a day/.test(pens[1].label) && !pens[1].badges.some(b => /Tired|Rest/.test(b)));
 await page.screenshot({ path: `${out}/wear-team-${theme}.png` });
 
 // ── The player card ──
@@ -103,6 +117,17 @@ const pcard = await page.evaluate(() => {
 check(`a pitcher's card: Wear — "${pcard?.word}", "${pcard?.note}"`, pcard?.word === 'Tired' && /^Today: /.test(pcard?.note || '') && /stuff and control/.test(pcard?.note || ''));
 await page.screenshot({ path: `${out}/wear-pitcher-card-${theme}.png` });
 await tap('#player-card-close');
+// r259 the relievers' cards say why
+for (const [i, want] of [[0, /^Tired$/], [1, /^Needs a day$/]]) {
+  await page.evaluate((id) => document.querySelector(`.tr-row[data-player="${id}"]`)?.scrollIntoView({ block: 'center' }), S.pen[i]);
+  await tap(`.tr-row[data-player="${S.pen[i]}"] .tr-name`);
+  const rc = await page.evaluate(() => { const sec = [...document.querySelectorAll('#player-card-sheet .pc-section')].find(s => s.querySelector('.pc-section-label')?.textContent.trim() === 'Wear');
+    return sec ? { word: sec.querySelector('.pc-wear-word')?.textContent.trim(), note: sec.querySelector('.pc-ask-note')?.textContent.trim() } : null; });
+  check(`reliever ${i + 1}'s card says why: "${rc?.word}", "${rc?.note}"`, want.test(rc?.word || '')
+    && (i === 0 ? rc?.note === 'Today: Pitched yesterday. Available, but tires sooner.' : rc?.note === 'Today: Pitched 2 days in a row: never a third. Resting today: not available to pitch.'));
+  if (i === 1) await page.screenshot({ path: `${out}/wear-reliever-card-${theme}.png` });
+  await tap('#player-card-close');
+}
 
 // ── A rest message, as the GM reads it ──
 const msg = await page.evaluate(async () => {

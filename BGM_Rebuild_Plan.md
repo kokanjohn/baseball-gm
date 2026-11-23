@@ -14730,3 +14730,34 @@ The tag is worked out when the GM looks (`FaWatch.reportRows` → `race`), so a 
 **Checks.** test-fa-report-ui adds three checks: flagged players are tagged as they stand, the text no longer says it, and once word gets around the same row says "Other clubs asking".
 
 No fresh team needed. Reports already open show no tags (they weren't flagged).
+
+---
+
+## §122.138 r259 — One wear bar, no badge beside it; wear fresh each spring
+
+**The mismatch.** Two relievers showed a "Tired" badge on the Team screen beside a full green wear bar. They measured two different things:
+- **Today's arm** (`PitchingEngine.armStatus`): pitched yesterday, three outings in four days, or a long outing lately → tired. Two days running, or a heavy outing → down: rest.
+- **The workload** (`armLoad` → `wearOf`): built up over weeks. One inning of relief is about 2 of the meter's 24.
+
+So one outing barely moved the bar.
+
+**The GM's call: the bar alone.** Its color and fill say what matters; why it reads that way is on the player card.
+- `DevelopmentEngine.wearToday(p, atMs, { reliever })`: a reliever's bar is his workload or today's arm, whichever is worse.
+  - Pitched yesterday (or a busy few days): **Tired**, orange, half the bar.
+  - Needs a day down: red, a quarter of the bar, the word **"Needs a day"**.
+  - The next day clears it back to the workload.
+  - A starter in the rotation, a hitter, or anyone not active in the bullpen reads their wear alone. A starter's days between starts are the rotation's, not tiredness.
+- The Team screen's "Rest" and "Tired" badges are gone; the row's bar (and its label) uses `wearToday`.
+- The player card's Wear section shows the same bar and word, and why: `armStatus` now returns `why` in words. For example: "Today: Pitched yesterday. Available, but tires sooner." or "Today: Pitched 2 days in a row: never a third. Resting today: not available to pitch." Other reasons: "A long outing yesterday.", "3 outings in the last four days.", "Already pitched today."
+
+**Spring (the GM's call).** Spring games still count like any games, day to day, and spring's wear carries into Opening Day (nothing resets then).
+- Each new season's spring starts everyone fresh: `DevelopmentEngine.freshSpring` in `OffseasonEngine.openNewSeason` clears hitters' wear and starts in a row, and pitchers' workload and recent outings.
+- A new club's first spring does the same.
+- Before this, hitters' wear from the last season stayed until the first spring game's off-day math took it off, and arms came back on their own over the winter.
+- Measured over a simulated spring: regulars reach Opening Day at 6–8 (Fine to Tiring), the catcher at 11, and arms are fresh.
+
+**Checks.**
+- New check-wear-today (9): pitched yesterday is Tired at half the bar with the reason; two days running is "Needs a day" at a quarter; a long outing; a fresh case; a heavy workload beats today's arm; a starter and a rested arm read the workload alone; a new spring and a new club start fresh.
+- test-wear-ui adds the two relievers on the Team screen (the bar, no badge) and their cards (why).
+
+No fresh team needed.

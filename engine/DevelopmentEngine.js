@@ -43,7 +43,7 @@ import {
   PLAYER_WORK,
   ARM_LOAD,
 } from '../data/constants.js';
-import { ageWearMult, armLoad } from './PitchingEngine.js';
+import { ageWearMult, armLoad, armStatus } from './PitchingEngine.js';
 import { computeOVR, ovrFor, computeAge, baseballYear } from './PlayerFactory.js';
 import { exposeRatings } from './Diamonds.js';
 import { devFactor } from './CoachEngine.js';
@@ -506,6 +506,39 @@ export function wearOf(p, atMs = null) {
   const lv = [...WEAR.levels].reverse().find(([, from]) => w >= from) || WEAR.levels[0];
   return { wear: w, tired: w >= WEAR.tired, worn: w >= WEAR.worn, dip, level: lv[0], word: lv[2], pitcher,
            share: Math.min(1, w / WEAR.meterMax), left: Math.max(0, 1 - w / WEAR.meterMax), straight: pitcher ? 0 : (p?.straight || 0) };
+}
+
+/**
+ * r259 §122.138 the wear bar as it should read today: one bar, no badge beside it. A hitter's and a starter's are
+ * their wear (wearOf). A reliever's is the arm's workload or today's arm, whichever is worse: pitched yesterday (or
+ * a busy few days) reads Tired, and needing a day down reads Worn down, until the day off clears it. `today` says
+ * which ('tired' | 'down' | null), `why` the reason (armStatus), for the player card.
+ * `reliever`: whether the day-to-day arm counts (the bullpen; a starter's days between starts are the rotation's).
+ */
+export function wearToday(p, atMs, { reliever = false } = {}) {
+  const w = wearOf(p, atMs);
+  if (!w.pitcher || !reliever) return { ...w, today: null, why: null };
+  const a = armStatus(p, atMs);
+  if (a.status === 'fresh') return { ...w, today: null, why: null };
+  const floor = a.status === 'down' ? WEAR.worn : WEAR.tired;
+  if (w.wear >= floor) return { ...w, today: a.status, why: a.why };
+  const lv = [...WEAR.levels].reverse().find(([, from]) => floor >= from) || WEAR.levels[0];
+  return { ...w, level: lv[0], word: a.status === 'down' ? 'Needs a day' : lv[2], share: Math.min(1, floor / WEAR.meterMax), left: Math.max(0, 1 - floor / WEAR.meterMax),
+           today: a.status, why: a.why };
+}
+
+/**
+ * r259 §122.138 wear starts fresh with each new spring (and a new club): the hitters' wear and starts in a row, the
+ * arms' workload and their record of recent outings. Not on Opening Day: spring's wear carries into the season.
+ */
+export function freshSpring(draft) {
+  for (const p of Object.values(draft.players || {})) {
+    if (!p) continue;
+    if (p.wear) p.wear = 0;
+    if (p.straight) p.straight = 0;
+    if (p.load) { p.load = 0; delete p.loadAt; }
+    if (p.arm?.length) p.arm = [];
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
