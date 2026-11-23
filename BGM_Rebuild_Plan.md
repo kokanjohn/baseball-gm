@@ -14761,3 +14761,19 @@ So one outing barely moved the bar.
 - test-wear-ui adds the two relievers on the Team screen (the bar, no badge) and their cards (why).
 
 No fresh team needed.
+
+---
+
+## §122.139 r260 — The wear bar is the player's, wherever he sits
+
+r259 read today's arm only for a pitcher in an active bullpen slot. So moving a tired reliever to the bench gave him a full green bar, and the bench arm who took his place showed his own recent outings, which had been hidden. The bar followed the slot.
+
+Now `wearToday(p, atMs)` takes no slot: it reads the pitcher's own **relief outings** (`armStatus` on his record without starts), wherever he is: bullpen, pitcher bench, or the rotation. His **starts** don't count toward it. The days after a start are the rotation's turn (the workload has them), so a starter isn't "Needs a day" between starts. A starter who pitched in relief yesterday is Tired like anyone.
+
+The Team screen and the player card call it the same way.
+
+**Checks.**
+- check-wear-today (11): the same bar on the bench as in the bullpen; a start yesterday reads the workload alone; a starter's relief outing yesterday reads Tired.
+- test-wear-ui: the tired reliever moved to the pitcher bench (a real move) keeps his orange bar, and nobody else's changes by taking his spot (this fails on r259).
+
+No fresh team needed.

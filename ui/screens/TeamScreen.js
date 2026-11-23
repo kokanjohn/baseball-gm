@@ -518,11 +518,11 @@ function _statCells(p, imp) {
  * left and changing color as the wear builds. The word is on the player card (its Wear section);
  * here it's the bar's label for screen readers and the long-press tip.
  */
-function _wearCell(p, { reliever = false } = {}) {
+function _wearCell(p) {
   if (p.group === PLAYER_GROUP.IL) return '';
   // r259 §122.138 one bar: a reliever's reads today's arm too (pitched yesterday: Tired; needs a day: Worn down),
   // no badge beside it. Why is on the player card.
-  const w = wearToday(p, Date.now(), { reliever });
+  const w = wearToday(p, Date.now());   // r260 the player's, wherever he sits
   const word = w.level === 'worn' && !w.today ? 'Worn' : w.word;
   const tip = `${w.pitcher ? 'Workload' : 'Wear'}: ${word}${!w.pitcher && w.straight ? ` (${w.straight} straight start${w.straight === 1 ? '' : 's'})` : ''}`;
   return `<span class="tr-wear tr-wear-${w.level}" title="${tip}" role="img" aria-label="${tip}">`
@@ -584,7 +584,7 @@ function _row(state, p, slot, imp, { first = false, il = false, coming = null, o
           <div class="tr-name-line">${_escape(p.name)}</div>
           <div class="tr-sub">${subBits.join(' · ')}</div>
         </div>
-        <div class="tr-wearc">${_wearCell(p, { reliever: pitcher && !coming && !il && isAvailable(p) && slot !== 'Bench' && !slot.startsWith('SP') })}</div>
+        <div class="tr-wearc">${_wearCell(p)}</div>
         <div class="tr-ovr"><span class="rating-num ${_ovrColor(p.ovr)}">${formatOVR(p.ovr)}</span></div>
         <div class="tr-act"><button class="tr-move" data-move="${p.id}"${canMove ? '' : ' disabled'}>MOVE</button></div>
       </div>

@@ -380,7 +380,7 @@ function _armToday(player, now) {
 function _renderWear(player, isPitcher, state) {
   const now = Date.now();
   // r259 §122.138 the bar as the Team screen shows it (a reliever's reads today's arm too), and why
-  const w = wearToday(player, now, { reliever: isPitcher && player.group === PLAYER_GROUP.BULLPEN });
+  const w = wearToday(player, now);
   let note;
   if (w.today) note = `Today: ${w.why || 'pitched recently.'} ${w.today === 'down' ? 'Resting today: not available to pitch.' : 'Available, but tires sooner.'}`;
   else if (isPitcher) note = `${_armToday(player, now)} ${ARM_LINES[w.level]}`;

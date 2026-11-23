@@ -128,6 +128,24 @@ for (const [i, want] of [[0, /^Tired$/], [1, /^Needs a day$/]]) {
   if (i === 1) await page.screenshot({ path: `${out}/wear-reliever-card-${theme}.png` });
   await tap('#player-card-close');
 }
+// r260 §122.139 the bar is the player's: the tired reliever moved to the pitcher bench (a bench arm in for him)
+// keeps his orange bar; the arm who came in keeps his own.
+const moved = await page.evaluate(async (id) => {
+  const SM = await import('/baseball-gm/store/StateManager.js'); const RE = await import('/baseball-gm/engine/RosterEngine.js');
+  const opts = RE.moveOptions(SM.get(), id); const k = opts.find(o => /bench/i.test(`${o.key} ${o.label}`));
+  if (!k) return { none: opts.map(o => o.label).join(', ') };
+  const tiredNow = () => [...document.querySelectorAll('.tr-row[data-player]')].filter(x => x.dataset.player !== id && /tr-wear-(tired|worn)/.test(x.querySelector('.tr-wear')?.className || '')).map(x => x.dataset.player);
+  const before = new Set(tiredNow());
+  SM.mutate(s => { RE.applyMove(s, id, k.key); });
+  const g = SM.get().players[id].group;
+  const App = await import('/baseball-gm/ui/App.js'); App.switchTab('dashboard'); App.switchTab('roster');
+  await new Promise(r => setTimeout(r, 400));
+  const r = document.querySelector(`.tr-row[data-player="${id}"]`);
+  const others = tiredNow().filter(x => !before.has(x));   // anyone whose bar changed by taking his spot
+  return { group: g, cls: r?.querySelector('.tr-wear')?.className || '', label: r?.querySelector('.tr-wear')?.getAttribute('aria-label') || '', others };
+}, S.pen[0]);
+check(`moved to the bench (${moved.group || moved.none}): his bar still Tired (${moved.label})`, moved.group === 'pb' && /tr-wear-tired/.test(moved.cls));
+check(`…and no one else turned Tired by taking his spot (${moved.others?.length ?? '?'})`, Array.isArray(moved.others) && moved.others.length === 0);
 
 // ── A rest message, as the GM reads it ──
 const msg = await page.evaluate(async () => {

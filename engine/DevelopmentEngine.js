@@ -513,12 +513,13 @@ export function wearOf(p, atMs = null) {
  * their wear (wearOf). A reliever's is the arm's workload or today's arm, whichever is worse: pitched yesterday (or
  * a busy few days) reads Tired, and needing a day down reads Worn down, until the day off clears it. `today` says
  * which ('tired' | 'down' | null), `why` the reason (armStatus), for the player card.
- * `reliever`: whether the day-to-day arm counts (the bullpen; a starter's days between starts are the rotation's).
+ * r260 §122.139 the player's, wherever he sits: his relief outings count (moved to the bench or into the bullpen, the
+ * bar goes with him). His starts don't — the days after a start are the rotation's turn, and the workload has them.
  */
-export function wearToday(p, atMs, { reliever = false } = {}) {
+export function wearToday(p, atMs) {
   const w = wearOf(p, atMs);
-  if (!w.pitcher || !reliever) return { ...w, today: null, why: null };
-  const a = armStatus(p, atMs);
+  if (!w.pitcher) return { ...w, today: null, why: null };
+  const a = armStatus({ ...p, arm: (p.arm || []).filter(o => !o.start) }, atMs);
   if (a.status === 'fresh') return { ...w, today: null, why: null };
   const floor = a.status === 'down' ? WEAR.worn : WEAR.tired;
   if (w.wear >= floor) return { ...w, today: a.status, why: a.why };
