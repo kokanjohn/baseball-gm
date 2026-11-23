@@ -146,6 +146,22 @@ const moved = await page.evaluate(async (id) => {
 }, S.pen[0]);
 check(`moved to the bench (${moved.group || moved.none}): his bar still Tired (${moved.label})`, moved.group === 'pb' && /tr-wear-tired/.test(moved.cls));
 check(`…and no one else turned Tired by taking his spot (${moved.others?.length ?? '?'})`, Array.isArray(moved.others) && moved.others.length === 0);
+// …and a hitter: the worn regular to the bench keeps his bar; whoever takes his spot keeps his own.
+const hit = await page.evaluate(async (id) => {
+  const SM = await import('/baseball-gm/store/StateManager.js'); const RE = await import('/baseball-gm/engine/RosterEngine.js');
+  const slot = SM.get().userTeam.lineupSlots.find(s => s.playerId === id)?.slot;
+  const k = RE.moveOptions(SM.get(), id).find(o => o.label === 'Bench');
+  if (!k) return { none: true };
+  const bar = (pid) => { const r = document.querySelector(`.tr-row[data-player="${pid}"]`); return { cls: r?.querySelector('.tr-wear')?.className || '', w: r?.querySelector('.tr-wear-bar i')?.style.width }; };
+  SM.mutate(s => { RE.applyMove(s, id, k.key); });
+  const sub = SM.get().userTeam.lineupSlots.find(s => s.slot === slot)?.playerId;
+  const subWear = SM.get().players[sub]?.wear || 0;
+  const App = await import('/baseball-gm/ui/App.js'); App.switchTab('dashboard'); App.switchTab('roster');
+  await new Promise(r => setTimeout(r, 400));
+  return { me: bar(id), sub: bar(sub), subId: sub, subWear, slot, inLineup: SM.get().userTeam.lineupSlots.some(s => s.playerId === id) };
+}, S.worn);
+check(`a hitter to the bench (from ${hit.slot}): his bar still Worn (${hit.me?.w}), and in his spot the bench player's own (${hit.sub?.w}, wear ${hit.subWear})`,
+  !hit.none && !hit.inLineup && /tr-wear-worn/.test(hit.me.cls) && hit.subId !== S.worn && !/tr-wear-worn/.test(hit.sub.cls));
 
 // ── A rest message, as the GM reads it ──
 const msg = await page.evaluate(async () => {
