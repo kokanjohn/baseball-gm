@@ -817,21 +817,19 @@ W.sc_free_agents = (f, r, who) => {
         : glovePos ? `About what the rating says, and the glove carries it (defense ${sr.defense}): a player for the field more than the bat.`
         : 'About what the rating says: a useful depth piece, not more.');
     }
-    // Whether the rest of the league has caught on (the sharper our scouts, the surer we are).
-    if (edge >= 4 && isDiamond(p, level)) {
-      lines.push(Number.isFinite(p._buzzAt) && p._buzzAt > f.atMs
-        ? `As far as we can tell, nobody else is on this one yet. I'd move before word gets around.`
-        : `Other clubs have been asking about this one. If we want in, it has to be soon.`);
-    }
     out.push(lines.join(' '));
   }
+  // Whether the rest of the league has caught on (the sharper our scouts, the surer we are). r258 §122.137 not a
+  // sentence under each player (it read the same under almost all of them): a tag on the player's row in the
+  // message, "No other clubs yet" / "Other clubs asking", as it stands when the GM looks (FaWatch.reportRows).
+  const buzz = seen.filter(({ p, edge }) => edge >= 4 && isDiamond(p, level)).map(x => x.p.id);
   // r204 §122.82 the report is a decision: sign any of them, or have the director keep an eye on one (up to
   // FA_WATCH.max at once, warned before another club signs). It stays open until these looks come back.
   const w = watching(st, f.atMs).map(f.P).filter(Boolean);
   out.push(`I can keep an eye on up to ${num(FA_WATCH.max)} free agents at a time and warn us before another club signs one`
     + (w.length ? ` (watching ${list(w.map(p => p.name))} now).` : '.'));
   return { body: out, memo: { playerIds: seen.map(x => x.p.id) },
-           faReport: { ids: seen.map(x => x.p.id), closeAtMs: f.atMs + 7 * MS_DAY } };
+           faReport: { ids: seen.map(x => x.p.id), buzz, closeAtMs: f.atMs + 7 * MS_DAY } };
 };
 
 W.sc_opponent = (f, r, who) => {

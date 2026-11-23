@@ -84,13 +84,17 @@ export function claimInstead(draft, p, teamId, atMs, { displaceId = null } = {})
  * another club: `team`), 'watching', or 'open' (still a decision). → [{ id, p, status, team }]
  */
 export function reportRows(state, card, atMs) {
+  const buzz = new Set(card?._faBuzz || []);
+  // r258 §122.137 a player the scouts flagged as better than the league knows: whether other clubs have caught on
+  // yet, as it stands now ('alone' until word gets around, p._buzzAt; then 'asking').
+  const race = (p) => (buzz.has(p.id) ? (Number.isFinite(p._buzzAt) && p._buzzAt > atMs ? 'alone' : 'asking') : null);
   return (card?._faRows || []).map(id => {
     const p = state.players?.[id];
     if (!p) return null;
     if (p.teamId === 'user') return { id, p, status: 'signed' };
     if (!_fa(p)) return { id, p, status: 'gone', team: (state.leagueTeams || []).find(t => t.id === p.teamId)?.name || 'another club' };
-    if (isWatched(state, id, atMs)) return { id, p, status: 'watching' };
-    return { id, p, status: 'open' };
+    if (isWatched(state, id, atMs)) return { id, p, status: 'watching', race: race(p) };
+    return { id, p, status: 'open', race: race(p) };
   }).filter(Boolean);
 }
 

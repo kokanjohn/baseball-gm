@@ -681,7 +681,8 @@ function _faRowsHtml(card, state) {
     }
     return `<div class="fa-row">
         <div class="fa-who"><button class="msg-player" data-msg-player="${p.id}">${_escape(p.name)}</button>
-          <span class="fa-meta">${_escape(posLabel(p))} · OVR ${p.ovr}</span></div>
+          <span class="fa-meta">${_escape(posLabel(p))} · OVR ${p.ovr}</span>
+          ${r.race ? `<span class="fa-race fa-race-${r.race}">${r.race === 'alone' ? 'No other clubs yet' : 'Other clubs asking'}</span>` : ''}</div>
         <div class="fa-acts">${acts}</div>
       </div>`;
   }).join('');

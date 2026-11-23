@@ -2801,7 +2801,7 @@ function _releaseDue(nowMs) {
     // (Done closes it, and it closes itself when nothing's left to decide or these looks come back).
     if (reply.faReport?.ids?.length) {
       Object.assign(out, {
-        _faRows: reply.faReport.ids, yesLabel: 'Done', noLabel: null, autoResolve: 'roster',
+        _faRows: reply.faReport.ids, _faBuzz: reply.faReport.buzz || [], yesLabel: 'Done', noLabel: null, autoResolve: 'roster',
         expiresAtMs: reply.faReport.closeAtMs, _autoLabel: null,
         _raw: { ...(c._raw || {}), onYes: 'fa_report_close', onNo: null, onAuto: 'fa_report_close' },
       });

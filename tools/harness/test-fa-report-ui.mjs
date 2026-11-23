@@ -42,6 +42,26 @@ const r0 = await rows();
 check(`a row per player, each Sign and Watch (${r0.rows.length})`, r0.rows.length >= 1 && r0.rows.every(t => /Sign \(\$/.test(t) && /Watch/.test(t)), r0.rows.join(' | '));
 check(`how many we're watching: “${r0.limit}”`, r0.limit === 'Watching 0 of 3');
 check('…and Done', r0.done.join() === 'Done');
+// r258 §122.137 whether other clubs are on a flagged player: a tag on the row (as it stands now), not a line
+// repeated under each player in the text.
+const race = await page.evaluate(async (id) => {
+  const SM = await import('/baseball-gm/store/StateManager.js');
+  const card = SM.get().inbox.find(c => c.instanceId === id);
+  const tags = [...document.querySelectorAll('.fa-row')].map(r => r.querySelector('.fa-race')?.textContent.trim() || '');
+  const text = document.querySelector('.mr-body')?.textContent || '';
+  return { buzz: card._faBuzz || [], rows: card._faRows, tags, text,
+           expect: card._faRows.map(pid => (card._faBuzz || []).includes(pid) ? (SM.get().players[pid]._buzzAt > Date.now() ? 'No other clubs yet' : 'Other clubs asking') : '') };
+}, id);
+check(`flagged players tagged as they stand (${race.buzz.length} of ${race.rows.length}: ${race.tags.map(t => t || '—').join(' | ')})`,
+  JSON.stringify(race.tags) === JSON.stringify(race.expect), JSON.stringify(race.expect));
+check('the text no longer says it under each player', !/nobody else is on this one|Other clubs have been asking/.test(race.text));
+if (race.buzz.length) {
+  // Word gets around: the same row now says other clubs are asking.
+  await page.evaluate(async (pid) => { const SM = await import('/baseball-gm/store/StateManager.js'); SM.mutate(s => { s.players[pid]._buzzAt = Date.now() - 60_000; }); (await import('/baseball-gm/ui/App.js')).switchTab('decisions'); }, race.buzz[0]);
+  await page.waitForTimeout(300); await page.click(`[data-open="${id}"]`); await page.waitForTimeout(300);
+  const after = await page.evaluate((pid) => [...document.querySelectorAll('.fa-row')].find(r => r.querySelector(`[data-msg-player="${pid}"]`))?.querySelector('.fa-race')?.textContent.trim(), race.buzz[0]);
+  check(`…once word gets around: “${after}”`, after === 'Other clubs asking');
+}
 await page.$eval('.fa-rows', el => el.scrollIntoView({ block: 'center' }));
 await page.screenshot({ path: `${out}/fa-report-${theme}.png` });
 

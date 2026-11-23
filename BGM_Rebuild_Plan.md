@@ -14714,3 +14714,19 @@ No fresh team needed.
 - check-weather, check-game-sim-weather, check-weather-story and check-weather-decisions pass with the pace.
 
 No fresh team needed. Games planned from now on get their own pace.
+
+---
+
+## §122.137 r258 — Free-agent looks: whether other clubs are on a player is a tag, not a repeated sentence
+
+The scouts' free-agent report said "As far as we can tell, nobody else is on this one yet. I'd move before word gets around." under almost every player. The scouts' picks are sorted by how much better they are than their rating, so most of them are the league's hidden finds, each with the same line.
+
+Now it's a tag on the player's row in the report, beside the position and rating:
+- **"No other clubs yet"** (green) until word gets around (`p._buzzAt`).
+- **"Other clubs asking"** (amber) after that.
+
+The tag is worked out when the GM looks (`FaWatch.reportRows` → `race`), so a row changes from green to amber as word spreads, while the report is open. The reply keeps which players the scouts flagged (`faReport.buzz` → the card's `_faBuzz`: those they judged well above their rating, as before). Players signed, or gone to another club, show no tag. The sentence is gone from the text.
+
+**Checks.** test-fa-report-ui adds three checks: flagged players are tagged as they stand, the text no longer says it, and once word gets around the same row says "Other clubs asking".
+
+No fresh team needed. Reports already open show no tags (they weren't flagged).
