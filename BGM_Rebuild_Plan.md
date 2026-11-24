@@ -14777,3 +14777,9 @@ The Team screen and the player card call it the same way.
 - test-wear-ui: the tired reliever moved to the pitcher bench (a real move) keeps his orange bar, and nobody else's changes by taking his spot (this fails on r259).
 
 No fresh team needed.
+
+---
+
+## §122.140 r261 — Messages tabs: Inbox | Compose | Completed
+
+The GM asked for Compose in the middle and Completed on the right. The tabs now run left to right Inbox (the to-do list, with its count) | Compose | Completed. The change is only the order in `InboxScreen`'s markup; each tab is still found by its id, and Inbox is still the default. No fresh team needed.

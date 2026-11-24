@@ -279,11 +279,11 @@ export function refresh() {
           Inbox
           ${todoCount > 0 ? `<span class="tab-badge">${Math.min(todoCount,99)}</span>` : ''}
         </div>
-        <div class="inbox-tab ${_activeTab === 'completed' ? 'active' : ''}" id="itab-completed">
-          Completed
-        </div>
         <div class="inbox-tab ${_activeTab === 'compose'   ? 'active' : ''}" id="itab-compose">
           Compose
+        </div>
+        <div class="inbox-tab ${_activeTab === 'completed' ? 'active' : ''}" id="itab-completed">
+          Completed
         </div>
       </div>
     </div>
