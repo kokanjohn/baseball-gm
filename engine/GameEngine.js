@@ -86,7 +86,7 @@ import { computeAllIMP, appendGameLog } from './IMPEngine.js';
 import { markAvailable, exposeRatings } from './Diamonds.js';
 import { computeSeasonPrestige, checkTurningPointEligibility, applyTurningPoint } from './PrestigeEngine.js';
 import * as AllStar from './AllStarEngine.js';
-import { recordOutings, starterRested, bullpenRoles } from './PitchingEngine.js';
+import { recordOutings, starterRested, bullpenRoles, dayOf } from './PitchingEngine.js';
 import { leaveIssues } from './RosterAdvice.js';
 import * as LeaguePos from './LeaguePositions.js';   // r168 §122.35
 import { cityOf } from './WeatherMap.js';
@@ -535,6 +535,8 @@ export function tick() {
   // of a game not yet played — so the game below starts with the roster it
   // really has.
   advanceClock(clockNow());
+  // r262 §122.141 an off day rests the hitters that day (once a day: the first tick of it)
+  if (StateManager.get()._wearDay !== dayOf(clockNow())) StateManager.mutate(s => { Development.creditOffDays(s, clockNow()); });
   _wxReplanDue(clockNow());   // §122.51 a weather decision that changes our game
   // §80: a game day nobody planned yet (a save from before r74) gets its inbox.
   planCardsForNextGame();

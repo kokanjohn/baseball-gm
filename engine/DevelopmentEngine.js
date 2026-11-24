@@ -43,7 +43,7 @@ import {
   PLAYER_WORK,
   ARM_LOAD,
 } from '../data/constants.js';
-import { ageWearMult, armLoad, armStatus } from './PitchingEngine.js';
+import { ageWearMult, armLoad, armStatus, dayOf } from './PitchingEngine.js';
 import { computeOVR, ovrFor, computeAge, baseballYear } from './PlayerFactory.js';
 import { exposeRatings } from './Diamonds.js';
 import { devFactor } from './CoachEngine.js';
@@ -315,8 +315,11 @@ export function countGame(draft, teamId, atMs = null, { kind = 'regular' } = {})
   const events = [];
   const t = teamId === 'user' ? draft.userTeam : (draft.leagueTeams || []).find(x => x.id === teamId);
   if (!t) return events;
-  // Off days since the club's last game: each beyond the first takes some wear off.
-  const offDays = atMs && t._lastGameAt ? Math.max(0, Math.floor((atMs - t._lastGameAt) / DAY) - 1) : 0;
+  // Off days since the club's last game (the days between, by the calendar) take some wear off. r262 §122.141 the
+  // ones already taken off as they came (creditOffDays) aren't taken again.
+  const between = atMs && t._lastGameAt ? Math.max(0, dayOf(atMs) - dayOf(t._lastGameAt) - 1) : 0;
+  const offDays = Math.max(0, between - (t._offCredited || 0));
+  t._offCredited = 0;
   if (atMs) t._lastGameAt = atMs;
   const inLineup = new Set((t.lineupSlots || []).map(x => x.playerId).filter(Boolean));
   const caught = (t.lineupSlots || []).find(x => x.slot === 'C')?.playerId || null;
@@ -385,6 +388,36 @@ function _wear(p, started, offDays, { catcher = false, mult = 1 } = {}) {
   else w = 0;
   p.wear = Math.round(w * 10) / 10;
   p.straight = started ? (p.straight || 0) + 1 : 0;
+}
+
+/**
+ * r262 §122.141 an off day rests the hitters the day it comes, not at the next game: once a day (the first tick of
+ * it), every club with no game today gets its off days since its last game taken off its hitters' wear (WEAR.offDay
+ * each), and keeps count (`t._offCredited`) so countGame doesn't take them again. A game today isn't an off day;
+ * a postponed one doesn't count as a game. Everything that reads wear — the bar, the staff, the game's own dip —
+ * reads the rested number.
+ */
+export function creditOffDays(draft, atMs) {
+  const today = dayOf(atMs);
+  if (draft._wearDay === today) return;
+  draft._wearDay = today;
+  const live = (g) => g && g.status !== 'postponed' && Number.isFinite(g.gameTime) && dayOf(g.gameTime) === today;
+  const playing = new Set();
+  for (const g of draft.schedule || []) if (live(g)) { playing.add('user'); if (g.opponentId) playing.add(g.opponentId); }
+  for (const list of Object.values(draft.leagueSchedule?.dayMap || {})) for (const g of list) if (live(g)) { playing.add(g.homeId); playing.add(g.awayId); }
+  const teams = [['user', draft.userTeam], ...(draft.leagueTeams || []).map(t => [t.id, t])];
+  for (const [id, t] of teams) {
+    if (!t?._lastGameAt) continue;
+    const off = Math.max(0, today - dayOf(t._lastGameAt) - 1 + (playing.has(id) ? 0 : 1));
+    const owed = off - (t._offCredited || 0);
+    if (owed <= 0) continue;
+    t._offCredited = off;
+    for (const pid of t.rosterIds || []) {
+      const p = draft.players?.[pid];
+      if (!p || isPitcher(p) || !p.wear) continue;
+      p.wear = Math.round(Math.max(0, p.wear - owed * WEAR.offDay) * 10) / 10;
+    }
+  }
 }
 
 /**

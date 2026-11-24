@@ -14783,3 +14783,21 @@ No fresh team needed.
 ## §122.140 r261 — Messages tabs: Inbox | Compose | Completed
 
 The GM asked for Compose in the middle and Completed on the right. The tabs now run left to right Inbox (the to-do list, with its count) | Compose | Completed. The change is only the order in `InboxScreen`'s markup; each tab is still found by its id, and Inbox is still the default. No fresh team needed.
+
+---
+
+## §122.141 r262 — An off day rests the hitters the day it comes
+
+A hitter's off-day rest (WEAR.offDay, 2 a day) used to be taken only when the next game was counted (`countGame`). So on the off day, and through the next game, the bar, the staff's rest messages and the game's own tired-hitter dip (SimEngine reads `p.wear`) all read the wear from before the rest.
+
+Now `DevelopmentEngine.creditOffDays(draft, atMs)` runs on the first tick of each calendar day (GameEngine `tick`, gated on `state._wearDay`). For every club it counts the off days since that club's last game, by the calendar: the days in between, plus today if the club has no game today. A postponed game isn't a game. Each club's hitters lose WEAR.offDay per off day not yet taken, and the club keeps count in `t._offCredited`. `countGame` takes off only the off days not already credited (now counted by the calendar too) and resets the count.
+
+The effect is the same total as before. Only the timing changed: the rest shows the morning of the off day, catching up at once after the app was closed, and is never taken twice. Pitchers are unchanged; their workload already comes off by the day.
+
+**Checks.** New check-off-day-rest (fails 3 of 4 on r261):
+- our off day: the regulars are rested that day (10 → 8);
+- the next game's morning: nothing more;
+- after the game: less the off day, plus the start, not twice;
+- a league club rests on its off days the same way.
+
+No fresh team needed.
