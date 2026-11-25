@@ -15219,3 +15219,31 @@ Fresh team: needed for the new spring home/away split. The current save keeps it
 - Season, multi-season, message-timing, emergencies, decision-impact, field-messages, message-pushes and notification-tap all pass.
 
 No fresh team needed. The first run marks where new messages begin.
+
+---
+
+## §122.159 — r280: Live View holds the last out, clears it, then shows the next half
+
+**Report.** The last out of a half showed for 4 s (r234), which wasn't enough. Also, only the last play's words and path stayed for those 4 s: the field had already flipped to the next half (0 outs, the other club's fielders, pitcher and batters) underneath them.
+
+**Fix (ui/components/LiveView.js).**
+- `liveViewState(game, state, { hold })`: when the revealed plays have ended a half (liveSituation has moved on), `hold` shows the half that just ended:
+  - its inning and 3 outs;
+  - its fielders (`_field` of that half) and pitcher;
+  - at bat: the batter who made the out (on deck / in the hole from them).
+  - New fact `held`.
+- The view's sequence on a new last out: `HOLD_MS` 9 s held with the last play's words and path → the words and path clear, the half still the one that ended → `GAP_MS` 1 s later the next half comes up (0 outs, its fielders, pitcher, batter).
+  - A play of the next half revealed meanwhile ends the hold at once.
+  - Opening the view after a half ended goes straight to the next half (no hold).
+  - This replaces r234's `CLEAR_MS` / `staleTimer`.
+- At bat between halves: the half before's `inning_end` no longer hides the next half's first batter. The search skips it, so the next half shows its batter, not "—".
+
+**Test.** test-live-view-ui, both themes, at 1.5 s, 7.5 s, 9.5 s and 11 s after the last out:
+- held: the words, path, inning, 3 outs, that half's pitcher and the batter who made the out;
+- still held;
+- cleared, still that half;
+- the next half: 0 outs, the other pitcher, a batter.
+
+test-game-injury-ui passes.
+
+No fresh team needed.

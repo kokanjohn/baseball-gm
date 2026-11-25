@@ -136,7 +136,9 @@ if (step) {
   await page.screenshot({ path: `${out}/lv-after-hit-${theme}.png` });
 }
 
-// r234 the half's last out: the play and its path stay a few seconds, then clear (the other side is up)
+// r234 the half's last out: the play and its path stay a few seconds, then clear (the other side is up).
+// r280 §122.159 the whole field holds at the last out (9 s: 3 outs, that half's pitcher and batter), the words and
+// path clear, and only then (a second later) the next half comes up.
 const endHalf = await page.evaluate(async () => {
   const SM = await import('/baseball-gm/store/StateManager.js');
   const EB = await import('/baseball-gm/ui/EventBus.js');
@@ -147,15 +149,31 @@ const endHalf = await page.evaluate(async () => {
   if (k >= plays.length) return null;
   SM.mutate(st => { st.schedule[st.currentGameIndex || 0].livePlayIndex = k + 1; });
   EB.emit('game:tick', { game: SM.get().schedule[SM.get().currentGameIndex || 0] });
-  return plays[k].description;
+  const p = plays[k];
+  const pitcherName = s.players[p.pitcherId]?.name, batterName = s.players[p.batterId]?.name;
+  return { text: p.description, inn: `${p.half === 'TOP' ? 'Top' : 'Bottom'} ${p.inning}`, pitcherName, batterName };
 });
 if (endHalf) {
+  const look = () => page.evaluate(() => {
+    const row = (k) => [...document.querySelectorAll('#live-view .lv-row')].find(r => r.querySelector('.lv-k')?.textContent === k)?.querySelector('.lv-v')?.textContent.trim() || '';
+    return { last: document.querySelector('#live-view .lv-last').textContent, path: !!document.querySelector('#live-view .lv-path'),
+             inn: document.querySelector('#live-view .lv-inn')?.textContent || '', outs: document.querySelector('#live-view .lv-sit')?.textContent.match(/(\d) outs?/)?.[1],
+             pitching: row('Pitching'), atBat: row('At bat') };
+  });
   await page.waitForTimeout(1500);
-  const during = await page.evaluate(() => ({ last: document.querySelector('#live-view .lv-last').textContent, path: !!document.querySelector('#live-view .lv-path') }));
-  await page.waitForTimeout(3500);
-  const after = await page.evaluate(() => ({ last: document.querySelector('#live-view .lv-last').textContent, path: !!document.querySelector('#live-view .lv-path') }));
-  check(`the half's last out shows for a few seconds ("${during.last}")`, during.last === endHalf && during.path);
-  check('…then its words and the ball\'s path clear', after.last === '' && !after.path);
+  const during = await look();
+  await page.waitForTimeout(6000);
+  const late = await look();
+  await page.waitForTimeout(2000);   // (9.5 s: cleared, the next half not up yet)
+  const cleared = await look();
+  await page.waitForTimeout(1500);   // (11 s: the next half)
+  const next = await look();
+  check(`the last out holds the field: “${during.last}”, ${during.inn}, ${during.outs} outs, ${during.pitching} pitching, ${during.atBat} at bat`,
+    during.last === endHalf.text && during.path && during.inn === endHalf.inn && during.outs === '3' && during.pitching === endHalf.pitcherName && during.atBat === endHalf.batterName);
+  check('…still held at 7.5 s', late.last === endHalf.text && late.inn === endHalf.inn && late.outs === '3');
+  check('…then the words and the ball\'s path clear, the half still the one that ended', cleared.last === '' && !cleared.path && cleared.inn === endHalf.inn && cleared.outs === '3');
+  check(`…and only then the next half: ${next.inn}, ${next.outs} outs, ${next.pitching} pitching, ${next.atBat} at bat`,
+    next.inn !== endHalf.inn && next.outs === '0' && next.last === '' && !next.path && next.pitching !== endHalf.pitcherName && next.atBat && next.atBat !== '—');
 }
 
 // A game from before r229 (no fielders saved on its plays): still nine, from the lineups.

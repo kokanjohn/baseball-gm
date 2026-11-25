@@ -42,15 +42,23 @@ function _fieldFromSlots(team) {
   return out;
 }
 
-export function liveViewState(game, state) {
+/**
+ * r280 §122.159 `opts.hold`: the half just ended, held as it was at its last out — that half's inning, 3 outs, its
+ * fielders and pitcher, the batter who made the out at the plate (the next half isn't shown yet).
+ */
+export function liveViewState(game, state, opts = {}) {
   const players = state.players || {};
   const plays = game.plays || [];
   const final = game.status === GAME_STATUS.FINAL || !!game._committed;
   const idx = final ? plays.length : (game.livePlayIndex || 0);
   const revealed = plays.slice(0, idx);
   const isFinal = final || revealed.some(p => p.type === 'game_end');
-  const sit = liveSituation(revealed, plays[idx] ?? null);
+  let sit = liveSituation(revealed, plays[idx] ?? null);
   const isHome = !!game.isHome;
+  // r280 §122.159 held at the last out: the half that just ended, not the next one
+  const lastHalfPlay = [...revealed].reverse().find(p => p.inning && p.half && p.type !== 'game_end');
+  const held = !!(opts.hold && !isFinal && lastHalfPlay && (lastHalfPlay.half !== sit.half || lastHalfPlay.inning !== sit.inning));
+  if (held) sit = { ...sit, inning: lastHalfPlay.inning, half: lastHalfPlay.half, outs: 3 };
 
   let our = 0, their = 0;
   for (let i = revealed.length - 1; i >= 0; i--) if (revealed[i].cumOurScore != null) { our = revealed[i].cumOurScore; their = revealed[i].cumTheirScore; break; }
@@ -75,10 +83,13 @@ export function liveViewState(game, state) {
   let atBat = null, atBatFor = null;
   if (!isFinal) for (let i = idx; i < plays.length; i++) {
     const p = plays[i];
+    if (p.type === 'inning_end' && p._halfInning !== halfKey) continue;   // (r280 the half before's close: the next half's batter is up)
     if (p._halfInning && p._halfInning !== halfKey) break;
     if (p.type === 'pinch_hit') { atBat = p.batterId; atBatFor = p._for || byName(bat, (p.description || '').split(' pinch hits for ')[1]); break; }
     if (p.batterId && PA_TYPES.has(p.type)) { atBat = p.batterId; break; }
   }
+  // (held: the batter who made the last out stays at the plate)
+  if (held && !atBat) atBat = [...revealed].reverse().find(p => p._halfInning === halfKey && p.batterId && PA_TYPES.has(p.type))?.batterId || null;
   const order = orders[bat];
   let at = atBat ? order.indexOf(atBat) : -1;
   if (at < 0 && atBatFor) at = order.indexOf(atBatFor);
@@ -129,6 +140,7 @@ export function liveViewState(game, state) {
     atBat, onDeck, inHole, fielders, pitcher, ball, last, lastIndex: revealed.length - 1, scoredLast,
     box, batLine, pitLine, bf, rhe: { away: { r: score.away, h: box.away.hits, e: box.away.errors }, home: { r: score.home, h: box.home.hits, e: box.home.errors } },
     stale: !!(last?._halfInning && last._halfInning !== halfKey && !isFinal),   // (r234 the last play was the half before)
+    held,                                                                       // (r280 shown as the half that just ended)
     status: isFinal ? 'Final' : wx.kind ? wx.pill : game.status === GAME_STATUS.DELAYED ? 'Delayed' : 'Live' };
 }
 
@@ -220,8 +232,12 @@ export function openLiveView(game) {
   const svg = el.querySelector('svg');
   const layer = (c) => svg.querySelector(`.${c}`);
   const runners = new Map();   // id → <g>
-  let shownIndex = null, raf = null, staleTimer = null, cleared = false;
-  const CLEAR_MS = 4000;   // (r234 a half that's over: its last play and path stay this long, then clear)
+  let shownIndex = null, raf = null;
+  // r280 §122.159 a half that's over: the field stays as it was at the last out (3 outs, its fielders, pitcher and
+  // batter, the last play's words and path) for HOLD_MS; then the words and the path clear; GAP_MS later the next
+  // half comes up. A play of the next half revealed meanwhile ends the hold at once (the game doesn't wait).
+  const HOLD_MS = 9000, GAP_MS = 1000;
+  let hold = null;   // { key: the last play's index, phase: 'hold' | 'clear' | 'done', timers }
   const listeners = [];
   const wire = (event, handler) => { EventBus.on(event, handler); listeners.push({ event, handler }); };
 
@@ -305,10 +321,23 @@ export function openLiveView(game) {
     at(0); raf = requestAnimationFrame(step);
   };
 
+  const endHold = () => { if (hold) hold.timers.forEach(clearTimeout); hold = null; };
   const update = () => {
     const state = StateManager.get(), game = find();
     if (!game) return;
-    const v = liveViewState(game, state), players = state.players || {};
+    let v = liveViewState(game, state);
+    const players = state.players || {};
+    if (!v.stale) endHold();
+    else if (!hold || hold.key !== v.lastIndex) {
+      endHold();
+      // (opened after it ended: already old — straight to the next half; a new last out: the hold)
+      const fresh = shownIndex !== null && v.lastIndex !== shownIndex;
+      hold = { key: v.lastIndex, phase: fresh ? 'hold' : 'done', timers: [] };
+      if (fresh) hold.timers.push(setTimeout(() => { if (hold) { hold.phase = 'clear'; update(); } }, HOLD_MS),
+                                  setTimeout(() => { if (hold) { hold.phase = 'done'; update(); } }, HOLD_MS + GAP_MS));
+    }
+    const phase = hold?.phase || null;
+    if (phase === 'hold' || phase === 'clear') v = liveViewState(game, state, { hold: true });
     const st = state, oppAbbr = (st.leagueTeams || []).find(t => t.id === game.opponentId)?.abbr || 'OPP';
     const uAbbr = st.userTeam?.abbr || 'US';
     const abbr = { away: v.isHome ? oppAbbr : uAbbr, home: v.isHome ? uAbbr : oppAbbr };
@@ -321,15 +350,11 @@ export function openLiveView(game) {
     // (on opening: as it stands; on a new play: the ball travels if that play put it in play)
     if (shownIndex === null || moved) drawBall(v, moved && !!v.ball && v.ball.index === v.lastIndex);
     shownIndex = v.lastIndex;
-    // a half that's over: the play that ended it stays a few seconds, then the words and the path clear
-    if (!v.stale) { clearTimeout(staleTimer); staleTimer = null; cleared = false; }
-    const clearStale = () => { cleared = true; el.querySelector('.lv-last').textContent = ''; layer('lv-path-layer').innerHTML = ''; layer('lv-ball-layer').innerHTML = ''; };
-    if (v.stale && !cleared && !staleTimer) {
-      if (!moved) clearStale();   // (opened after it: already old)
-      else staleTimer = setTimeout(() => { staleTimer = null; clearStale(); }, CLEAR_MS);
-    }
-    if (!(v.stale && cleared)) el.querySelector('.lv-last').textContent = v.last?.description || '';
-    else { layer('lv-path-layer').innerHTML = ''; layer('lv-ball-layer').innerHTML = ''; }
+    // r280 §122.159 the last out's words and path while held; cleared before the next half comes up
+    const showLast = phase ? phase === 'hold' : true;
+    el.querySelector('.lv-last').textContent = showLast ? (v.last?.description || '') : '';
+    if (!showLast) { if (raf) { cancelAnimationFrame(raf); raf = null; } layer('lv-path-layer').innerHTML = ''; layer('lv-ball-layer').innerHTML = ''; }
+    el.classList.toggle('lv-held', phase === 'hold' || phase === 'clear');
     const name = (id) => (id ? `<button type="button" class="lv-link" data-pid="${id}">${_esc(players[id]?.name || '')}</button>` : '—');
     const bl = v.batLine, pl = v.pitLine;
     const batWords = bl ? [`${bl.h}-for-${bl.ab}`, bl.hr ? `${bl.hr} HR` : '', bl.rbi ? `${bl.rbi} RBI` : '', bl.bb ? `${bl.bb} BB` : '', bl.k ? `${bl.k} K` : ''].filter(Boolean).join(', ') : '';
@@ -348,7 +373,7 @@ export function openLiveView(game) {
   const close = () => {
     listeners.forEach(({ event, handler }) => EventBus.off(event, handler));
     if (raf) cancelAnimationFrame(raf);
-    clearTimeout(staleTimer);
+    endHold();
     el.classList.remove('open');
     setTimeout(() => el.remove(), 200);
     _open = null;
