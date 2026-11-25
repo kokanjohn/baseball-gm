@@ -14948,3 +14948,21 @@ No fresh team needed.
 - A mound repair changes no player, and morale drops.
 
 No fresh team needed. A career day already in the inbox names no one, and its yes now changes no player.
+
+---
+
+## §122.150 — r271: no instant reply from the sender
+
+**Report.** After answering another GM's message, their response showed in the toast. Replies also showed in the Completed thread. A GM wouldn't hear back the moment they answered.
+
+**Fix (InboxScreen).**
+- `_resolveCard`'s toast / decision-effects headline is what the GM chose: the picked choice's label, else `yesLabel` / `noLabel`. It is never `yesMsg` / `noMsg`.
+- `_decision` no longer returns an `outcome`. `_renderThread` shows the message, then your reply (or "No reply in time"), then "What changed", with no message back from the sender.
+- `yesMsg` / `noMsg` / `expireMsg` stay on the cards as data. Nothing in the UI shows them now.
+- Real answers that come later (a trade counter's answer, a promise kept) still arrive as their own messages, as before.
+
+**Test.** test-decision-impact-ui:
+- Answering from the inbox: the headline is the choice label, not the card's `yesMsg`.
+- The completed thread has two parts (message, your reply) plus What changed.
+
+No fresh team needed.

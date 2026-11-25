@@ -526,17 +526,14 @@ function _renderReading(card, inbox, state) {
 function _decision(card) {
   const auto = card.choice === 'auto';
   // r204 §122.82 the free-agent report, closed: what came of each player
-  if (card._summary && card.resolved) return { text: card._summary, outcome: null, auto: false, read: false };
+  if (card._summary && card.resolved) return { text: card._summary, auto: false, read: false };
   const autoPick = card.autoChoice || null;
   const text = card.choice === 'yes' ? (card.yesLabel || 'Accepted')
              : card.choice === 'no'  ? (card.noLabel  || 'Declined')
              : auto ? (card._autoLabel || (autoPick === 'yes' ? card.yesLabel : autoPick === 'no' ? card.noLabel : null) || 'Decided by default')
              : (card.yesLabel || 'Read');
-  const outcome = card.choice === 'yes' ? card.yesMsg
-                : card.choice === 'no'  ? card.noMsg
-                : auto ? (card.expireMsg || (autoPick === 'yes' ? card.yesMsg : autoPick === 'no' ? card.noMsg : null))
-                : null;
-  return { text, outcome, auto, read: card.choice === 'skip' };
+  // r271 §122.150 no reply from the sender here: the GM wouldn't hear back the moment they answered.
+  return { text, auto, read: card.choice === 'skip' };
 }
 
 function _renderCompleted(state) {
@@ -610,17 +607,6 @@ function _renderThread(card, state) {
         </div>
         <div class="mt-decision">${_escape(d.text)}</div>
       </div>`}
-      ${d.outcome ? `
-      <div class="mt-msg">
-        <div class="mr-sender">
-          ${_avatar(_from(card), 'mr-av')}
-          <div class="mr-who">
-            <div class="mr-name">${_escape(_from(card))}</div>
-            <div class="mr-to">to me</div>
-          </div>
-        </div>
-        <div class="mr-body"><p>${_escape(d.outcome)}</p></div>
-      </div>` : ''}
       ${d.read ? '' : _impactHtml(card)}
     </div>`;
 }
@@ -1128,12 +1114,10 @@ async function _resolveCard(instanceId, choice, pick = null) {
       EventBus.emit('roster:changed', { source: 'inbox', instanceId });
     }
     _openCard = null;
-    // Outcome line ("Upgrades complete. Players will notice.") as the headline,
-    // with animated bars for every metric the decision moved (§63). Falls back
-    // to a plain toast when nothing measurable changed.
+    // What the GM chose as the headline, with animated bars for every metric the decision moved (§63);
+    // a plain toast when nothing measurable changed. r271 §122.150 never the sender's reply: it isn't here yet.
     const picked = pick != null ? card?._choices?.find(c => c.key === pick)?.label : null;
-    const msg   = (choice === 'yes' ? card?.yesMsg : card?.noMsg)
-               || (choice === 'yes' ? (picked || card?.yesLabel || 'Decision made.') : (card?.noLabel || 'Declined.'));
+    const msg   = choice === 'yes' ? (picked || card?.yesLabel || 'Decision made.') : (card?.noLabel || 'Declined.');
     const shown = App.showDecisionEffects({ title: msg, before, after, positive: choice === 'yes' });
     if (!shown) App.showToast(msg, choice === 'yes' ? 'positive' : 'neutral', 3500);
     App.updateHeader(StateManager.get());   // budget in the header

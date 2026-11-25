@@ -36,11 +36,21 @@ const made = await page.evaluate(async ({ theme, now }) => {
   if (old) { CE.resolve(old.instanceId, 'no'); SM.mutate(s => { const c = s.inbox.find(x => x.instanceId === old.instanceId); delete c._impact; delete c._impactLater; }); }
   const App = await import('/baseball-gm/ui/App.js'); await App.init();
   const get = (c) => c && SM.get().inbox.find(x => x.instanceId === c.instanceId);
-  return { money: money && { id: money.instanceId, impact: get(money)._impact }, rest: rest && { id: rest.instanceId, impact: get(rest)._impact }, old: old && old.instanceId };
+  const next = SM.get().inbox.find(c => !c.resolved && c.noLabel && c.yesMsg && !c._choices);
+  return { next: next && { id: next.instanceId, yesLabel: next.yesLabel, yesMsg: next.yesMsg }, money: money && { id: money.instanceId, impact: get(money)._impact, yesMsg: money.yesMsg }, rest: rest && { id: rest.instanceId, impact: get(rest)._impact }, old: old && old.instanceId };
 }, { theme, now });
 check('a money decision and a player decision answered', !!made.money && !!made.rest);
 await page.waitForTimeout(800);
 await page.tap('.nav-item[data-tab="decisions"]'); await page.waitForTimeout(400);
+// r271 §122.150 answering shows what you chose, never the sender's reply
+if (made.next) {
+  await page.evaluate((id) => document.querySelector(`[data-open="${id}"], [data-card="${id}"]`)?.scrollIntoView({ block: 'center' }), made.next.id);
+  await page.tap(`[data-open="${made.next.id}"], [data-card="${made.next.id}"]`); await page.waitForTimeout(400);
+  await page.tap(`[data-resolve="${made.next.id}"][data-choice="yes"]`); await page.waitForTimeout(300);
+  const shown = await page.evaluate(() => (document.querySelector('.ep-title')?.textContent || '') + ' ' + (document.getElementById('toast')?.textContent || ''));
+  check(`answered: the toast is your choice (“${shown.trim()}”), not their reply`, shown.includes(made.next.yesLabel) && !shown.includes(made.next.yesMsg));
+  await page.waitForTimeout(3800);
+}
 await page.tap('#itab-completed'); await page.waitForTimeout(400);
 
 const openThread = async (id) => {
@@ -56,6 +66,8 @@ check(`the money decision: “What changed” (${m.rows.join(' | ')})`, m.h === 
 check(`club funds from → to, and the difference in red (“${fundsRow}”)`, /^Club funds \$[\d.]+[KM] → \$[\d.]+[KM] −\$\d+K$/.test(fundsRow) && m.downs >= 1);
 const pts = m.rows.find(r => /^(Team morale|Stadium atmosphere|Owner trust)/.test(r)) || '';
 check(`a rating from → to with its difference (“${pts}”)`, /^(Team morale|Stadium atmosphere|Owner trust) \d+ → \d+ [+−]\d+$/.test(pts));
+const thread = await page.evaluate(() => ({ msgs: document.querySelectorAll('.mt-msg:not(.mi)').length, text: document.querySelector('.mr')?.innerText || '' }));
+check(`the thread is the message and your reply — no reply from them (${thread.msgs} parts)`, thread.msgs === 2 && !thread.text.includes(made.money.yesMsg));
 await page.screenshot({ path: `${out}/decision-impact-${theme}.png`, fullPage: false });
 await page.evaluate(() => document.querySelector('.mi')?.scrollIntoView({ block: 'center' })); await page.waitForTimeout(200);
 await page.screenshot({ path: `${out}/decision-impact-rows-${theme}.png` });
