@@ -15117,3 +15117,33 @@ No fresh team needed.
 Season, multi-season, sim-plays, ball-placement, coaches, game-sim-weather, pitcher-roles, next-starter, Live View and game-injury UI all pass.
 
 Fresh team: not needed.
+
+---
+
+## §122.156 — r277: the Schedule's Forecast button — a 10-day outlook in the TV-segment style
+
+**Request.** A Forecast button at the top of the Schedule showing the 10-day outlook, like a TV broadcast or weather app: large icons, the temperature, the chance of rain, and minimal information (not the detailed list in the per-game forecast sheet).
+
+**UI.**
+- Schedule header: "Forecast" and "Scores" buttons side by side (`.sched-head-btns`).
+- New ui/components/OutlookSheet.js (precached), `openOutlookSheet({ state })`:
+  - A deep-blue broadcast panel: a gold "10-DAY OUTLOOK" kicker, our city, and a gold rule.
+  - Ten tiles in two rows of five, all on screen at once. Each tile: the weekday ("Today" first, gold-tinted), the city (road days only), a large drawn icon, the high (large), the low, and the chance of rain with a drop (blue at 30%+).
+- `weatherIcon(name)`: inline SVGs in fixed broadcast colors, the same in both themes. It covers every icon name the forecast uses: sun/hot/moon, sun-cloud/moon-cloud, cloud, wind, rain-light/rain/rain-heavy/rain-chance, storm/storm-near/storm-chance, snow-light/snow/snow-heavy/snow-chance, mix.
+
+**Where each day is.** `outlookVenues(state, days, now)`: the park of that day's game. On an off day, the park of the next game (the club is there or on the way); with no games ahead, ours.
+
+**Numbers.**
+- `ForecastSource.outlookFor` for ours and each road park (the worker, cached by forecast hour). These are the same days the forecast sheet lists.
+- A day is never less likely to rain than one of our games there that day (`withinDay` with `gameForecastFor`), as on the forecast sheet.
+
+**Test.** test-outlook-ui (360px, both themes):
+- The buttons.
+- Ten tiles from Today.
+- Each tile has an icon at least 44px, a high and low, and a %.
+- Two rows, all on screen.
+- The header.
+- Each day's park matches `outlookVenues`, and the city shows only on road days.
+- Closes; no page errors.
+
+No fresh team needed.

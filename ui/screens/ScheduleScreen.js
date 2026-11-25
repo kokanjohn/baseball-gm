@@ -33,6 +33,7 @@ import { wxState, weatherLine, gameNotes, calledInnings, postponedOn, dayLabel, 
 import { weatherToldOf, leagueWeatherToldOf } from '../../engine/GameEngine.js';
 import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
 import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
+import { openOutlookSheet } from '../components/OutlookSheet.js';   // r277 §122.156
 import {
   formatDate, formatRecord, formatTeamRecord, formatGameLabel,
   formatGameStatus, formatPhaseLabel,
@@ -129,7 +130,10 @@ export function refresh() {
           <div class="section-title">Schedule</div>
           <div class="section-sub">${formatTeamRecord(state.userTeam, phase)} · ${formatPhaseLabel(phase)}</div>
         </div>
-        <button class="scores-btn" id="sched-scores-btn">Scores</button>
+        <div class="sched-head-btns">
+          <button class="scores-btn" id="sched-fc-btn">Forecast</button>
+          <button class="scores-btn" id="sched-scores-btn">Scores</button>
+        </div>
       </div>
       ${html}
     </div>
@@ -501,6 +505,12 @@ function _scheduledTime(game) {
 
 function _attachListeners(state) {
   _fillForecasts(state);   // §102.7
+
+  // r277 §122.156 the 10-day outlook
+  document.getElementById('sched-fc-btn')?.addEventListener('click', () => {
+    App.playClick();
+    openOutlookSheet({ state: StateManager.get() });
+  });
 
   // Scores button
   document.getElementById('sched-scores-btn')?.addEventListener('click', () => {
@@ -1000,6 +1010,7 @@ function _injectCSS() {
     .sg-ppd-note { font-size:10px;color:var(--muted);white-space:nowrap; }
     .sg-row-ppd { opacity:.8; }
     .game-weather { font-weight:500;color:var(--muted); }
+    .sched-head-btns { display:flex;gap:8px; }
     .game-fc { display:block;margin-top:2px;padding:0;border:0;background:none;font:inherit;font-size:10px;font-weight:700;color:#3b82f6;text-align:left;cursor:pointer; }
     .game-wx-notes { font-size:10px;font-weight:600;color:#f97316;margin-top:2px;line-height:1.3; }
     .sg-final-pill { font-size:9px;font-weight:700;color:var(--muted); }
