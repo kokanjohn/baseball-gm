@@ -82,7 +82,8 @@ const waits = sent.filter(r => /^OFF: Available again/.test(r.after));
 check(`a topic with a wait says the day it's back (${waits.length}: “${waits[0]?.after.slice(5)}”)`, waits.length >= 10 && waits.every(r => /^OFF: Available again (today|tomorrow|Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|in \d+ days)$/.test(r.after)));
 check('…and five days on, every one is open again', waits.every(r => /^on: /.test(r.later)), waits.filter(r => !/^on: /.test(r.later)).map(r => r.label).join(', '));
 const fa = sent.find(r => /Free agents/.test(r.label));
-check(`the free-agent looks: “${fa?.after}”`, !!fa && (/^on: .*looks left this week/.test(fa.after) || /^OFF: Next look in \d+ days?$/.test(fa.after)));
+// r265 §122.144 one report is one look (a few players): the topic stays open for the rest of the week's
+check(`the free-agent looks: one report, the topic still open (“${fa?.after}”)`, !!fa && /^on: .*\d of \d looks left this week$/.test(fa.after) && !/ 0 of /.test(fa.after));
 const morale = sent.find(r => /morale/i.test(r.label));
 check('an old save\'s wait counted in games didn\'t shut its topic (sent from it)', !!morale && morale.arrived);
 check('no page errors', errors.length === 0, errors.join(' | '));

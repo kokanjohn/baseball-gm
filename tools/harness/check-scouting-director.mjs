@@ -61,7 +61,8 @@ check('an empty chair sends no tips', Coach.tipChance({ scoutingDirector: { vaca
 setDirector({ quality: 85 });
 const rep = writeComposeReply(S(), { topicId: 'sc_free_agents', channelId: 'scouting', atMs: clock.get() });
 check(`the report is signed by the director (${rep?.sender})`, rep?.sender?.startsWith(staff().scoutingDirector.name));
-check(`a top director looks at up to 5 a week (${rep?.memo?.playerIds?.length})`, (rep?.memo?.playerIds?.length || 0) <= 5 && (rep?.memo?.playerIds?.length || 0) >= 3);
+// r265 §122.144 one look is a report of up to three players
+check(`a report names up to 3 (${rep?.memo?.playerIds?.length})`, (rep?.memo?.playerIds?.length || 0) <= 3 && (rep?.memo?.playerIds?.length || 0) >= 1);
 
 // r199 §122.76 the week's looks, counted: what's left, and how many days until one comes back.
 {
@@ -70,16 +71,17 @@ check(`a top director looks at up to 5 a week (${rep?.memo?.playerIds?.length})`
   const ids = Object.keys(S().players).slice(0, 5);
   const none = at(60, []);
   check(`none used: ${none.left} of ${none.looks} left (a 60 director)`, none.looks === 3 && none.left === 3 && none.nextAt === null);
-  const two = at(60, [{ topicId: 'sc_free_agents', atMs: now - 2 * DAY, memo: { playerIds: ids.slice(0, 2) } }]);
-  check(`two reported two days ago: ${two.left} of ${two.looks} left`, two.left === 1);
+  const two = at(60, [{ topicId: 'sc_free_agents', atMs: now - 2 * DAY, memo: { playerIds: ids.slice(0, 3) } }]);
+  check(`one report (3 players) two days ago: ${two.left} of ${two.looks} left`, two.left === 2 && two.used === 1);
   const all = at(60, [{ topicId: 'sc_free_agents', atMs: now - 2.5 * DAY, memo: { playerIds: ids.slice(0, 2) } },
                       { topicId: 'sc_free_agents', atMs: now - DAY, memo: { playerIds: ids.slice(2, 3) } },
+                      { topicId: 'sc_free_agents', atMs: now - 2 * DAY, memo: { playerIds: ids.slice(3, 5) } },
                       { topicId: 'sc_free_agents', atMs: now - 3 * DAY, memo: { playerIds: [] } }]);
   check(`all three used: the first comes back in ${all.inDays} days (a reply that found nobody doesn't count)`, all.left === 0 && all.inDays === 5);
   const old = at(60, [{ topicId: 'sc_free_agents', atMs: now - 8 * DAY, memo: { playerIds: ids.slice(0, 3) } }]);
   check('a week later they\'re back', old.left === 3);
   const top = at(85, [{ topicId: 'sc_free_agents', atMs: now - DAY, memo: { playerIds: ids.slice(0, 3) } }]);
-  check(`a better director, more looks: ${top.left} of ${top.looks} left`, top.looks === 5 && top.left === 2);
+  check(`a better director, more looks: ${top.left} of ${top.looks} left`, top.looks === 5 && top.left === 4);
 }
 
 // ── Tips ──────────────────────────────────────────────────────

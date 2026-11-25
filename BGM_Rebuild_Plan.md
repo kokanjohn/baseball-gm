@@ -14838,3 +14838,20 @@ Now it holds the moment the topic was asked. The topic comes back at midnight fi
 - an old save's game-count wait doesn't shut its topic.
 
 No fresh team needed.
+
+---
+
+## §122.144 r265 — Free-agent looks: a look is a report of a few players
+
+**The GM's call.** The GM took a look to be a short report you could ask for a few times a week. In practice a look was one player, and a report named every look left at once, so one report used the whole week (§122.76).
+
+Now a look is one report of up to three players (`FA_REPORT_SIZE`). The director's 2 to 5 looks a week (`scoutLooks`) are reports. `faLooks` counts reports that named someone: `used` is reports, and a report that found nobody still uses none. Each comes back seven days after. Reports never repeat a player named in the last 30 days, so each is new names.
+- After one report the topic stays open: "The scouts look over the free agents. 2 of 3 looks left this week."
+- With all used: "Next look in N days", and the reply says "We've already made our 3 looks this week…".
+
+**Checks.**
+- check-scouting-director: a report names up to 3; one report leaves 2 of 3; all three used comes back in 5 days; a week later they're back; a top director leaves 4 of 5 after one.
+- test-compose-ui: with all used, the topic waits.
+- test-compose-reopen-ui: after one report the topic is still open with looks left.
+
+No fresh team needed. Reports already made count as one look each.

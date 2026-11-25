@@ -144,7 +144,8 @@ check(`free agents: the week's looks left (“${fa1.text}”)`, /^The scouts loo
 const looks = Number((fa1.text || '').match(/of (\d)/)?.[1] || 0);
 await page.evaluate(async (n) => {
   const SM = await import('/baseball-gm/store/StateManager.js'); const ids = Object.keys(SM.get().players).slice(0, n);
-  SM.mutate(s => { s.composeLog = [...(s.composeLog || []), { topicId: 'sc_free_agents', atMs: Date.now() - 2 * 86_400_000 - 3600_000, memo: { playerIds: ids } }]; });
+  // r265 §122.144 a look is a report: n reports, two days ago
+  SM.mutate(s => { s.composeLog = [...(s.composeLog || []), ...ids.map(id => ({ topicId: 'sc_free_agents', atMs: Date.now() - 2 * 86_400_000 - 3600_000, memo: { playerIds: [id] } }))]; });
 }, looks);
 const fa2 = await faDesc();
 check(`…all used: the topic waits, saying how many days (“${fa2.text}”)`, fa2.text === 'Next look in 5 days' && fa2.off);

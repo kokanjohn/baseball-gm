@@ -763,18 +763,20 @@ W.sc_prospect = (f, r, who) => {
  * whether other clubs have caught on yet.
  */
 /**
- * r199 §122.76 the scouts' looks at free agents: so many a week (scoutLooks, by the director), each
- * player they report on one look, back seven days later. → { looks, used, left, nextAt, inDays, seen }
- * (nextAt: when the first look comes back, once none are left).
+ * r199 §122.76 the scouts' looks at free agents: so many a week (scoutLooks, by the director), back seven days
+ * later. → { looks, used, left, nextAt, inDays, seen } (nextAt: when the first look comes back, once none are left).
+ * r265 §122.144 a look is one report of up to FA_REPORT_SIZE players (it was one player, and a report took every
+ * look left at once): a few players a time, a few times a week. A report that found nobody uses none.
  */
+export const FA_REPORT_SIZE = 3;
 export function faLooks(state, atMs) {
   const week = (state.composeLog || []).filter(x => x.topicId === 'sc_free_agents' && x.atMs < atMs && atMs - x.atMs < 7 * MS_DAY);
   const seen = week.flatMap(x => x.memo?.playerIds || []);
   const looks = scoutLooks(state.userTeam?.coachingStaff);
-  const left = Math.max(0, looks - seen.length);
   const used = week.filter(x => x.memo?.playerIds?.length);
+  const left = Math.max(0, looks - used.length);
   const nextAt = !left && used.length ? Math.min(...used.map(x => x.atMs)) + 7 * MS_DAY : null;
-  return { looks, used: seen.length, left, nextAt, inDays: nextAt ? Math.max(1, Math.ceil((nextAt - atMs) / MS_DAY)) : 0, seen };
+  return { looks, used: used.length, left, nextAt, inDays: nextAt ? Math.max(1, Math.ceil((nextAt - atMs) / MS_DAY)) : 0, seen };
 }
 
 W.sc_free_agents = (f, r, who) => {
@@ -782,7 +784,7 @@ W.sc_free_agents = (f, r, who) => {
   const L = faLooks(st, f.atMs), looks = L.looks, left = L.left;
   if (left <= 0) {
     const names = L.seen.map(f.P).filter(p => p && p.group === 'freeAgent').map(p => p.name);
-    return { body: [`We've already looked at our ${looks} this week${names.length ? ` (${list(names)}${names.length === 1 ? ' is' : ' are'} still out there)` : ''}. The next look comes in ${plural(L.inDays, 'day')}.`], memo: { playerIds: [] } };
+    return { body: [`We've already made our ${plural(looks, 'look')} this week${names.length ? ` (${list(names)}${names.length === 1 ? ' is' : ' are'} still out there)` : ''}. The next look comes in ${plural(L.inDays, 'day')}.`], memo: { playerIds: [] } };
   }
   const recent = new Set(f.pastReplies('sc_free_agents').filter(x => f.atMs - x.atMs < 30 * MS_DAY).flatMap(x => x.memo?.playerIds || []));
   const sigmaOf = (p) => 4 / scoutEye(f, p);
@@ -792,7 +794,7 @@ W.sc_free_agents = (f, r, who) => {
     .map(x => ({ ...x, edge: x.worth - (x.p.ovr || 0) }))
     .filter(x => x.worth - level >= 42)
     .sort((a, b) => (b.edge + 0.3 * (b.worth - level)) - (a.edge + 0.3 * (a.worth - level)))
-    .slice(0, left);
+    .slice(0, FA_REPORT_SIZE);   // r265 a few players a look
   if (!seen.length) return { body: ['We looked. Nobody out there is better than the ratings say right now.'], memo: { playerIds: [] } };
   const out = [`We looked at ${list(seen.map(x => x.p.name))}.`];
   for (const { p, edge } of seen) {
