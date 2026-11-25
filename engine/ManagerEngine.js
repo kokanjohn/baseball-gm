@@ -30,6 +30,7 @@ import { STAFF_NAMES } from '../data/player-names.js';
 import { eventRand } from './Dice.js';
 import { qualityOf, qualityWord, rollQuality } from './CoachEngine.js';
 import { strategyOf, RUN_STYLES, HOOK_STYLES } from './Strategy.js';
+import { enroll, leave, toMarket, samePerson } from './People.js';   // r281 §122.160
 
 export { qualityWord };
 
@@ -140,10 +141,11 @@ export function staffLeague(state, rand = eventRand, taken = new Set()) {
   const free = _freeNames(state, taken);
   let deck = [];
   for (const t of state.leagueTeams || []) {
-    if (t.manager?.name) { ensureManager(t.manager, rand); applyStyle(t); continue; }
+    if (t.manager?.name) { ensureManager(t.manager, rand); applyStyle(t); enroll(state, t.manager, { role: 'manager', clubId: t.id, season: t.manager.hiredSeason ?? state.seasonNum ?? 1 }); continue; }
     if (!deck.length) deck = [...STYLE_KEYS].sort(() => rand() - 0.5);
     const name = free.splice(Math.floor(rand() * free.length) % Math.max(1, free.length), 1)[0] || `${t.abbr} Manager`;
     t.manager = { name, ...rollManager(rand, 58, deck.pop()), hiredSeason: state.seasonNum || 1 };
+    enroll(state, t.manager, { role: 'manager', clubId: t.id, season: state.seasonNum || 1 });   // r281 §122.160
     applyStyle(t);
   }
 }
@@ -174,19 +176,21 @@ export function cpuWinter(draft, atMs, rand = eventRand) {
     const p = pct < 0.42 ? 0.6 : pct < 0.47 ? 0.25 : 0.04;
     if (rand() >= p) continue;
     const fired = pct < 0.47;
-    const gone = { name: m.name, quality: m.quality, style: m.style, club: t.name, clubId: t.id, wins: t.wins || 0, losses: t.losses || 0, season, fired };
+    const gone = { id: m.id, name: m.name, quality: m.quality, style: m.style, club: t.name, clubId: t.id, wins: t.wins || 0, losses: t.losses || 0, season, fired };
+    if (m.id) toMarket(draft, m.id, season);   // r281 §122.160 the same person, on the market
     // The new one: the best of the market some of the time, else someone new.
     let next;
     const best = pool.filter(x => x.clubId !== t.id).sort((a, b) => b.quality - a.quality)[0];
     if (best && rand() < 0.4) {
       pool.splice(pool.indexOf(best), 1);
-      next = { name: best.name, quality: best.quality, style: best.style, salary: salaryFor(best.quality) };
+      next = { id: best.id, name: best.name, quality: best.quality, style: best.style, salary: salaryFor(best.quality) };
     } else {
       const free = _freeNames({ ...draft, managerPool: pool }, new Set([gone.name]));
       next = { name: _pick(free, rand) || `${t.abbr} Manager`, ...rollManager(rand) };
     }
     pool.push(gone);
     t.manager = { ...next, hiredSeason: season + 1 };
+    enroll(draft, t.manager, { role: 'manager', clubId: t.id, season: season + 1 });   // r281 §122.160 (an id if new)
     applyStyle(t);
     events.push({ type: 'MANAGER_CHANGE', teamId: t.id, out: gone.name, in: next.name, fired, record: `${gone.wins}–${gone.losses}`, atMs });
   }
@@ -211,7 +215,7 @@ export function candidates(state, { rand = eventRand, taken = new Set() } = {}) 
   const ours = state.userTeam?.coachingStaff?.manager;
   // (r221 never one who shares a name with someone on our staff)
   const staffNames = new Set(Object.values(state.userTeam?.coachingStaff || {}).map(c => c?.name).filter(Boolean));
-  const market = (state.managerPool || []).filter(m => m.name !== ours?.name && !taken.has(m.name) && !staffNames.has(m.name)).sort((a, b) => b.quality - a.quality);
+  const market = (state.managerPool || []).filter(m => !samePerson(m, ours) && !taken.has(m.name) && !staffNames.has(m.name)).sort((a, b) => b.quality - a.quality);
   const bg = [...BACKGROUNDS];
   const bgOf = () => bg.splice(Math.floor(rand() * bg.length) % bg.length, 1)[0] || '';
   const free = _freeNames(state, new Set([...taken, ...market.map(m => m.name)]));
@@ -219,7 +223,7 @@ export function candidates(state, { rand = eventRand, taken = new Set() } = {}) 
   let A;
   if (market.length) {
     const m = market[0];
-    A = { name: m.name, quality: m.quality, style: m.style, salary: Math.round(salaryFor(m.quality) * 1.05 / 5) * 5,
+    A = { id: m.id, name: m.name, quality: m.quality, style: m.style, salary: Math.round(salaryFor(m.quality) * 1.05 / 5) * 5,
           background: `let go by the ${m.club} after a ${m.wins}–${m.losses} season`, fromClub: m.clubId };
   } else {
     const r = rollManager(rand, 68);
@@ -235,10 +239,13 @@ export function hire(draft, cand, nextSeason) {
   const u = draft.userTeam;
   const prev = u.coachingStaff.manager || {};
   u.coachingStaff.manager = {
-    name: cand.name, quality: cand.quality, style: cand.style, salary: cand.salary, background: cand.background || '',
+    ...(cand.id ? { id: cand.id } : {}), name: cand.name, quality: cand.quality, style: cand.style, salary: cand.salary, background: cand.background || '',
     contractExpiry: nextSeason + 2, relationship: 50, managerConfidence: 55, hiredSeason: nextSeason,
   };
-  draft.managerPool = (draft.managerPool || []).filter(m => m.name !== cand.name);
+  // r281 §122.160 the same person off the market; the one before leaves our record
+  draft.managerPool = (draft.managerPool || []).filter(m => !samePerson(m, cand));
+  if (prev.id) leave(draft, prev.id, nextSeason - 1);
+  enroll(draft, u.coachingStaff.manager, { role: 'manager', clubId: 'user', season: nextSeason });
   applyStyle(u);
-  return { name: cand.name, prev: prev.name };
+  return { name: cand.name, prev: prev.name, id: u.coachingStaff.manager.id, prevId: prev.id || null };
 }

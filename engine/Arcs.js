@@ -30,6 +30,7 @@ import { knownRetiring } from './Retirement.js';
 import { trueOVR } from './Diamonds.js';
 import { eligibleSlotsFor } from './RosterEngine.js';
 import { since, doing, good, bad, enough } from './Callbacks.js';
+import { samePerson } from './People.js';   // r281 §122.160
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const isP = (p) => p?.pos === 'SP' || p?.pos === 'RP';
@@ -209,10 +210,11 @@ export const ARCS = [
       const list = Object.keys(ROLE_TITLE).filter(r => staff[r] && !staff[r].vacant && staff[r].name && (staff[r].quality || 0) >= ARC.coachQuality);
       if (!list.length || !(st.leagueTeams || []).length) return null;
       const role = pickOf(list, rand);
-      return { role, club: pickOf(st.leagueTeams, rand).id, name: staff[role].name };
+      return { role, club: pickOf(st.leagueTeams, rand).id, name: staff[role].name, id: staff[role].id || null };
     },
     doneKey: (st) => `coach:${st.seasonNum || 1}`,
-    alive: (st, arc) => { const c = st.userTeam?.coachingStaff?.[arc.who.role]; return !!c && !c.vacant && c.name === arc.who.name; },
+    // r281 §122.160 the same person (by id), whatever they're called now
+    alive: (st, arc) => { const c = st.userTeam?.coachingStaff?.[arc.who.role]; return !!c && !c.vacant && samePerson(c, arc.who); },
     steps: [
       { build(st, arc) {
         const c = st.userTeam.coachingStaff[arc.who.role], club = st.leagueTeams.find(t => t.id === arc.who.club);

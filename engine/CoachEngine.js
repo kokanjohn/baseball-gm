@@ -41,6 +41,7 @@
 import { STAFF_NAMES } from '../data/player-names.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
 import { eventRand } from './Dice.js';
+import { enroll, leave } from './People.js';   // r281 §122.160
 import { PLAYER_ORIGIN, ARCHETYPE_CARD_WEIGHTS } from '../data/constants.js';
 
 /** Every staff role with a quality and a specialty (the manager is separate). */
@@ -387,20 +388,24 @@ export function renewCoach(staff, role, salary, nextSeason) {
   return c;
 }
 
-/** The chair is empty (let go, or fired). */
-export function vacate(staff, role) {
+/** The chair is empty (let go, or fired). r281 §122.160 with `draft`: the one who left stays in the record (`prevId`). */
+export function vacate(staff, role, draft = null) {
   const c = staff?.[role];
   if (!c) return null;
-  staff[role] = { vacant: true, name: '', salary: 0, contractExpiry: null, relationship: 50, prev: c.vacant ? c.prev : c.name };
+  if (draft && !c.vacant && c.id) leave(draft, c.id, draft.seasonNum || 1);
+  staff[role] = { vacant: true, name: '', salary: 0, contractExpiry: null, relationship: 50,
+                  prev: c.vacant ? c.prev : c.name, prevId: c.vacant ? c.prevId ?? null : c.id ?? null };
   return staff[role];
 }
 
-/** Hire a candidate on a two-year deal. */
-export function hire(staff, role, cand, nextSeason) {
+/** Hire a candidate on a two-year deal. r281 §122.160 with `draft`: the new coach's id and record. */
+export function hire(staff, role, cand, nextSeason, draft = null) {
   staff[role] = {
+    ...(cand.id ? { id: cand.id } : {}),
     name: cand.name, salary: cand.salary, contractExpiry: nextSeason + 2, relationship: 50,
     quality: cand.quality, specialty: cand.specialty, background: cand.background || '', hiredSeason: nextSeason,
   };
+  if (draft) enroll(draft, staff[role], { role, clubId: 'user', season: nextSeason });
   return staff[role];
 }
 

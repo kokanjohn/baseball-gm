@@ -14,6 +14,7 @@
 import { awakeSegments } from './CardScheduler.js';
 import { STAFF_NAMES } from '../data/player-names.js';
 import { dice, diceSeed } from './Dice.js';
+import { enroll, leave } from './People.js';   // r281 §122.160
 
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
@@ -117,7 +118,10 @@ export const GM_TURNOVER = Object.freeze({
  */
 export function gmTurnover(draft, rand, { records = {}, rapportDefault = 50 } = {}) {
   const teams = draft.leagueTeams || [];
-  for (const t of teams) if (!t.gm?.name) t.gm = { name: cpuGmName(draft, t.id), since: 1 };
+  for (const t of teams) {
+    if (!t.gm?.name) t.gm = { name: cpuGmName(draft, t.id), since: 1 };
+    if (!t.gm.id) enroll(draft, t.gm, { role: 'gm', clubId: t.id, season: t.gm.since ?? 1 });   // r281 §122.160
+  }
   const n = 1 + (rand() < GM_TURNOVER.second ? 1 : 0);
   // (records: last season's, taken before the new season zeroes them)
   const losses = (t) => { const r = records[t.id] || t; const w = r.wins || 0, l = r.losses || 0; return w + l ? l / (w + l) : 0.5; };
@@ -133,7 +137,9 @@ export function gmTurnover(draft, rand, { records = {}, rapportDefault = 50 } = 
     const name = names[Math.floor(rand() * names.length)] || t.gm.name;
     used.add(name);
     out.push({ teamId: t.id, name, prev: t.gm.name });
-    t.gm = { name, since: draft.seasonNum, prev: t.gm.name };
+    if (t.gm.id) leave(draft, t.gm.id, (draft.seasonNum || 1) - 1);   // r281 §122.160 the one before stays in the record
+    t.gm = { name, since: draft.seasonNum, prev: t.gm.name, prevId: t.gm.id || null };
+    enroll(draft, t.gm, { role: 'gm', clubId: t.id, season: draft.seasonNum });
     const rels = draft.userTeam.gmRelationships || {};
     if (rels[t.id] != null) draft.userTeam.gmRelationships = { ...rels, [t.id]: Math.round(rapportDefault + (rels[t.id] - rapportDefault) * GM_TURNOVER.carry) };
   }

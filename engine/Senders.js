@@ -67,13 +67,35 @@ export function senderName(card, state) {
   return senderLabel(card, state).split(', ')[0];
 }
 
-/** Stamp the role on a message as it arrives (the club as it stands then). */
+/**
+ * r281 §122.160 the person a sender names (their id), from who holds the jobs now: one of ours (by name, or the
+ * scouting director for the department), the owner, another club's manager or GM. Null: a department, an office,
+ * someone outside the league.
+ */
+export function senderIdOf(card, state) {
+  const s = String(card?.sender || '').trim();
+  if (!s) return null;
+  if (SCOUTING.has(s)) { const d = state?.userTeam?.coachingStaff?.scoutingDirector; return d && !d.vacant ? d.id || null : null; }
+  const name = (s.match(PAREN)?.[1] || s.split(', ')[0]).trim();
+  const ut = state?.userTeam;
+  for (const c of Object.values(ut?.coachingStaff || {})) if (c && !c.vacant && c.name === name) return c.id || null;
+  if (ut?.ownerName === name) return ut.ownerId || null;
+  for (const t of state?.leagueTeams || []) {
+    if (t.gm?.name === name) return t.gm.id || null;
+    if (t.manager?.name === name) return t.manager.id || null;
+  }
+  return null;
+}
+
+/** Stamp the role on a message as it arrives (the club as it stands then). r281 and who it's from (`_senderId`). */
 export function stampSender(card, state) {
   if (!card || card._senderRole) return card;
+  const id = senderIdOf(card, state);
+  const withId = id ? { ...card, _senderId: id } : card;
   if (SCOUTING.has(String(card.sender || '').trim())) {   // r235 the director as it arrives ('' while the job is open)
     const who = _director(state);
-    return { ...card, _senderName: who || '', ...(who ? { _senderRole: 'Scouting Director' } : {}) };
+    return { ...withId, _senderName: who || '', ...(who ? { _senderRole: 'Scouting Director' } : {}) };
   }
   const role = roleOf(card.sender, state);
-  return role ? { ...card, _senderRole: role } : card;
+  return role ? { ...withId, _senderRole: role } : withId;
 }

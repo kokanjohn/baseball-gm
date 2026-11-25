@@ -15247,3 +15247,54 @@ No fresh team needed. The first run marks where new messages begin.
 test-game-injury-ui passes.
 
 No fresh team needed.
+
+---
+
+## §122.160 — r281: person IDs (step 1 of staff renaming)
+
+**Plan (the user).**
+- Step 1: IDs for every named person.
+- Step 1b: schedule games find their opponent by team ID.
+- Step 2: messages carry references to the people they mention (staff and players) and show current names.
+- Step 3: rename on the staff screen.
+- Saved games don't need upgrading; the user starts fresh teams.
+
+**engine/People.js (pure, precached).**
+- `state.people = { [id]: { id, name, role, clubId, since, left } }`, with ids 'pp1', 'pp2', … from `state._personSeq`. No random draw, so no stream shifts.
+- `newPersonId`, `personOf`, `nameOf`.
+- `enroll(draft, who, { role, clubId, season })`: sets `who.id` if missing and upserts the record.
+- `leave(draft, id, season)`: sets `left`; the person stays in the record.
+- `toMarket(draft, id, season)`: clubId null, role manager.
+- `samePerson(a, b)`: by id; by name only when one side has no id.
+
+**Who gets an ID, and where.**
+- New club (GameEngine): our five staff and the owner (`userTeam.ownerId`).
+  - Every CPU club's manager (`Managers.staffLeague`).
+  - Every CPU club's GM: `t.gm` is now set at the start from `cpuGmName` (same name as before) and enrolled. Before, it was named lazily until the first GM turnover.
+- `Managers.cpuWinter`:
+  - A manager let go keeps their ID on the market (`gone.id`, `toMarket`).
+  - One hired from the market keeps their ID (`best.id`); a new one gets one.
+  - All are enrolled under the club.
+- `Managers.candidates`: a market candidate carries their ID. Our own manager is excluded by `samePerson`, not by name.
+- `Managers.hire`: the new manager keeps a market candidate's ID; the market drops them by ID; the previous manager leaves our record. It returns `id`/`prevId`.
+- `Coach.vacate(staff, role, draft)`: the one leaving gets `leave`; the empty chair keeps `prevId`.
+- `Coach.hire(staff, role, cand, season, draft)`: enrolls the new coach. Callers pass the draft: OffseasonEngine's decision/hire/settle, and GameEngine's coach-leaves-for-a-job.
+- FirstDay `gmTurnover`: every GM is enrolled; a replaced GM gets `leave`; the new GM is enrolled with `prevId`.
+
+**Identity comparisons switched from name to ID.**
+- Arcs coach storyline: `who.id`, and `alive` uses `samePerson`. A renamed coach carries on; a different person with the same name doesn't.
+- The manager market's "not our manager" check and the hired manager's removal from the market.
+- Name-uniqueness filters (new hires never share a name in use) stay by name: that's about names.
+
+**Senders.** New `senderIdOf(card, state)`: our staff by name, the scouting director for Scouting, the owner, a CPU club's GM or manager. `stampSender` adds `_senderId` on arrival, which step 2 will use.
+
+**Check.** check-people:
+- A new club: 24 people with distinct IDs, all in the record under their name, role and club.
+- A CPU winter: those let go keep their IDs (on the market, or hired straight away by another club); new managers have IDs under their club; a market rehire is the same person.
+- GM turnover: a new ID; the previous GM is in the record with `left` and `prevId`.
+- Ours: a coach let go is in the record with `left` and the chair's `prevId`; a new coach gets an ID; a manager hired from the market keeps their ID and leaves the market; the previous manager is marked `left`.
+- The coach storyline: on while the coach is here; on under a new name; off for a different person with the same name.
+- `_senderId` on a manager's message; none on a department's.
+- Also passing: season, multi-season, arcs, coaches, gm-connections, gm-profile, manager-fill, managers, winter, follow-ups, starred-report, gm-connections UI.
+
+Fresh team: needed (saves from before r281 have no IDs; per the user, no upgrade).

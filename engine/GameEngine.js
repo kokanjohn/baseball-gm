@@ -99,6 +99,7 @@ import * as LeagueTrades from './LeagueTrades.js';
 import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import * as Coach from './CoachEngine.js';
+import * as People from './People.js';   // r281 §122.160
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso, weatherContext } from './WeatherClimate.js';
 import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME, fieldKey, planKey } from './GameWeather.js';
 import { gameStory } from './GameWeatherStory.js';
@@ -164,7 +165,7 @@ import {
 } from '../data/constants.js';
 import { clockNow, runAt } from './Clock.js';
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
-import { gmTurnover } from './FirstDay.js';   // r212 §122.90
+import { gmTurnover, cpuGmName } from './FirstDay.js';   // r212 §122.90; r281 cpuGmName
 import { planEmergencies, nextEmergencyAt } from './Emergencies.js';   // r213 §122.91
 import { nextStepAt as nextDeadlineStep } from './DeadlineStory.js';   // r215 §122.94
 import { nextStepAt as nextStretchStep } from './StretchStory.js';   // r216 §122.95
@@ -424,7 +425,15 @@ export async function startNewGame(config) {
     // §122.64 every club's manager has a rating and a style; each club starts on its manager's style.
     Object.assign(s.userTeam.coachingStaff.manager, Managers.rollManager(eventRand));
     Managers.applyStyle(s.userTeam);
+    // r281 §122.160 everyone named has an id and a record: our staff and owner, then every club's manager and GM
+    for (const role of Object.keys(s.userTeam.coachingStaff)) People.enroll(s, s.userTeam.coachingStaff[role], { role, clubId: 'user', season: s.seasonNum || 1 });
+    const owner = { name: s.userTeam.ownerName };
+    s.userTeam.ownerId = People.enroll(s, owner, { role: 'owner', clubId: 'user', season: s.seasonNum || 1 });
     Managers.staffLeague(s, eventRand, new Set(staffPool.slice(0, staffIdx)));
+    for (const t of s.leagueTeams || []) {
+      if (!t.gm?.name) t.gm = { name: cpuGmName(s, t.id), since: s.seasonNum || 1 };
+      People.enroll(s, t.gm, { role: 'gm', clubId: t.id, season: t.gm.since ?? s.seasonNum ?? 1 });
+    }
 
     // Schedule
     s.schedule       = schedule;
@@ -3488,7 +3497,7 @@ function _runOffseasonStep(step, atMs) {
       if (c._leaving?.season === (st.seasonNum || 1)) {
         const club = (st.leagueTeams || []).find(t => t.id === c._leaving.clubId);
         StateManager.mutate(s => {
-          Coach.vacate(s.userTeam.coachingStaff, role);
+          Coach.vacate(s.userTeam.coachingStaff, role, s);
           s.activityFeed = pruneActivityFeed([...(s.activityFeed || []), buildActivityFeedEntry('coaching', s.userTeam.abbr,
             `${c.name} leaves to manage the ${club?.name || 'another club'}. The ${Coach.ROLE_INFO[role].title.toLowerCase()} job is open.`, atMs)]);
         });

@@ -1183,7 +1183,7 @@ export function applyCoachDecision(draft, role, mode, { salary = null, atMs = 0 
   const name = c.name;
   const owed = mode === 'fire' ? Coach.buyoutOwed(c, next) : 0;
   if (owed) Finance.post(u.finances, -owed, 'staff', `Buyout — ${name}, ${Coach.ROLE_INFO[role].title}`, atMs);
-  Coach.vacate(staff, role);
+  Coach.vacate(staff, role, draft);
   if (mode === 'fire') u.morale = Math.max(0, (u.morale || 50) - 1);
   return { name, owed };
 }
@@ -1191,7 +1191,7 @@ export function applyCoachDecision(draft, role, mode, { salary = null, atMs = 0 
 export function applyCoachHire(draft, role, cand) {
   const staff = draft.userTeam?.coachingStaff;
   if (!staff || !cand) return null;
-  return Coach.hire(staff, role, cand, (draft.seasonNum || 1) + 1);
+  return Coach.hire(staff, role, cand, (draft.seasonNum || 1) + 1, draft);
 }
 
 /**
@@ -1209,7 +1209,7 @@ function _settleStaff(draft) {
     if (c.vacant) {
       const taken = new Set(Object.values(staff).map(x => x?.name).filter(Boolean).concat(draft.userTeam.ownerName));
       const [cand] = Coach.candidates(draft, role, null, { taken });
-      Coach.hire(staff, role, { ...cand, quality: 55, salary: Coach.salaryFor(role, 55, eventRand) }, start);
+      Coach.hire(staff, role, { ...cand, quality: 55, salary: Coach.salaryFor(role, 55, eventRand) }, start, draft);
     } else if ((c.contractExpiry ?? 99) <= start) {
       c.contractExpiry = start + 2;
     }
