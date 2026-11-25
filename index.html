@@ -169,6 +169,7 @@ button.budget-pill{cursor:pointer;-webkit-tap-highlight-color:transparent;}
   min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;
   justify-content:center;padding:0 4px;line-height:1;border:2px solid var(--surface);}
 .nav-badge.visible{display:flex;}
+.nav-badge.muted{background:var(--surface2);color:var(--soft);}   /* r267 none unread: the ones waiting on an answer */
 
 /* r175–r177 §122.48–50 Sideways is for Team and League only (App._applyOrientation).
    body[data-wide] (Team, League): the body fills the width with a slim header and nav.
@@ -283,6 +284,7 @@ body[data-turn] .tab-content,body[data-turn] .modal-sheet,body[data-turn] .leagu
 .inbox-tab.active{color:var(--text);border-bottom-color:var(--link);}
 .inbox-tab .tab-badge{display:inline-block;background:var(--danger);color:#fff;border-radius:999px;
   font-size:9px;font-weight:800;padding:1px 5px;margin-left:5px;vertical-align:middle;}
+.inbox-tab .tab-badge.muted{background:var(--surface2);color:var(--soft);}   /* r267 */
 .msg-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;margin-bottom:12px;overflow:hidden;}
 .msg-card.unread{border-left:3px solid var(--danger);}
 .msg-card.unread.type-good{border-left-color:var(--accent2);}

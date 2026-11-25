@@ -29,13 +29,14 @@ import * as StateManager from '../store/StateManager.js';
 import { applyTheme, applyTeamColors, metricBarColor } from './formatters.js';
 import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
 import { installSwipeClose } from './components/SwipeClose.js';
+import { inboxCounts } from '../engine/CardEngine.js';   // r267 §122.146 the Messages badge
 
 // ─────────────────────────────────────────────────────────────
 // TAB STATE
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r266';
+export const APP_VERSION = 'tfo-v2-r267';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -178,13 +179,15 @@ export function clearMilestone() {
 // INBOX BADGE
 // ─────────────────────────────────────────────────────────────
 
+// r267 §122.146 red: unread messages; muted: none unread, the ones still waiting on an answer; none: hidden.
 function _updateInboxBadge() {
-  const state = StateManager.get();
-  const count = (state.inbox || []).filter(c => !c.resolved).length;
   const badge = document.getElementById('inbox-badge');
-  if (!badge) return;
-  badge.textContent = count > 0 ? String(Math.min(count, 99)) : '0';
-  badge.classList.toggle('visible', count > 0);
+  if (!badge || !StateManager.get()) return;
+  const b = inboxCounts().badge;
+  badge.textContent = b ? String(Math.min(b.n, 99)) : '';
+  badge.classList.toggle('visible', !!b);
+  badge.classList.toggle('muted', b?.tone === 'waiting');
+  badge.setAttribute('aria-label', !b ? '' : b.tone === 'unread' ? `${b.n} unread` : `${b.n} waiting on you`);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -354,6 +357,8 @@ function _wireBus() {
   // Wire EventBus listeners
   EventBus.on('card:delivered',      () => _updateInboxBadge());
   EventBus.on('card:resolved',       () => _updateInboxBadge());
+  EventBus.on('card:read',           () => _updateInboxBadge());   // r267 a message opened: one fewer unread
+  EventBus.on('inbox:changed',       () => _updateInboxBadge());   // r267 the roster clock's new or withdrawn messages
   EventBus.on('game:committed',      (payload) => _onGameCommitted(payload));
   // A commit schedules the next stretch of cards — send the schedule to the push worker.
   EventBus.on('game:committed',      () => _syncPush());

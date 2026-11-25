@@ -3715,6 +3715,17 @@ function _buildContextForCompose(state, channelId) {
  *
  * @returns {Object[]} cards
  */
+/**
+ * r267 §122.146 the Messages badges (the nav bar's and the Inbox tab's), from one place: unread messages, and the
+ * ones still waiting on an answer (read or not). → { unread, todo, badge: { n, tone: 'unread' | 'waiting' } | null }
+ * Unread wins (red); with none unread, what still needs an answer (muted).
+ */
+export function inboxCounts() {
+  const inbox = getInbox();
+  const unread = inbox.filter(c => !c._readAt).length, todo = inbox.length;
+  return { unread, todo, badge: unread ? { n: unread, tone: 'unread' } : todo ? { n: todo, tone: 'waiting' } : null };
+}
+
 export function getInbox() {
   const state = StateManager.get();
   return (state.inbox || [])

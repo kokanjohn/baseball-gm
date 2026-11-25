@@ -14869,3 +14869,25 @@ A card for one of the next week's games is taller by its forecast line ("51° ·
 **Checks.** New test-schedule-rows-ui (360px wide, dark and light): cards alike are one height (83 with a forecast, 68 without; it failed at 81/101 before), and the opponent line stays one line with the tag beside the name. test-landscape-ui's "3 whole player rows" check fails the same way without this change; it was already failing.
 
 No fresh team needed.
+
+---
+
+## §122.146 r267 — The Messages badge: unread in red, waiting on an answer in muted
+
+**Before:** the nav bar's Messages badge and the Inbox tab's showed every message still in the Inbox, red, whether read or not. Opening one changed nothing, since `markRead` sent no event and the badge counted unanswered messages, not unread.
+
+**Now (the GM's call):** both badges come from one place, `CardEngine.inboxCounts()` → `{ unread, todo, badge }`.
+- **Red** with the number unread, counting down as each is opened.
+- **Muted** (surface color, soft text) with none unread: the number still waiting on an answer, so after reading them all you still know how many need a response.
+- **No badge** with nothing waiting.
+
+Opening a message emits `card:read`. The app updates the nav badge on it, and on `inbox:changed` (the roster clock's new or withdrawn messages), along with the delivered and resolved events it already had. The Inbox tab's badge is drawn with the screen. The "N unread" pill by the title is unchanged.
+
+**Checks.** New test-inbox-badge-ui (dark and light):
+- at first, red with the unread on both;
+- one opened: one fewer at once, on both;
+- all read: muted with the number waiting;
+- a new message: red, 1;
+- answered: the badge is what's left.
+
+No fresh team needed.

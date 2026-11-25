@@ -24,7 +24,7 @@
 import * as App          from '../App.js';
 import * as EventBus     from '../EventBus.js';
 import * as StateManager from '../../store/StateManager.js';
-import { getInbox, getHistory, clearHistory, restoreHistory, markRead } from '../../engine/CardEngine.js';
+import { getInbox, getHistory, clearHistory, restoreHistory, markRead, inboxCounts } from '../../engine/CardEngine.js';
 import { snapshotMetrics, formatMoney } from '../formatters.js';
 import * as When from '../../engine/When.js';
 import { dealsFor, shoppable, SHOP_AGAIN_MS, scoutingAsked, scoutingDeal } from '../../engine/TradeAdvice.js';
@@ -259,7 +259,6 @@ export function refresh() {
   if (!state) return;
 
   const inbox     = getInbox();
-  const todoCount = inbox.length;
 
   // §115 a message open full-screen (it may have been withdrawn or decided meanwhile).
   if (_openCard) {
@@ -286,7 +285,8 @@ export function refresh() {
       <div class="inbox-tabs">
         <div class="inbox-tab ${_activeTab === 'todo'      ? 'active' : ''}" id="itab-todo">
           Inbox
-          ${todoCount > 0 ? `<span class="tab-badge">${Math.min(todoCount,99)}</span>` : ''}
+          ${(() => { const b = inboxCounts().badge;   // r267 §122.146 red: unread; muted: waiting on an answer
+             return b ? `<span class="tab-badge${b.tone === 'waiting' ? ' muted' : ''}">${Math.min(b.n, 99)}</span>` : ''; })()}
         </div>
         <div class="inbox-tab ${_activeTab === 'compose'   ? 'active' : ''}" id="itab-compose">
           Compose
@@ -1092,7 +1092,7 @@ function _attachTabListeners(state) {
 function _openMessage(instanceId, { keepScroll = false } = {}) {
   if (!keepScroll && !_openCard) _listScroll = window.scrollY || 0;
   _openCard = instanceId;
-  if (_activeTab !== 'completed') markRead(instanceId);
+  if (_activeTab !== 'completed' && markRead(instanceId)) EventBus.emit('card:read', { instanceId });   // r267 the badges
   import('../PushClient.js').then(P => P.clearNotification(instanceId)).catch(() => {});   // r236 §122.115 opened here: its notification goes too
   refresh();
   window.scrollTo(0, 0);
