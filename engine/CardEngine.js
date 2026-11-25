@@ -2702,7 +2702,9 @@ export function deliverMomentCard(moment, context, game = null, timing = 'soon')
   const { _when, ...def } = pick;
   const instance = _createInstance({ ...def, autoResolve: def.autoResolve || 'skip' }, context, state);
   if (!instance) return false;
-  _scheduleCards([{ ...instance, _moment: timing, _firstMoment: moment }], state, game);
+  // r268 §122.147 the takeover's message is one of the club's opening messages (the GM just made the club, at
+  // whatever hour): a seed like the first day's — there in minutes, never pushed, not held to the staff's day.
+  _scheduleCards([{ ...instance, _moment: timing, _firstMoment: moment, ...(moment === 'takeover' ? { _seed: true } : {}) }], state, game);
   const scheduled = (StateManager.get().scheduledCards || []).some(c => c.instanceId === instance.instanceId);
   if (!scheduled) return false;    // the moment had already passed (planned too late)
   StateManager.mutate(s => {

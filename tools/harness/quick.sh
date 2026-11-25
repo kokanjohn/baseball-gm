@@ -8,7 +8,7 @@ S=${1:-/tmp/tfo-quick}; shift; mkdir -p "$S/shots"
 R=$S/quick.txt; : > "$R"
 for a in "$@"; do
   case "$a" in
-    --season) (timeout 1500 node tools/harness/sim-season.js 142 1 > "$S/season.txt" 2>&1; echo "season EXIT $?" >> "$R") & ;;
+    --season) (TZ=UTC timeout 1500 node tools/harness/sim-season.js 142 1 > "$S/season.txt" 2>&1; echo "season EXIT $?" >> "$R") & ;;
     --multi)  (timeout 1500 node tools/harness/multi-season.mjs > "$S/multi.txt" 2>&1; echo "multi EXIT $?" >> "$R") & ;;
   esac
 done

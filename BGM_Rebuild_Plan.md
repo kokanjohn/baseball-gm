@@ -14891,3 +14891,18 @@ Opening a message emits `card:read`. The app updates the nav badge on it, and on
 - answered: the badge is what's left.
 
 No fresh team needed.
+
+---
+
+## §122.147 r268 — GitHub's Season Harness green again (it runs in UTC)
+
+GitHub's "Season Harness" check had failed on every push since before r224, while the local runs passed. The runner's clock is UTC, and ours is New York, five hours behind.
+
+The one check that failed was "no planned message arrives outside the staff's working day": `mo_take_clubhouse` at 00:14. The harness makes the club at midnight UTC, and the takeover's moment message (`deliverMomentCard('takeover', …, 'soon')`) comes minutes after, so it landed at night. The first day's other opening messages are seeds (`_seed`: there when the club is made, never pushed, exempt from the staff's day since r152). The takeover's message is one of them in all but the flag. It now carries `_seed: true`: never pushed (the GM just made the club and is there), and not held to the staff's working day.
+
+**Checks.**
+- The full season under `TZ=UTC` failed only that check (3,810/3,811, the same as GitHub) and passes with the fix (3,811/3,811). It still passes in New York time (3,814/3,814).
+- The workflow's other two steps (the push worker's encryption round trip, check-refs) pass under UTC.
+- `tools/harness/quick.sh --season` now runs the season with `TZ=UTC`, as GitHub does, so a check that only fails there shows up before a push.
+
+No fresh team needed.
