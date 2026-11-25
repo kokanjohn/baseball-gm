@@ -57,6 +57,9 @@ check(`the table: We Get ${sheet.get.join(', ')} | We Send ${sheet.send.join(', 
   check(`each player's deal by year: ${sheet.pay.join(' | ')}`, sheet.pay.length > 0 && sheet.pay.every(t => { const m = t.match(/Signed through (\d{4})$/); return m && +m[1] >= yr; }) && !sheet.pay.some(t => /season/.test(t))); }
 check(`the money: ${sheet.money.join(' · ')}`, sheet.money.some(r => /^Salary a year/.test(r)) && sheet.money.some(r => /^Later seasons/.test(r)));
 check(`the totals: ${sheet.rows.join(' · ')}`, sheet.rows.some(r => /^This season, net/.test(r)) && sheet.rows.some(r => /^Payroll after the deal .*target/.test(r)) && sheet.rows.some(r => /^Later seasons, net/.test(r)));
+// r287 §122.166 the age says it's the age
+{ const metas = await page.$$eval('.ds-player .ds-meta', els => els.map(e => e.textContent.trim()));
+  check(`each player's line names the age (${metas[0]})`, metas.length > 0 && metas.every(m => /· Age \d+/.test(m) && !/OVR \d+ · \d+/.test(m))); }
 await page.screenshot({ path: `${out}/deal-sheet-offer-${theme}.png` });
 // r208 §122.86 the whole card opens the player, over the sheet — even when the player card was opened before
 // (its overlay is reused) — and closing it comes back to the sheet.

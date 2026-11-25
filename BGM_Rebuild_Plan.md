@@ -15459,3 +15459,13 @@ No fresh team needed.
 The oop-move, pitcher-move, team-roster, lineup-days and wear UI tests pass.
 
 No fresh team needed.
+
+---
+
+## §122.166 — r287: the Deal sheet says "Age 30", not "30"
+
+**Request.** On the Deal sheet, each player's line showed a bare number after the OVR ("OF · OVR 50 · 33"). It now reads "OF · OVR 50 · Age 33" (DealSheet `.ds-meta`; nothing when the age is unknown).
+
+**Test.** test-deal-sheet-ui: every player's line has "· Age N", never a bare number after the OVR.
+
+No fresh team needed.

@@ -65,7 +65,7 @@ function _cell(state, r, col, row) {
   const kept = r.kept ? `<span class="ds-kept">${r.keptBy === 'us' ? 'We keep' : 'They keep'} paying ${Math.round(r.kept * 100)}% this season</span>` : '';
   return `<button type="button" class="ds-player" data-ds-player="${_e(r.id)}" style="grid-column:${col};grid-row:${row}">
     <span class="ds-name">${_e(r.name)}</span>
-    <span class="ds-meta">${_e(p ? posLabel(p) : r.pos)} · OVR ${r.ovr} · ${r.age}${r.injured ? ' · hurt' : ''}</span>
+    <span class="ds-meta">${_e(p ? posLabel(p) : r.pos)} · OVR ${r.ovr}${r.age != null && r.age !== "" ? ` · Age ${r.age}` : ""}${r.injured ? ' · hurt' : ''}</span>
     <span class="ds-pay">${r.salary > 0 ? `${formatK(r.salary)} a year` : 'No salary'} · ${_years(state, r.years)}</span>
     ${kept}
   </button>`;
