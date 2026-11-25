@@ -93,11 +93,16 @@ check(`yes: ${who.name} is away for development work`, after?.reason === 'traini
 // ── Team: away for days ──
 await tap('.nav-item[data-tab="roster"]');
 // r252 §122.131 a red mark with the days ("3 days"); tapping it says what it is
-const status = await page.evaluate((id) => { const b = document.querySelector(`.tr-row[data-player="${id}"] .tr-stat`); return { short: b?.textContent.trim() || '', full: b?.dataset.stat || '' }; }, who.id);
+const status = await page.evaluate((id) => { const b = document.querySelector(`.tr-row[data-player="${id}"] .tr-stat`); return { short: b?.textContent.trim() || '', full: b?.title || '' }; }, who.id);
 check(`Team marks the absence in days ("${status.short}": “${status.full}”)`, /^\d+ days?$/.test(status.short) && /Away training\. Back /.test(status.full));
 await tap(`.tr-row[data-player="${who.id}"] .tr-stat`);
-const toast = await page.evaluate(() => document.getElementById('toast')?.textContent || '');
-check('…tapped: it says so, and the player card stays closed', /Away training/.test(toast) && !(await page.evaluate(() => !!document.querySelector('#player-card-overlay.open'))));
+await page.waitForTimeout(500);
+// r269 §122.148 tapping the mark opens the player card, whose status line says what it is
+const card = await page.evaluate(() => ({ open: !!document.querySelector('#player-card-overlay.open'), line: document.querySelector('#player-card-overlay .pc-status')?.textContent || '' }));
+check(`…tapped: the player card opens and says so (“${card.line}”)`, card.open && /Away training/.test(card.line));
+await page.evaluate(() => document.getElementById('player-card-close')?.click());
+await page.keyboard.press('Escape');
+await page.waitForTimeout(400);
 
 // ── r251 "Who should we work on…?": a skill, how to rank, where ──
 await tap('.nav-item[data-tab="decisions"]');

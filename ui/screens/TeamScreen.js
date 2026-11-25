@@ -655,9 +655,9 @@ function _rowMarksYear(state, p) {
 }
 
 /** Not available today, in a word (day-to-day, being evaluated, rest, suspended…). */
-/** r252 §122.131 a status mark on a row: tap it for what it means (the row's card stays closed). */
+/** r252 §122.131 a status mark on a row. r269 §122.148 a plain mark: tapping the row opens the card, which says what it means. */
 function _statBadge(short, full, tone = 'bad') {
-  return `<button type="button" class="tr-stat tr-stat-${tone}" data-stat="${_escape(full)}">${_escape(short)}</button>`;
+  return `<span class="tr-stat tr-stat-${tone}" title="${_escape(full)}">${_escape(short)}</span>`;
 }
 
 function _clockText(ms) {
@@ -965,8 +965,6 @@ function _attachListeners(state) {
       if (e.target.closest('.tr-move')) return;
       const mark = e.target.closest('.tr-oop-mark');
       if (mark) { App.showToast(mark.dataset.oop, 'negative', 4500); return; }
-      const stat = e.target.closest('.tr-stat');   // r252
-      if (stat) { App.showToast(stat.dataset.stat, 'negative', 4500); return; }
       openPlayerCard(el.dataset.player, StateManager.get());
     });
   });
@@ -1357,7 +1355,7 @@ function _injectCSS() {
     .tr-next{color:#22C55E;font-weight:700;}
     .tr-coming .tr-name-line{color:var(--soft);}
     .tr-hurt{color:var(--danger);} .tr-warn{color:#fbbf24;}
-    .tr-stat{display:inline-block;padding:0 5px;border-radius:4px;border:1px solid currentColor;background:transparent;font:inherit;font-size:10px;font-weight:800;line-height:14px;cursor:pointer;vertical-align:1px;}
+    .tr-stat{display:inline-block;padding:0 5px;border-radius:4px;border:1px solid currentColor;background:transparent;font:inherit;font-size:10px;font-weight:800;line-height:14px;vertical-align:1px;}
     .tr-stat-bad{color:var(--danger);} .tr-stat-warn{color:#d49b00;} .tr-ly{color:var(--muted);font-style:italic;}
     .tr-muted{color:var(--muted);font-style:italic;font-weight:500;}
     .tr-empty .tr-fz{background:var(--surface);}

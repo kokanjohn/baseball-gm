@@ -14906,3 +14906,19 @@ The one check that failed was "no planned message arrives outside the staff's wo
 - `tools/harness/quick.sh --season` now runs the season with `TZ=UTC`, as GitHub does, so a check that only fails there shows up before a push.
 
 No fresh team needed.
+
+---
+
+## §122.148 — r269: a status mark on a Team row no longer blocks the player card
+
+**Report.** After the career day, a player showed "Playing through it". Tapping him on the Team screen showed a toast with the status and would not open his player card.
+
+**Cause.** r252 made the status mark (`.tr-stat`) a button. The row click handler toasted its text and returned before calling `openPlayerCard`. On a phone the mark sits in the name column, so a tap on the name often hit the mark.
+
+**Fix.** The mark is now a plain `<span>` (with a `title`). Any tap on the row opens the player card, and the card's status line (r253, `_statusLine`) says what the mark means. The toast branch and the pointer cursor are gone. The out-of-position `!` mark still toasts.
+
+**Test.** test-player-work-ui: tapping the "3 days" mark opens the card, and its status line reads "Away training. Back …".
+
+**Open (the user's call).** Card effects with `ovr` and no named player (36 messages, including x5 career day) land on one random roster player via `CardEngine._applySoftEffects`. A negative one becomes a short "Playing through it" condition. That doesn't match messages about several players or nobody in particular.
+
+No fresh team needed.
