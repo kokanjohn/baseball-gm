@@ -989,15 +989,17 @@ function _openMoveSheet(playerId) {
   const arm = ['SP', 'RP'].includes(p.pos);
   const P = (id) => st.players[id];
   const fillTime = deadline ? (managerFillsNow(st, clockNow()) ? nextLineupGame(st)?.gameTime : deadline) : null;
-  const ovrNum = (q) => `<span class="rating-num ${_ovrColor(q.ovr)} sm-pick-ovr">${q.ovr}</span>`;
+  // r263 §122.142 the wear bar beside each OVR (the Team screen's, the player's own)
+  const ovrNum = (q) => `<span class="sm-rate">${_wearCell(q)}<span class="rating-num ${_ovrColor(q.ovr)} sm-pick-ovr">${q.ovr}</span></span>`;
   const head = (t) => `<div class="sm-head">${t}</div>`;
-  const tag = (o) => (o.note ? `<span class="sm-note-tag">${_escape(o.note[0].toUpperCase() + o.note.slice(1))}</span>` : '');
+  // (r263 out of position or role: no words on the row — "a starter in relief", "unfamiliar", "stretched out 1 of
+  // 3"; the "Out of role"/"Out of position" button it sits behind says it)
   // a place to go: the spot, and who's there now
   // (a hitter's: the slot, then who's there; a pitcher's: who's there — the heading is the role)
   const placeRow = (o, main, { who = true } = {}) => {
     const occ = o.occId ? P(o.occId) : null;
     const what = !who ? '' : !occ ? 'Open' : o.swap ? `Swap with ${_escape(occ.name)}` : `For ${_escape(occ.name)}`;
-    const sub = [what, tag(o)].filter(Boolean).join(' · ');
+    const sub = what;
     return `<div class="sm-row${o.oop ? ' sm-oop' : ''}" data-key="${o.key}">
       <div class="sm-pick-info"><span class="sm-pick-name">${main}</span>${sub ? `<span class="sm-pick-sub">${sub}</span>` : ''}</div>
       ${occ ? ovrNum(occ) : ''}
@@ -1038,7 +1040,7 @@ function _openMoveSheet(playerId) {
        <div class="sm-oop-list" hidden>${extra.map(block).join('')}</div>` : '');
   const pos = posLabel(p);
   const forDay = ahead ? ` · ${_escape(When.relDay(day.game.gameTime, clockNow()))}'s game` : '';
-  _showSwapSheet(`Move ${_escape(p.name)}`, `${pos} · OVR ${p.ovr}${forDay}`, rows, (overlay) => {
+  _showSwapSheet(`Move ${_escape(p.name)}`, `<span class="sm-sub-me">${pos} · OVR ${p.ovr}${forDay}${_wearCell(p)}</span>`, rows, (overlay) => {
     overlay.querySelectorAll('.sm-row[data-key]').forEach(row => row.addEventListener('click', () => {
       App.playClick(); overlay.remove(); _doMove(playerId, row.dataset.key);
     }));
@@ -1381,7 +1383,8 @@ function _injectCSS() {
     .sm-pick-sub{font-size:11px;color:var(--muted);}
     .sm-pick-ovr{font-size:16px !important;flex-shrink:0;}
     .sm-head{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:14px 20px 6px;}
-    .sm-note-tag{color:#d49b00;}
+    .sm-rate{display:flex;align-items:center;gap:8px;flex-shrink:0;}   /* r263 wear bar, then OVR */
+    .sm-sub-me{display:inline-flex;align-items:center;gap:8px;}
     .sm-leave .sm-pick-name{color:var(--soft);}
     .sm-oop .sm-pick-name{color:var(--soft);}
     .sm-arrow{font-size:16px;color:var(--border);flex-shrink:0;}

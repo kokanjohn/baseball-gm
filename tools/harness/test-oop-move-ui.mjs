@@ -46,8 +46,12 @@ check(`…"${sheet.btn}" below them, the rest hidden`, /^Out of position \(\d+\)
 await page.screenshot({ path: `${out}/oop-move-closed-${theme}.png` });
 await tap('.sm-oop-toggle');
 const open = await page.evaluate(() => [...document.querySelectorAll('.sm-oop-list .sm-row')].map(r => r.innerText.replace(/\s+/g, ' ').trim()));
-// r246 §122.125 under the button, each says how familiar he is there (no "Out of position" on every row)
-check(`tapped: how familiar he is at each — ${open.slice(0, 3).join(' | ')}`, open.length >= 5 && open.every(x => /practiced|unfamiliar/i.test(x)) && open.some(x => /^3B .*practiced/i.test(x)) && open.some(x => /unfamiliar/i.test(x)));
+// r263 §122.142 under the button: the spot, who's there and their OVR, no words about familiarity
+check(`tapped: the spots, no familiarity words — ${open.slice(0, 3).join(' | ')}`, open.length >= 5 && !open.some(x => /practiced|unfamiliar|\d+ of \d+/i.test(x)));
+const bars = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#ts-swap-modal .sm-row')].filter(r => r.querySelector('.sm-pick-ovr')).length,
+  withBar: [...document.querySelectorAll('#ts-swap-modal .sm-row')].filter(r => r.querySelector('.sm-pick-ovr') && r.querySelector('.sm-rate .tr-wear .tr-wear-bar i')).length,
+  me: !!document.querySelector('#ts-swap-modal .sm-sub-me .tr-wear-bar i') }));
+check(`a wear bar beside every OVR (${bars.withBar} of ${bars.rows}) and the player's own under his name`, bars.rows > 0 && bars.withBar === bars.rows && bars.me);
 await page.screenshot({ path: `${out}/oop-move-open-${theme}.png` });
 await tap('.sm-oop-list .sm-row[data-key^="oop:"]:has(.sm-pick-name:text-is("3B"))');
 await page.waitForTimeout(500);

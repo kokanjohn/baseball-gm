@@ -49,7 +49,10 @@ check(`…"${sheet.btn}" below them, the rest hidden`, /^Out of role \(\d+\)$/.t
 await tap('.sm-oop-toggle');
 const open = await page.evaluate(() => ({ rows: [...document.querySelectorAll('.sm-oop-list .sm-row')].map(r => r.innerText.replace(/\s+/g, ' ').trim()),
   heads: [...document.querySelectorAll('.sm-oop-list .sm-head')].map(r => r.textContent.trim()) }));
-check(`tapped: into the rotation, how far stretched out — ${open.rows[0]}`, open.rows.length >= 4 && open.heads.join() === 'Into the rotation' && open.rows.every(x => /stretched out 1 of 3/i.test(x)));
+// r263 §122.142 no words about the role on the row ("stretched out 1 of 3", "a starter in relief"); a wear bar beside the OVR
+check(`tapped: into the rotation, no role words — ${open.rows[0]}`, open.rows.length >= 4 && open.heads.join() === 'Into the rotation' && !open.rows.some(x => /stretched|starter in relief|short start/i.test(x)));
+const pb = await page.evaluate(() => [...document.querySelectorAll('#ts-swap-modal .sm-row')].filter(r => r.querySelector('.sm-pick-ovr')).map(r => !!r.querySelector('.sm-rate .tr-wear-bar i')));
+check(`a wear bar beside every OVR (${pb.filter(Boolean).length} of ${pb.length})`, pb.length > 0 && pb.every(Boolean));
 await page.screenshot({ path: `${out}/pitcher-move-open-${theme}.png` });
 await tap('.sm-oop-list .sm-row[data-key^="turn:"]');
 await page.waitForTimeout(500);

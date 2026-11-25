@@ -14801,3 +14801,15 @@ The effect is the same total as before. Only the timing changed: the rest shows 
 - a league club rests on its off days the same way.
 
 No fresh team needed.
+
+---
+
+## §122.142 r263 — The Move sheet: no role words, a wear bar beside every OVR
+
+**No words on out-of-position or out-of-role rows.** Under "Out of position" / "Out of role", a row read "Unfamiliar, 2 of 10" or "Practiced" (a hitter), or "a starter in relief" or "stretched out 1 of 3" / "not stretched out: a short start" (a pitcher). The button they sit behind already says what they are. The rows now show the spot, who's there, and their rating. RosterEngine's `moveOptions` still carries `note` and `detail` for anything else that reads them; only the sheet stopped showing them (the row's `sm-note-tag` style is gone).
+
+**The wear bar beside each OVR.** Every row with a player's OVR (who's in the spot, who'd come in) shows that player's wear bar to the left of the number. It is the Team screen's `_wearCell`, so the same color, fill and reading of today's arm (§122.138–139). The player being moved has his own bar after "POS · OVR N" under his name.
+
+**Checks.** test-oop-move-ui and test-pitcher-move-ui (dark and light) now check the opposite of what they used to: no familiarity or role words on the rows, and a wear bar beside every OVR (10 of 10, 8 of 8), plus the player's own.
+
+No fresh team needed.
