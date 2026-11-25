@@ -1022,7 +1022,22 @@ function _openMoveSheet(playerId) {
   const leaveRow = (o, words) => `<div class="sm-row sm-leave" data-key="${o.key}">
       <div class="sm-pick-info"><span class="sm-pick-name">${words}</span>${fillTime ? `<span class="sm-pick-sub">Filled at ${_escape(When.clockText(fillTime))} if still open</span>` : ''}</div>
     </div>`;
-  const by = (f) => opts.filter(f);
+  // r286 §122.165 in the Team screen's order: the lineup's spots as it lists them (the three OF spots by OVR, highest
+  // first, an open one last); the rotation, the bullpen and anyone coming in, by OVR (highest first, open last)
+  const ovrOf = (id) => (id ? P(id)?.ovr ?? -1 : -2);
+  const byOvr = (rows, idOf) => [...rows].sort((a, b) => ovrOf(idOf(b)) - ovrOf(idOf(a)));
+  const lineupOrder = (rows) => {
+    const of = byOvr(rows.filter(o => o.label === 'OF'), o => o.occId);
+    let k = 0;
+    return rows.map(o => (o.label === 'OF' ? of[k++] : o));
+  };
+  const by = (f) => {
+    const rows = opts.filter(f);
+    if (rows.every(o => o.key.startsWith('slot:') || o.key.startsWith('oop:'))) return lineupOrder(rows);
+    if (rows.every(o => o.key.startsWith('in:'))) return byOvr(rows, o => o.inId);
+    if (rows.every(o => /^(turn|pen):/.test(o.key))) return byOvr(rows, o => o.occId);
+    return rows;
+  };
   const groups = [];   // [{ head, rows, oop }]
   if (!arm) {
     const at = by(o => o.key === 'bench')[0]?.slot || '';

@@ -15438,3 +15438,24 @@ Rename (r284) opens the rename sheet.
 - the toast reads "Old is now New".
 
 No fresh team needed.
+
+---
+
+## §122.165 — r286: the Move sheet in the Team screen's order
+
+**Report.** Moving a bench outfielder into the lineup, the three OF spots in the Move sheet weren't in OVR order like the Team screen.
+
+**Cause.** The sheet listed `moveOptions` in lineup-slot order. The Team screen shows the three OF slots by OVR (r247 `_ofByOvr`), and the rotation, bullpen and benches by OVR (r208).
+
+**Fix (TeamScreen `_openMoveSheet`).** Each group is now in the Team screen's order:
+- "Play at" spots (and the out-of-position ones): lineup order, with the three OF spots by their outfielder's OVR, highest first, an open one last.
+- Who could come in ("Replace at …"): by OVR.
+- Into the rotation / Into the bullpen: by the occupant's OVR, an open spot last.
+
+**Test.** New test-move-order-ui:
+- the outfielders made out of order (lowest in the first OF slot); a bench outfielder's sheet lists the OF spots 80/72/64, the same three names in the same order as the Team screen;
+- a pitcher-bench arm's sheet: each group by OVR.
+
+The oop-move, pitcher-move, team-roster, lineup-days and wear UI tests pass.
+
+No fresh team needed.
