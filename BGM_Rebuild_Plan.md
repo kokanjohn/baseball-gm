@@ -15415,3 +15415,26 @@ Fresh team: recommended (CPU GM names change; messages from before r283 have no 
 - Season, multi-season and the related checks and screen tests pass.
 
 Fresh team: not needed.
+
+---
+
+## §122.164 — r285: the owner's card opens the owner's sheet first
+
+**Request (the user).** Tapping the Owner card should open a card first, not the rename sheet, with a short read on the owner's current expectations and a Rename button.
+
+**TeamScreen `_openOwnerSheet`.** It's the same sheet as a coach's, titled with the owner's name, subtitle "Owner". Rows:
+- **Mood:** the owner's stage (Content / Watching / Concerned / Ordering cuts) and its line, from `_OWNER_STAGE_TEXT` (the same words as Finances).
+- **Trust in you:** Strong / Good / Uneasy / Thin, with the number.
+- **Expects:** `_ownerWinTarget` wins this season; underneath, the regular-season wins so far and games played.
+- **Payroll target:** this season's target; underneath, payroll now.
+- **Order** (when there is one): "$X off the payroll", due when (as Finances words it).
+
+Rename (r284) opens the rename sheet.
+
+**Fix.** The rename toast read "New is now New": the person's record changes in place, so the old name is now read before saving.
+
+**Test.** test-rename-everywhere-ui:
+- the owner's card opens the owner's sheet with Mood, Trust in you, Expects and Payroll target, and Rename; Rename opens the rename sheet;
+- the toast reads "Old is now New".
+
+No fresh team needed.

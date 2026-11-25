@@ -1121,7 +1121,7 @@ function _settingNow(team, m) {
 }
 
 function _openStaffSheet(state, key) {
-  if (key === 'owner') { _openRename(state, state.userTeam?.ownerId, 'Owner'); return; }   // r284 §122.163
+  if (key === 'owner') { _openOwnerSheet(state); return; }   // r285 §122.164 the owner's card first
   const d = state.userTeam?.coachingStaff?.[key];
   if (!d || d.vacant) return;
   const season = state.seasonNum || 1;
@@ -1147,6 +1147,36 @@ function _openStaffSheet(state, key) {
   const rename = d.id ? `<div class="staff-sheet-acts"><button type="button" class="staff-rename-btn" id="staff-rename">Rename</button></div>` : '';
   _showSwapSheet(_escape(d.name || STAFF_LABELS[key]), STAFF_LABELS[key] || '', `<div class="staff-sheet">${rows}</div>${rename}`, (ov) => {
     ov.querySelector('#staff-rename')?.addEventListener('click', () => { ov.remove(); _openRename(StateManager.get(), d.id, STAFF_LABELS[key]); });
+  });
+}
+
+/**
+ * r285 §122.164 the owner's card: how ownership feels about the books, the trust, what's expected this season (the
+ * wins, the payroll target), any order outstanding — and Rename.
+ */
+function _openOwnerSheet(state) {
+  const u = state.userTeam || {}, fin = u.finances || {};
+  const row = (label, value, sub = '') => `
+    <div class="staff-sheet-row"><div class="staff-sheet-label">${label}</div>
+      <div class="staff-sheet-value">${value}${sub ? `<div class="staff-sheet-sub">${sub}</div>` : ''}</div></div>`;
+  const [stageName, stageText] = _OWNER_STAGE_TEXT[fin.owner?.stage || 'content'] || _OWNER_STAGE_TEXT.content;
+  const trust = Math.round(u.ownerTrust ?? 50);
+  const trustWord = trust >= 70 ? 'Strong' : trust >= 55 ? 'Good' : trust > 35 ? 'Uneasy' : 'Thin';
+  const wins = u._ownerWinTarget;
+  const reg = (state.schedule || []).filter(g => !g.isSpring && !g.isPlayoff && g._committed);
+  const won = reg.filter(g => g.result === 'win').length;
+  const target = Finance.seasonTarget(fin), payroll = Finance.payrollOf(state, 'user');
+  const order = fin.owner?.order;
+  const rows = [
+    row('Mood', _escape(stageName), _escape(stageText)),
+    row('Trust in you', `${trustWord} (${trust})`),
+    Number.isFinite(wins) ? row('Expects', `${wins} wins this season`, reg.length ? `${won} so far, ${reg.length} games played` : '') : '',
+    target ? row('Payroll target', formatMoney(target), `Payroll now ${formatMoney(payroll)}`) : '',
+    order ? row('Order', `${formatMoney(order.amountK || 0)} off the payroll`, Number.isFinite(order.dueAt) ? (() => { const d = When.untilDay(order.dueAt, Date.now()); return _escape(d.startsWith('in ') ? `Due ${d}` : `Due by ${d}`); })() : '') : '',
+  ].join('');
+  const acts = u.ownerId ? `<div class="staff-sheet-acts"><button type="button" class="staff-rename-btn" id="staff-rename">Rename</button></div>` : '';
+  _showSwapSheet(_escape(u.ownerName || 'Owner'), 'Owner', `<div class="staff-sheet">${rows}</div>${acts}`, (ov) => {
+    ov.querySelector('#staff-rename')?.addEventListener('click', () => { ov.remove(); _openRename(StateManager.get(), u.ownerId, 'Owner'); });
   });
 }
 
@@ -1181,11 +1211,12 @@ function _openRename(state, id, label) {
     save.addEventListener('click', () => {
       const v = cleanName(input.value);
       if (nameProblem(StateManager.get(), id, v)) { check(); return; }
+      const was = StateManager.get().people[id].name;   // (the record changes in place: the old name first)
       StateManager.mutate(s => { renamePerson(s, id, v); });
       ov.remove();
       EventBus.emit('person:renamed', { id, name: v });
       EventBus.emit('roster:changed', { source: 'rename' });
-      App.showToast(`${p.name} is now ${v}`, 'neutral', 3000);
+      App.showToast(`${was} is now ${v}`, 'neutral', 3000);
       refresh();
     });
     check();

@@ -56,10 +56,22 @@ check(`refused as it's typed: in use (“${t1.why}”), a word the game uses (�
 await tryName('Rain'); await page.screenshot({ path: `${out}/rename-refused-${theme}.png` });
 const t5 = await tryName('Quillfeather');
 check('a good name: Save', !t5.off && t5.why === '');
-await click('#rename-save'); await page.waitForTimeout(800);
+await click('#rename-save'); await page.waitForTimeout(500);
+const toast = await page.evaluate(() => document.getElementById('toast')?.textContent || document.querySelector('.toast')?.textContent || '');
+check(`the toast says who became who (“${toast.trim()}”)`, toast.includes(`${mgrName} is now Quillfeather`));
+await page.waitForTimeout(300);
 const after = await page.$eval('.staff-card-tap[data-staff="manager"] .staff-card-name', e => e.textContent.trim());
 check(`saved: the staff card reads ${after}`, after === 'Quillfeather');
-check('…the owner has a card too (tap to rename)', !!(await page.$('.staff-card-tap[data-staff="owner"]')));
+// r285 §122.164 the owner's card opens the owner's sheet first: the mood, the trust, what's expected — and Rename
+await page.waitForTimeout(3000);   // (the toast gone)
+await click('.staff-card-tap[data-staff="owner"]'); await page.waitForTimeout(500);
+const own = await page.evaluate(() => ({ labels: [...document.querySelectorAll('#ts-swap-modal .staff-sheet-label')].map(e => e.textContent.trim()),
+  rename: !!document.getElementById('staff-rename'), input: !!document.getElementById('rename-input') }));
+check(`the owner's card opens the owner's sheet (${own.labels.join(', ')}), with Rename`, own.rename && !own.input && ['Mood', 'Trust in you', 'Expects', 'Payroll target'].every(l => own.labels.includes(l)));
+await page.screenshot({ path: `${out}/owner-sheet-${theme}.png` });
+await click('#staff-rename'); await page.waitForTimeout(400);
+check('…Rename opens the rename sheet', await page.evaluate(() => !!document.getElementById('rename-input')));
+await click('#rename-cancel'); await page.waitForTimeout(300);
 
 // ── everyone renamed ──
 const pairs = await page.evaluate(async () => {
