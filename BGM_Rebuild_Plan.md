@@ -15006,3 +15006,32 @@ Fresh team: not needed (the next spring game uses it).
 - `?tab=dashboard` and `?tab=inbox` cold starts, and the address is cleaned up.
 
 No fresh team needed.
+
+---
+
+## §122.153 — r274: starred players
+
+**Request.** Mark selected players (hitters and pitchers) and filter the League list by them. Use a name other than ESPN's "watch list". "Watching" is also already used for the scouting director's free-agent watch (§122.82).
+
+**Name.** Starred.
+
+**Model.** engine/Starred.js (pure, precached):
+- `state.starred = { [playerId]: sinceMs }`, created on first use.
+- `isStarred`, `starredIds` (players still in the game, newest first), `toggleStar(draft, id, atMs)`.
+- Any player can be starred: ours, another club's, a free agent, on waivers.
+
+**UI.**
+- PlayerCard header: a "☆ Star" / "★ Starred" toggle (amber when on) beside ×. It emits `star:changed`.
+- LeagueScreen Players: an amber ★ before a starred player's name. The view filter gains "Starred" (everyone starred, then the position and health filters as usual). The empty text is "No starred players fit these filters."
+- On `star:changed` the row's star is added or removed in place, so the list doesn't jump. The Starred view is rebuilt.
+
+**Test.** test-starred-ui:
+- Star a hitter and a pitcher.
+- The star appears on the list without a reload.
+- Starred + Pitchers / Batters show just each one.
+- Unstarring removes the player from the Starred list.
+- The star is kept across a reload.
+
+**Open.** How starred players tie into Compose: the user's call.
+
+No fresh team needed.

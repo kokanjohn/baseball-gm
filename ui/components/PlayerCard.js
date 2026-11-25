@@ -36,6 +36,8 @@ import * as StateManager from '../../store/StateManager.js';
 import { baseballYear } from '../../engine/PlayerFactory.js';
 import { wearToday } from '../../engine/DevelopmentEngine.js';
 import { primaryPos, eligibleAt, keepNeed, familiarity, pitchRoles, stretchOf } from '../../engine/Positions.js';   // r164
+import { isStarred, toggleStar } from '../../engine/Starred.js';   // r274 §122.153
+import * as EventBus from '../EventBus.js';
 
 // ─────────────────────────────────────────────────────────────
 // OPEN / CLOSE
@@ -73,7 +75,10 @@ export function openPlayerCard(playerId, state) {
       <div class="modal-handle"></div>
       <div class="modal-header">
         <div class="modal-title">${_escape(player.name)}</div>
-        <button class="modal-close" id="player-card-close">×</button>
+        <div class="pc-head-acts">
+          ${_starButton(isStarred(state, playerId))}
+          <button class="modal-close" id="player-card-close">×</button>
+        </div>
       </div>
       <div class="modal-divider"></div>
       <div class="player-card-body">
@@ -87,6 +92,16 @@ export function openPlayerCard(playerId, state) {
 
   // Wire close
   document.getElementById('player-card-close')?.addEventListener('click', closePlayerCard);
+  // r274 §122.153 star / unstar: the League list marks the player and can show only the starred
+  const star = document.getElementById('pc-star');
+  star?.addEventListener('click', () => {
+    let on = false;
+    StateManager.mutate(s => { on = toggleStar(s, playerId, Date.now()); });
+    star.classList.toggle('on', on);
+    star.setAttribute('aria-pressed', String(on));
+    star.textContent = on ? '★ Starred' : '☆ Star';
+    EventBus.emit('star:changed', { playerId, on });
+  });
   document.getElementById('pc-hist-btn')?.addEventListener('click', (e) => {   // r253
     const list = document.getElementById('pc-hist-list');
     list.hidden = !list.hidden;
@@ -110,6 +125,11 @@ export function openPlayerCard(playerId, state) {
     openSignSheet(playerId, kind);
   });
   overlay.addEventListener('click', e => { if (e.target === overlay) closePlayerCard(); });
+}
+
+/** r274 §122.153 the star toggle: "☆ Star", or "★ Starred" when on. */
+function _starButton(on) {
+  return `<button type="button" class="pc-star${on ? ' on' : ''}" id="pc-star" aria-pressed="${on}">${on ? '★ Starred' : '☆ Star'}</button>`;
 }
 
 /**
@@ -667,6 +687,9 @@ function _injectCSS() {
       background:var(--chip-accent-bg);padding:1px 6px;border-radius:4px;display:inline-block;}
     .pc-trait{font-size:11px;color:var(--muted);font-style:italic;margin-top:2px;}
     .pc-section{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);}
+    .pc-head-acts{display:flex;align-items:center;gap:10px;}
+    .pc-star{padding:5px 10px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--muted);font:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;}
+    .pc-star.on{border-color:#e0a800;color:#e0a800;}
     .pc-status{font-size:12px;font-weight:700;margin-top:4px;} .pc-status-bad{color:var(--danger);} .pc-status-warn{color:#d49b00;}
     .pc-hist-btn{display:block;width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text);font:inherit;font-size:13px;font-weight:600;cursor:pointer;}
     .pc-hist-list{margin-top:10px;}

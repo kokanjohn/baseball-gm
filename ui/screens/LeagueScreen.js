@@ -38,6 +38,7 @@ import { PHASE } from '../../data/constants.js';
 import * as When from '../../engine/When.js';
 import { primaryPos, pitchRoles, eligibleAt, posLabel } from '../../engine/Positions.js';   // r163 §122.35
 import * as Managers from '../../engine/ManagerEngine.js';   // §122.64
+import { isStarred, starredIds } from '../../engine/Starred.js';   // r274 §122.153
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -87,6 +88,15 @@ export function mount() {
   wire('game:committed',    () => { if (_activeTab === 'standings' || _activeTab === 'playoffs') refresh(); });
   wire('game:phaseChanged', () => refresh());
   wire('roster:changed',    () => refresh());
+  // r274 §122.153 a star changed on the player card: the row's mark (the Starred list itself is rebuilt)
+  wire('star:changed', ({ playerId, on }) => {
+    if (_activeTab !== 'players') return;
+    if (_playerFilter.view === 'starred') { refresh(); return; }
+    const line = document.querySelector(`.lp-row[data-player="${playerId}"] .lp-name-line`);
+    if (!line) return;
+    line.querySelector('.lp-star')?.remove();
+    if (on) line.insertAdjacentHTML('afterbegin', _STAR);
+  });
   wire('nav:tabActivated',  ({ tab }) => { if (tab === 'league') refresh(); });
 
   refresh();
@@ -413,6 +423,9 @@ function _renderTeams(state) {
 // PLAYERS TAB
 // ─────────────────────────────────────────────────────────────
 
+/** r274 §122.153 a starred player's mark beside the name. */
+const _STAR = '<span class="lp-star" title="Starred">★</span>';
+
 function _renderPlayers(state) {
   const userRosterIds = new Set(state.userTeam?.rosterIds || []);
   const players       = state.players || {};
@@ -432,6 +445,7 @@ function _renderPlayers(state) {
     : f.view === 'fa'      ? fas
     : f.view === 'rosters' ? rostered()
     : f.view === 'all'     ? [...rostered(), ...waivers, ...fas]
+    : f.view === 'starred' ? starredIds(state).map(id => players[id]).filter(Boolean)   // r274 §122.153
     : [...waivers, ...fas];
   const available = (p) => p.onWaivers || p.group === 'freeAgent';
   const showMarket = !isSearching && ['available', 'waivers', 'fa'].includes(f.view);
@@ -490,6 +504,7 @@ function _renderPlayers(state) {
     opt('fa', 'Free Agents', f.view),
     opt('rosters', 'On Rosters', f.view),
     opt('all', 'All', f.view),
+    opt('starred', 'Starred', f.view),
   ].join('');
   const teamSel = [
     opt('all', 'All Teams', f.team),
@@ -578,7 +593,7 @@ function _renderPlayers(state) {
       <div class="lp-row ${isUser ? 'user-player-row' : ''}" data-player="${p.id}">
         <div class="lp-td-name">
           <div class="lp-name-block">
-            <div class="lp-name-line">${_escape(p.name)}${p.onWaivers ? ` <span class="lp-wv-left" title="Time left on waivers">${_waiverLeft(p)}</span>` : ''}${p.group === 'freeAgent' && FaWatch.isWatched(state, p.id, Date.now()) ? ' <span class="lp-wv-left">Watching</span>' : ''}</div>
+            <div class="lp-name-line">${isStarred(state, p.id) ? _STAR : ''}${_escape(p.name)}${p.onWaivers ? ` <span class="lp-wv-left" title="Time left on waivers">${_waiverLeft(p)}</span>` : ''}${p.group === 'freeAgent' && FaWatch.isWatched(state, p.id, Date.now()) ? ' <span class="lp-wv-left">Watching</span>' : ''}</div>
             <div class="lp-name-sub">${_escape(teamAbbr)} · ${posLabel(p)}${shown.year ? ` · <span class="lp-lyline">'${String(shown.year).slice(-2)} stats</span>` : ''}${dtd}</div>
           </div>
           <div class="lp-ovr"><span class="rating-num ${_lpOvrClass(p.ovr)}">${formatOVR(p.ovr)}</span></div>
@@ -604,6 +619,7 @@ function _renderPlayers(state) {
         <div id="lp-list">${rows || `<div class="lw-empty">${
           f.view === 'waivers' ? 'No one on waivers fits these filters right now. A club puts a player on waivers to clear a roster spot; any club can claim for 72 hours, worst record first.'
           : f.view === 'fa' || f.view === 'available' ? 'No free agents fit these filters right now.'
+          : f.view === 'starred' ? 'No starred players fit these filters.'
           : 'No players match these filters.'}</div>`}</div>
         ${allPlayers.length > _rowLimit ? `<button class="lp-more-btn" id="lp-more-btn">Show ${Math.min(100, allPlayers.length - _rowLimit)} more <span>(${_rowLimit} of ${allPlayers.length} shown)</span></button>` : ''}
       </div>
@@ -1133,6 +1149,7 @@ function _injectCSS() {
     /* Player name text — 12px matching the previous fix */
     .lp-name-line{font-size:12px;font-weight:600;color:var(--text);
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .lp-star{color:#e0a800;font-size:11px;margin-right:3px;}
     .lp-name-sub{font-size:10px;color:var(--muted);margin-top:1px;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
