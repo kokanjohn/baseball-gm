@@ -1381,6 +1381,11 @@ export const DEF_AGE_CURVE = Object.freeze([2.0, 0.0, -2.0, -3.0, -4.5]);
 // r213 §122.91 the staff's working day (local): messages are planned inside it. There are no quiet hours on
 // the phone any more (its own settings silence it); a game's news comes with the game, an emergency any hour.
 export const STAFF_HOURS = Object.freeze({ start: '08:00', end: '22:00' });
+// r279 §122.158 a follow-up (FollowUps.js): when about a third of the time to the deadline is left (`leftShare`),
+// in the staff's day; none on a window under `minWindowMs`, none within `minAfterMs` of the message or
+// `minBeforeMs` of the deadline.
+export const FOLLOW_UP = Object.freeze({ leftShare: 1 / 3, minWindowMs: 3 * 3_600_000, minAfterMs: 60 * 60_000,
+  minBeforeMs: 45 * 60_000, endPadMs: 20 * 60_000, startPadMs: 15 * 60_000 });
 export const STAFF_QUIET = Object.freeze({ quietStart: STAFF_HOURS.end, quietEnd: STAFF_HOURS.start });
 
 // r214 §122.93 a message written in the night that can wait comes in the morning: spread over this long from 8am, and

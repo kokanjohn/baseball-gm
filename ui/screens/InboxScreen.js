@@ -322,7 +322,9 @@ function _renderTabBody(state, inbox) {
 
 /** The inbox newest first. r252 §122.131 one list: no "Important" / "Everything else" — the GM reads each one. */
 function _inboxOrder(inbox) {
-  const newest = (a, b) => (b.arrivedAtMs || b.deliveredAt || 0) - (a.arrivedAtMs || a.deliveredAt || 0);
+  // (r279 §122.158 a follow-up brings a message back to the top: its latest word)
+  const latest = (c) => Math.max(c.arrivedAtMs || c.deliveredAt || 0, c._followUp?.atMs || 0);
+  const newest = (a, b) => latest(b) - latest(a);
   return [...inbox].sort(newest);
 }
 
@@ -395,7 +397,8 @@ function _dueText(card) {
 
 function _renderRow(card) {
   const unread = !card._readAt;
-  const when = Number.isFinite(card.arrivedAtMs) ? _shortWhen(card.arrivedAtMs) : '';
+  const at = card._followUp?.atMs ?? card.arrivedAtMs;   // r279 §122.158 the latest word
+  const when = Number.isFinite(at) ? _shortWhen(at) : '';
   const labels = _labels(card);
   return `
     <div class="ml-row${unread ? ' unread' : ''}" data-open="${card.instanceId}" id="card-${card.instanceId}">
@@ -406,7 +409,7 @@ function _renderRow(card) {
           <span class="ml-time">${when}</span>
         </div>
         <div class="ml-subj">${_escape(card.subject || '')}</div>
-        <div class="ml-snip">${_escape(card.preview || '')}</div>
+        <div class="ml-snip">${_escape(card._followUp ? card._followUp.text : (card.preview || ''))}</div>
         ${labels ? `<div class="ml-labels">${labels}</div>` : ''}
       </div>
       ${unread ? '<div class="ml-dot" aria-label="Unread"></div>' : ''}
@@ -506,6 +509,7 @@ function _renderReading(card, inbox, state) {
         </div>
       </div>
       <div class="mr-body">${_paragraphs(card.body || card.preview || '', _messagePlayers(card, state))}</div>
+      ${_followUpHtml(card)}
       ${dealOfCard(state, card) ? `<button class="btn-revise btn-deal" data-deal-sheet="${card.instanceId}">See the Deal</button>` : ''}
       ${card.resolved || fromScouting(card, state) ? '' : askScoutingButton(state, { instanceId: card.instanceId })}
       <div class="mr-reply">
@@ -598,6 +602,7 @@ function _renderThread(card, state) {
         </div>
         <div class="mr-body">${_paragraphs(card.body || card.preview || '', _messagePlayers(card, state))}</div>
       </div>
+      ${_followUpHtml(card)}
       ${d.read ? '' : `
       <div class="mt-msg mt-reply${d.auto ? ' auto' : ''}">
         <div class="mr-sender">
@@ -611,6 +616,23 @@ function _renderThread(card, state) {
       </div>`}
       ${d.read ? '' : _impactHtml(card)}
     </div>`;
+}
+
+/** r279 §122.158 the sender's follow-up, in the same thread: from the sender, to me, when. */
+function _followUpHtml(card) {
+  const f = card._followUp;
+  if (!f) return '';
+  return `
+      <div class="mt-msg mt-follow">
+        <div class="mr-sender">
+          ${_avatar(_from(card), 'mr-av')}
+          <div class="mr-who">
+            <div class="mr-name">${_escape(_from(card))}</div>
+            <div class="mr-to">to me · ${_longWhen(f.atMs)}</div>
+          </div>
+        </div>
+        <div class="mr-body"><p>${_escape(f.text)}</p></div>
+      </div>`;
 }
 
 /** r255 §122.134 what the decision changed, and by how much (kept on the card when it was decided). */

@@ -15168,3 +15168,54 @@ No fresh team needed.
 - Season, multi-season, away-days, message-timing, game-pace, outlook, spring-banner and schedule-rows all pass.
 
 Fresh team: needed for the new spring home/away split. The current save keeps its calendar.
+
+---
+
+## §122.158 — r279: the club's own people follow up on a decision they're still waiting on
+
+**Decisions (the user).**
+- **Format:** the follow-up goes in the same message (A), never a second message.
+- **Who:** everyone inside the club, including PR, the ticket office, Guest Services and the player rep. Never: other clubs' GMs and agents, partnerships and sponsors, marketing, community relations, fan relations, the booster club, the beat writer, the league office.
+- **How many:** one follow-up, with about a third of the time left.
+- **Content:** it says what happens without an answer.
+- **Cost:** nothing beyond the usual default.
+- **Lineup reminders** are folded in.
+- New messages only.
+
+**engine/FollowUps.js (pure, precached).**
+- `internalSender(card)`: a `NEVER` set of outward desks; another club's GM (`… GM)`); agents.
+- `asksForDecision(card)`: not a notice or 'skip', not compose; has a no answer or 2+ choices.
+- `deadlineMs(card, state)`: `expiresAtMs`, else the first pitch of game `expiresAt − 1` (by which a game-counted message lapses).
+- `followUpAt(card, state)`: arrival + ⅔ of the window (`FOLLOW_UP.leftShare` ⅓ left), moved into the staff's day (`STAFF_HOURS`): back to that evening (−20 min) if it's an hour past arrival, else the next morning (+15 min).
+  - None when the window is under 3 h, within 60 min of arrival, or within 45 min of the deadline.
+  - Only for messages that arrived at or after `state._followUpsFrom`.
+- `defaultWords(card)`:
+  - an answer's button words (the auto choice; yes/no) → "If I don't hear back, I'll take that as “…”";
+  - the roster clock's `_autoLabel` turned to what will happen ("Correa stays in the outfield", "Hal waives Lee", "we pass") → "If I don't hear back by then: …".
+- `followUpText`: one of three openings, then "I need your answer by {tonight at 7:05 PM}", then the default. "I" for a person, "we" for a department.
+
+**CardEngine.**
+- `releaseDueCards` runs `_followUps(now)`. The first run only sets `_followUpsFrom` (messages already waiting get none).
+- Each follow-up that's due sets `card._followUp = { atMs, text }` and clears `_readAt`, so the message is unread again. It's announced via `takeReleased` with the subject "Following up: …" (the toast). It isn't counted as a new delivery.
+- `getPushSchedule` adds `fu:<instanceId>` alerts (Messages kind, the message's own tag) for follow-ups still to come.
+- Answering or the deadline closes the one message, so nothing else is left behind.
+
+**Lineup reminders folded in.** `_lineupNudges` asks once an episode. The old second ask (n = 2, from the manager after the game) is gone; the coach's message gets its own follow-up instead.
+
+**InboxScreen.**
+- The list orders by the latest word: `max(arrivedAtMs, _followUp.atMs)`. The row's time and snippet are the follow-up's.
+- The reading view and the Completed thread show the follow-up under the message (`.mt-follow`, from the sender, "to me · when").
+
+**Checks.**
+- check-follow-ups:
+  - the first run marks new; a message already waiting gets none;
+  - the manager's follow-up: when, in hours, on the push schedule with the message's tag;
+  - then the same message is unread again, with the follow-up, when, the default, and the "Following up:" announcement; the push is gone; one only;
+  - answered closes the one message; unanswered, it's followed up, then lapses as one message;
+  - the sender table;
+  - Partnerships, a notice, and a two-hour window get none.
+- check-il-return: the lineup ask's follow-up is in the same message; no second ask.
+- test-follow-up-ui: the row is unread, ordered by the latest word, with the follow-up as its snippet; the badge counts it; the reading view; answering leaves the inbox; Completed shows message → follow-up → reply.
+- Season, multi-season, message-timing, emergencies, decision-impact, field-messages, message-pushes and notification-tap all pass.
+
+No fresh team needed. The first run marks where new messages begin.

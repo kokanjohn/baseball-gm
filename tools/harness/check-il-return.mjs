@@ -174,8 +174,8 @@ console.log('\nThe return card, unanswered');
         !!c4 && P(rec)?.onWaivers && P(X4).group !== PLAYER_GROUP.IL && active() === 28);
 }
 
-// ── 2. Unanswered: the manager follows up once; "keep" ends it ──
-console.log('\nUnanswered: the manager follows up once');
+// ── 2. Unanswered: r279 §122.158 the coach follows up in the same message; no second ask ──
+console.log('\nUnanswered: a follow-up in the same message, then nothing more');
 const X3 = U().lineupSlots.find(sl => sl.slot === 'OF')?.playerId;
 hurt(X3, 2); fillRoster(); step(2.5 * 3600_000);
 c = cardFor('il_return', X3);
@@ -184,14 +184,15 @@ const notPlaying = c._choices.find(x => !U().lineupSlots.some(sl => sl.playerId 
 resolve(c.instanceId, 'yes', { pick: notPlaying.key }); advanceClock(clock.get());
 n = waitFor('lineup_return', X3);
 const lock = n?.expiresAtMs;
-for (let i = 0; i < 90 && cardFor('lineup_return', X3)?._nudge !== 2; i++) step(60 * 60_000);   // (r214 a nudge written in the night comes in the morning)
-const n2 = cardFor('lineup_return', X3);
-console.log(`    ${n2?.sender}: “${n2?.body}”`);
-check('no answer by first pitch: nothing changed', SM.get().inbox.find(x => x.instanceId === n.instanceId)?.choice === 'auto' && !slotOf(X3));
-check('the manager asks once more after that game', !!n2 && n2.sender === U().coachingStaff.manager.name && n2.deliverAtMs >= lock + 3 * 3600_000);
-resolve(n2.instanceId, 'no'); advanceClock(clock.get());
+const arrived = SM.get().inbox.find(x => x.instanceId === n?.instanceId)?.arrivedAtMs ?? clock.get();
+step(Math.max(60_000, lock - clock.get() + 60_000));
+const n1 = SM.get().inbox.find(x => x.instanceId === n.instanceId);
+const window = lock - arrived;
+console.log(`    the window: ${(window / 3_600_000).toFixed(1)} h; follow-up: ${n1?._followUp ? `“${n1._followUp.text}”` : 'none'}`);
+check('a follow-up in the same message when the window allows (3 h or more)', window < 3 * 3_600_000 ? !n1?._followUp : !!n1?._followUp && n1._followUp.atMs < lock);
+check('no answer by first pitch: nothing changed', n1?.choice === 'auto' && !slotOf(X3));
 for (let i = 0; i < 30; i++) step(60 * 60_000);
-check('"keep" ends it', !cardFor('lineup_return', X3) && !P(X3)._lostSlot);
+check('no second ask: one message about it, ever', [...SM.get().inbox, ...(SM.get().scheduledCards || [])].filter(c => c.cardId === 'lineup_return' && c._targetPlayerId === X3).length === 1);
 
 // ── 3. A starting pitcher: the pitcher bench, then the pitching coach ──
 console.log('\nA starting pitcher');

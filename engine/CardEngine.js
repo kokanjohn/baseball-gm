@@ -145,6 +145,7 @@ import { computeOVR } from './PlayerFactory.js';
 import { starterRested, reliefValue } from './PitchingEngine.js';
 import { clockNow } from './Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
+import { followUpAt, followUpText } from './FollowUps.js';   // r279 §122.158
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt, stretchOf, pitchRoles } from './Positions.js';   // r163 §122.35
 import * as Impact from './DecisionImpact.js';   // r255 §122.134 what a decision changed (the Completed tab)
@@ -1143,9 +1144,8 @@ const _nudgeEpisode = (p) => p?._lostSlot?.atMs ?? p?.injury?.injuredAt ?? 0;
 /**
  * The coaching staff asks about putting a player back in the spot an injury
  * took (`_lostSlot`): the hitting coach for a bat, the pitching coach for a
- * starter (the manager when the chair is empty), before our next game. A
- * second ask (n = 2) comes from the manager after that game if nothing
- * changed; then the staff lets it be.
+ * starter (the manager when the chair is empty), before our next game. Once an
+ * episode: r279 §122.158 the reminder is the message's own follow-up (FollowUps).
  */
 function _deliverLineupNudge(state, player, n, atMs) {
   const spot = _whoHasSpot(state, player);
@@ -1155,23 +1155,20 @@ function _deliverLineupNudge(state, player, n, atMs) {
   const staff = state.userTeam.coachingStaff || {};
   const coach = staff[{ lineup: 'hittingCoach', rotation: 'pitchingCoach', bullpen: 'pitchingCoach' }[spot.kind]];
   const mgr = _managerName(state);
-  const sender = n > 1 || !coach || coach.vacant ? mgr : coach.name;
+  const sender = !coach || coach.vacant ? mgr : coach.name;
   const X = player, Y = spot.player;
   const diff = (X.ovr || 0) - (Y.ovr || 0);
   const xLine = _lineNow(X), yLine = _lineNow(Y);
   const K = {
     lineup:   { where: _slotWhere(spot.slot), bench: 'the bench',
                 ready: `${X.name} is back to full strength and took a full round of batting practice today, no restrictions. The timing's there.`,
-                has: `${_slotPlayed(spot.slot)} since ${X.name} went down`,
-                still: `sat again while ${Y.name} (OVR ${Y.ovr}) played ${_slotWhere(spot.slot).replace(/^(at|in|behind) /, '')}` },
+                has: `${_slotPlayed(spot.slot)} since ${X.name} went down` },
     rotation: { where: 'in the rotation', bench: 'the pitcher bench',
                 ready: `${X.name} threw a full bullpen session today and is ready to take the ball every fifth day again.`,
-                has: 'is the weakest starter in the rotation',
-                still: `is still out of the rotation while ${Y.name} (OVR ${Y.ovr}) keeps starting` },
+                has: 'is the weakest starter in the rotation' },
     bullpen:  { where: 'in the bullpen', bench: 'the pitcher bench',
                 ready: `${X.name} threw a clean side session today, no restrictions, and is ready to pitch out of the pen again.`,
-                has: 'is the weakest arm in the bullpen right now',
-                still: `is still on the pitcher bench while ${Y.name} (OVR ${Y.ovr}) pitches out of the pen` },
+                has: 'is the weakest arm in the bullpen right now' },
   }[spot.kind];
   const vote = diff >= -1
     ? `My vote: ${X.name} back ${K.where}, ${Y.name} to ${K.bench}.`
@@ -1180,11 +1177,9 @@ function _deliverLineupNudge(state, player, n, atMs) {
   const card = _rosterCard(state, {
     cardId: 'lineup_return', tag: 'LINEUP', sender, avatar: spot.kind === 'lineup' ? '🏏' : '⚾', type: 'normal',
     _rosterKey: `lineup:${X.id}:${_nudgeEpisode(X)}:${n}`, _targetPlayerId: X.id, _spotKind: spot.kind, _nudge: n,
-    subject: n > 1 ? `${X.name} is still waiting` : `Get ${X.name} back ${K.where}?`,
+    subject: `Get ${X.name} back ${K.where}?`,
     preview: `${Y.name} ${K.has}.`,
-    body: (n > 1
-            ? `${X.name} (OVR ${X.ovr}) ${K.still}.`
-            : `${K.ready} ${Y.name} (OVR ${Y.ovr}${yLine ? `, ${yLine}` : ''}) ${K.has}; ${X.name} is OVR ${X.ovr}${xLine ? `, ${xLine}` : ''}.`)
+    body: `${K.ready} ${Y.name} (OVR ${Y.ovr}${yLine ? `, ${yLine}` : ''}) ${K.has}; ${X.name} is OVR ${X.ovr}${xLine ? `, ${xLine}` : ''}.`
         + ` ${vote} Your call. ${spot.kind === 'lineup' ? `The lineup for ${when} locks at first pitch.` : `Our next game is ${when}.`}`,
     yesLabel: `Put ${X.name} back ${K.where}`,
     noLabel: `Keep ${Y.name} ${K.where}`,
@@ -1208,19 +1203,13 @@ function _lineupNudges(atMs) {
     if (!p?._lostSlot || seated.has(id) || queue.has(id) || !isAvailable(p) || p.group === PLAYER_GROUP.IL) continue;
     const prefix = `lineup:${id}:${_nudgeEpisode(p)}:`;
     const mine = [...(state.inbox || []), ...(state.scheduledCards || [])].filter(c => (c._rosterKey || '').startsWith(prefix));
-    if (mine.some(c => !c.resolved) || mine.length >= 2) continue;
-    const prev = mine[0];
-    let at;
-    if (!prev) {
-      // A little after the news, and well before our next first pitch.
-      const g = _nextUserGame(state, atMs);
-      at = atMs + _randBetween(20, 50) * 60_000;
-      if (g && at > g.gameTime - 30 * 60_000) at = Math.max(atMs, g.gameTime - 30 * 60_000);
-    } else {
-      if (prev.choice !== 'auto') continue;   // answered: the GM decided
-      at = Math.max(atMs, (prev.expiresAtMs || atMs) + _randBetween(200, 260) * 60_000);   // after that game
-    }
-    if (_deliverLineupNudge(state, p, mine.length + 1, at)) delivered++;
+    // r279 §122.158 asked once an episode: a reminder is the message's own follow-up (FollowUps), no second ask
+    if (mine.length) continue;
+    // A little after the news, and well before our next first pitch.
+    const g = _nextUserGame(state, atMs);
+    let at = atMs + _randBetween(20, 50) * 60_000;
+    if (g && at > g.gameTime - 30 * 60_000) at = Math.max(atMs, g.gameTime - 30 * 60_000);
+    if (_deliverLineupNudge(state, p, 1, at)) delivered++;
     state = StateManager.get();
   }
   return delivered;
@@ -2725,7 +2714,33 @@ export function deliverMomentCard(moment, context, game = null, timing = 'soon')
 export function releaseDueCards(nowMs = clockNow()) {
   const out = _releaseDue(nowMs);
   if (out.length && !StateManager.isSpeculating()) _released.push(...out);
+  const fu = _followUps(nowMs);   // r279 §122.158 (announced like a new message; not counted as one)
+  if (fu.length && !StateManager.isSpeculating()) _released.push(...fu.map(c => ({ ...c, subject: `Following up: ${c.subject}` })));
   return out;
+}
+
+/**
+ * r279 §122.158 the follow-ups due: the sender writes again in the same message (`_followUp: { atMs, text }`),
+ * which comes back to the top of the inbox unread. One a message (FollowUps.followUpAt). The first time a club
+ * runs this, it only marks where new messages begin (`_followUpsFrom`): messages already waiting get none.
+ * @returns {Object[]} the messages followed up on
+ */
+function _followUps(nowMs) {
+  const state = StateManager.get();
+  if (!state?.inbox) return [];
+  if (!Number.isFinite(state._followUpsFrom)) { StateManager.mutate(s => { s._followUpsFrom = nowMs; }); return []; }
+  const due = state.inbox.map(c => ({ c, at: followUpAt(c, state) })).filter(x => x.at !== null && x.at <= nowMs);
+  if (!due.length) return [];
+  StateManager.mutate(s => {
+    for (const { c, at } of due) {
+      const card = s.inbox.find(x => x.instanceId === c.instanceId);
+      if (!card || card.resolved || card._followUp) continue;
+      card._followUp = { atMs: at, text: followUpText(card, s, at) };
+      card._readAt = null;
+    }
+  });
+  const after = StateManager.get();
+  return due.map(({ c }) => after.inbox.find(x => x.instanceId === c.instanceId)).filter(c => c?._followUp);
 }
 
 const _released = [];   // r139 released since the app last looked (never by a look-ahead)
@@ -2900,7 +2915,13 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
       tag:       c.instanceId,
       kind:      c.kind,
     }));
-  return [...cards, ...gameReminders(state, nowMs, ahead), ...gamePushes(state, ahead, nowMs)]
+  // r279 §122.158 the follow-ups still to come on messages waiting in Messages (the same message's alert tag)
+  const followUps = alertOn(state, PUSH_ALERTS.messages) ? (state?.inbox || [])
+    .map(c => ({ c, at: followUpAt(c, state) }))
+    .filter(({ at }) => at !== null && at > nowMs - 60 * 1000)
+    .map(({ c, at }) => ({ id: `fu:${c.instanceId}`, deliverAt: at, title: senderLabel(c, state) || 'The Front Office',
+                           body: `Following up: ${c.subject || 'a message in your inbox'}`, tag: c.instanceId, kind: PUSH_ALERTS.messages })) : [];
+  return [...cards, ...followUps, ...gameReminders(state, nowMs, ahead), ...gamePushes(state, ahead, nowMs)]
     .sort((a, b) => a.deliverAt - b.deliverAt);
 }
 
