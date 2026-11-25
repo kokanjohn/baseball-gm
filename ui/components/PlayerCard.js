@@ -36,7 +36,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { baseballYear } from '../../engine/PlayerFactory.js';
 import { wearToday } from '../../engine/DevelopmentEngine.js';
 import { primaryPos, eligibleAt, keepNeed, familiarity, pitchRoles, stretchOf } from '../../engine/Positions.js';   // r164
-import { isStarred, toggleStar } from '../../engine/Starred.js';   // r274 §122.153
+import { isStarred, toggleStar, canStar } from '../../engine/Starred.js';   // r274 §122.153
 import * as EventBus from '../EventBus.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ export function openPlayerCard(playerId, state) {
       <div class="modal-header">
         <div class="modal-title">${_escape(player.name)}</div>
         <div class="pc-head-acts">
-          ${_starButton(isStarred(state, playerId))}
+          ${canStar(state, playerId) ? _starButton(isStarred(state, playerId)) : ''}
           <button class="modal-close" id="player-card-close">×</button>
         </div>
       </div>

@@ -34,6 +34,10 @@ import { precipAt, forecastContext, DBZ_MIN } from './WeatherSystems.js';
 import { cutBy } from './OffseasonEngine.js';   // r200
 import { watching } from './FaWatch.js';   // r204 §122.82
 import * as Retirement from './Retirement.js';   // r223 §122.102
+import { starredIds } from './Starred.js';   // r275 §122.154
+import { clubMode, tradeWindow } from './TradeEngine.js';
+import { waiverEndsAt } from './FreeAgency.js';
+import { statusOf } from './PlayerStatus.js';
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -834,6 +838,66 @@ W.sc_free_agents = (f, r, who) => {
            faReport: { ids: seen.map(x => x.p.id), buzz, closeAtMs: f.atMs + 7 * MS_DAY } };
 };
 
+/**
+ * r275 §122.154 the Scouting Director on our starred players: up to STARRED_REPORT_SIZE of them, the ones
+ * reported on longest ago first. Each: who and where, how the season is going and lately, health, the contract
+ * (or the asking price, or the waiver clock), and whether the club would move the player.
+ */
+export const STARRED_REPORT_SIZE = 3;
+W.sc_starred = (f, r, who) => {
+  const st = f.state;
+  const ids = starredIds(st);
+  if (!ids.length) return { body: ['We don\'t have anyone starred right now.'], memo: { playerIds: [] } };
+  const last = new Map();
+  for (const x of f.pastReplies('sc_starred')) for (const id of x.memo?.playerIds || []) if (!last.has(id)) last.set(id, x.atMs);
+  const pick = [...ids].sort((a, b) => (last.get(a) ?? 0) - (last.get(b) ?? 0)).slice(0, STARRED_REPORT_SIZE).map(f.P).filter(Boolean);
+  const out = [pick.length < ids.length ? `On ${list(pick.map(p => p.name))} this time (we have ${num(ids.length)} starred).` : `On our starred ${pick.length === 1 ? 'player' : 'players'}: ${list(pick.map(p => p.name))}.`];
+  const win = tradeWindow(st);
+  for (const p of pick) {
+    const arm = ['SP', 'RP'].includes(p.pos), n = p.name;
+    const club = (st.leagueTeams || []).find(t => t.id === p.teamId);
+    const where = p.onWaivers ? 'on waivers' : p.group === 'freeAgent' ? 'a free agent' : club ? `the ${club.name}` : 'unsigned';
+    const s = S(p), lines = [`${n} (${posLabel(p)}, ${f.age(p)}, OVR ${p.ovr}, ${where}):`];
+    // The season, and the last ten games (regular season: the Impact log).
+    if (arm ? (s.ip || 0) >= 1 : (s.ab || 0) >= 1) {
+      lines.push(arm ? `${eraS(p).toFixed(2)} ERA in ${Math.round(s.ip)} innings${SPRING ? ' this spring' : ''}${s.k ? `, ${plural(s.k, 'strikeout')}` : ''}.`
+        : `${statLine(p)}${s.hr ? `, ${plural(s.hr, 'homer')}` : ''}${SPRING ? ' this spring' : ''}.`);
+      const recent = (p._impGameLog || []).slice(-10).map(e => e.stats || {});
+      if (!SPRING && recent.length >= 5) {
+        const t = recent.reduce((a, x) => { for (const k of ['ab', 'h', 'hr', 'ip', 'er']) a[k] += x[k] || 0; return a; }, { ab: 0, h: 0, hr: 0, ip: 0, er: 0 });
+        if (arm && t.ip >= 3) lines.push(`Lately: ${eraOf(t.er, t.ip).toFixed(2)} over the last ${Math.round(t.ip)} innings.`);
+        else if (!arm && t.ab >= 10) lines.push(`Lately: ${t.h}-for-${t.ab}${t.hr ? ` with ${plural(t.hr, 'homer')}` : ''} over ${num(recent.length)} games.`);
+      }
+    } else {
+      const ly = (p.seasonLog || []).filter(e => e?.stats).at(-1)?.stats;
+      lines.push(ly && (arm ? ly.ip >= 10 : ly.ab >= 30)
+        ? (arm ? `Hasn't pitched yet this year. Last year: a ${eraOf(ly.er || 0, ly.ip).toFixed(2)} ERA in ${Math.round(ly.ip)} innings.` : `Hasn't played yet this year. Last year: ${fmtAvg(avgOf(ly.h || 0, ly.ab))} with ${plural(ly.hr || 0, 'homer')}.`)
+        : (arm ? 'Hasn\'t pitched yet.' : 'Hasn\'t played yet.'));
+    }
+    const hurt = statusOf(st, p, f.atMs);
+    if (hurt?.kind === 'dtd' || hurt?.kind === 'evaluating') lines.push(`Day-to-day${p.injury?.type ? ` (${p.injury.type})` : ''}.`);
+    else if (hurt?.kind === 'il') lines.push(`On the injured list${p.injury?.type ? ` (${p.injury.type})` : ''}.`);
+    // Money, and whether we could get the player.
+    if (p.group === 'freeAgent') {
+      const ask = signingTerms(st, p);
+      lines.push(`Asking ${ask.salary ? formatK(ask.salary) : 'the minimum'}${ask.bonus ? ` with a ${formatK(ask.bonus)} bonus` : ''}. We can sign ${n} any time.`);
+    } else if (p.onWaivers) {
+      lines.push(`Any club can claim ${n} until ${f.when(waiverEndsAt(p))}, worst record first.`);
+    } else if (club) {
+      const yrs = yearsAfterThis(p, st);
+      lines.push(`Paid ${formatK(p.contractSalary || 0)} a year, ${yrs ? `signed for ${plural(yrs, 'more year')} after this one` : 'a free agent after this season'}.`);
+      const regular = (club.lineupSlots || []).some(sl => sl.playerId === p.id) || (club.rotation?.order || []).includes(p.id);
+      const mode = clubMode(st, club.id);
+      if (!win.open) lines.push(`Nothing can happen now: ${win.reason}.`);
+      else lines.push(mode === 'seller' ? `The ${club.name} are selling${regular ? ', even their regulars' : ''}. ${n} could be had.`
+        : mode === 'buyer' ? (regular ? `The ${club.name} are in the race and ${n} plays every day for them. It would cost a lot.` : `The ${club.name} are in the race, but ${n} isn't a regular for them. They might listen.`)
+        : regular ? `The ${club.name} haven't picked a direction. ${n} is a regular for them, so they'd want real value back.` : `The ${club.name} haven't picked a direction, and ${n} isn't a regular for them. Worth a call.`);
+    }
+    out.push(lines.join(' '));
+  }
+  return { body: out, memo: { playerIds: pick.map(p => p.id) } };
+};
+
 W.sc_opponent = (f, r, who) => {
   const ser = f.nextSeries();
   if (!ser?.opp) return { body: [offseasonNote(f) || 'No opponent on the board yet.'], memo: {} };
@@ -1050,7 +1114,7 @@ const TOPIC_LABELS = {
   bc_tactics: 'the running game', pc_bullpen: 'the bullpen', pc_roles: 'the bullpen roles', tix_attendance: 'attendance',
   tix_promo: 'a promotion', sc_prospect: 'our young players', sc_opponent: 'the next opponent',
   sc_free_agents: 'the free agents', mgr_trade: 'the trade', sc_trade: 'the trade', sc_shop: 'shopping a player',
-  sc_retire: 'a player\'s plans', hc_work: 'the work', pc_work: 'the work', bc_defense: 'the glove work', bc_work: 'the work', bc_who: 'who to work with', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
+  sc_retire: 'a player\'s plans', sc_starred: 'our starred players', hc_work: 'the work', pc_work: 'the work', bc_defense: 'the glove work', bc_work: 'the work', bc_who: 'who to work with', bc_teach: 'the position work', pc_stretch: 'the sim games', sc_program: 'the program', mgr_rest: 'a day off', doc_health: 'that player',
 };
 
 

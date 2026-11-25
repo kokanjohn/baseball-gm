@@ -28,8 +28,15 @@ const S = (fn) => page.evaluate(async (src) => { const SM = await import('/baseb
 
 await page.tap('.nav-item[data-tab="league"]'); await page.waitForTimeout(500);
 await page.selectOption('#lp-view-select', 'all'); await page.waitForTimeout(400);
-const rows = await page.$$eval('.lp-row[data-player]', els => els.map(e => e.dataset.player));
+const rows = await page.$$eval('.lp-row[data-player]:not(.user-player-row)', els => els.map(e => e.dataset.player));
 const hitterId = rows[3];
+// r275 §122.154 one of ours: no Star on the card
+const ourId = await page.$eval('.lp-row.user-player-row[data-player]', e => e.dataset.player).catch(() => null);
+if (ourId) {
+  await page.tap(`.lp-row[data-player="${ourId}"] .lp-name-line`); await page.waitForTimeout(500);
+  check('one of ours: no Star on the player card', await page.evaluate(() => !!document.getElementById('player-card-overlay')?.classList.contains('open') && !document.getElementById('pc-star')));
+  await page.tap('#player-card-close'); await page.waitForTimeout(400);
+} else check('one of ours on the All list', false);
 check(`League → All lists players, none starred yet (${rows.length})`, rows.length > 20 && await page.$$eval('.lp-star', e => e.length) === 0);
 
 // star a hitter from his card
@@ -45,7 +52,7 @@ check('the list marks the player with a star (no reload)', await page.evaluate((
 
 // star a pitcher too (from the Pitchers list)
 await page.tap('.lp-pos-btn[data-pos="pitchers"]'); await page.waitForTimeout(400);
-const pitcherId = await page.$eval('.lp-row[data-player]', e => e.dataset.player);
+const pitcherId = await page.$eval('.lp-row[data-player]:not(.user-player-row)', e => e.dataset.player);
 await page.tap(`.lp-row[data-player="${pitcherId}"] .lp-name-line`); await page.waitForTimeout(500);
 await page.tap('#pc-star'); await page.waitForTimeout(300);
 await page.tap('#player-card-close'); await page.waitForTimeout(400);
@@ -71,6 +78,17 @@ check('…and gone from the Starred list', await page.$$eval('.lp-row[data-playe
 // kept across a reload
 await page.waitForTimeout(2500);   // (the save is debounced)
 await page.reload({ waitUntil: 'networkidle' }); await page.waitForTimeout(2000);
+// r275 §122.154 the Scouting Director on our starred players
+await page.tap('.nav-item[data-tab="decisions"]'); await page.waitForTimeout(400);
+await page.tap('#itab-compose'); await page.waitForTimeout(300);
+await page.tap('[data-channel="scouting"]'); await page.waitForTimeout(300);
+const topic = await page.evaluate(() => document.querySelector('[data-topic="sc_starred"]')?.innerText.replace(/\s+/g, ' ').trim() || '');
+check(`Scouting Director: “${topic}”`, /Our starred players/.test(topic));
+await page.tap('[data-topic="sc_starred"]'); await page.waitForTimeout(300);
+await page.tap('#compose-send-btn'); await page.waitForTimeout(500);
+const sent = await S((s) => (s.scheduledCards || []).some(c => c._composeTopic === 'sc_starred'));
+check('sent: waiting on the director\'s report', sent);
+await page.screenshot({ path: `${out}/starred-compose-${theme}.png` });
 check('the star is kept after reopening the app', (await S((s) => Object.keys(s.starred || {}))).join() === pitcherId);
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close();

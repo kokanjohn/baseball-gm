@@ -15035,3 +15035,36 @@ No fresh team needed.
 **Open.** How starred players tie into Compose: the user's call.
 
 No fresh team needed.
+
+---
+
+## §122.154 — r275: starred players are league players; the Scouting Director reports on them
+
+**Decisions (the user).**
+- Our own players can't be starred; starring is for league players only.
+- Compose ties in through option 1: a Scouting Director report on the starred players.
+
+**Starred.js.**
+- New `canStar(state, id)`: not ours (teamId and rosterIds), not retired.
+- `isStarred` and `starredIds` apply it. So a starred player who joins us is no longer starred, without a hook on each way a player can join.
+- `toggleStar` refuses (and clears) a player who can't be starred.
+
+**PlayerCard.** No Star toggle on our own players' cards.
+
+**Compose.** Scouting Director → "Our starred players" (`sc_starred`; a 3-day wait; "No starred players" when there are none).
+- ComposeReplies `W.sc_starred` reports on up to `STARRED_REPORT_SIZE = 3` players. The ones reported on longest ago (from `composeLog` memo playerIds) go first, and the opening line says how many are starred if not all are covered.
+- Each player:
+  - who, position, age, OVR, and where (a club, a free agent, on waivers);
+  - the season line (spring stats in spring; last season's line if nothing yet this year) and the last ten regular-season games;
+  - day-to-day / injured list.
+- Then the money and the chance of getting the player:
+  - a free agent: the asking price;
+  - on waivers: claimable until when;
+  - another club's: salary and years left, then a read from `clubMode` (seller / buyer / neither) and whether the player is a regular (lineup or rotation). The trade window's reason is given when it's closed.
+- Fallback card `compose_sc_starred` in cards-pool.
+
+**Tests.**
+- check-starred-report: one of ours can't be starred; a report on 3 of 4, named and clean; contract and dealability lines; the next report starts with the one left out; a free agent's asking price; a starred player who joins us drops out; nobody starred.
+- test-starred-ui: no Star on our player's card; the Compose topic is there and sends.
+
+No fresh team needed.

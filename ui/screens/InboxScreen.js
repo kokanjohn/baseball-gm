@@ -29,6 +29,7 @@ import { snapshotMetrics, formatMoney } from '../formatters.js';
 import * as When from '../../engine/When.js';
 import { dealsFor, shoppable, SHOP_AGAIN_MS, scoutingAsked, scoutingDeal } from '../../engine/TradeAdvice.js';
 import { namedPlayers, faLooks } from '../../engine/ComposeReplies.js';
+import { starredIds } from '../../engine/Starred.js';   // r275 §122.154
 import { workPlayers, skillsOf, teachablePositions } from '../../engine/PlayerWork.js';
 import { posLabel, startsAt, familiarity } from '../../engine/Positions.js';   // r163 §122.35
 import { penRoleOf } from '../../engine/Strategy.js';   // r169
@@ -169,6 +170,7 @@ const COMPOSE_CHANNELS = [
     topics: [
       { id: 'sc_free_agents', label: 'Free agents worth a look', desc: 'The scouts look over the free agents', looks: true },   // r199 the week's looks, not a cooldown
       { id: 'sc_prospect',   label: 'Young player report',      desc: 'A scouting report on one of our young players' },
+      { id: 'sc_starred',    label: 'Our starred players',      desc: 'How the players we starred are doing, and whether we could get them', starred: true, cooldown: 3 },   // r275 §122.154
       { id: 'sc_opponent',   label: 'Opponent scouting',        desc: 'Ask about an upcoming opponent\'s tendencies' },
       { id: 'sc_trade',      label: 'A trade on the table',     desc: 'The director\'s read on a deal: on the field, the value, a counter, the payroll', deal: true },   // r202 §122.79 (the manager's folded in)
       { id: 'sc_shop',       label: 'What could we get for…?',  desc: 'Pick one of our players: the director calls the clubs that could use them', player: true },
@@ -744,6 +746,7 @@ function _topicState(t, state) {
     const L = faLooks(state, Date.now());
     return L.left ? { info: `${L.left} of ${L.looks} looks left this week` } : { none: `Next look in ${L.inDays} day${L.inDays === 1 ? '' : 's'}` };
   }
+  if (t.starred && !starredIds(state).length) return { none: 'No starred players' };   // r275 §122.154
   const back = _composeBackAt(cd[t.id], t.cooldown || COMPOSE_COOLDOWN_DAYS);
   return back && back > Date.now() ? { backAt: back } : {};
 }

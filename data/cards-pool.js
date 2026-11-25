@@ -2662,6 +2662,15 @@ export const COMPOSE_RESPONSE_POOL = {
     yesLabel:'Noted', yesEffect:{}, yesMsg:"Free-agent report reviewed.",
   },
 
+  // r275 §122.154 (written as it comes back: ComposeReplies sc_starred)
+  sc_starred: {
+    id:'compose_sc_starred', autoResolve:'yes', type:'normal', tag:'SCOUTING',
+    sender:'Scouting', avatar:'🔭',
+    subject:"Our starred players",
+    body:"We checked in on our starred players. Nothing new to report this time.",
+    yesLabel:'Noted', yesEffect:{},
+  },
+
   sc_opponent: {
     id:'compose_sc_opponent', autoResolve:'yes', type:'normal', tag:'SCOUTING',
     sender:'Scouting', avatar:'🔭',
