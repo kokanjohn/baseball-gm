@@ -15305,7 +15305,7 @@ Fresh team: needed (saves from before r281 have no IDs; per the user, no upgrade
 
 **Why.** Our games already carried `opponentId`, but about 20 lookups found the opposing club by `game.opponent`, the name shown on the game. Club names can change: Settings renames clubs (App.js cascades the new name onto our schedule). Two clubs with the same name would send a lookup to the wrong one.
 
-There was also a real bug: `buildCardContext`'s `isDivisionOpponent` mapped division clubs to names and checked whether the list included `nextGame.opponent`… against a list built from `.name`. The match was sound only by luck of field naming, and in practice it was never true. As a result, the money card mon_pg_rival ("rival night", `_requiresDivisionOpponent`) could never come up. It can now.
+`buildCardContext`'s `isDivisionOpponent` (behind the rival-night card mon_pg_rival) compared names to names. It worked, under a misleading variable name (`divisionTeamIds`), but would miss a renamed club. It now goes by ID.
 
 **engine/Opponents.js (pure, precached).**
 - `opponentOf(state, game)`: the club by `game.opponentId`.
@@ -15326,9 +15326,9 @@ There was also a real bug: `buildCardContext`'s `isDivisionOpponent` mapped divi
   - every game (142) has its club's ID and that club's name;
   - a series is one club's games in a row;
   - rename a club, and give another club its old name: the lookups and the series still find the right club and never take in the other;
-  - the next game against a division rival reads as one, and against the other division, not;
+  - the next game against a division rival (one just renamed) reads as one, and against the other division, not;
   - with our next opponent renamed to another club's name, the game is played against its own club (its nine all from that club's roster).
 - check-away-days and check-callbacks were updated to pass the club's ID.
 - Season, multi-season, people, game-pushes, lookahead, message-lookahead, situations, message-timing, arcs, and the away-weather, game-pushes, schedule-rows, outlook and Live View UI tests all pass.
 
-Fresh team: not needed (games have carried `opponentId` since the calendar was built). The rival-night card can now appear.
+Fresh team: not needed (games have carried `opponentId` since the calendar was built).

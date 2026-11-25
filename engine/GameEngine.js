@@ -1583,7 +1583,7 @@ export function buildCardContext() {
     : 0;
 
   // Division opponent check
-  // (r282 §122.161 by the club's id: the old check matched names against… names, read as ids, and was never true)
+  // (r282 §122.161 by the club's id, not its name: a renamed club is still a division rival)
   const isDivisionOpponent = opponentOf(state, nextGame)?.divisionId === state.userTeam?.divisionId && !!nextGame?.opponentId;
 
   // Standings context
