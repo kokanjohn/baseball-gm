@@ -15469,3 +15469,11 @@ No fresh team needed.
 **Test.** test-deal-sheet-ui: every player's line has "· Age N", never a bare number after the OVR.
 
 No fresh team needed.
+
+### §122.167 The forecast opens without a wait (r288)
+
+The first tap on Forecast paused about a second: the ten days are worked out per ballpark (the weather worker, cached per forecast hour), and nothing showed until they were.
+- `OutlookSheet` opens at once with ten skeleton tiles (`ol-tile ol-wait`, `.ol-sk` shapes for day, place, icon, high, low, chance) that shimmer (`ol-shimmer`, staggered by `--d`); each tile fades in (`ol-in`) as its day is filled. Reduced motion turns both off.
+- `warmOutlook(state)` works the outlook out ahead (the club and every venue it visits); `ScheduleScreen` calls it when idle after it shows, so a Forecast tap from the Schedule usually fills at once (~75 ms in the test against ~1.1 s cold).
+- test-outlook-ui: a cold open shows ten shimmering tiles; a warm open fills in under 700 ms (timed with performance.now, since the tests pin Date); tiles are measured after the fade settles.
+No fresh team needed.

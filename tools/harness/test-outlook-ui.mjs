@@ -24,11 +24,30 @@ await page.evaluate(async (theme) => {
   const App = await import('/baseball-gm/ui/App.js'); await App.init();
 }, theme);
 await page.waitForTimeout(800);
-await page.tap('.nav-item[data-tab="schedule"]'); await page.waitForTimeout(600);
+// r288 §122.167 straight in (nothing worked out yet): the sheet opens at once, shimmering tiles until the days come
+await page.tap('.nav-item[data-tab="schedule"]');
+const t0 = performance.now();
+await page.evaluate(async () => { const SM = await import('/baseball-gm/store/StateManager.js'); (await import('/baseball-gm/ui/components/OutlookSheet.js')).openOutlookSheet({ state: SM.get() }); });
+const first = await page.evaluate(() => ({ tiles: document.querySelectorAll('.ol-tile').length, shimmer: document.querySelectorAll('.ol-tile.ol-wait .ol-sk').length,
+  anim: getComputedStyle(document.querySelector('.ol-sk') || document.body).animationName }));
+check(`opened at once: ten tiles, each shimmering while it's worked out (${first.shimmer} shapes, ${first.anim})`, first.tiles === 10 && first.shimmer >= 50 && first.anim === 'ol-shimmer');
+await page.waitForFunction(() => document.querySelectorAll('.ol-tile:not(.ol-wait)').length === 10, null, { timeout: 30000 }).catch(() => {});
+const cold = Math.round(performance.now() - t0);
+await page.evaluate(() => document.getElementById('ol-sheet')?.remove());
+await page.waitForTimeout(600);
 const btns = await page.$$eval('.sched-head-btns button', bs => bs.map(b => b.textContent.trim()));
 check(`the Schedule's top: ${btns.join(' | ')}`, btns.join('|') === 'Forecast|Scores');
+// …and with the Schedule shown a moment first (the outlook worked out ahead): the days are there almost at once
+await page.evaluate(async () => (await import('/baseball-gm/ui/App.js')).switchTab('dashboard'));
+await page.evaluate(() => { for (const k of Object.keys(window)) if (k.startsWith('__fc')) delete window[k]; });
+await page.tap('.nav-item[data-tab="schedule"]'); await page.waitForTimeout(2500);
+const t1 = performance.now();
 await page.tap('#sched-fc-btn');
 await page.waitForFunction(() => document.querySelectorAll('.ol-tile:not(.ol-wait)').length === 10, null, { timeout: 30000 }).catch(() => {});
+const warm = Math.round(performance.now() - t1);
+console.log(`    the first open: ${cold} ms to fill; with the Schedule shown first: ${warm} ms`);
+check(`worked out ahead: filled in ${warm} ms`, warm < 700);
+await page.waitForTimeout(400);   // the tiles' fade-in settles before they're measured
 const t = await page.evaluate(() => [...document.querySelectorAll('.ol-tile')].map(el => ({
   day: el.querySelector('.ol-day')?.textContent.trim(), where: el.querySelector('.ol-where')?.textContent.trim(), venue: el.dataset.venue,
   icon: !!el.querySelector('.ol-icon svg'), iconW: Math.round(el.querySelector('.ol-icon')?.getBoundingClientRect().width || 0),

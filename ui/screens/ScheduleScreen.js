@@ -33,7 +33,7 @@ import { wxState, weatherLine, gameNotes, calledInnings, postponedOn, dayLabel, 
 import { weatherToldOf, leagueWeatherToldOf } from '../../engine/GameEngine.js';
 import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
 import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
-import { openOutlookSheet } from '../components/OutlookSheet.js';   // r277 §122.156
+import { openOutlookSheet, warmOutlook } from '../components/OutlookSheet.js';   // r277 §122.156, r288 warmOutlook
 import { sameOpponent } from '../../engine/Opponents.js';   // r282 §122.161
 import {
   formatDate, formatRecord, formatTeamRecord, formatGameLabel,
@@ -505,6 +505,8 @@ function _scheduledTime(game) {
 
 function _attachListeners(state) {
   _fillForecasts(state);   // §102.7
+  // r288 §122.167 the outlook worked out ahead, once things are quiet (the Forecast sheet opens with it there)
+  (window.requestIdleCallback || ((f) => setTimeout(f, 300)))(() => warmOutlook(StateManager.get()));
 
   // r277 §122.156 the 10-day outlook
   document.getElementById('sched-fc-btn')?.addEventListener('click', () => {

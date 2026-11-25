@@ -36,7 +36,9 @@ export function openOutlookSheet({ state }) {
         <div><div class="ol-kicker">10-Day Outlook</div><div class="ol-city">${_esc(home)}</div></div>
         <button class="modal-close" id="ol-close" aria-label="Close">×</button>
       </div>
-      <div class="ol-grid" id="ol-grid">${Array.from({ length: DAYS }, (_, i) => `<div class="ol-tile ol-wait" id="ol-t-${i}"><div class="ol-day">&nbsp;</div><div class="ol-icon"></div><div class="ol-hi">&nbsp;</div></div>`).join('')}</div>
+      <div class="ol-grid" id="ol-grid">${Array.from({ length: DAYS }, (_, i) => `<div class="ol-tile ol-wait" id="ol-t-${i}" style="--d:${i * 70}ms">
+        <div class="ol-sk ol-sk-day"></div><div class="ol-sk ol-sk-where"></div><div class="ol-sk ol-sk-icon"></div>
+        <div class="ol-sk ol-sk-hi"></div><div class="ol-sk ol-sk-lo"></div><div class="ol-sk ol-sk-pct"></div></div>`).join('')}</div>
     </div></div>`;
   document.body.appendChild(overlay);
   requestAnimationFrame(() => overlay.classList.add('open'));
@@ -45,6 +47,18 @@ export function openOutlookSheet({ state }) {
   overlay.querySelector('#ol-close').addEventListener('click', close);
   _fill(overlay, state, map);
   return { close, overlay };
+}
+
+/**
+ * r288 §122.167 work the outlook out ahead (the Schedule calls this when it shows): the ten days at our park and at
+ * each park we'll be at, into ForecastSource's cache — so the Forecast sheet opens with its numbers there.
+ */
+export async function warmOutlook(state) {
+  try {
+    const now = Date.now();
+    const base = await outlookFor(state, 'user', now);
+    for (const v of new Set(outlookVenues(state, base, now))) if (v !== 'user') await outlookFor(state, v, now);
+  } catch (err) { console.warn('[outlook] warm', err); }
 }
 
 /** Where the club is each of the ten days: { venues: [venueId × 10], games: upcoming games }. */
@@ -78,6 +92,7 @@ async function _fill(overlay, state, map) {
     const away = v !== 'user';
     const wet = d.chance >= 30;
     tile.classList.remove('ol-wait');
+    tile.classList.add('ol-in');   // r288 (fades in over the loading shimmer)
     tile.dataset.venue = v;
     tile.innerHTML = `
       <div class="ol-day">${_esc(when)}</div>
@@ -145,7 +160,19 @@ function _injectCSS() {
     .ol-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:2px 0 8px;}
     .ol-tile{display:flex;flex-direction:column;align-items:center;padding:8px 2px 8px;border-radius:12px;min-height:150px;}
     .ol-tile:first-child{background:var(--surface2);}
-    .ol-wait{opacity:.45;}
+    /* r288 §122.167 while the outlook is worked out: each tile's shape, shimmering, a beat apart */
+    .ol-sk{border-radius:6px;background:linear-gradient(90deg,var(--surface2) 0%,var(--border) 50%,var(--surface2) 100%);
+      background-size:200% 100%;animation:ol-shimmer 1.2s ease-in-out infinite;animation-delay:var(--d,0ms);}
+    .ol-sk-day{width:60%;height:12px;margin-top:2px;}
+    .ol-sk-where{width:0;height:12px;}
+    .ol-sk-icon{width:44px;height:44px;border-radius:50%;margin:7px 0 6px;}
+    .ol-sk-hi{width:58%;height:20px;}
+    .ol-sk-lo{width:38%;height:12px;margin-top:5px;}
+    .ol-sk-pct{width:46%;height:11px;margin-top:9px;}
+    @keyframes ol-shimmer{0%{background-position:100% 0;}100%{background-position:-100% 0;}}
+    .ol-in{animation:ol-fade .25s ease-out;}
+    @keyframes ol-fade{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:none;}}
+    @media (prefers-reduced-motion: reduce){.ol-sk,.ol-in{animation:none;}}
     .ol-day{font-size:12px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--text);}
     .ol-where{font-size:9px;font-weight:700;color:var(--muted);height:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px;}
     .ol-icon{width:52px;height:55px;margin:2px 0;}
