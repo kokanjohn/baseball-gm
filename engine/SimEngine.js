@@ -74,7 +74,7 @@ import { computeOVR, isAvailable, computeAge } from './PlayerFactory.js';
 import { playingRating, trueRatings } from './Diamonds.js';
 import { injuryChancePerExposure } from './InjuryEngine.js';
 import {
-  ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, armLoad, tireAfterBF, reliefInnings, springStarterInnings,
+  ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, armLoad, tireAfterBF, reliefInnings, springStarterInnings, seasonStarterInnings,
 } from './PitchingEngine.js';
 import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
 import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost, exposure } from './Positions.js';
@@ -2123,9 +2123,9 @@ function _pitcherTargetInnings(pitcher, gs = null) {
   const isRP = pitcher?.group === PLAYER_GROUP.BULLPEN
             || pitcher?.group === PLAYER_GROUP.PITCHER_BENCH;
   if (isRP) return Math.max(1, Math.round(1 + (stam - 40) / 25)); // ~1–2 IP
-  // r154 spring: a starter is building up (2 innings early in camp, 4 by the end).
-  if (gs?.isSpring) return springStarterInnings(gs.springNum);
-  return Math.max(4, Math.round(5 + (stam - 50) / 12));           // ~5–8 IP
+  // r154 spring: a starter is building up. r272 §122.151 an inning or two short of his regular-season length.
+  if (gs?.isSpring) return springStarterInnings(gs.springNum, seasonStarterInnings(pitcher));
+  return seasonStarterInnings(pitcher);                             // ~5–8 IP
 }
 
 // Credit the current pitcher with a completed inning; decide whether he's done

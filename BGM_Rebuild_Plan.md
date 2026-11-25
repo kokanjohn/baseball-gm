@@ -14966,3 +14966,22 @@ No fresh team needed. A career day already in the inbox names no one, and its ye
 - The completed thread has two parts (message, your reply) plus What changed.
 
 No fresh team needed.
+
+---
+
+## §122.151 — r272: spring starters go an inning or two short of a regular-season start
+
+**Request.** Starters should go deeper in spring games (3–4 innings) so a spring game isn't using three starters. They should go an inning or two shorter than they would in a regular-season game.
+
+**Change.**
+- `SPRING_SP_INNINGS {first:2,last:4}` is replaced by `SPRING_SP_SHORTER {first:2,last:1}` and `SPRING_SP_MIN_INNINGS = 2`.
+- `PitchingEngine.springStarterInnings(springNum, seasonInnings)` = the regular-season innings less 2 in the first spring game, easing to 1 less by the last (never under 2).
+- New `seasonStarterInnings(pitcher)` (stamina: ~5–8, at least 4) is the one formula for a regular-season starter's length. SimEngine `_pitcherTargetInnings` uses it for both.
+- Unchanged: spring starters still aren't pulled early for a reliever by the manager. The hook still doesn't apply in spring. Tiring (batters faced) and being shelled still end an outing.
+
+**Checks (sim-season).**
+- The spring cap check uses the new length, with one inning of give for a season's stamina change.
+- New: spring starts average 3–5.5 innings, and a side uses 3+ starters in at most 10% of spring game sides. Run: 4.8 innings on average; 1 side of 16.
+- The "every absence ends" check now accepts an absence that ends by date (`untilMs`, e.g. a sim game). The new spring randomness turned up a sim-game absence that the old check flagged wrongly.
+
+Fresh team: not needed (the next spring game uses it).

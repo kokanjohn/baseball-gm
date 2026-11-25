@@ -2413,14 +2413,22 @@ async function main() {
     check(`stats: two starts per game, quality starts counted (${gsSum} GS / ${startGames} games, ${qsSum} QS)`,
           gsSum === 2 * startGames && qsSum > 0 && qsSum < gsSum && rotNoStart.length === 0,
           `starters with no start recorded: ${rotNoStart.length}`);
-    // r154 spring: starters build up — never past their spring innings (2 early, 4 late).
+    // r154 spring: starters build up — never past their spring innings.
+    // r272 §122.151 an inning or two short of a regular-season start (his stamina now; a season's
+    // development can move it an inning, so one inning's give), and a spring game uses two starters at most.
     {
       const sp = st.schedule.filter(g => g.isSpring && g._committed && g.boxScore);
       const over = sp.flatMap(g => [g.boxScore.away.pitchers[0], g.boxScore.home.pitchers[0]]
-        .filter(Boolean).map(p => ({ g: g.index, outs: p.ipOuts || 0, cap: 3 * Pitching.springStarterInnings(g.index) })))
+        .filter(Boolean).map(p => ({ g: g.index, outs: p.ipOuts || 0, cap: 3 * (Pitching.springStarterInnings(g.index, Pitching.seasonStarterInnings(st.players[p.id])) + 1) })))
         .filter(x => x.outs > x.cap);
       const ips = sp.map(g => `${g.index}:${(g.boxScore.away.pitchers[0]?.ipOuts || 0) / 3 | 0}/${(g.boxScore.home.pitchers[0]?.ipOuts || 0) / 3 | 0}`).join(' ');
       check(`spring: no starter goes past his build-up innings (${sp.length} games; ${ips})`, sp.length > 0 && over.length === 0, JSON.stringify(over));
+      const starts = sp.flatMap(g => [g.boxScore.away.pitchers[0], g.boxScore.home.pitchers[0]]).filter(Boolean);
+      const avg = starts.reduce((a, p) => a + (p.ipOuts || 0), 0) / Math.max(1, starts.length) / 3;
+      const sps = sp.flatMap(g => ['away', 'home'].map(s => g.boxScore[s].pitchers.filter(p => st.players[p.id]?.pos === 'SP').length));
+      const three = sps.filter(n => n >= 3).length;
+      check(`spring: starters go about 3–5 innings (${avg.toFixed(1)} on average), and a side uses 3+ starters in ${three} of ${sps.length}`,
+        avg >= 3 && avg <= 5.5 && three <= Math.ceil(sps.length * 0.1), `SPs per side: ${sps.join(' ')}`);
     }
     // §76: the manager's pitching. Relievers rest (never a third day in a row),
     // starters get four days, relief work is spread over the pen (the best arms
@@ -2512,8 +2520,8 @@ async function main() {
           pc.every(x => x.ok), pc.filter(x => !x.ok).map(x => x.action).join(','));
     check('player cards: nobody away is ever in the lineup or rotation after a game', gm.awayInLineup.length === 0,
           gm.awayInLineup.slice(0, 5).join(' '));
-    const stale = Object.values(st.players).filter(p => p.unavailable && !(p.unavailable.gamesLeft > 0));
-    check('player cards: every absence ends (games counted down)', stale.length === 0, stale.length);
+    const stale = Object.values(st.players).filter(p => p.unavailable && !(p.unavailable.gamesLeft > 0) && !Number.isFinite(p.unavailable.untilMs));
+    check('player cards: every absence ends (games counted down)', stale.length === 0, stale.map(p => `${p.name} ${JSON.stringify(p.unavailable)}`).join('; ') || 0);
     const chained = [...gm.chainSeen.values()];
     check(`card chains: follow-up cards are set in motion (${chained.length})`, chained.length >= 1,
           `${[...new Set(chained)].join(',')} — scouting cards seen: ${[...gm.cardIdsSeen].filter(x => /^(sc|intl|indie|s2)/.test(x)).join(',') || 'none'}`);
