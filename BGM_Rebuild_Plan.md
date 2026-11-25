@@ -15374,3 +15374,44 @@ Fresh team: not needed (games have carried `opponentId` since the calendar was b
 - Season, multi-season, people, opponents, follow-ups, gm-connections, arcs, message-timing, decision-impact, and the follow-up, decision-impact, inbox-badge, message-pushes, pool-cards and starred UI tests all pass.
 
 Fresh team: recommended (CPU GM names change; messages from before r283 have no `_people` and show names as written).
+
+---
+
+## §122.163 — r284: renaming people (step 3), and names updated everywhere they show
+
+**Request (the user).** The rename option, and names updated everywhere a name touches or shows, not only in messages.
+
+**Rename (TeamScreen → Staff).**
+- Each staff sheet has a Rename button. A new Owner card (tap it) renames the owner.
+- The rename sheet checks the name as it's typed (`NameRules.nameProblem`). Save calls `renamePerson`, emits `person:renamed` and `roster:changed`, and toasts "X is now Y".
+- **Name rules** (engine/NameRules.js, precached), refused when the name is:
+  - not 2–24 characters of letters (spaces, hyphens, apostrophes and periods between them), starting with a capital;
+  - a name anyone in the record goes by or has gone by (`namesInUse`: current names and `aka`);
+  - a player's name;
+  - a club's name, city, nickname or abbreviation;
+  - for a one-word name, a word the game's messages use (the vocabulary of every card pool, plus days and a few game words).
+- That last rule exists because names update by the word wherever they were written. So "Rain" would otherwise turn "Rain delay" into the person's new name.
+
+**Names everywhere.**
+- **Messages** (r283), plus:
+  - the sender is always among a message's people (`peopleIn` adds `_senderId`; `viewOf` adds it for messages stamped before r284). This is how a Scouting message shows the director's current name.
+  - "What changed" labels (`_impact[].label`).
+  - messages written about someone before they had an ID (a candidate later hired): `enroll` links them on hire.
+- **Words kept as text** (`People.liveText`): each old name that was one person's alone and isn't anyone's now, nor a player's, reads as the person's name now. It's applied to:
+  - the Dashboard's Recent feed and the League activity feed;
+  - the League wire (Moves);
+  - the Finances ledger lines (a buyout names the coach).
+- **Fields:** an empty staff chair's "X is gone" reads the person by `prevId`. Names held in objects (staff, owner, CPU managers and GMs, the managers' market) are updated by `renamePerson`.
+- **Hiring:** new coaches, managers and GMs never take a name in `namesInUse` (CoachEngine candidates, ManagerEngine `_freeNames`, FirstDay `cpuGmName` and `gmTurnover`), so an old name never gets a new owner.
+- `enroll` now keeps a person's `aka` when they change jobs.
+
+**Checks.**
+- check-live-names (extended): old names stay taken and no candidate is given one; feed text reads the new name; the name rules refuse a name in use, a game word, a club's and a player's, and accept a good one.
+- New test-rename-everywhere-ui, on a three-season save (multi-season.mjs with `STATE_DUMP`; the test reads /ms-state.json from the test server's root):
+  - the staff sheet's Rename refuses a name in use, a game word ("Rain"), a non-name and the club's city, and saves a good one;
+  - the owner card;
+  - then everyone (31) renamed, and 51 views read: Dashboard and Recent; Team Staff and Finances; League Teams and four team sheets, Moves, Standings; the Schedule and three team sheets; the inbox and each message; Completed and 25 threads; Compose and each channel.
+  - No old name anywhere; the new names shown 93 times.
+- Season, multi-season and the related checks and screen tests pass.
+
+Fresh team: not needed.

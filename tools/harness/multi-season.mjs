@@ -367,5 +367,7 @@ noteMail();
 }
 say(`  the GM's profile (felt, not shown): ${Object.entries(gmProfile(SM.get())).map(([k, v]) => `${k} ${v}`).join(', ')}`);
 say(`  card answers: ${Object.entries(tally).filter(([k]) => /^(os_|fo_|il_return|lineup_return)/.test(k)).map(([k, v]) => `${k} ${v.yes}/${v.no}/${v.left}`).join(', ')}`);
+// (a saved game at the end, for tools that read a real state: STATE_DUMP=file)
+if (process.env.STATE_DUMP) { const { writeFileSync } = await import('node:fs'); writeFileSync(process.env.STATE_DUMP, JSON.stringify({ state: SM.get(), clockMs: clock.get() })); }
 say(`\n${pass}/${pass + fail} checks passed${fail ? ` — FAILED: ${[...new Set(fails)].join(' | ')}` : ''}`);
 process.exit(fail ? 1 : 0);

@@ -84,6 +84,9 @@ export function peopleIn(card, state) {
     }
     out[id] = nm;
   }
+  // (r284 the sender always: a department's message shows its head — the scouting director — by name)
+  const sid = card._senderId;
+  if (sid && !out[sid] && state.people[sid]?.name) out[sid] = state.people[sid].name;
   return out;
 }
 
@@ -102,20 +105,31 @@ export function liveNames(text, card, state) {
   return String(text).replace(re, (m, pre, nm) => pre + map.get(nm));
 }
 
+/** The people a message names, its sender always among them (r284: a message stamped before r284 too). */
+function _named(card) {
+  const sid = card?._senderId;
+  if (!sid || card._people?.[sid]) return card?._people || null;
+  const written = card._senderName || String(card.sender || '').match(PAREN)?.[1] || String(card.sender || '').split(', ')[0];
+  return { ...(card._people || {}), [sid]: written };
+}
+
 /** The message as it's shown now: its words with today's names (the same object when nothing changed). */
 export function viewOf(card, state) {
-  if (!card?._people || !Object.keys(card._people).length) return card;
+  const named = _named(card);
+  if (!named || !Object.keys(named).length) return card;
+  card = named === card._people ? card : { ...card, _people: named };
   const L = (s) => (typeof s === 'string' ? liveNames(s, card, state) : s);
   const out = { ...card };
   for (const k of ['sender', 'subject', 'preview', 'body', 'yesLabel', 'noLabel', '_autoLabel', 'yesMsg', 'noMsg', '_summary', '_senderName']) if (typeof card[k] === 'string') out[k] = L(card[k]);
   if (Array.isArray(card._choices)) out._choices = card._choices.map(c => (c ? { ...c, label: L(c.label), sub: L(c.sub) } : c));
   if (card._followUp?.text) out._followUp = { ...card._followUp, text: L(card._followUp.text) };
+  if (Array.isArray(card._impact)) out._impact = card._impact.map(r => (r && typeof r.label === 'string' ? { ...r, label: L(r.label) } : r));   // r284 "What changed"
   return out;
 }
 
 /** What the sender is shown as: "Name, Role" for a person, the department as it is. */
 export function senderLabel(card, state) {
-  if (card?._people && Object.keys(card._people).length) card = viewOf(card, state);   // r283 today's names
+  if (card?._people || card?._senderId) card = viewOf(card, state);   // r283 today's names
   const s = String(card?.sender || '').trim();
   if (!s) return '';
   if (SCOUTING.has(s)) {   // r235 the director (when it arrived, else now), or the department while the job is open

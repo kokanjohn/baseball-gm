@@ -30,7 +30,7 @@ import { STAFF_NAMES } from '../data/player-names.js';
 import { eventRand } from './Dice.js';
 import { qualityOf, qualityWord, rollQuality } from './CoachEngine.js';
 import { strategyOf, RUN_STYLES, HOOK_STYLES } from './Strategy.js';
-import { enroll, leave, toMarket, samePerson } from './People.js';   // r281 §122.160
+import { enroll, leave, toMarket, samePerson, namesInUse } from './People.js';   // r281 §122.160, r284 namesInUse
 
 export { qualityWord };
 
@@ -127,7 +127,7 @@ export function managerNames(state) {
 
 /** Names nobody in the league is using (staff, owner, managers, the market). */
 function _freeNames(state, taken = new Set()) {
-  const used = new Set([...taken, ...managerNames(state), state?.userTeam?.ownerName,
+  const used = new Set([...taken, ...namesInUse(state), ...managerNames(state), state?.userTeam?.ownerName,
     ...Object.values(state?.userTeam?.coachingStaff || {}).map(c => c?.name)].filter(Boolean));
   return STAFF_NAMES.filter(n => !used.has(n));
 }

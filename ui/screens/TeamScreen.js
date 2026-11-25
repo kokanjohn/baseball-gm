@@ -42,6 +42,8 @@ import * as Coach from '../../engine/CoachEngine.js';
 import * as Managers from '../../engine/ManagerEngine.js';   // §122.64
 import { strategyOf, RUN_STYLES, HOOK_STYLES } from '../../engine/Strategy.js';
 import * as When from '../../engine/When.js';
+import { renamePerson, nameOf, liveText } from '../../engine/People.js';   // r284 §122.163
+import { nameProblem, cleanName } from '../../engine/NameRules.js';
 import { posLabel, eligibleAt, pitchRoles } from '../../engine/Positions.js';   // r163 §122.35
 
 // ─────────────────────────────────────────────────────────────
@@ -718,7 +720,7 @@ function _renderStaff(state) {
       <div class="staff-card">
         <div class="staff-card-left">
           <div class="staff-card-name">Vacant</div>
-          <div class="staff-card-role">${label}${data.prev ? ` · ${_escape(data.prev)} is gone` : ''}</div>
+          <div class="staff-card-role">${label}${data.prev ? ` · ${_escape(nameOf(state, data.prevId) || data.prev)} is gone` : ''}</div>
         </div>
         <div class="staff-card-meta"><span style="font-size:10px;font-weight:700;color:var(--danger);background:var(--chip-red-bg);padding:2px 6px;border-radius:4px;">Hiring</span></div>
       </div>`;
@@ -738,7 +740,16 @@ function _renderStaff(state) {
     `;
   }).join('');
 
-  return `<div style="padding:8px 16px 16px;">${cards}</div>`;
+  // r284 §122.163 the owner (tap to rename)
+  const u = state.userTeam || {};
+  const owner = u.ownerName ? `
+      <button class="staff-card staff-card-tap" data-staff="owner" aria-label="${_escape(u.ownerName)}, Owner">
+        <div class="staff-card-left">
+          <div class="staff-card-name">${_escape(u.ownerName)}</div>
+          <div class="staff-card-role">Owner</div>
+        </div>
+      </button>` : '';
+  return `<div style="padding:8px 16px 16px;">${cards}${owner}</div>`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -800,7 +811,7 @@ function _renderFinances(state) {
 
   const recent = [...(fin.ledger || [])].slice(-10).reverse().map(e => `
     <div class="fin-line">
-      <span>${_escape(e.label)}<span class="fin-when">${When.agoDay(e.at, Date.now())}</span></span>
+      <span>${_escape(liveText(state, e.label))}<span class="fin-when">${When.agoDay(e.at, Date.now())}</span></span>
       <span class="${e.k < 0 ? 'fin-neg' : 'fin-pos'}">${e.k < 0 ? '−' : '+'}${formatMoney(Math.abs(e.k))}</span>
     </div>`).join('');
 
@@ -1110,6 +1121,7 @@ function _settingNow(team, m) {
 }
 
 function _openStaffSheet(state, key) {
+  if (key === 'owner') { _openRename(state, state.userTeam?.ownerId, 'Owner'); return; }   // r284 §122.163
   const d = state.userTeam?.coachingStaff?.[key];
   if (!d || d.vacant) return;
   const season = state.seasonNum || 1;
@@ -1131,7 +1143,54 @@ function _openStaffSheet(state, key) {
     row('Contract', left <= 0 ? 'Final year' : `${left} year${left === 1 ? '' : 's'} left`, `Through season ${d.contractExpiry || season}`),
     row('Relationship with you', relWord),
   ].join('');
-  _showSwapSheet(_escape(d.name || STAFF_LABELS[key]), STAFF_LABELS[key] || '', `<div class="staff-sheet">${rows}</div>`, () => {});
+  // r284 §122.163 rename (the person: everywhere they're named, past and future)
+  const rename = d.id ? `<div class="staff-sheet-acts"><button type="button" class="staff-rename-btn" id="staff-rename">Rename</button></div>` : '';
+  _showSwapSheet(_escape(d.name || STAFF_LABELS[key]), STAFF_LABELS[key] || '', `<div class="staff-sheet">${rows}</div>${rename}`, (ov) => {
+    ov.querySelector('#staff-rename')?.addEventListener('click', () => { ov.remove(); _openRename(StateManager.get(), d.id, STAFF_LABELS[key]); });
+  });
+}
+
+/**
+ * r284 §122.163 rename a person (staff or the owner): the new name, checked as it's typed (NameRules); saved, it's
+ * who they are everywhere — the staff screen, every message from or about them, the feed, the wire.
+ */
+function _openRename(state, id, label) {
+  const p = state.people?.[id];
+  if (!p) return;
+  const body = `
+    <div class="staff-sheet rename-sheet">
+      <label class="rename-label" for="rename-input">New name</label>
+      <input id="rename-input" class="rename-input" type="text" maxlength="24" autocomplete="off" autocapitalize="words" spellcheck="false" value="${_escape(p.name)}">
+      <div class="rename-why" id="rename-why"></div>
+      <div class="rename-acts">
+        <button type="button" class="rename-cancel" id="rename-cancel">Cancel</button>
+        <button type="button" class="rename-save" id="rename-save" disabled>Save</button>
+      </div>
+    </div>`;
+  _showSwapSheet(`Rename ${_escape(p.name)}`, _escape(label || ''), body, (ov) => {
+    const input = ov.querySelector('#rename-input'), why = ov.querySelector('#rename-why'), save = ov.querySelector('#rename-save');
+    const check = () => {
+      const v = cleanName(input.value);
+      const problem = v === p.name ? null : nameProblem(StateManager.get(), id, v);
+      why.textContent = problem || '';
+      save.disabled = !!problem || v === p.name || !v;
+    };
+    input.addEventListener('input', check);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !save.disabled) save.click(); });
+    ov.querySelector('#rename-cancel').addEventListener('click', () => ov.remove());
+    save.addEventListener('click', () => {
+      const v = cleanName(input.value);
+      if (nameProblem(StateManager.get(), id, v)) { check(); return; }
+      StateManager.mutate(s => { renamePerson(s, id, v); });
+      ov.remove();
+      EventBus.emit('person:renamed', { id, name: v });
+      EventBus.emit('roster:changed', { source: 'rename' });
+      App.showToast(`${p.name} is now ${v}`, 'neutral', 3000);
+      refresh();
+    });
+    check();
+    setTimeout(() => { input.focus(); input.select(); }, 250);
+  });
 }
 
 function _showSwapSheet(title, subtitle, rowsHtml, wireRows) {

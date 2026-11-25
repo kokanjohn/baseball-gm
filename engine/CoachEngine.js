@@ -41,7 +41,7 @@
 import { STAFF_NAMES } from '../data/player-names.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
 import { eventRand } from './Dice.js';
-import { enroll, leave } from './People.js';   // r281 §122.160
+import { enroll, leave, namesInUse } from './People.js';   // r281 §122.160, r284 namesInUse
 import { PLAYER_ORIGIN, ARCHETYPE_CARD_WEIGHTS } from '../data/constants.js';
 
 /** Every staff role with a quality and a specialty (the manager is separate). */
@@ -345,7 +345,7 @@ export function candidates(state, role, U, { rand = eventRand, taken = new Set()
   const other = _pick(info.specialties.filter(s => s !== need), rand) || need;
   // r221 a name nobody in the league answers to already: our staff, the owner, every club's manager and GM, the managers
   // on the market (a new coach sharing the manager's name read as the coach speaking of themselves).
-  const inUse = new Set([...taken, state?.userTeam?.ownerName, ...Object.values(state?.userTeam?.coachingStaff || {}).map(c => c?.name),
+  const inUse = new Set([...taken, ...namesInUse(state), state?.userTeam?.ownerName, ...Object.values(state?.userTeam?.coachingStaff || {}).map(c => c?.name),
     ...(state?.leagueTeams || []).flatMap(t => [t.manager?.name, t.gm?.name]), ...(state?.managerPool || []).map(m => m.name)].filter(Boolean));
   const free = STAFF_NAMES.filter(n => !inUse.has(n));
   const names = [];

@@ -39,6 +39,7 @@ import * as When from '../../engine/When.js';
 import { primaryPos, pitchRoles, eligibleAt, posLabel } from '../../engine/Positions.js';   // r163 §122.35
 import * as Managers from '../../engine/ManagerEngine.js';   // §122.64
 import { isStarred, starredIds } from '../../engine/Starred.js';   // r274 §122.153
+import { liveText } from '../../engine/People.js';   // r284 §122.163
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -324,7 +325,7 @@ function _renderActivityFeed(state) {
   const entries = feed.map(entry => `
     <div class="activity-feed-entry">
       <div class="activity-feed-icon">${_activityIcon(entry.type)}</div>
-      <div class="activity-feed-text">${_escape(entry.text || '')}</div>
+      <div class="activity-feed-text">${_escape(liveText(state, entry.text || ''))}</div>
       <div class="activity-feed-time">${_feedTime(entry, state)}</div>
     </div>
   `).join('');
@@ -367,7 +368,7 @@ function _renderMoves(state) {
     const ours = (e.teamIds || []).includes('user');
     html += `<div class="lw-row${ours ? ' lw-ours' : ''}">
       <div class="lw-kind">${KIND[e.kind] || 'Move'}</div>
-      <div class="lw-text">${_escape(e.text)}</div>
+      <div class="lw-text">${_escape(liveText(state, e.text))}</div>
     </div>`;
   }
   return html;

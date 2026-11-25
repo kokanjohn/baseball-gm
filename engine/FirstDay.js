@@ -14,7 +14,7 @@
 import { awakeSegments } from './CardScheduler.js';
 import { STAFF_NAMES } from '../data/player-names.js';
 import { dice, diceSeed } from './Dice.js';
-import { enroll, leave } from './People.js';   // r281 §122.160
+import { enroll, leave, namesInUse } from './People.js';   // r281 §122.160, r284 namesInUse
 
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
@@ -95,7 +95,7 @@ export function cpuGmName(state, teamId) {
   const t = (state.leagueTeams || []).find(x => x.id === teamId);
   if (t?.gm?.name) return t.gm.name;
   // (r283 §122.162 nor the owner's, nor a club's manager's: one name, one person)
-  const staff = new Set([...Object.values(state.userTeam?.coachingStaff || {}).map(c => c?.name), state.userTeam?.ownerName,
+  const staff = new Set([...namesInUse(state), ...Object.values(state.userTeam?.coachingStaff || {}).map(c => c?.name), state.userTeam?.ownerName,
     ...(state.leagueTeams || []).map(x => x.manager?.name), ...(state.managerPool || []).map(m => m?.name)].filter(Boolean));
   const r = dice(diceSeed(state), 'cpu-gms');
   const pool = STAFF_NAMES.filter(n => !staff.has(n));
@@ -128,7 +128,7 @@ export function gmTurnover(draft, rand, { records = {}, rapportDefault = 50 } = 
   // (records: last season's, taken before the new season zeroes them)
   const losses = (t) => { const r = records[t.id] || t; const w = r.wins || 0, l = r.losses || 0; return w + l ? l / (w + l) : 0.5; };
   const pool = teams.map(t => ({ t, w: 0.25 + losses(t) }));
-  const used = new Set([...teams.map(t => t.gm.name), ...Object.values(draft.userTeam?.coachingStaff || {}).map(c => c?.name).filter(Boolean)]);
+  const used = new Set([...namesInUse(draft), ...teams.map(t => t.gm.name), ...Object.values(draft.userTeam?.coachingStaff || {}).map(c => c?.name).filter(Boolean)]);
   const out = [];
   for (let k = 0; k < n && pool.length; k++) {
     const tot = pool.reduce((m, x) => m + x.w, 0);

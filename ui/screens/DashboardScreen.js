@@ -47,6 +47,7 @@ import { weatherToldOf } from '../../engine/GameEngine.js';
 import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
 import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
 import { opponentOf } from '../../engine/Opponents.js';   // r282 §122.161
+import { liveText } from '../../engine/People.js';   // r284 §122.163
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -1380,11 +1381,12 @@ const RECENT_SHOWN = 12;
 function _renderActivityFeed(state) {
   const feed = (state.activityFeed || []).slice().sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)).slice(-RECENT_SHOWN).reverse();
   if (!feed.length) return '';
-  const row = (e) => `<div class="recent-row"><span class="recent-text">${_escape(e.text || '')}</span><span class="recent-time">${_agoText(e.timestamp)}</span></div>`;
+  // r284 §122.163 written before a rename: today's names
+  const row = (e) => `<div class="recent-row"><span class="recent-text">${_escape(liveText(state, e.text || ''))}</span><span class="recent-time">${_agoText(e.timestamp)}</span></div>`;
   return `<div class="recent-wrap${_recentOpen ? ' open' : ''}" id="recent-wrap">
     <button class="recent-head" id="recent-toggle" aria-expanded="${_recentOpen}">
       <span class="recent-label">Recent</span>
-      <span class="recent-latest">${_recentOpen ? '' : _escape(feed[0].text || '')}</span>
+      <span class="recent-latest">${_recentOpen ? '' : _escape(liveText(state, feed[0].text || ''))}</span>
       <span class="recent-more">${_recentOpen ? 'Less' : 'More'}</span>
     </button>
     ${_recentOpen ? `<div class="recent-list">${feed.map(row).join('')}</div>` : ''}

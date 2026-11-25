@@ -58,5 +58,17 @@ const amb = peopleIn({ sender: 'Stadium Ops.', body: 'Twinname called.' }, S());
 const fromOwner = peopleIn({ sender: 'Twinname', _senderId: S().userTeam.ownerId, body: 'Twinname here.' }, S());
 check('a name two people share: nobody\'s (left as written), unless one of them sent it', Object.keys(amb).length === 0 && Object.keys(fromOwner).join() === S().userTeam.ownerId);
 
+// r284 §122.163 a name someone went by is never handed to someone new; text kept as words reads the new name
+const { liveText, namesInUse } = await import('../../engine/People.js');
+const Coach = await import('../../engine/CoachEngine.js');
+const { nameProblem } = await import('../../engine/NameRules.js');
+check(`the old names stay taken (${mgr.name}, Quillfeather)`, namesInUse(S()).has(mgr.name) && namesInUse(S()).has('Quillfeather'));
+const cands = Array.from({ length: 30 }, (_, k) => Coach.candidates(S(), 'hittingCoach', null, { rand: (() => { let x = k + 1; return () => (x = (x * 9301 + 49297) % 233280) / 233280; })() })).flat().map(c => c.name);
+check('…no candidate is ever given one', !cands.includes(mgr.name) && !cands.includes('Quillfeather'));
+check(`the feed's words read the new name (“${liveText(S(), `${mgr.name} takes over as manager.`)}”)`, liveText(S(), `${mgr.name} takes over as manager.`) === 'Brightwater takes over as manager.');
+const pid = S().userTeam.coachingStaff.benchCoach.id;
+check('renaming: a name someone else goes by is refused; a word the game uses; a club\'s; a player\'s; a good one is fine',
+  !!nameProblem(S(), pid, 'Brightwater') && !!nameProblem(S(), pid, 'Weather') && !!nameProblem(S(), pid, S().leagueTeams[0].city)
+  && !!nameProblem(S(), pid, Object.values(S().players)[0].name) && nameProblem(S(), pid, 'Ollivander') === null);
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

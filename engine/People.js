@@ -36,10 +36,12 @@ export function nameOf(state, id) {
  */
 export function enroll(draft, who, { role, clubId, season }) {
   if (!who || !who.name) return null;
+  const isNew = !who.id || !draft.people?.[who.id];
   if (!who.id) who.id = newPersonId(draft);
   const people = draft.people || (draft.people = {});
   const was = people[who.id];
-  people[who.id] = { id: who.id, name: who.name, role, clubId: clubId ?? null, since: was && was.clubId === clubId && was.role === role ? was.since : (season ?? null), left: null };
+  people[who.id] = { ...(was || {}), id: who.id, name: who.name, role, clubId: clubId ?? null, since: was && was.clubId === clubId && was.role === role ? was.since : (season ?? null), left: null };
+  if (isNew) _linkMessages(draft, who.id, who.name);   // r284 §122.163 what was written about them before
   return who.id;
 }
 
@@ -76,6 +78,55 @@ export function renamePerson(draft, id, name) {
   for (const t of draft.leagueTeams || []) { if (t.manager?.id === id) t.manager.name = next; if (t.gm?.id === id) t.gm.name = next; }
   for (const m of draft.managerPool || []) if (m?.id === id) m.name = next;
   return old;
+}
+
+// ── r284 §122.163 names everywhere ──────────────────────────────────────────────────────────────────────────────
+
+const _esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const _wordRe = (alts, flags = 'u') => new RegExp(`(^|[^\\p{L}\\p{N}])(${alts})(?=$|[^\\p{L}\\p{N}])`, flags);
+
+/** Every name anyone in the record goes by or has gone by (no one new may take one of them). */
+export function namesInUse(state) {
+  const out = new Set();
+  for (const p of Object.values(state?.people || {})) { if (p.name) out.add(p.name); for (const a of p.aka || []) out.add(a); }
+  return out;
+}
+
+/**
+ * Text written before a rename (the activity feed, the league wire, anything kept as words), with each old name
+ * reading as the person's name now. Only a name that was one person's alone and isn't anyone's now, nor a player's.
+ */
+export function liveText(state, text) {
+  if (!text || !state?.people) return text;
+  const owners = new Map(), current = new Set();
+  for (const p of Object.values(state.people)) { current.add(p.name); for (const a of p.aka || []) owners.set(a, owners.has(a) ? null : p); }
+  const map = new Map();
+  let players = null;
+  for (const [a, p] of owners) {
+    if (!p || current.has(a)) continue;
+    players ||= new Set(Object.values(state.players || {}).map(x => x?.name));
+    if (!players.has(a)) map.set(a, p.name);
+  }
+  if (!map.size) return text;
+  const re = _wordRe([...map.keys()].sort((x, y) => y.length - x.length).map(_esc).join('|'), 'gu');
+  return String(text).replace(re, (m, pre, nm) => pre + map.get(nm));
+}
+
+/**
+ * Messages that named someone before they had an id (a candidate, written about before they were hired): noted now,
+ * so they read the person's name from here on (`_people`). A name another person in the record shares, or a player's,
+ * is left alone.
+ */
+function _linkMessages(draft, id, name) {
+  const others = Object.values(draft.people || {}).some(p => p.id !== id && (p.name === name || (p.aka || []).includes(name)));
+  if (others || Object.values(draft.players || {}).some(x => x?.name === name)) return;
+  const re = _wordRe(_esc(name));
+  for (const c of draft.inbox || []) {
+    if (c._people?.[id]) continue;
+    const text = [c.sender, c.subject, c.preview, c.body, c.yesLabel, c.noLabel, c._autoLabel, c._summary, c._followUp?.text,
+      ...(c._choices || []).flatMap(x => [x?.label, x?.sub])].filter(Boolean).join('\n');
+    if (re.test(text)) c._people = { ...(c._people || {}), [id]: name };
+  }
 }
 
 /** Is `a` the same person as `b` (by id; by name only for someone from before r281 with no id)? */
