@@ -45,6 +45,7 @@ import { posLabel, primaryPos } from './Positions.js';   // r163 §122.35
 import { hometownPlayer, parkQuirk } from './AwayDays.js';   // r217 §122.96
 import { cpuGmName } from './FirstDay.js';   // r217 §122.96
 import { seasonTotals } from './GMProfile.js';   // r219 §122.98
+import { opponentOf } from './Opponents.js';   // r282 §122.161
 
 // Matches any {token}. Digits are allowed (e.g. {sp2_items}, {bg11_team}).
 export const TOKEN_PATTERN = /\{([a-z0-9_]+)\}/gi;
@@ -151,7 +152,7 @@ export function buildTokenMap(cardDef, context, state) {
   // r217 §122.96 the road and the off day: how the park we're visiting plays, a player who grew up near it,
   // another club's GM (a round of golf), where the race stands.
   values.park_quirk       = parkQuirk(state, nextGame && !nextGame.isHome ? nextGame.opponent : '');
-  const homeKid           = nextGame && !nextGame.isHome ? hometownPlayer(state, nextGame.opponent) : null;
+  const homeKid           = nextGame && !nextGame.isHome ? hometownPlayer(state, nextGame.opponentId) : null;
   if (homeKid) values.hometown_player_name = homeKid.name;
   const otherClub         = _pick(teams);
   if (otherClub) {
@@ -378,7 +379,7 @@ function _nextRoadCity(state, nextGame) {
     if (sched[i] && !sched[i].isHome) g = sched[i];
   }
   if (!g) return null;
-  const team = (state.leagueTeams || []).find(t => t.name === g.opponent);
+  const team = opponentOf(state, g);   // r282 §122.161
   // r217 §122.96 a club's city is its name less the nickname (clubs carry no city of their own).
   return team?.city || (team?.name || g.opponent || '').split(' ').slice(0, -1).join(' ') || null;
 }

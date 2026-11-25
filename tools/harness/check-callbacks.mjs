@@ -117,7 +117,7 @@ console.log('\nThe hometown, next visit');
 {
   const kid = S().userTeam.rosterIds.map(id => S().players[id]).find(p => hometownOf(S(), p) && ['sh', 'bh', 'sp', 'bp'].includes(p.group));
   const club = S().leagueTeams.find(t => t.id === hometownOf(S(), kid));
-  const i = sched.findIndex((g, k) => k > mid && reg(k) && !g.isHome && g.opponent === club.name && (sched[k - 1].opponent !== g.opponent || sched[k - 1].isHome));
+  const i = sched.findIndex((g, k) => k > mid && reg(k) && !g.isHome && g.opponentId === club.id && (sched[k - 1].opponentId !== g.opponentId || sched[k - 1].isHome));
   now = at(i);
   rec({ cardId: 'rd3', _tokenPlayers: { hometown_player: kid.id }, _budgetCost: 15 }, now - 60 * DAY);
   const cb = CALLBACKS.find(x => x.key === 'hometown'), e = S().gmRecord.log.at(-1);
@@ -125,7 +125,7 @@ console.log('\nThe hometown, next visit');
   const ctx = cb.fits(S(), e, now, next);
   const c = ctx && cb.build(S(), e, ctx, now); if (c) say(c);
   check(`the family again, the same seats at the same price (${kid.name}, ${club.name})`, c && c._budgetCost === 15 && c.body.includes(kid.name) && c.body.includes(club.name));
-  check('…not when we play elsewhere', cb.fits(S(), e, now, { ...next, opponent: S().leagueTeams.find(t => t.id !== club.id).name }) == null);
+  check('…not when we play elsewhere', cb.fits(S(), e, now, { ...next, opponentId: S().leagueTeams.find(t => t.id !== club.id).id }) == null);
 }
 
 console.log('\nDelivery');

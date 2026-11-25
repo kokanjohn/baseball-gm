@@ -36,7 +36,7 @@ import { inboxCounts } from '../engine/CardEngine.js';   // r267 §122.146 the M
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r281';
+export const APP_VERSION = 'tfo-v2-r282';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -1828,12 +1828,11 @@ function _applyLeagueTeams() {
       t.nickname = nicks[i];
       t.abbr     = abbrs[i];
 
-      // Cascade name change to user schedule opponent strings.
-      // game.opponent is used by _activateGame to find the leagueTeam object —
-      // if the name changed but schedule strings weren't updated, opponent lookup fails.
+      // Cascade name change to user schedule opponent strings (what the schedule shows; r282 §122.161 every
+      // lookup goes by game.opponentId, so a rename can't lose the club).
       if (oldName !== t.name && st.schedule) {
         for (const game of st.schedule) {
-          if (game.opponent === oldName) game.opponent = t.name;
+          if (game.opponentId === t.id) game.opponent = t.name;   // (r282 by the club's id)
         }
       }
 

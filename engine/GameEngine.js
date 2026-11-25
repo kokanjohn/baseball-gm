@@ -100,6 +100,7 @@ import { regularIndex } from './TradeEngine.js';
 import * as Development from './DevelopmentEngine.js';
 import * as Coach from './CoachEngine.js';
 import * as People from './People.js';   // r281 §122.160
+import { opponentOf, sameOpponent } from './Opponents.js';   // r282 §122.161
 import { newWeatherSeed, calendarAnchor, offseasonAnchor, addCalendarEntry, springStartIso, weatherContext } from './WeatherClimate.js';
 import { gameWeatherPlan, gameConditions, gameRecord, resumptionPlan, forecastForGame, PLAN_OUTCOME, fieldKey, planKey } from './GameWeather.js';
 import { gameStory } from './GameWeatherStory.js';
@@ -755,7 +756,7 @@ function _simOurGame(state, game) {
   const players     = state.players;
 
   // Find the opponent's league team object by name
-  const opponentTeam = state.leagueTeams.find(t => t.name === game.opponent) || null;
+  const opponentTeam = opponentOf(state, game);
 
   // Compute win probability for context (used by SimEngine for variance tuning)
   const healthyRosterIds = (userTeam.rosterIds || []).filter(id => {
@@ -917,7 +918,7 @@ function _commitAt(gameIndex) {
 
       // The opponent's record gets the mirror result — this game IS their
       // game for the date (one league calendar, §67).
-      const oppRecordTeam = s.leagueTeams.find(t => t.name === g.opponent) || null;
+      const oppRecordTeam = opponentOf(s, g);
       if (oppRecordTeam) {
         _creditResult(oppRecordTeam, outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'tie', kind);
       }
@@ -947,7 +948,7 @@ function _commitAt(gameIndex) {
         if (gate) { g.attendance = gate.attendance; g.gateK = gate.gateK; g.sellout = gate.sellout; }
       } else {
         // §78.5 on the road, the home club's crowd pays the home club.
-        const host = (s.leagueTeams || []).find(t => t.name === g.opponent);
+        const host = opponentOf(s, g);
         if (host?.finances) Finance.homeGate(s, host.id, { atMs: _gameEndMs(g), dayMs: g.gameTime, playoff: !!g.isPlayoff, weather: _gateWeather(s, g, true), noTicket: g.makeup?.ticket === 'one' });
       }
     }
@@ -957,7 +958,7 @@ function _commitAt(gameIndex) {
     // arrives here with _committed already set and must still credit stats.
     if (!g._statsApplied && g.plays && g.plays.length > 0) {
       g._statsApplied = true;
-      const opponentTeam = s.leagueTeams.find(t => t.name === g.opponent) || null;
+      const opponentTeam = opponentOf(s, g);
       const statKey = g.isPlayoff ? 'postseasonStats' : g.isSpring ? 'springStats' : 'stats';
       const statMutations = accumulateStats(
         g.plays, s.userTeam, opponentTeam, s.players, statKey
@@ -1011,7 +1012,7 @@ function _commitAt(gameIndex) {
     }
     // The opponent's rotation turns over too (it used to stand still, so the
     // user always faced the same starter).
-    if (wasPlayed) _advanceRotation(s.leagueTeams.find(t => t.name === g.opponent), theirStarterId, s.players);
+    if (wasPlayed) _advanceRotation(opponentOf(s, g), theirStarterId, s.players);
     // §71: players away (rest, illness, training, benched) and playing-hurt
     // conditions count down one game; whoever is back gets his spot back.
     // (r160 §122.32 wear too: ours never sits anyone on the manager's say — the staff's rest
@@ -1019,7 +1020,7 @@ function _commitAt(gameIndex) {
     // r164 §122.35 and starts by position (regular season: toward eligibility; spring and postseason: familiarity)
     const kind = g.isPlayoff ? 'playoff' : g.isSpring ? 'spring' : 'regular';
     if (wasPlayed) _pendingPos.push(...Development.countGame(s, 'user', g.gameTime, { kind }).filter(e => e.type === 'POS_GAINED'));
-    const oppTeam = s.leagueTeams.find(t => t.name === g.opponent);
+    const oppTeam = opponentOf(s, g);
     if (oppTeam && wasPlayed) Development.countGame(s, oppTeam.id, g.gameTime, { kind });
 
     // (Trades, arrivals and IL clearances are no longer tied to a commit —
@@ -1418,18 +1419,18 @@ function _checkSeriesMilestone(state) {
   if (!g || !g._committed || g._seriesMilestoneFired) return null;
 
   const opp = g.opponent;
-  if (!opp) return null;
+  if (!opp || !g.opponentId) return null;
 
   // Last game of the series? (next scheduled game is a different opponent, or
-  // the schedule ends / crosses the spring↔regular boundary).
+  // the schedule ends / crosses the spring↔regular boundary). r282 §122.161 the same club by id.
   const next = schedule[idx + 1];
-  if (next && next.opponent === opp && !!next.isSpring === !!g.isSpring) return null;
+  if (next && sameOpponent(next, g) && !!next.isSpring === !!g.isSpring) return null;
 
   // Walk back over the consecutive same-opponent block to tally the series.
   let wins = 0, losses = 0, count = 0;
   for (let j = idx; j >= 0; j--) {
     const gj = schedule[j];
-    if (!gj || !gj._committed || gj.opponent !== opp || !!gj.isSpring !== !!g.isSpring) break;
+    if (!gj || !gj._committed || !sameOpponent(gj, g) || !!gj.isSpring !== !!g.isSpring) break;
     // §122.58 only games played count: a series rained out (spring cancellations) isn't a "0–0 split".
     if (gj.cancelled || !['win', 'loss', 'tie'].includes(gj.result)) continue;
     count++;
@@ -1543,12 +1544,12 @@ export function buildCardContext() {
   let seriesLength   = 1;
   for (let i = currentIdx - 1; i >= 0; i--) {
     const g = schedule[i];
-    if (!g || g.opponent !== nextGame?.opponent || g.isHome !== nextGame?.isHome) break;
+    if (!g || !sameOpponent(g, nextGame) || g.isHome !== nextGame?.isHome) break;
     seriesPosition++;
   }
   for (let i = currentIdx + 1; i < schedule.length; i++) {
     const g = schedule[i];
-    if (!g || g.opponent !== nextGame?.opponent || g.isHome !== nextGame?.isHome) break;
+    if (!g || !sameOpponent(g, nextGame) || g.isHome !== nextGame?.isHome) break;
     seriesLength++;
   }
   seriesLength += seriesPosition - 1;
@@ -1571,7 +1572,7 @@ export function buildCardContext() {
     schedule[currentIdx + 1] && schedule[currentIdx + 1].isHome;
 
   // Travel day — gap in schedule with no game
-  const isTravelDay = !!prevGame && !!nextGame && prevGame.opponent !== nextGame.opponent &&
+  const isTravelDay = !!prevGame && !!nextGame && !sameOpponent(prevGame, nextGame) &&
     prevGame.isHome !== nextGame.isHome;
 
   const daysUntilNextGame = nextGame
@@ -1582,10 +1583,8 @@ export function buildCardContext() {
     : 0;
 
   // Division opponent check
-  const divisionTeamIds = (state.leagueTeams || [])
-    .filter(t => t.divisionId === state.userTeam?.divisionId)
-    .map(t => t.name);
-  const isDivisionOpponent = divisionTeamIds.includes(nextGame?.opponent);
+  // (r282 §122.161 by the club's id: the old check matched names against… names, read as ids, and was never true)
+  const isDivisionOpponent = opponentOf(state, nextGame)?.divisionId === state.userTeam?.divisionId && !!nextGame?.opponentId;
 
   // Standings context
   const standings    = state.standings || {};

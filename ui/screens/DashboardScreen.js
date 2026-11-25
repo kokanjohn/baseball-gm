@@ -46,6 +46,7 @@ import { wxState, weatherLine, liveWeatherLine, gameNotes, elapsedLabel, startSt
 import { weatherToldOf } from '../../engine/GameEngine.js';
 import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
 import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
+import { opponentOf } from '../../engine/Opponents.js';   // r282 §122.161
 
 // ─────────────────────────────────────────────────────────────
 // MODULE STATE
@@ -810,7 +811,7 @@ function _userFull(state) {
 }
 function _oppAbbr(state, game) {
   const opp = game?.opponent || '';
-  const oppTeam = state?.leagueTeams?.find(t => t.name === opp);
+  const oppTeam = opponentOf(state, game);   // r282 §122.161 by id
   return String(oppTeam?.abbr || opp.split(' ').pop() || 'AWAY').toUpperCase().slice(0, 4);
 }
 function _oppFull(game) {

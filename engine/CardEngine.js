@@ -146,6 +146,7 @@ import { starterRested, reliefValue } from './PitchingEngine.js';
 import { clockNow } from './Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from './GamePushes.js';
 import { followUpAt, followUpText } from './FollowUps.js';   // r279 §122.158
+import { sameOpponent } from './Opponents.js';   // r282 §122.161
 import { dice, diceId, diceSeed, eventRand, inEvent, withDice } from './Dice.js';
 import { primaryPos, canPlay, coversRole, posLabel, eligibleAt, keepNeed, startsAt, stretchOf, pitchRoles } from './Positions.js';   // r163 §122.35
 import * as Impact from './DecisionImpact.js';   // r255 §122.134 what a decision changed (the Completed tab)
@@ -3978,7 +3979,7 @@ function _stretch(state, next) {
   if (!next || i < 0) return { roadAhead: 0, seriesStartMs: null, tripStartMs: null, seriesOpener: false };
   let roadAhead = 0;
   for (let j = i; j < sched.length && !sched[j].isHome; j++) if (!sched[j].isSpring) roadAhead++;
-  let a = i; while (a > 0 && sched[a - 1].opponent === next.opponent && !!sched[a - 1].isHome === !!next.isHome) a--;
+  let a = i; while (a > 0 && sameOpponent(sched[a - 1], next) && !!sched[a - 1].isHome === !!next.isHome) a--;
   let b = i; while (!next.isHome && b > 0 && !sched[b - 1].isHome) b--;
   const t0 = (g) => Number.isFinite(g?.gameTime) ? g.gameTime - 2 * 86_400_000 : null;   // (a day or two before its first game)
   return { roadAhead, seriesOpener: a === i, seriesStartMs: t0(sched[a]), tripStartMs: next.isHome ? null : t0(sched[b]) };
@@ -4060,7 +4061,7 @@ function _filterEligible(pool, context, state, poolName = null) {
     if (card._parkEvent && stretch.tripStartMs != null && PARK_EVENT_IDS.some(id => dealtSince(id, stretch.tripStartMs))) return false;
     // r219 §122.98 a card about what the club has come to expect of the GM: only when the profile leans that far.
     if (card._profile && !_profileFits(card._profile, prof ||= GMP.profile(state))) return false;
-    if (card._requiresHometown && !(context.nextGame && !context.nextGame.isHome && hometownPlayer(state, context.nextGame.opponent))) return false;
+    if (card._requiresHometown && !(context.nextGame && !context.nextGame.isHome && hometownPlayer(state, context.nextGame.opponentId))) return false;
     if (card._oncePerRoadTrip && dealtSince(card.id, stretch.tripStartMs)) return false;
 
     // Series / schedule context gates

@@ -6,7 +6,7 @@
  *                                           { startMs, endMs } (its working hours), or null
  *   hometownOf(state, p)                    the league city a player grew up near (a club's id), or null —
  *                                           the same answer every time it's asked (from the save's seed)
- *   hometownPlayer(state, opponent)         one of our active players who grew up near this opponent's city
+ *   hometownPlayer(state, opponentId)       one of our active players who grew up near this opponent's city (r282 the club's id)
  *   parkQuirk(state, opponent)              how the opponent's ballpark plays (the same every visit)
  *   homeMorning(state, atMs, rand)          the morning of our first home game after a moment (a "how it
  *                                           went" message from the ballpark when we're back), or null
@@ -58,8 +58,8 @@ export function hometownOf(state, p) {
 }
 
 /** One of our active players who grew up near the city we're visiting (the best known first). */
-export function hometownPlayer(state, opponent) {
-  const team = (state?.leagueTeams || []).find(t => t.name === opponent);
+export function hometownPlayer(state, opponentId) {
+  const team = (state?.leagueTeams || []).find(t => t.id === opponentId);
   if (!team) return null;
   const active = new Set([PLAYER_GROUP.STARTING_HITTERS, PLAYER_GROUP.BENCH_HITTERS, PLAYER_GROUP.STARTING_PITCHERS, PLAYER_GROUP.BULLPEN]);
   return (state.userTeam?.rosterIds || []).map(id => state.players?.[id])

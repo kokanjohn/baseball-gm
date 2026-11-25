@@ -59,13 +59,14 @@ export function lookAhead(nowMs = clockNow()) {
   return StateManager.speculate(() => runAt(nowMs, () => {
     const g0 = getNextGame();
     if (!g0 || !Number.isFinite(g0.gameTime)) return null;
-    const T0 = g0.gameTime, opp = g0.opponent;
+    const T0 = g0.gameTime, opp = g0.opponent, oppId = g0.opponentId;
     // The game, wherever the weather moves it (the schedule re-sorts on a move).
     const find = () => {
       const s = StateManager.get().schedule || [];
-      return s.find(x => x.gameTime === T0 && x.opponent === opp && !x.postponements?.some(p => p.gameTime === T0))
-          || s.find(x => x.opponent === opp && x.postponements?.some(p => p.gameTime === T0))
-          || s.find(x => x.opponent === opp && x.suspension?.gameTime === T0)
+      // (r282 §122.161 the same club, by id)
+      return s.find(x => x.gameTime === T0 && x.opponentId === oppId && !x.postponements?.some(p => p.gameTime === T0))
+          || s.find(x => x.opponentId === oppId && x.postponements?.some(p => p.gameTime === T0))
+          || s.find(x => x.opponentId === oppId && x.suspension?.gameTime === T0)
           || null;
     };
     // The world up to our first pitch, then first pitch itself (the roster
@@ -96,6 +97,7 @@ export function lookAhead(nowMs = clockNow()) {
       gameTime: T0,
       date:     g0.date,
       opponent: opp,
+      opponentId: oppId,
       isHome:   !!g0.isHome,
       isAllStar: !!g0.isAllStar,
       isSpring: !!g0.isSpring,

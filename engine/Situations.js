@@ -21,6 +21,7 @@
  */
 import { SITUATIONS as SX, PLAYER_GROUP } from '../data/constants.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
+import { sameOpponent } from './Opponents.js';   // r282 §122.161
 
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
@@ -55,7 +56,7 @@ function recent(p, n) {
 function nextGame(state) {
   const sched = state.schedule || [];
   const i = sched.findIndex(g => !g._committed && !g.cancelled && !g.isSpring && !g.isPlayoff);
-  return i < 0 ? null : { g: sched[i], i, opener: i === 0 || sched[i - 1].opponent !== sched[i].opponent || !!sched[i - 1].isHome !== !!sched[i].isHome };
+  return i < 0 ? null : { g: sched[i], i, opener: i === 0 || !sameOpponent(sched[i - 1], sched[i]) || !!sched[i - 1].isHome !== !!sched[i].isHome };
 }
 
 export function findSituations(state, atMs) {
@@ -111,7 +112,7 @@ export function findSituations(state, atMs) {
   // The series against the club closest to us.
   if (next?.opener) {
     const div = (state.userTeam?.divisionId === 'B' ? state.standings?.divB : state.standings?.divA) || [];
-    const me = div.find(t => t.id === 'user'), them = div.find(t => t.name === next.g.opponent);
+    const me = div.find(t => t.id === 'user'), them = div.find(t => t.id === next.g.opponentId);
     if (me && them) {
       const gap = ((me.wins - them.wins) + (them.losses - me.losses)) / 2;
       const closest = div.filter(t => t.id !== 'user').every(t => Math.abs(((me.wins - t.wins) + (t.losses - me.losses)) / 2) >= Math.abs(gap));

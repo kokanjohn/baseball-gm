@@ -34,6 +34,7 @@ import { weatherToldOf, leagueWeatherToldOf } from '../../engine/GameEngine.js';
 import { gameForecastFor, peekGameForecast } from '../components/ForecastSource.js';
 import { openForecastSheet, forecastLine } from '../components/ForecastSheet.js';
 import { openOutlookSheet } from '../components/OutlookSheet.js';   // r277 §122.156
+import { sameOpponent } from '../../engine/Opponents.js';   // r282 §122.161
 import {
   formatDate, formatRecord, formatTeamRecord, formatGameLabel,
   formatGameStatus, formatPhaseLabel,
@@ -317,7 +318,7 @@ function _renderGameRow(game, idx, currentIdx, state, isPlayoff) {
       </div>
       <div class="game-vs">
         <div class="game-opp">
-          <span class="game-opp-name" data-opp="${_escape(game.opponent || game.opp || '')}" style="cursor:pointer;">
+          <span class="game-opp-name" data-opp="${_escape(game.opponentId || '')}" style="cursor:pointer;">
             ${_escape(oppLabel)}
           </span>${badges}
         </div>
@@ -411,11 +412,10 @@ function _renderBadges(game, idx, currentIdx, state) {
 
 function _seriesContext(game, idx, state) {
   const schedule = state.schedule;
-  const opp = game.opponent || game.opp;
-  if (!opp) return null;
+  if (!game.opponentId) return null;
 
-  const seriesStart = _findSeriesStart(schedule, idx, opp);
-  const seriesEnd   = _findSeriesEnd(schedule, idx, opp);
+  const seriesStart = _findSeriesStart(schedule, idx, game);
+  const seriesEnd   = _findSeriesEnd(schedule, idx, game);
   const seriesGames = schedule.slice(seriesStart, seriesEnd + 1);
   if (seriesGames.length < 2) return null;
 
@@ -451,21 +451,21 @@ function _seriesContext(game, idx, state) {
   return { text: 'LOST', cls: 'avoid' };
 }
 
-function _findSeriesStart(schedule, idx, opp) {
+function _findSeriesStart(schedule, idx, game) {
   let i = idx;
   while (i > 0) {
     const prev = schedule[i - 1];
-    if (!prev || (prev.opponent || prev.opp) !== opp) break;
+    if (!sameOpponent(prev, game)) break;   // r282 §122.161 the same club, by id
     i--;
   }
   return i;
 }
 
-function _findSeriesEnd(schedule, idx, opp) {
+function _findSeriesEnd(schedule, idx, game) {
   let i = idx;
   while (i < schedule.length - 1) {
     const next = schedule[i + 1];
-    if (!next || (next.opponent || next.opp) !== opp) break;
+    if (!sameOpponent(next, game)) break;
     i++;
   }
   return i;
@@ -631,13 +631,10 @@ function _openResultSheet(game, idx, state) {
 // TEAM DETAIL MODAL
 // ─────────────────────────────────────────────────────────────
 
-function _openTeamModal(teamName, state) {
-  // Find the league team
+function _openTeamModal(teamId, state) {
+  // Find the league team (r282 §122.161 by its id)
   const leagueTeams = state.leagueTeams || [];
-  const team = leagueTeams.find(t =>
-    t.name === teamName || t.abbr === teamName ||
-    (t.city && t.nickname && `${t.city} ${t.nickname}` === teamName)
-  );
+  const team = leagueTeams.find(t => t.id === teamId);
 
   if (!team) return;
 
@@ -829,7 +826,7 @@ function _renderScoresModal(state) {
       && userGame.status !== GAME_STATUS.PRE_GAME_WATCH;
 
     const userAbbr = (state.userTeam?.abbr || state.userTeam?.nickname || state.userTeam?.city || 'HOME').toUpperCase().slice(0,4);
-    const oppTeam  = leagueTeams.find(t => t.name === userGame.opponent);
+    const oppTeam  = leagueTeams.find(t => t.id === userGame.opponentId);   // r282 §122.161
     const oppAbbr  = (oppTeam?.abbr || userGame.opponent?.split(' ').pop()?.substring(0,3) || 'OPP').toUpperCase();
     const awayAbbr = userGame.isHome ? oppAbbr  : userAbbr;
     const homeAbbr = userGame.isHome ? userAbbr : oppAbbr;

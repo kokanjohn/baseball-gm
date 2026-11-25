@@ -15298,3 +15298,37 @@ No fresh team needed.
 - Also passing: season, multi-season, arcs, coaches, gm-connections, gm-profile, manager-fill, managers, winter, follow-ups, starred-report, gm-connections UI.
 
 Fresh team: needed (saves from before r281 have no IDs; per the user, no upgrade).
+
+---
+
+## §122.161 — r282: our games find their opponent by the club's ID (step 1b)
+
+**Why.** Our games already carried `opponentId`, but about 20 lookups found the opposing club by `game.opponent`, the name shown on the game. Club names can change: Settings renames clubs (App.js cascades the new name onto our schedule). Two clubs with the same name would send a lookup to the wrong one.
+
+There was also a real bug: `buildCardContext`'s `isDivisionOpponent` mapped division clubs to names and checked whether the list included `nextGame.opponent`… against a list built from `.name`. The match was sound only by luck of field naming, and in practice it was never true. As a result, the money card mon_pg_rival ("rival night", `_requiresDivisionOpponent`) could never come up. It can now.
+
+**engine/Opponents.js (pure, precached).**
+- `opponentOf(state, game)`: the club by `game.opponentId`.
+- `sameOpponent(a, b)`: two of our games against the same club, by ID.
+
+**By ID now.**
+- GameEngine: game activation (the opponent's lineup), the commit's record, host and rotation lookups, the series milestone (the last game of a series, the series tally), buildCardContext's series position/length, the travel day, and the division opponent.
+- AwayDays `hometownPlayer(state, opponentId)`, and its callers: Callbacks, the CardEngine `_requiresHometown` gate, CardTokens.
+- Callbacks and Situations "opener" (a new series); Situations' rival lookup; the CardEngine series start; CardTokens' next-opponent club.
+- GamePushes; LookAhead (finding our game wherever the weather moves it; its output now carries `opponentId`).
+- Dashboard `_oppAbbr`.
+- Schedule: the series badges (`_findSeriesStart`/`End`), the scores modal's opponent, and the team modal (`data-opp` is the club's ID).
+- App.js's Settings rename cascade matches our games by `opponentId`.
+- `game.opponent` stays as the name shown.
+
+**Checks.**
+- New check-opponents:
+  - every game (142) has its club's ID and that club's name;
+  - a series is one club's games in a row;
+  - rename a club, and give another club its old name: the lookups and the series still find the right club and never take in the other;
+  - the next game against a division rival reads as one, and against the other division, not;
+  - with our next opponent renamed to another club's name, the game is played against its own club (its nine all from that club's roster).
+- check-away-days and check-callbacks were updated to pass the club's ID.
+- Season, multi-season, people, game-pushes, lookahead, message-lookahead, situations, message-timing, arcs, and the away-weather, game-pushes, schedule-rows, outlook and Live View UI tests all pass.
+
+Fresh team: not needed (games have carried `opponentId` since the calendar was built). The rival-night card can now appear.

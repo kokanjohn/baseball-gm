@@ -53,7 +53,7 @@ const WHY_WORD = { lightning: 'storms', snow: 'snow', rain: 'rain', 'wet field':
 export function gamePushes(state, L, nowMs) {
   if (!L || !state?.userTeam || L.isAllStar) return [];
   const us = state.userTeam.nickname || state.userTeam.name || 'We';
-  const oppTeam = (state.leagueTeams || []).find(t => t.name === L.opponent);
+  const oppTeam = (state.leagueTeams || []).find(t => t.id === L.opponentId);   // r282 §122.161 by id
   const them = oppTeam?.nickname || String(L.opponent || '').split(' ').pop() || 'Them';
   const match = `${L.isHome ? 'vs' : '@'} ${L.opponent}`;
   const key = `g:${L.gameTime}`;

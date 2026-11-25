@@ -14,6 +14,7 @@
  */
 import { CALLBACK as CB, PHASE } from '../data/constants.js';
 import { hometownPlayer } from './AwayDays.js';
+import { sameOpponent } from './Opponents.js';   // r282 §122.161
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const MONTH = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -93,7 +94,7 @@ export const CALLBACKS = [
 
   // A player's family in their hometown, seated last time: the next visit.
   { key: 'hometown', from: ['rd3'], choices: ['yes'], days: [20, 400],
-    fits: (st, e, atMs, next) => (ours(st, e.p) && next && !next.isHome && next.opener && hometownPlayer(st, next.opponent)?.id === e.p ? { opp: next.opponent } : null),
+    fits: (st, e, atMs, next) => (ours(st, e.p) && next && !next.isHome && next.opener && hometownPlayer(st, next.opponentId)?.id === e.p ? { opp: next.opponent } : null),
     build: (st, e, { opp }) => {
       const p = st.players[e.p], k = e.k || 10;
       return { sender: 'Travel Coordinator', avatar: '✈️', tag: 'CULTURE', _budgetCost: k, _targetPlayerId: p.id, _tokenPlayers: { pl_player: p.id },
@@ -218,7 +219,7 @@ export const playerKey = (cb, e) => `${cb.key}@${e.p}`;
 function nextGame(state) {
   const sched = state.schedule || [];
   const i = sched.findIndex(g => !g._committed && !g.cancelled && Number.isFinite(g.gameTime));
-  return i < 0 ? null : { ...sched[i], opener: i === 0 || sched[i - 1].opponent !== sched[i].opponent || !!sched[i - 1].isHome !== !!sched[i].isHome };
+  return i < 0 ? null : { ...sched[i], opener: i === 0 || !sameOpponent(sched[i - 1], sched[i]) || !!sched[i - 1].isHome !== !!sched[i].isHome };
 }
 
 /** A callback due now (the decision in its window, its people still around, not yet used), picked by `rand`. */

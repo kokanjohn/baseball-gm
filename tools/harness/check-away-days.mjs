@@ -120,7 +120,7 @@ console.log('\nEvery message, with real tokens');
   const kidIdx = kidClub ? sched.findIndex((g, i) => i > SPRING_TRAINING_GAME_COUNT + 40 && reg(i) && !g.isHome && g.opponent === kidClub.name) : -1;
   check(`one of ours grew up near a league city (${kid?.name} — ${kidClub?.name})`, kidIdx > 0);
   const ctx = at(kidIdx);
-  check('…and the hometown pick finds them when we visit', hometownPlayer(S(), sched[kidIdx].opponent)?.id === kid.id);
+  check('…and the hometown pick finds them when we visit', hometownPlayer(S(), sched[kidIdx].opponentId)?.id === kid.id);
   const bad = [];
   for (const d of [...OFFDAY_POOL, ...ROAD_POOL, ...AWAY_FOLLOWUPS.map(e => e.card)]) {
     const c = CE.deliverCardById(d.id, ctx);
