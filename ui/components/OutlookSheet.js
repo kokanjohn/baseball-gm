@@ -34,7 +34,7 @@ export function openOutlookSheet({ state }) {
     <div class="ol-panel">
       <div class="ol-head">
         <div><div class="ol-kicker">10-Day Outlook</div><div class="ol-city">${_esc(home)}</div></div>
-        <button class="ol-close" id="ol-close" aria-label="Close">×</button>
+        <button class="modal-close" id="ol-close" aria-label="Close">×</button>
       </div>
       <div class="ol-grid" id="ol-grid">${Array.from({ length: DAYS }, (_, i) => `<div class="ol-tile ol-wait" id="ol-t-${i}"><div class="ol-day">&nbsp;</div><div class="ol-icon"></div><div class="ol-hi">&nbsp;</div></div>`).join('')}</div>
     </div></div>`;
@@ -101,7 +101,7 @@ const DROPS = (n, heavy = false) => Array.from({ length: n }, (_, k) => {
 }).join('');
 const FLAKES = (n) => Array.from({ length: n }, (_, k) => {
   const x = 22 + k * (30 / Math.max(1, n - 1)) - (n === 1 ? -15 : 0), y = 64;
-  return `<g stroke="#E8F4FF" stroke-width="2" stroke-linecap="round"><line x1="${x - 4}" y1="${y}" x2="${x + 4}" y2="${y}"/><line x1="${x - 2}" y1="${y - 3.5}" x2="${x + 2}" y2="${y + 3.5}"/><line x1="${x + 2}" y1="${y - 3.5}" x2="${x - 2}" y2="${y + 3.5}"/></g>`;
+  return `<g stroke="#8EC5F0" stroke-width="2.2" stroke-linecap="round"><line x1="${x - 4}" y1="${y}" x2="${x + 4}" y2="${y}"/><line x1="${x - 2}" y1="${y - 3.5}" x2="${x + 2}" y2="${y + 3.5}"/><line x1="${x + 2}" y1="${y - 3.5}" x2="${x - 2}" y2="${y + 3.5}"/></g>`;
 }).join('');
 const BOLT = `<path d="M38 50l-8 13h7l-4 11 12-15h-7l5-9z" fill="#FFD23F" stroke="#E5A800" stroke-width="1"/>`;
 
@@ -137,26 +137,23 @@ function _injectCSS() {
   const st = document.createElement('style');
   st.textContent = `
     .ol-sheet{max-height:calc(92 * var(--vh));overflow-y:auto;padding:0 0 18px;}
-    .ol-panel{margin:4px 10px 0;border-radius:18px;overflow:hidden;color:#fff;
-      background:linear-gradient(160deg,#0B2A5B 0%,#123F86 45%,#0A2148 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.15);}
-    .ol-head{display:flex;justify-content:space-between;align-items:flex-start;padding:14px 16px 10px;
-      background:linear-gradient(90deg,rgba(255,255,255,.10),rgba(255,255,255,0));border-bottom:2px solid #FFC233;}
-    .ol-kicker{font-size:11px;font-weight:900;letter-spacing:2px;text-transform:uppercase;color:#FFC233;}
-    .ol-city{font-size:22px;font-weight:900;letter-spacing:.3px;line-height:1.15;}
-    .ol-close{background:rgba(255,255,255,.12);border:0;color:#fff;width:32px;height:32px;border-radius:50%;font-size:20px;line-height:1;cursor:pointer;}
-    .ol-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:10px 8px 12px;}
-    .ol-tile{display:flex;flex-direction:column;align-items:center;padding:8px 2px 8px;border-radius:12px;
-      background:linear-gradient(180deg,rgba(255,255,255,.10),rgba(255,255,255,.03));min-height:150px;}
-    .ol-tile:first-child{background:linear-gradient(180deg,rgba(255,194,51,.28),rgba(255,194,51,.06));}
+    /* r278 on the standard sheet (no panel of its own): the theme's colors; the icons keep theirs */
+    .ol-panel{padding:0 8px;color:var(--text);}
+    .ol-head{display:flex;justify-content:space-between;align-items:flex-start;padding:4px 8px 10px;}
+    .ol-kicker{font-size:11px;font-weight:900;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+    .ol-city{font-size:22px;font-weight:900;letter-spacing:.3px;line-height:1.15;color:var(--text);}
+    .ol-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:2px 0 8px;}
+    .ol-tile{display:flex;flex-direction:column;align-items:center;padding:8px 2px 8px;border-radius:12px;min-height:150px;}
+    .ol-tile:first-child{background:var(--surface2);}
     .ol-wait{opacity:.45;}
-    .ol-day{font-size:12px;font-weight:900;letter-spacing:1px;text-transform:uppercase;}
-    .ol-where{font-size:9px;font-weight:700;color:#BFD8F2;height:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px;}
+    .ol-day{font-size:12px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--text);}
+    .ol-where{font-size:9px;font-weight:700;color:var(--muted);height:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px;}
     .ol-icon{width:52px;height:55px;margin:2px 0;}
-    .ol-svg{width:100%;height:100%;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35));}
-    .ol-hi{font-size:22px;font-weight:900;line-height:1;}
-    .ol-lo{font-size:13px;font-weight:700;color:#9FB8D8;margin-top:2px;}
-    .ol-pct{display:flex;align-items:center;gap:3px;font-size:12px;font-weight:800;color:#9FB8D8;margin-top:6px;}
-    .ol-pct.wet{color:#6CC0FF;}
+    .ol-svg{width:100%;height:100%;filter:drop-shadow(0 1px 2px rgba(0,0,0,.30));}
+    .ol-hi{font-size:22px;font-weight:900;line-height:1;color:var(--text);}
+    .ol-lo{font-size:13px;font-weight:700;color:var(--muted);margin-top:2px;}
+    .ol-pct{display:flex;align-items:center;gap:3px;font-size:12px;font-weight:800;color:var(--muted);margin-top:6px;}
+    .ol-pct.wet{color:#3B9EFF;}
     .ol-drop{width:8px;height:11px;fill:currentColor;}
   `;
   document.head.appendChild(st);

@@ -2415,7 +2415,8 @@ async function main() {
           `starters with no start recorded: ${rotNoStart.length}`);
     // r154 spring: starters build up — never past their spring innings.
     // r272 §122.151 an inning or two short of a regular-season start (his stamina now; a season's
-    // development can move it an inning, so one inning's give), and a spring game uses two starters at most.
+    // development can move it an inning, so one inning's give), and a spring game seldom uses three starters (r278 a
+    // quarter of sides at most: the long men are spare starters, so one of them in relief counts as a third).
     {
       const sp = st.schedule.filter(g => g.isSpring && g._committed && g.boxScore);
       const over = sp.flatMap(g => [g.boxScore.away.pitchers[0], g.boxScore.home.pitchers[0]]
@@ -2428,7 +2429,7 @@ async function main() {
       const sps = sp.flatMap(g => ['away', 'home'].map(s => g.boxScore[s].pitchers.filter(p => st.players[p.id]?.pos === 'SP').length));
       const three = sps.filter(n => n >= 3).length;
       check(`spring: starters go about 3–5 innings (${avg.toFixed(1)} on average), and a side uses 3+ starters in ${three} of ${sps.length}`,
-        avg >= 3 && avg <= 5.5 && three <= Math.ceil(sps.length * 0.1), `SPs per side: ${sps.join(' ')}`);
+        avg >= 3 && avg <= 5.5 && three <= Math.ceil(sps.length * 0.25), `SPs per side: ${sps.join(' ')}`);
     }
     // §76: the manager's pitching. Relievers rest (never a third day in a row),
     // starters get four days, relief work is spread over the pen (the best arms

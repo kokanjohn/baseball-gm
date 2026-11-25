@@ -94,19 +94,58 @@ export function generateLeagueCalendar(seasonNum, leagueTeams, startDateOverride
   const springRounds = _circleRounds(ids);
   _shuffle(springRounds);
   let offset = 0, played = 0;
+  // r278 §122.157 every club's spring is half at home. First pass: each game at whichever side's park has been
+  // the road more often so far (home games less road games); even, ours at home, else a coin flip. Then, while
+  // one club has at least two home games more than another (net, four in balance) and a chain of games links
+  // them — the first hosting the next, who hosts the next … who hosts the second — those games are turned
+  // around: the clubs between keep their count, the two move toward even. Our first game stays at home
+  // (r210 §122.88), and ours never drops below five. Every club ends within one game of even.
+  const springGames = [];
+  const bal = new Map(ids.map(id => [id, 0]));   // home games less road games
   while (played < SPRING_TRAINING_GAME_COUNT) {
     if (!SPRING_OFF_DAYS.has(offset)) {
       for (const [a, b] of springRounds[played % springRounds.length]) {
-        let home = eventRand() < 0.5;
+        const ba = bal.get(a), bb = bal.get(b);
+        let home = ba !== bb ? ba < bb : a === 'user' ? true : b === 'user' ? false : eventRand() < 0.5;
         // r210 §122.88 our first spring game is at home: a full first day (the crew, the weather calls, the gate)
-        // however it goes. The rest of spring, home or away as it falls.
-        if (played === 0 && (a === 'user' || b === 'user')) home = a === 'user';
-        put(offset, { homeId: home ? a : b, awayId: home ? b : a, isSpring: true,
-                      seriesId: `st-${played}-${a}-${b}`, seriesGame: 1, seriesLength: 1 });
+        // however it goes.
+        const fixed = played === 0 && (a === 'user' || b === 'user');
+        if (fixed) home = a === 'user';
+        const g = { offset, played, fixed, pair: [a, b], homeId: home ? a : b, awayId: home ? b : a };
+        springGames.push(g);
+        bal.set(g.homeId, bal.get(g.homeId) + 1);
+        bal.set(g.awayId, bal.get(g.awayId) - 1);
       }
       played++;
     }
     offset++;
+  }
+  // (each chain lowers the sum of squared balances, so this ends)
+  const chain = (from) => {   // breadth-first along "hosts": the games from `from` to each club it reaches
+    const via = new Map([[from, null]]), queue = [from];
+    while (queue.length) {
+      const t = queue.shift();
+      for (const g of springGames) if (!g.fixed && g.homeId === t && !via.has(g.awayId)) { via.set(g.awayId, g); queue.push(g.awayId); }
+    }
+    return via;
+  };
+  for (let turned = true; turned;) {
+    turned = false;
+    for (const s of ids) {
+      if (s === 'user' && bal.get(s) <= 1) continue;   // (ours keeps five or six at home)
+      const via = chain(s);
+      const d = [...via.keys()].filter(t => t !== s && bal.get(s) - bal.get(t) >= 4).sort((x, y) => bal.get(x) - bal.get(y))[0];
+      if (!d) continue;
+      for (let t = d; t !== s;) { const g = via.get(t); [g.homeId, g.awayId] = [g.awayId, g.homeId]; t = g.awayId; }
+      bal.set(s, bal.get(s) - 2);
+      bal.set(d, bal.get(d) + 2);
+      turned = true;
+    }
+  }
+  for (const g of springGames) {
+    const [a, b] = g.pair;
+    put(g.offset, { homeId: g.homeId, awayId: g.awayId, isSpring: true,
+                    seriesId: `st-${g.played}-${a}-${b}`, seriesGame: 1, seriesLength: 1 });
   }
 
   // ── Regular season ───────────────────────────────────────────

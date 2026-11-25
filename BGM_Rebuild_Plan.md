@@ -15147,3 +15147,24 @@ Fresh team: not needed.
 - Closes; no page errors.
 
 No fresh team needed.
+
+---
+
+## §122.157 — r278: the outlook on the standard sheet; spring is half at home
+
+**Outlook (user).** The blue inset panel is removed: the weather sits directly on the standard modal sheet.
+- The kicker, city, day, low and % use the theme's colors (muted / text). The close is the standard `.modal-close`.
+- Today's tile has a `--surface2` background. A 30%+ chance is blue (#3B9EFF).
+- The icons keep their fixed colors. The snowflakes are now #8EC5F0 (white ones disappeared on the light sheet).
+
+**Spring home games (user: half at home; six is fine).** The cause was that `generateLeagueCalendar` flipped a coin for every spring game except our first (home, r210), so a club could get 7 or 8 home games.
+- First pass: each game goes to whichever side has the lower balance (home less road so far). When they're even, we're at home; otherwise a coin flip. Our first game is still home.
+- Balancing: while one club's balance is at least 4 above another's and a chain of games links them (s hosts x, x hosts y … hosts d), those games flip. Clubs in between keep their balance; s goes down 2 and d up 2. Our club is never the start of a chain at +1 or less, so ours never drops below five.
+- Result: every club is within one game of even (5 of 10; 4 or 5 of 9 for clubs with a bye), and ours has 5 or 6. The spring `seriesId` keeps the round's pair order.
+
+**Checks.**
+- New check-spring-home (12 leagues, every region): ours has 5 every time; every club is within one game of even; our first game is at home.
+- The sim-season spring starters check now allows a third starter in up to a quarter of sides. The long men are spare starters, so one of them in relief counts as a third. Starts average 5.0 innings.
+- Season, multi-season, away-days, message-timing, game-pace, outlook, spring-banner and schedule-rows all pass.
+
+Fresh team: needed for the new spring home/away split. The current save keeps its calendar.
