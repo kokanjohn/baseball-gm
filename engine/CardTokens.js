@@ -209,6 +209,12 @@ export function buildTokenMap(cardDef, context, state) {
   values.bg9_player           = secondHitter?.name || 'one of the regulars';
   values.bg12_player          = thirdHitter?.name  || values.active_hitter_name;
   values.pl_player_name       = plPlayer?.name || 'One of our players';
+  // r270 §122.149 a card about several of our players (`_group: { n, at }`): it names each one,
+  // and its OVR effect lands on each one (never on a player the text doesn't name).
+  const group = cardDef?._group ? _pickGroup(state, used, cardDef._group) : [];
+  for (const p of group) used.add(p.id);
+  values.group_players = group.length ? _andList(group.map(p => p.name)) : 'a few of our players';
+  values.group_count   = String(group.length);
 
   // Roster-move roles (§72): the farm's best bat / arm, the bench bat who'd
   // lose his spot (drop), and the bench bat who could take the named
@@ -257,6 +263,7 @@ export function buildTokenMap(cardDef, context, state) {
     active_catcher: activeCatcher?.id || null, farm_pitcher: farmPitcher?.id || null,
     farm_hitter: farmHitter?.id || null, leader_player: leader?.id || null,
     pl_player: plPlayer?.id || null, hometown_player: homeKid?.id || null,
+    bg12_player: thirdHitter?.id || activeHitter?.id || null,   // r270 §122.149
     prospect_hitter: prospectHitter?.id || null, prospect_pitcher: prospectPitcher?.id || null,
     drop_hitter: dropHitter?.id || null, audition_hitter: auditionHitter?.id || null,
     ...outside.players,
@@ -265,7 +272,7 @@ export function buildTokenMap(cardDef, context, state) {
   // A card about an outside player with nobody real to offer can't be sent.
   const helper = new Set(['drop_pitcher', 'replaced_starter', 'trade_prospect']);
   const missingPlayer = outside.needsPlayer && !Object.keys(outside.players).some(k => !helper.has(k));
-  return { values, amountsK, players, counts, newPlayers: outside.newPlayers, offer: outside.offer, missingPlayer };
+  return { values, amountsK, players, group: group.map(p => p.id), counts, newPlayers: outside.newPlayers, offer: outside.offer, missingPlayer };
 }
 
 /**
@@ -704,6 +711,16 @@ function _setHitter(values, prefix, p, fallback) {
 // ─────────────────────────────────────────────────────────────
 // RANDOM HELPERS
 // ─────────────────────────────────────────────────────────────
+
+/** r270 §122.149 `n` available players of ours (`at`: only these positions), each different. */
+function _pickGroup(state, used, { n = 1, at = null } = {}) {
+  const pool = _roster(state, used).filter(p => (PITCHER_GROUPS.includes(p.group) || HITTER_GROUPS.includes(p.group))
+    && (!at || at.includes(primaryPos(p))));
+  return _shuffle(pool).slice(0, n);
+}
+function _andList(names) {
+  return names.length < 3 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
 
 function _pick(arr) {
   if (!arr || arr.length === 0) return null;

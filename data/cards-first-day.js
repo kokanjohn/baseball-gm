@@ -177,7 +177,7 @@ export const FIRST_DAY_SECONDARY = Object.freeze([
    preview:"The clubhouse spread is fast food with a salad bar. A real program…",
    body:"The clubhouse spread is fast food with a salad bar. A real nutrition program, with a chef and plans built for each player, runs {misc_cost_sm} for the season. The players feel it by midsummer, when the legs usually go. Without it, they eat what they eat.",
    yesLabel:'Hire the Chef',noLabel:'Keep the Spread',
-   yesEffect:{morale:3,ovr:1},noEffect:{},
+   yesEffect:{morale:4},noEffect:{},
    yesMsg:"The chef starts this week. The players are already asking about the menu.",
    noMsg:"The spread stays.",
    _budgetCost:'misc_cost_sm',_ttl:3},

@@ -159,7 +159,7 @@ export const WINTER_POOL = [
    preview:"We'd like to add an analyst for the winter…",
    body:"We'd like to add an analyst for the winter — someone to go through every pitch we threw this year and tell us what we're missing. It's {misc_cost_xs} for the contract. The coaches are skeptical; they think they already know.",
    yesLabel:'Make the Hire',noLabel:'Trust the Coaches',
-   yesEffect:{ovr:1},noEffect:{},
+   yesEffect:{morale:1},noEffect:{},
    yesMsg:"Hired. The first report will be ready before camp.",noMsg:"No hire. The coaches have it.",
    _relNo:{pc_nm:1,hc_nm:1},_budgetCost:'misc_cost_xs'},
 
@@ -177,7 +177,7 @@ export const WINTER_POOL = [
    preview:"We'd like to bring the young players in for a week in January…",
    body:"We'd like to bring the young players in for a week in January — conditioning, fundamentals, a first look at the new staff's way of doing things. It's {misc_cost_xs}, and they come to camp a step ahead. The veterans won't be invited, and a few will notice.",
    yesLabel:'Hold the Minicamp',noLabel:'Wait for Camp',
-   yesEffect:{ovr:1},noEffect:{},
+   yesEffect:{morale:1},noEffect:{},
    yesMsg:"Minicamp is set for the second week of January.",noMsg:"We'll wait for camp.",
    _budgetCost:'misc_cost_xs'},
 

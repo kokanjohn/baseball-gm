@@ -14922,3 +14922,29 @@ No fresh team needed.
 **Open (the user's call).** Card effects with `ovr` and no named player (36 messages, including x5 career day) land on one random roster player via `CardEngine._applySoftEffects`. A negative one becomes a short "Playing through it" condition. That doesn't match messages about several players or nobody in particular.
 
 No fresh team needed.
+
+---
+
+## §122.149 — r270: a message's rating effect lands only on the players it names
+
+**Decision (the user).** Messages never pick a player at random. A message about specific players names them, and its rating effect lands on them. A message about no one has no player effect; its cost or gain goes to morale.
+
+**Engine.**
+- `CardEngine._applySoftEffects`: the `ovr` effect goes to `instance._groupPlayerIds` if set, else `instance._targetPlayerId`, and only to those still on the roster. The random fallback is gone. A gain is still `Development.startPlan`; a loss is still `Development.setCondition` for 2–5 games, per named player.
+- New card field `_group: { n, at? }`. `CardTokens.buildTokenMap` picks `n` available players (`at`: these primary positions only) via `_pickGroup`. It sets `{group_players}` ("A, B and C") and `{group_count}`, and returns `group` (ids). The instance keeps them as `_groupPlayerIds`.
+- `{bg12_player}` is now a role token (`players.bg12_player`, `_ROLE_TOKEN`), so bg12's gain lands on the hitter it names.
+
+**Cards.**
+- x5 career day: `_group:{n:3}`. The body and the yes reply name the three players. Yes slows each of them.
+- mo_spo_weather: `_group:{n:1, at:['1B','2B','3B','SS']}`. The no reply names the infielder who comes off rubbing an ankle.
+- c1, coach_pressure_hitting, mon_flush_video now name `{active_hitter_name}` ("gives X a real step forward / room to grow"); coach_pressure_pitching names `{active_pitcher_name}`.
+- About no one: the `ovr` value moved into morale, one for one. These are bg1, bg2, bg8, c2, c4, d2/d3/d4/o1 follow-ups, f1, f4, fd_nutrition, fn1, fn5, fn8, ill3, ls1, o2, od7, op2, rd1, rd6, rd7, rv1_field_condition, rv6–rv11 repairs, sc1, sc3, sc3_sign, sc4, sp14, sp_hint3, st2, st3, wt_analyst, wt_minicamp.
+
+**Check.** check-card-ovr:
+- Every card with `ovr` has a `_group` or a player token.
+- Career day yes changes exactly the three named.
+- The soft infield costs only the named infielder.
+- bg12 changes only its player.
+- A mound repair changes no player, and morale drops.
+
+No fresh team needed. A career day already in the inbox names no one, and its yes now changes no player.

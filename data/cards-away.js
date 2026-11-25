@@ -81,7 +81,7 @@ export const OFFDAY_POOL = [
    preview:"The legs are heavy after the last stretch…",
    body:"The legs are heavy after the last stretch. We'd like the whole team out of the building today — no early work, no treatment unless it's needed — and a later report time tomorrow. Everyone comes back fresher. The coaches would rather keep tomorrow's early work; they think the edge is in the routine.",
    yesLabel:'Full Rest',noLabel:'Usual Schedule',
-   yesEffect:{morale:2},noEffect:{ovr:1},
+   yesEffect:{morale:2},noEffect:{morale:1},
    yesMsg:"Building's closed. Report time is pushed back tomorrow.",noMsg:"Usual schedule tomorrow. Early work as planned."},
 
   // ── the off day's news ──
@@ -115,7 +115,7 @@ export const ROAD_POOL = [
    preview:"The park in {road_city} plays {park_quirk}…",
    body:"The park in {road_city} plays {park_quirk}. I'd like to shade the lineup to it for the series — a different bat or two at the bottom of the order, the outfield positioned for it. It squeezes a little more out of the series, but a couple of regulars will lose at-bats and notice. Or we play our game and let the park be the park.",
    yesLabel:'Shade the Lineup',noLabel:'Play Our Game',
-   yesEffect:{ovr:1,morale:-1},noEffect:{morale:1},
+   yesEffect:{},noEffect:{morale:1},
    yesMsg:"Lineup shaded for the park.",noMsg:"Our lineup, our game."},
 
   {id:'rd2',autoResolve:'no',_weight:0.8,type:'normal',tag:'MARKETING',sender:'PR Dept.',avatar:'📣',
@@ -163,7 +163,7 @@ export const ROAD_POOL = [
    preview:"The visitors' clubhouse here is the smallest in the league…",
    body:"The visitors' clubhouse in {road_city} is the smallest in the league — no batting cage of its own, and the hot water gives out by the fifth inning. We can rent a cage at a training center nearby for the hitters' early work — {misc_cost_xs}. Or we make do, like every other visiting club.",
    yesLabel:'Rent the Cage',noLabel:'Make Do',
-   yesEffect:{ovr:1},noEffect:{morale:-1},
+   yesEffect:{morale:1},noEffect:{morale:-1},
    yesMsg:"Cage rented. The van leaves at one.",noMsg:"Making do.",
    _budgetCost:'misc_cost_xs'},
 
@@ -173,7 +173,7 @@ export const ROAD_POOL = [
    preview:"A few of the players have plans in {road_city} tonight…",
    body:"A few of the players have plans in {road_city} tonight, and it's the kind of town where a night out turns into a late one. I can set a curfew — midnight, rooms checked — and we'll be sharper tomorrow, but they'll grumble, and the veterans don't like being treated like kids. Or we trust them.",
    yesLabel:'Set a Curfew',noLabel:'Trust Them',
-   yesEffect:{ovr:1,morale:-2},noEffect:{morale:2},
+   yesEffect:{morale:-1},noEffect:{morale:2},
    yesMsg:"Curfew's set. Rooms get checked at midnight.",noMsg:"No curfew. I told them not to make me regret it."},
 
   {id:'rd8',autoResolve:'no',_weight:0.8,type:'good',tag:'MARKETING',sender:'Community Relations',avatar:'🤝',
@@ -341,7 +341,7 @@ export const AWAY_FOLLOWUPS = [
 
   repair('rv6_damage', 'The festival tore up the outfield',
     'The festival is gone, and so is a good share of the outfield grass — the stages left two bare patches in left-center, and the crowds packed the rest down. We can resod the worst of it this morning for {repair_cost}, with batting practice moved to the cages. Or we paint the bare spots green and play on them, and the outfielders take their chances.',
-    'Resod It', 'Play On It', { ovr: -2, morale: -1 }, 'Resodding now. BP is in the cages.', 'Painted green. The outfielders are not thrilled.',
+    'Resod It', 'Play On It', { morale: -3 }, 'Resodding now. BP is in the cages.', 'Painted green. The outfielders are not thrilled.',
     { days: 5, yes: 'We resodded the outfield where the festival stages were.', no: 'The festival patches in left-center are painted, not fixed — the outfield plays rough there.', open: 'The festival tore up the outfield, and I\'m waiting on your word about resodding.' }),
   news('rv6_good', 'Partnerships', '🎶', 'The festival sold out',
     'The festival sold out both days. Bar sales came in high enough that our share added {event_bonus} on top of the fee, and the promoter is already asking about next summer. The grass held up better than anyone expected.', { _revenueToken: 'event_bonus', yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
@@ -352,14 +352,14 @@ export const AWAY_FOLLOWUPS = [
     'The championship game went to extra innings and ended on a walk-off. The winning school sent a signed ball and a team photo taken at our home plate; it\'s hanging in the concourse now.', { yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
   repair('rv7_mound', 'The mound after the championship',
     'The championship game left the mound dug out in front of the rubber — their pitchers land in different spots than ours. We can rebuild the landing area this morning for {repair_cost}. Or we pack it and go, and our starter finds out about it in the first inning.',
-    'Rebuild the Mound', 'Pack It and Go', { ovr: -1 }, 'Rebuilding it now.', 'Packed. We\'ll see how it holds.',
+    'Rebuild the Mound', 'Pack It and Go', { morale: -1 }, 'Rebuilding it now.', 'Packed. We\'ll see how it holds.',
     { days: 3, yes: 'We rebuilt the mound\'s landing area after the championship game.', no: 'The mound is still dug out in front of the rubber from the championship game.', open: 'The championship game dug out the mound, and I\'m waiting on your word about rebuilding it.' }),
 
   news('rv8_good', 'Partnerships', '🎬', 'The film crew wrapped',
     'The film crew wrapped on time and left the place cleaner than they found it. The director asked whether a few of our players would do a walk-on when the film comes out next summer. Everyone in the front office wants to be an extra.', { yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
   repair('rv8_wall', 'A dented panel in right field',
     'The film crew backed a lighting truck into the outfield wall in right — a dented panel and a seam that has come loose. We can have the panel replaced before first pitch for {repair_cost}. Or we pad over it for now, and balls off it will bounce oddly until the winter.',
-    'Replace the Panel', 'Pad Over It', { ovr: -1 }, 'A new panel goes in this morning.', 'Padded over. Expect a few strange bounces.',
+    'Replace the Panel', 'Pad Over It', { morale: -1 }, 'A new panel goes in this morning.', 'Padded over. Expect a few strange bounces.',
     { days: 14, yes: 'The new panel is in the right-field wall.', no: 'The dented panel in right is padded over, and balls off it bounce oddly.', open: 'There\'s a dented panel in the right-field wall, and I\'m waiting on your word about replacing it.' }),
   news('rv8_overstay', 'Stadium Ops.', '🎬', 'The film crew ran over',
     'The film crew ran over by a day, and their trucks were still in the lot this morning. We charged them for the extra day, {event_bonus}, and the lot is clear now.', { _revenueToken: 'event_bonus', yesEffect: { morale: -1 }, noEffect: { morale: -1 } }),
@@ -368,20 +368,20 @@ export const AWAY_FOLLOWUPS = [
     'The run raised more than the charity hoped, and the pictures of the finish line at home plate are everywhere this morning. The charity wants to make it a yearly thing.', { yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
   repair('rv9_track', 'The warning track after the run',
     'A few thousand runners chewed up the warning track — it\'s loose and rutted in the corners. We can regrade it before batting practice for {repair_cost}. Or we rake it and live with it, and our outfielders will be feeling for the wall.',
-    'Regrade the Track', 'Rake It and Play', { ovr: -1 }, 'Regrading now.', 'Raked. The outfielders have been warned.',
+    'Regrade the Track', 'Rake It and Play', { morale: -1 }, 'Regrading now.', 'Raked. The outfielders have been warned.',
     { days: 3, yes: 'We regraded the warning track after the run.', no: 'The warning track is still loose in the corners from the run.', open: 'The run chewed up the warning track, and I\'m waiting on your word about regrading it.' }),
 
   news('rv10_good', 'Partnerships', '🎆', 'The biggest crowd of the year',
     'The fireworks drew the biggest crowd the ballpark has had all year, and the concessions did well enough to add {event_bonus} to the fee. The crew had every bit of debris off the field by sunrise.', { _revenueToken: 'event_bonus', yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
   repair('rv10_scorch', 'Scorch marks in center field',
     'The fireworks left scorch marks in center field and debris in the warning track. We can cut out the burned sod and replace it this morning for {repair_cost}. Or we paint it and play, and center field will play hard in those spots.',
-    'Replace the Sod', 'Paint It and Play', { ovr: -1, morale: -1 }, 'New sod going in now.', 'Painted. Center field will play fast.',
+    'Replace the Sod', 'Paint It and Play', { morale: -2 }, 'New sod going in now.', 'Painted. Center field will play fast.',
     { days: 5, yes: 'The scorched sod in center field is replaced.', no: 'The painted spots in center field are playing hard.', open: 'The fireworks scorched center field, and I\'m waiting on your word about new sod.' }),
 
   news('rv11_good', 'Partnerships', '💍', 'The wedding at home plate',
     'The wedding went beautifully. The couple sent a photo of the two of them at home plate, and it\'s already the most-shared thing the club has posted this month.', { yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
   repair('rv11_grass', 'The infield after the wedding',
     'The wedding dinner left table marks in the infield grass and a few spots where the chairs sank in. We can roll and patch it this morning for {repair_cost}. Or we leave it, and a ground ball or two will take a funny hop.',
-    'Roll and Patch It', 'Leave It', { ovr: -1 }, 'Rolling it now.', 'Left as is. Watch the hops.',
+    'Roll and Patch It', 'Leave It', { morale: -1 }, 'Rolling it now.', 'Left as is. Watch the hops.',
     { days: 3, yes: 'We rolled and patched the infield after the wedding.', no: 'There are still a few soft spots in the infield grass from the wedding.', open: 'The wedding left marks in the infield grass, and I\'m waiting on your word about rolling it.' }),
 ];

@@ -131,7 +131,7 @@ export const MONEY_BETWEEN = [
    autoResolve:'no',type:'good',tag:'COACHING',sender:'{hitting_coach_name} (Hitting Coach)',avatar:'🎥',
    subject:"A new video room?",
    preview:"{pitching_coach_name} and I put together a wish list…",
-   body:"{pitching_coach_name} and I put together a wish list: high-speed cameras in both cages and a proper video room, {misc_cost_lg}. It pays for itself in two months of adjustments. With funds at {funds_now}, this is the time to ask. Funding it lifts the players and gives one of them a real step forward. If it's not this year, we'll understand — we'll just be disappointed.",
+   body:"{pitching_coach_name} and I put together a wish list: high-speed cameras in both cages and a proper video room, {misc_cost_lg}. It pays for itself in two months of adjustments. With funds at {funds_now}, this is the time to ask. Funding it lifts the players and gives {active_hitter_name} a real step forward. If it's not this year, we'll understand — we'll just be disappointed.",
    yesLabel:'Fund the Video Room',noLabel:'Not This Year',
    yesEffect:{morale:3,ovr:1},noEffect:{morale:-1},
    yesMsg:"It's ordered. We're already rearranging furniture.",

@@ -187,6 +187,7 @@ export const MOMENT_CARDS = Object.freeze({
 
     // r256 §122.135 the groundskeeper's, and only when it rained at our park (at least 0.3" in the 12 hours before)
     {id:'mo_spo_weather',type:'normal',tag:'OPERATIONS',sender:'Head Groundskeeper',avatar:'🌱',
+     _group:{n:1,at:['1B','2B','3B','SS']},   // r270 §122.149 the infielder a bad hop catches
      _needsRain:{hours:12,inches:0.3,home:true},
      _fieldNote:{days:1,yes:"The second crew is working drying agent into the infield after the rain.",no:"We're playing the opener on the soft infield, like you said.",open:"The rain left the infield soft, and I'm waiting on your word about a second crew."},
      subject:"Spring opener — the infield is soft after the rain",
@@ -195,7 +196,7 @@ export const MOMENT_CARDS = Object.freeze({
      yesLabel:'Bring in the Crew',noLabel:'Play It As Is',
      yesEffect:{morale:1},noEffect:{ovr:-1},
      yesMsg:"Fast and true by first pitch. Nobody noticed, which is the point.",
-     noMsg:"A couple of bad hops. One of the infielders came off rubbing an ankle.",
+     noMsg:"A couple of bad hops. {group_players} came off rubbing an ankle.",
      _budgetCost:'misc_cost_xs'},
 
     {id:'mo_spo_returning_fans',type:'good',tag:'CULTURE',sender:'Community Relations',avatar:'🎟️',_when:{season:'returning'},

@@ -4215,7 +4215,7 @@ function _createInstance(cardDef, context, state) {
 
   // ONE token map for every field of this card (§60): same player, same
   // sponsor, same dollar amounts in subject, body, labels and outcome messages.
-  const { values, amountsK, players: tokenPlayers, counts, newPlayers, offer, missingPlayer } = buildTokenMap(cardDef, context, state);
+  const { values, amountsK, players: tokenPlayers, group, counts, newPlayers, offer, missingPlayer } = buildTokenMap(cardDef, context, state);
   if (missingPlayer && !context?._preset) return null;   // §73: no real player to offer — nothing to send
   // Preset players (§73): a follow-up card about a player already named.
   if (context?._preset) {
@@ -4320,6 +4320,7 @@ function _createInstance(cardDef, context, state) {
     _expiredSeason:   state.seasonNum,
     _targetPlayerId:  target.playerId,
     _targetRole:      target.role,
+    _groupPlayerIds:  group || [],   // r270 §122.149 the players a `_group` card names
     // §71: the number of games the card's text promises (e.g. a suspension).
     _actionGames:     cardDef._gamesToken ? (counts?.[cardDef._gamesToken] ?? null) : null,
     _tokenPlayers:    tokenPlayers || {},
@@ -4348,7 +4349,7 @@ function _createInstance(cardDef, context, state) {
  * The player a pool card is about (§71): the first player-role token its text
  * names. Its action, its OVR effect and its withdrawal all follow that man.
  */
-const _ROLE_TOKEN = /\{(active_sp|active_bp|active_pitcher|active_hitter|active_catcher|farm_pitcher|farm_hitter|leader_player|act_hi|pl_player|active_farm)_(?:name|pos|who)?(?:_tr)?\}|\{(act_hi)\}/;
+const _ROLE_TOKEN = /\{(active_sp|active_bp|active_pitcher|active_hitter|active_catcher|farm_pitcher|farm_hitter|leader_player|act_hi|pl_player|active_farm)_(?:name|pos|who)?(?:_tr)?\}|\{(act_hi|bg12_player)\}/;
 function _cardTarget(cardDef, tokenPlayers = {}) {
   const text = [cardDef.subject, cardDef.preview, cardDef.body].filter(Boolean).join(' ');
   const m = text.match(_ROLE_TOKEN);
@@ -4395,18 +4396,16 @@ function _applySoftEffects(state, effects, choice, instance) {
     if (effects.local)  Finance.adjustLocalIncome(fin, effects.local);
   }
 
-  // OVR effect (§71) — on the player the card is about (else one of ours):
-  // a gain is a development plan that lands over time; a loss is a temporary
-  // dip in condition (playing hurt / out of sorts) for a few games.
+  // OVR effect (§71) — on the players the card names, and only them (r270 §122.149: never one picked
+  // at random): a `_group` card's players, else the player its text is about. A gain is a development
+  // plan that lands over time; a loss is a temporary dip in condition for a few games.
   if (effects.ovr !== undefined && effects.ovr !== 0) {
     const rosterIds = state.userTeam.rosterIds || [];
-    // §118 who it lands on and for how long: this answer's own draw.
+    // §118 how long: this answer's own draw.
     const rand = dice(diceSeed(state), 'card-ovr', instance?.instanceId || instance?.cardId || 'card', choice);
-    const targetId = (instance?._targetPlayerId && rosterIds.includes(instance._targetPlayerId))
-      ? instance._targetPlayerId
-      : rosterIds[Math.floor(rand() * rosterIds.length)];
-    if (targetId) {
-      const atMs = clockNow();
+    const named = instance?._groupPlayerIds?.length ? instance._groupPlayerIds : instance?._targetPlayerId ? [instance._targetPlayerId] : [];
+    const atMs = clockNow();
+    for (const targetId of named.filter(id => rosterIds.includes(id))) {
       if (effects.ovr > 0) Development.startPlan(state, targetId, { gain: effects.ovr, source: instance?.cardId || 'card' }, atMs);
       else Development.setCondition(state, targetId, { amount: Math.abs(effects.ovr) * 2, games: 2 + Math.floor(rand() * 4), reason: instance?.cardId || 'card' });
     }
