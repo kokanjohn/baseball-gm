@@ -14985,3 +14985,24 @@ No fresh team needed.
 - The "every absence ends" check now accepts an absence that ends by date (`untilMs`, e.g. a sim game). The new spring randomness turned up a sim-game absence that the old check flagged wrongly.
 
 Fresh team: not needed (the next spring game uses it).
+
+---
+
+## §122.152 — r273: tapping a game notification opens the Dashboard
+
+**Report.** Tapping the first-pitch notification opened Messages. It should open the Dashboard.
+
+**Fix.**
+- sw.js `_tapTab(notification.data)` decides from the push id the worker already sends (`data.cardId` = the schedule item's id). The game's own pushes go to `dashboard`: GamePushes `g:<gameTime>:start`, `…:hurt:<id>`, `…:final`. Everything else goes to `inbox`: messages, and the 30-minute reminder, whose text points at the inbox.
+- App open: the service worker posts `{type:'OPEN_TAB', tab}`. App keeps handling `OPEN_INBOX` for a service worker from before r273.
+- App closed: `openWindow('/baseball-gm/?tab=<tab>')`. App init opens Messages only for `?tab=inbox` (Dashboard otherwise) and clears any `?tab`.
+- The Cloudflare worker is unchanged.
+
+**Also.** Eight screenshots (wear-*, who-*, work-*) had been committed to the repo root by r269: two screen tests defaulted their output folder to `.`. They're removed, and every screen test now defaults to /tmp/tfo-shots.
+
+**Test.** test-notification-tap-ui:
+- `_tapTab` on real ids.
+- With the app open on Messages, OPEN_TAB dashboard shows the Dashboard; OPEN_TAB inbox shows Messages.
+- `?tab=dashboard` and `?tab=inbox` cold starts, and the address is cleaned up.
+
+No fresh team needed.

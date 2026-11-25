@@ -16,7 +16,7 @@
  *   - If both cache and network fail, serve the offline fallback
  */
 
-const CACHE_VERSION  = 'tfo-v2-r272';
+const CACHE_VERSION  = 'tfo-v2-r273';
 const CACHE_NAME     = `the-front-office-${CACHE_VERSION}`;
 const OFFLINE_URL    = '/baseball-gm/index.html';
 
@@ -381,17 +381,24 @@ function _b64ToBytes(b64) {
   return Uint8Array.from(bin, c => c.charCodeAt(0));
 }
 
+// r273 §122.152 where a tap opens: the game's own pushes (first pitch, one of ours hurt, the final —
+// GamePushes ids "g:<gameTime>:start|hurt:<id>|final") open the Dashboard; everything else, Messages.
+function _tapTab(data) {
+  return /^g:\d+:(start|final|hurt:)/.test(String(data?.cardId || '')) ? 'dashboard' : 'inbox';
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const tab = _tapTab(event.notification.data);
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
       for (const client of list) {
         if (client.url.includes('/baseball-gm/')) {
-          client.postMessage({ type: 'OPEN_INBOX' });
+          client.postMessage({ type: 'OPEN_TAB', tab });
           return client.focus();
         }
       }
-      return self.clients.openWindow('/baseball-gm/?tab=inbox');
+      return self.clients.openWindow(`/baseball-gm/?tab=${tab}`);
     })
   );
 });

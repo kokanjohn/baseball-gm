@@ -9,7 +9,7 @@ import { execSync } from 'node:child_process';
 import { pinEnv } from './ui-env.mjs';   // §122.69 the same moment and dice every run
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
-const [out = '.', theme = 'dark'] = process.argv.slice(2);
+const [out = '/tmp/tfo-shots', theme = 'dark'] = process.argv.slice(2);
 let ok = true;
 const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${!cond && info ? ' — ' + info : ''}`); };
 

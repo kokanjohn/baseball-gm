@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
-const [out = '.', theme = 'dark', query = 'region=north&day=101&hour=22'] = process.argv.slice(2);
+const [out = '/tmp/tfo-shots', theme = 'dark', query = 'region=north&day=101&hour=22'] = process.argv.slice(2);
 const browser = await chromium.launch();
 const shots = [];
 for (const loop of ['past2h', 'next6h', 'next24h']) for (const zoom of [0, 1, 2]) {

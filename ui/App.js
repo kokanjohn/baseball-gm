@@ -36,7 +36,7 @@ import { inboxCounts } from '../engine/CardEngine.js';   // r267 §122.146 the M
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r272';
+export const APP_VERSION = 'tfo-v2-r273';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -374,7 +374,9 @@ function _wireBus() {
   if (!_swMessagesWired) {
     _swMessagesWired = true;
     navigator.serviceWorker?.addEventListener('message', (event) => {
-      if (event.data?.type === 'OPEN_INBOX')    { _releaseDueCards().then(() => switchTab('decisions')); }
+      // r273 §122.152 a notification tapped: the game's pushes open the Dashboard, the rest Messages
+      if (event.data?.type === 'OPEN_TAB')      { _releaseDueCards().then(() => switchTab(event.data.tab === 'dashboard' ? 'dashboard' : 'decisions')); }
+      if (event.data?.type === 'OPEN_INBOX')    { _releaseDueCards().then(() => switchTab('decisions')); }   // (a service worker from before r273)
       if (event.data?.type === 'PUSH_RECEIVED') { _releaseDueCards(); }
       // r236 §122.115 a push arrived with the app on screen: bring in what's due, then say whether the
       // message is already in Messages (then the service worker shows no notification).
@@ -547,11 +549,11 @@ async function _mountApp(state) {
   mountLeague();
   mountSchedule();
 
-  // Navigate to dashboard by default — or the inbox when opened from a
-  // notification tap (sw.js opens /baseball-gm/?tab=inbox).
-  const openInbox = new URLSearchParams(location.search).get('tab') === 'inbox';
-  switchTab(openInbox ? 'decisions' : 'dashboard');
-  if (openInbox) history.replaceState(null, '', location.pathname);
+  // Navigate to dashboard by default — or the inbox when opened from a message's
+  // notification (sw.js opens /baseball-gm/?tab=inbox; a game's push, ?tab=dashboard).
+  const tabParam = new URLSearchParams(location.search).get('tab');
+  switchTab(tabParam === 'inbox' ? 'decisions' : 'dashboard');
+  if (tabParam) history.replaceState(null, '', location.pathname);
 
   // Catch the roster clock up to now and deliver anything that came due
   // while the app was closed, then make sure the push worker has this

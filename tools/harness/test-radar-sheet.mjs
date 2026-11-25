@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
-const [out = '.', throttle = '1'] = process.argv.slice(2);
+const [out = '/tmp/tfo-shots', throttle = '1'] = process.argv.slice(2);
 const browser = await chromium.launch();
 let ok = true;
 const check = (name, cond, info = '') => { ok = ok && cond; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${!cond && info ? ' — ' + info : ''}`); };

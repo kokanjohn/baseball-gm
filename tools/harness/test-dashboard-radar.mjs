@@ -6,7 +6,7 @@ import { execSync } from 'node:child_process';
 import { pinEnv } from './ui-env.mjs';   // (r233 the pinned world, like every UI test since §122.69)
 const require = createRequire(execSync('npm root -g').toString().trim() + '/');
 const { chromium } = require('playwright');
-const [out = '.', theme = 'dark'] = process.argv.slice(2);
+const [out = '/tmp/tfo-shots', theme = 'dark'] = process.argv.slice(2);
 // (r233 a taller screen: at 844 the dashboard has grown past room for the card, which then steps aside for its Radar
 //  button as designed — §100 — so this test of the card itself uses a screen with room for it)
 let ok = true;
