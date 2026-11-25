@@ -35,7 +35,7 @@ import { installSwipeClose } from './components/SwipeClose.js';
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r263';
+export const APP_VERSION = 'tfo-v2-r264';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;

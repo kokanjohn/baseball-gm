@@ -190,8 +190,17 @@ const COMPOSE_CHANNELS = [
   },
 ];
 
-// Compose cooldown in games (how long before same topic can be used again)
-const COMPOSE_COOLDOWN_GAMES = 5;
+// Compose cooldown in days (how long before the same topic can be asked again). r264 §122.143 it was games: the
+// game count stands still all winter and starts over each season, so a topic asked late in a season stayed shut
+// most of the next one. Now the day it was asked, and back at the start of the fifth day after.
+const COMPOSE_COOLDOWN_DAYS = 5;
+
+/** r264 when a topic asked at `sentAt` can be asked again (midnight, `days` days on); null for an old save's game count. */
+function _composeBackAt(sentAt, days) {
+  if (!Number.isFinite(sentAt) || sentAt < 1e11) return null;   // (before r264: a game index — let it go)
+  const d = new Date(sentAt); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + days);
+  return d.getTime();
+}
 
 // ─────────────────────────────────────────────────────────────
 // MOUNT / UNMOUNT
@@ -741,7 +750,7 @@ function _topicState(t, state) {
     if (!open.length) return { none: 'Every player was shopped in the last few days' };
     return { players: open };
   }
-  const gameIdx = state.currentGameIndex || 0, cd = state.composeCooldowns || {};
+  const cd = state.composeCooldowns || {};
   const waiting = (state.scheduledCards || []).find(c => c.isCompose && c._composeTopic === t.id);
   if (waiting) return { waiting };
   // r199 §122.76 the scouts' looks at free agents: what's left this week, or how long until one comes back.
@@ -749,9 +758,8 @@ function _topicState(t, state) {
     const L = faLooks(state, Date.now());
     return L.left ? { info: `${L.left} of ${L.looks} looks left this week` } : { none: `Next look in ${L.inDays} day${L.inDays === 1 ? '' : 's'}` };
   }
-  const span = t.cooldown || COMPOSE_COOLDOWN_GAMES;
-  const left = cd[t.id] !== undefined ? Math.max(0, span - (gameIdx - cd[t.id])) : 0;
-  return { left };
+  const back = _composeBackAt(cd[t.id], t.cooldown || COMPOSE_COOLDOWN_DAYS);
+  return back && back > Date.now() ? { backAt: back } : {};
 }
 
 function _composeRecipients(state) {
@@ -775,12 +783,12 @@ function _composeRecipients(state) {
     if (ch.id === 'other_gms') { const n = gmsToWelcome(state).length; sub = n ? `${n} new GM${n === 1 ? '' : 's'} to welcome` : 'Trade talks with the other clubs'; }
     else {
       const st = ch.topics.map(t => _topicState(t, state));
-      const open = st.filter(x => !x.waiting && !x.left && !x.none).length;
+      const open = st.filter(x => !x.waiting && !x.backAt && !x.none).length;
       const wait = st.filter(x => x.waiting).length;
-      const left = Math.min(...st.filter(x => x.left).map(x => x.left));
+      const back = Math.min(...st.filter(x => x.backAt).map(x => x.backAt));   // r264 the soonest a topic opens again
       sub = open ? `${open} topic${open !== 1 ? 's' : ''}${wait ? ` · awaiting ${wait} repl${wait !== 1 ? 'ies' : 'y'}` : ''}`
           : wait ? `Awaiting a reply`
-          : Number.isFinite(left) ? `Recently contacted · again in ${left} game${left !== 1 ? 's' : ''}`
+          : Number.isFinite(back) ? `Recently contacted · again ${When.untilDay(back, Date.now())}`
           : 'Nothing to ask right now';
     }
     return `<button type="button" class="compose-person" data-channel="${ch.id}">
@@ -798,8 +806,8 @@ function _composeTopics(state, ch) {
     const st = _topicState(t, state);
     const isSel = _composeTopic === t.id;
     const note = st.waiting ? `Sent ${_shortWhen(st.waiting._sentAtMs)} · awaiting reply`
-      : st.left ? `Available again in ${st.left} game${st.left !== 1 ? 's' : ''}` : st.none || '';
-    const off = !!(st.waiting || st.left || st.none);
+      : st.backAt ? `Available again ${When.untilDay(st.backAt, Date.now())}` : st.none || '';
+    const off = !!(st.waiting || st.backAt || st.none);
     // r150 a trade topic, picked: which deal (each with its deadline).
     const deals = isSel && !off && st.deals ? `<div class="compose-h compose-deal-h">${t.deal === 'gms' ? 'Which GM?' : 'Which deal?'}</div>
       <div class="compose-deals">${st.deals.map(d => `<button type="button" class="compose-deal${_composeDeal === d.key ? ' selected' : ''}" data-deal="${_escape(d.key)}">
@@ -880,22 +888,7 @@ function _onlyDeal(ch, topicId) {
   return st.deals?.length === 1 ? st.deals[0].key : null;
 }
 
-function _isOnCooldown(channel, cooldowns, gameIdx) {
-  return channel.topics.every(t => {
-    const lastUsed = cooldowns[t.id];
-    return lastUsed !== undefined &&
-      (gameIdx - lastUsed) < (t.cooldown || COMPOSE_COOLDOWN_GAMES);
-  });
-}
 
-function _cooldownGamesLeft(channel, cooldowns, gameIdx) {
-  const vals = channel.topics.map(t => {
-    const lastUsed = cooldowns[t.id];
-    if (lastUsed === undefined) return 0;
-    return Math.max(0, (t.cooldown || COMPOSE_COOLDOWN_GAMES) - (gameIdx - lastUsed));
-  });
-  return Math.max(...vals, 0);
-}
 
 
 
@@ -1042,7 +1035,7 @@ function _attachTabListeners(state) {
       if (!ch) return;
       _composeChannel = ch.id;
       // One open topic: picked already.
-      const open = ch.topics.filter(t => { if (t.opens) return false; const st = _topicState(t, StateManager.get()); return !st.waiting && !st.left && !st.none; });
+      const open = ch.topics.filter(t => { if (t.opens) return false; const st = _topicState(t, StateManager.get()); return !st.waiting && !st.backAt && !st.none; });
       _composeTopic = open.length === 1 ? open[0].id : null;
       _composeDeal = _onlyDeal(ch, _composeTopic);
       _composeSkill = null; _composeRank = null; _composeWhere = null;
@@ -1173,7 +1166,6 @@ const WHO_SKILL_LIST = [['contact', 'Contact', 'Hitters'], ['power', 'Power', 'H
   ['stuff', 'Stuff', 'Pitchers'], ['control', 'Control', 'Pitchers'], ['stamina', 'Stamina', 'Pitchers']];
 
 async function _sendCompose(topicId, channelId, state) {
-  const gameIdx = state.currentGameIndex || 0;
   const ch = COMPOSE_CHANNELS.find(c => c.id === channelId);
   const topic = ch?.topics.find(t => t.id === topicId);
   // r150 a trade topic asks about one deal (no cooldown: one question per deal).
@@ -1201,9 +1193,9 @@ async function _sendCompose(topicId, channelId, state) {
                        pc_stretch: (p) => `Stretch ${p.name} out`, bc_defense: (p) => `Work with ${p.name} on defense`, pc_roles: (p) => `${p.name}'s role`,
                        sc_retire: (p) => `Is ${p.name} retiring?` };
 
-  // Record cooldown immediately
+  // Record cooldown immediately (r264 the moment it was asked)
   if (!topic?.deal && !topic?.player && !topic?.looks) StateManager.mutate(s => {
-    s.composeCooldowns = { ...(s.composeCooldowns || {}), [topicId]: gameIdx };
+    s.composeCooldowns = { ...(s.composeCooldowns || {}), [topicId]: Date.now() };
   });
 
   // §105 the reply is written now and arrives later (CardEngine schedules it; a push when it lands).

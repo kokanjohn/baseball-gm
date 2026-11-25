@@ -14813,3 +14813,28 @@ No fresh team needed.
 **Checks.** test-oop-move-ui and test-pitcher-move-ui (dark and light) now check the opposite of what they used to: no familiarity or role words on the rows, and a wear bar beside every OVR (10 of 10, 8 of 8), plus the player's own.
 
 No fresh team needed.
+
+---
+
+## §122.143 r264 — Compose topics reopen as they should; the wait counts days, not games
+
+**The audit.** A new UI check, test-compose-reopen-ui, sends every Compose topic through the screen (the topic, then its deal, player, skill, rank or where), lets the reply arrive, and reads the topic again.
+- All 28 that can be sent leave "awaiting reply" as soon as the reply lands. The screen refreshes on `card:delivered`, so that part was wired right.
+- Topics about a player or a deal reopen at once, for the next player or deal.
+- Sixteen topics have a wait.
+- The free-agent looks say when the next look comes.
+
+**The bug: the wait counted games played.** `composeCooldowns[topic]` held `currentGameIndex`. That count stands still all winter, so a topic asked in the off-season stayed shut until five games into spring. It also starts over at each new season, so a topic asked late in one season (game 158) stayed shut for most of the next (5 − (0 − 158) = 163 games).
+
+Now it holds the moment the topic was asked. The topic comes back at midnight five days after (`COMPOSE_COOLDOWN_DAYS`, `_composeBackAt`) and says when: "Available again Saturday" (`When.untilDay`). The recipient's line reads "Recently contacted · again Saturday". A value from an old save (a game index, under 1e11) is ignored, so nothing stays shut by it. The unused `_isOnCooldown` / `_cooldownGamesLeft` are gone.
+
+**Free agents worth a look.** Unchanged and working as designed (§122.76). Each report uses one of the week's looks per player it names (2 to 5 by the director). A report usually names all that are left, so the topic reads "Next look in 7 days" until the first one comes back.
+
+**Checks.** test-compose-reopen-ui (dark and light):
+- every topic sent got its reply and isn't "awaiting reply" after;
+- a waiting topic says the day it's back;
+- five days on, every one is open;
+- the free-agent looks;
+- an old save's game-count wait doesn't shut its topic.
+
+No fresh team needed.
