@@ -39,7 +39,7 @@ import * as FreeAgency from '../../engine/FreeAgency.js';
 import { formatK } from '../../engine/CardTokens.js';
 import { FA_WATCH, PHASE } from '../../data/constants.js';
 import { askScoutingButton, askScouting } from '../components/AskScouting.js';   // r208 §122.86
-import { senderLabel, fromScouting } from '../../engine/Senders.js';   // r212 §122.90, r235 §122.114
+import { senderLabel, fromScouting, viewOf } from '../../engine/Senders.js';   // r212 §122.90, r235 §122.114, r283 §122.162
 import { newGms, gmsToWelcome } from '../../engine/FirstDay.js';
 import { askable as retireAskable } from '../../engine/Retirement.js';   // r223 §122.102
 import { computeAge, baseballYear } from '../../engine/PlayerFactory.js';
@@ -260,11 +260,12 @@ export function refresh() {
   const state = StateManager.get();
   if (!state) return;
 
-  const inbox     = getInbox();
+  // r283 §122.162 every message as it's shown now: today's names for the people it names
+  const inbox     = getInbox().map(c => viewOf(c, state));
 
   // §115 a message open full-screen (it may have been withdrawn or decided meanwhile).
   if (_openCard) {
-    const open = _activeTab === 'completed' ? getHistory(100).find(c => c.instanceId === _openCard)
+    const open = _activeTab === 'completed' ? _history(state).find(c => c.instanceId === _openCard)
                                             : inbox.find(c => c.instanceId === _openCard);
     if (open) {
       container.innerHTML = _activeTab === 'completed' ? _renderThread(open, state) : _renderReading(open, inbox, state);
@@ -542,8 +543,11 @@ function _decision(card) {
   return { text, auto, read: card.choice === 'skip' };
 }
 
+/** r283 §122.162 Completed, as shown now (today's names). */
+function _history(state) { return getHistory(100).map(c => viewOf(c, state)); }
+
 function _renderCompleted(state) {
-  const history = getHistory(100);
+  const history = _history(state);
   const undoBtn = _undoCleared?.length ? `<button class="completed-tool" id="completed-undo">Undo delete</button>` : '<span></span>';
   const toolbar = (history.length || _undoCleared?.length) ? `
     <div class="completed-toolbar">
@@ -1119,7 +1123,8 @@ function _openMessage(instanceId, { keepScroll = false } = {}) {
  */
 async function _resolveCard(instanceId, choice, pick = null) {
   try {
-    const card = getInbox().find(c => c.instanceId === instanceId);
+    const raw = getInbox().find(c => c.instanceId === instanceId);
+    const card = raw && viewOf(raw, StateManager.get());   // r283 (the words the toast shows)
     if (!card) {
       // Withdrawn while open — its situation was already handled (§65).
       App.showToast('That message is no longer needed — it was already taken care of.', 'neutral', 3000);

@@ -94,7 +94,9 @@ export function gmHelloTimes(nowMs, count, quiet, rand) {
 export function cpuGmName(state, teamId) {
   const t = (state.leagueTeams || []).find(x => x.id === teamId);
   if (t?.gm?.name) return t.gm.name;
-  const staff = new Set(Object.values(state.userTeam?.coachingStaff || {}).map(c => c?.name).filter(Boolean));
+  // (r283 §122.162 nor the owner's, nor a club's manager's: one name, one person)
+  const staff = new Set([...Object.values(state.userTeam?.coachingStaff || {}).map(c => c?.name), state.userTeam?.ownerName,
+    ...(state.leagueTeams || []).map(x => x.manager?.name), ...(state.managerPool || []).map(m => m?.name)].filter(Boolean));
   const r = dice(diceSeed(state), 'cpu-gms');
   const pool = STAFF_NAMES.filter(n => !staff.has(n));
   for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }

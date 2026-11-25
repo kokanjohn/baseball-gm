@@ -47,8 +47,75 @@ export function roleOf(sender, state) {
   return null;
 }
 
+// ── r283 §122.162 names as they are now ──────────────────────────────────────────────────────────────────────
+// A message keeps the text it was written with. When it arrives, the people it names are noted (`_people`: { id:
+// the name it says }); when it's shown, every name those people have gone by reads as the name they have now. A
+// place that shows a message without this shows the name as it was written — never a code.
+
+const _esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const _word = (name) => new RegExp(`(^|[^\\p{L}\\p{N}])${_esc(name)}(?=$|[^\\p{L}\\p{N}])`, 'u');
+
+/** The text a message shows (all of it, for finding names in). */
+function _allText(card) {
+  return [card.sender, card.subject, card.preview, card.body, card.yesLabel, card.noLabel, card._autoLabel,
+    card._summary, card._followUp?.text, ...(card._choices || []).flatMap(c => [c?.label, c?.sub])].filter(Boolean).join('\n');
+}
+
+/**
+ * The people a message names: { id: the name as written }, from everyone in the record (any name they've gone by).
+ * A name that's also a player's is left alone unless it's the sender (it may be the player's).
+ */
+export function peopleIn(card, state) {
+  const text = _allText(card);
+  if (!text || !state?.people) return {};
+  // (each name to the people who've gone by it: a name two people share is the sender's if one is the sender,
+  //  else nobody's — left as written)
+  const byName = new Map();
+  for (const p of Object.values(state.people)) for (const nm of new Set([p.name, ...(p.aka || [])])) if (nm) byName.set(nm, [...(byName.get(nm) || []), p.id]);
+  let players = null;
+  const out = {};
+  for (const [nm, ids] of byName) {
+    if (!_word(nm).test(text)) continue;
+    const id = ids.includes(card._senderId) ? card._senderId : ids.length === 1 ? ids[0] : null;
+    if (!id || out[id]) continue;
+    if (id !== card._senderId) {
+      players ||= new Set(Object.values(state.players || {}).map(x => x?.name));
+      if (players.has(nm)) continue;
+    }
+    out[id] = nm;
+  }
+  return out;
+}
+
+/** `text` with every name the message's people have gone by reading as the name they have now. */
+export function liveNames(text, card, state) {
+  const ids = Object.keys(card?._people || {});
+  if (!text || !ids.length || !state?.people) return text;
+  const map = new Map();
+  for (const id of ids) {
+    const p = state.people[id];
+    if (!p?.name) continue;
+    for (const old of [card._people[id], ...(p.aka || [])]) if (old && old !== p.name && !map.has(old)) map.set(old, p.name);
+  }
+  if (!map.size) return text;
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${[...map.keys()].sort((a, b) => b.length - a.length).map(_esc).join('|')})(?=$|[^\\p{L}\\p{N}])`, 'gu');
+  return String(text).replace(re, (m, pre, nm) => pre + map.get(nm));
+}
+
+/** The message as it's shown now: its words with today's names (the same object when nothing changed). */
+export function viewOf(card, state) {
+  if (!card?._people || !Object.keys(card._people).length) return card;
+  const L = (s) => (typeof s === 'string' ? liveNames(s, card, state) : s);
+  const out = { ...card };
+  for (const k of ['sender', 'subject', 'preview', 'body', 'yesLabel', 'noLabel', '_autoLabel', 'yesMsg', 'noMsg', '_summary', '_senderName']) if (typeof card[k] === 'string') out[k] = L(card[k]);
+  if (Array.isArray(card._choices)) out._choices = card._choices.map(c => (c ? { ...c, label: L(c.label), sub: L(c.sub) } : c));
+  if (card._followUp?.text) out._followUp = { ...card._followUp, text: L(card._followUp.text) };
+  return out;
+}
+
 /** What the sender is shown as: "Name, Role" for a person, the department as it is. */
 export function senderLabel(card, state) {
+  if (card?._people && Object.keys(card._people).length) card = viewOf(card, state);   // r283 today's names
   const s = String(card?.sender || '').trim();
   if (!s) return '';
   if (SCOUTING.has(s)) {   // r235 the director (when it arrived, else now), or the department while the job is open
@@ -91,7 +158,9 @@ export function senderIdOf(card, state) {
 export function stampSender(card, state) {
   if (!card || card._senderRole) return card;
   const id = senderIdOf(card, state);
-  const withId = id ? { ...card, _senderId: id } : card;
+  const withId0 = id ? { ...card, _senderId: id } : card;
+  const people = peopleIn(withId0, state);   // r283 §122.162 who it names
+  const withId = Object.keys(people).length ? { ...withId0, _people: people } : withId0;
   if (SCOUTING.has(String(card.sender || '').trim())) {   // r235 the director as it arrives ('' while the job is open)
     const who = _director(state);
     return { ...withId, _senderName: who || '', ...(who ? { _senderRole: 'Scouting Director' } : {}) };

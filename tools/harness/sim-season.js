@@ -2523,6 +2523,26 @@ async function main() {
           gm.awayInLineup.slice(0, 5).join(' '));
     const stale = Object.values(st.players).filter(p => p.unavailable && !(p.unavailable.gamesLeft > 0) && !Number.isFinite(p.unavailable.untilMs));
     check('player cards: every absence ends (games counted down)', stale.length === 0, stale.map(p => `${p.name} ${JSON.stringify(p.unavailable)}`).join('; ') || 0);
+    // r283 §122.162 a season's messages, everyone renamed (as a look: not kept): each message names them as they are now
+    {
+      const { renamePerson } = await import('../../engine/People.js');
+      const { viewOf, senderLabel } = await import('../../engine/Senders.js');
+      const R = SM.speculate(() => {
+        const was = {};
+        SM.mutate(s => { for (const p of Object.values(s.people || {})) { was[p.id] = p.name; renamePerson(s, p.id, `Zz${p.id.replace(/\D/g, '')}q`); } });
+        const s = SM.get(), msgs = [...(s.inbox || [])];
+        const named = msgs.filter(c => Object.keys(c._people || {}).length);
+        const word = (n) => new RegExp(`(^|[^\\p{L}])${n}(?=$|[^\\p{L}])`, 'u');
+        const left = [];
+        for (const c of named) {
+          const v = viewOf(c, s), shown = [senderLabel(c, s), v.subject, v.preview, v.body, v.yesLabel, v.noLabel, v._autoLabel, v._followUp?.text, v._summary, ...(v._choices || []).map(x => x.label)].filter(Boolean).join(' | ');
+          for (const id of Object.keys(c._people)) if (word(was[id]).test(shown) || !shown.includes(s.people[id].name)) left.push(`${c.cardId}: ${was[id]} (${s.people[id].role}${word(was[id]).test(shown) ? ', still there' : ', new name missing'})`);
+        }
+        return { all: msgs.length, named: named.length, people: new Set(named.flatMap(c => Object.keys(c._people))).size, left };
+      });
+      check(`names now: ${R.named} of ${R.all} messages name ${R.people} people; all renamed, every one shows the new names (${R.left.length} left)`,
+        R.named >= 20 && R.left.length === 0, R.left.slice(0, 6).join('; '));
+    }
     const chained = [...gm.chainSeen.values()];
     check(`card chains: follow-up cards are set in motion (${chained.length})`, chained.length >= 1,
           `${[...new Set(chained)].join(',')} — scouting cards seen: ${[...gm.cardIdsSeen].filter(x => /^(sc|intl|indie|s2)/.test(x)).join(',') || 'none'}`);

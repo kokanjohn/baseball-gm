@@ -126,7 +126,7 @@ import { dealByKey } from './TradeAdvice.js';
 import { reviewWords } from './SeasonReview.js';
 import { MOMENT_CARDS } from '../data/cards-moments.js';
 import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS, NEW_GM_HELLOS, LATER_HELLOS } from '../data/cards-first-day.js';   // r211 §122.89, r212 §122.90
-import { stampSender, senderLabel } from './Senders.js';   // r212 §122.90
+import { stampSender, senderLabel, viewOf, peopleIn } from './Senders.js';   // r212 §122.90, r283 viewOf
 import { pickEmergency, answerBy } from './Emergencies.js';   // r213 §122.91
 import { storyMoments, buildStep, buildAfter } from './DeadlineStory.js';   // r215 §122.94
 import * as Stretch from './StretchStory.js';   // r216 §122.95
@@ -2897,11 +2897,13 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
   // r236 §122.115 a message already in Messages needs no alert: the foresight is kept for hours, and a message it
   // saw coming stayed on the worker's list (kept a minute past due for the cron) after it had arrived in the app.
   const arrived = new Set((state?.inbox || []).map(c => c.instanceId));
+  // (r283 §122.162 a message not here yet, as it will read: today's names)
+  const live = (c) => viewOf({ ...c, _people: c._people || peopleIn(c, state) }, state);
   const planned = (state?.scheduledCards || [])
     .filter(c => !c._seed && c.deliverAtMs > horizon)
-    .map(c => ({ instanceId: c.instanceId, sender: senderLabel(c, state), subject: c.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent, kind: _pushKind(c) }));
+    .map(c => { const v = live(c); return { instanceId: c.instanceId, sender: senderLabel(v, state), subject: v.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent, kind: _pushKind(c) }; });
   const coming = (foreseen?.messages || [])
-    .map(m => ({ instanceId: m.instanceId, sender: senderLabel(m, state), subject: m.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent, kind: _pushKind(m) }));
+    .map(m => { const v = live(m); return { instanceId: m.instanceId, sender: senderLabel(v, state), subject: v.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent, kind: _pushKind(m) }; });
   const cards = [...coming, ...planned].filter(c => !arrived.has(c.instanceId) && alertOn(state, c.kind))
     // r213 §122.91 each alert sounds when its message arrives: no quiet hours (the phone's own settings
     // silence it). Planned messages already keep to the staff's working day.
@@ -2921,7 +2923,7 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
     .map(c => ({ c, at: followUpAt(c, state) }))
     .filter(({ at }) => at !== null && at > nowMs - 60 * 1000)
     .map(({ c, at }) => ({ id: `fu:${c.instanceId}`, deliverAt: at, title: senderLabel(c, state) || 'The Front Office',
-                           body: `Following up: ${c.subject || 'a message in your inbox'}`, tag: c.instanceId, kind: PUSH_ALERTS.messages })) : [];
+                           body: `Following up: ${viewOf(c, state).subject || 'a message in your inbox'}`, tag: c.instanceId, kind: PUSH_ALERTS.messages })) : [];
   return [...cards, ...followUps, ...gameReminders(state, nowMs, ahead), ...gamePushes(state, ahead, nowMs)]
     .sort((a, b) => a.deliverAt - b.deliverAt);
 }

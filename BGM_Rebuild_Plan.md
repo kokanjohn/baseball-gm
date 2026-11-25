@@ -15332,3 +15332,45 @@ Fresh team: needed (saves from before r281 have no IDs; per the user, no upgrade
 - Season, multi-season, people, game-pushes, lookahead, message-lookahead, situations, message-timing, arcs, and the away-weather, game-pushes, schedule-rows, outlook and Live View UI tests all pass.
 
 Fresh team: not needed (games have carried `opponentId` since the calendar was built).
+
+---
+
+## §122.162 — r283: messages show people as they're called now (step 2)
+
+**Approach.** A message keeps the text it was written with; nothing in the stored text is a code. On arrival (`stampSender`, the one path into Messages), it notes the people it names: `_people = { personId: the name as written }`. When it's shown, every name those people have gone by (`people[id].aka`, plus the name as written) reads as their current name. A surface that doesn't apply this shows the name as written, never a code.
+
+**People.js.**
+- `aka` on the record.
+- `renamePerson(draft, id, name)`: keeps the old name in `aka`, and updates every place that holds the person by name (our staff, the owner, a club's manager or GM, the managers' market). Step 3 will use it.
+
+**Senders.js.**
+- `peopleIn(card, state)`: whole-word matches of every name anyone in the record has gone by, across sender, subject, preview, body, labels, the default's label, `_summary`, choices and the follow-up.
+  - A name two people share goes to the sender if one of them sent it; otherwise it's nobody's and stays as written.
+  - A name that's also a player's is left alone unless it's the sender.
+  - `yesMsg`/`noMsg` aren't scanned (not shown since r271).
+- `liveNames(text, card, state)` and `viewOf(card, state)`: the message with today's names. It returns the same object when nothing changed.
+- `senderLabel` applies it.
+- `stampSender` adds `_people` alongside `_senderId`.
+
+**Where it's applied.**
+- InboxScreen: the inbox list, the reading view, Completed and its threads (`_history`), and the toast after answering.
+- App's "new message" toast.
+- `getPushSchedule`: messages on their way (planned and foreseen) and follow-up alerts, with sender and subject as they'll read.
+
+**A name collision fixed.** `cpuGmName` didn't exclude the owner's name or the managers' names, so a CPU GM could share the owner's name. Now it does. This shifts the CPU GM names a new league gets.
+
+**Not covered (not messages).** Activity-feed lines and player-history notes keep the name they were written with.
+
+**Checks.**
+- check-live-names:
+  - a manager's message notes the manager, and a department's message mentioning the manager notes them;
+  - renamed: the sender line and text read the new name while the stored text is untouched; the follow-up too;
+  - written before a rename and arriving after: found by the old name;
+  - renamed twice: the latest name;
+  - the push for a message on its way;
+  - a shared name: nobody's unless the sender's.
+- sim-season: a whole season's messages (294 of 689 name 11 people), everyone renamed in a look-ahead. Every message shows the new names and none of the old.
+- test-live-names-ui: after renames, the inbox list, reading view, Completed and thread show no old names.
+- Season, multi-season, people, opponents, follow-ups, gm-connections, arcs, message-timing, decision-impact, and the follow-up, decision-impact, inbox-badge, message-pushes, pool-cards and starred UI tests all pass.
+
+Fresh team: recommended (CPU GM names change; messages from before r283 have no `_people` and show names as written).

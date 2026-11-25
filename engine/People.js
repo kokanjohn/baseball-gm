@@ -4,7 +4,8 @@
  * the id wherever they go (let go by one club, hired by another; our manager to the market). The name is what they're
  * called; the id is who they are — what the game compares (a storyline's coach, who left the chair).
  *
- *   state.people = { [id]: { id, name, role, clubId, since, left } }
+ *   state.people = { [id]: { id, name, aka, role, clubId, since, left } }
+ *     aka: the names they went by before (r283 §122.162: a message that says one of them shows the name now)
  *     role: 'manager' | 'pitchingCoach' | 'hittingCoach' | 'benchCoach' | 'scoutingDirector' | 'owner' | 'gm'
  *     clubId: 'user' | a club's id | null (on the market); since / left: seasons (left: null while there)
  *   state._personSeq — the last id handed out (ids are 'pp1', 'pp2', … : no draw on any random stream)
@@ -55,6 +56,26 @@ export function toMarket(draft, id, season) {
   if (p.clubId === 'user' && p.left == null) p.left = season ?? null;
   p.clubId = null;
   p.role = 'manager';
+}
+
+/**
+ * r283 §122.162 the person is called something else from now on: the record (the old name kept in `aka`) and every
+ * place that holds them by name — our staff and owner, a club's manager or GM, the managers' market. Returns the
+ * old name (null: unknown person or the same name).
+ */
+export function renamePerson(draft, id, name) {
+  const p = draft?.people?.[id];
+  const next = String(name || '').trim();
+  if (!p || !next || p.name === next) return null;
+  const old = p.name;
+  p.aka = [...new Set([...(p.aka || []), old])].filter(n => n !== next);
+  p.name = next;
+  const u = draft.userTeam || {};
+  for (const c of Object.values(u.coachingStaff || {})) if (c?.id === id) c.name = next;
+  if (u.ownerId === id) u.ownerName = next;
+  for (const t of draft.leagueTeams || []) { if (t.manager?.id === id) t.manager.name = next; if (t.gm?.id === id) t.gm.name = next; }
+  for (const m of draft.managerPool || []) if (m?.id === id) m.name = next;
+  return old;
 }
 
 /** Is `a` the same person as `b` (by id; by name only for someone from before r281 with no id)? */

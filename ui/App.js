@@ -23,7 +23,7 @@
  *   schedule  → #tab-schedule
  */
 
-import { senderLabel } from '../engine/Senders.js';   // r212 §122.90
+import { senderLabel, viewOf } from '../engine/Senders.js';   // r212 §122.90, r283 §122.162
 import * as EventBus  from './EventBus.js';
 import * as StateManager from '../store/StateManager.js';
 import { applyTheme, applyTeamColors, metricBarColor } from './formatters.js';
@@ -36,7 +36,7 @@ import { inboxCounts } from '../engine/CardEngine.js';   // r267 §122.146 the M
 // ─────────────────────────────────────────────────────────────
 
 // Build version shown in Settings / Debug. Bump alongside sw.js CACHE_VERSION.
-export const APP_VERSION = 'tfo-v2-r282';
+export const APP_VERSION = 'tfo-v2-r283';
 
 let _activeTab       = 'dashboard';
 let _milestoneActive = false;
@@ -864,7 +864,7 @@ async function _releaseDueCards({ quiet = false } = {}) {
   if (!released.length) return released;
   EventBus.emit('card:delivered', { cards: released, source: 'scheduled' });
   if (!quiet && _activeTab !== 'decisions' && document.visibilityState === 'visible') {
-    const c = released[released.length - 1];
+    const c = viewOf(released[released.length - 1], StateManager.get());   // r283 today's names
     const more = released.length > 1 ? ` (+${released.length - 1} more)` : '';
     const from = senderLabel(c, StateManager.get());   // r212 §122.90
     showToast(`📬 ${from ? from + ': ' : ''}${c.subject}${more}`, 'neutral', 4500);
