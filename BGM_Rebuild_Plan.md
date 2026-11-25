@@ -14855,3 +14855,17 @@ Now a look is one report of up to three players (`FA_REPORT_SIZE`). The director
 - test-compose-reopen-ui: after one report the topic is still open with looks left.
 
 No fresh team needed. Reports already made count as one look each.
+
+---
+
+## §122.145 r266 — Schedule cards: the opponent and its tags on one line
+
+On a narrow phone a long opponent ("@ Lightshore Breakers") pushed the ST tag onto a line of its own, so those cards were taller than the rest (101px against 81px at 360px wide).
+
+The opponent line is now a single flex line (`.game-opp`: no wrapping). The name shortens with "…" when it has to (`.game-opp-name`), and the tags (ST, DH, MAKEUP, the series) never shrink or drop below it. Cards with the same content are now one height.
+
+A card for one of the next week's games is taller by its forecast line ("51° · Mostly Clear"). That's content, not the wrap, and it's the same on every card that has one.
+
+**Checks.** New test-schedule-rows-ui (360px wide, dark and light): cards alike are one height (83 with a forecast, 68 without; it failed at 81/101 before), and the opponent line stays one line with the tag beside the name. test-landscape-ui's "3 whole player rows" check fails the same way without this change; it was already failing.
+
+No fresh team needed.
