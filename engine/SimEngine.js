@@ -76,8 +76,8 @@ import { injuryChancePerExposure } from './InjuryEngine.js';
 import {
   ROLE, bullpenRoles, chooseReliever, starterRested, armStatus, armLoad, tireAfterBF, reliefInnings, springStarterInnings, seasonStarterInnings,
 } from './PitchingEngine.js';
-import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR } from '../data/constants.js';
-import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost, exposure } from './Positions.js';
+import { PITCH_HOOK_EXTRA_BF, PITCH_SHELLED_RUNS, PITCH_SHELLED_EARLY_RUNS, WEAR, PINCH_HIT } from '../data/constants.js';
+import { canPlay, primaryPos, posLabel, defenseOf, reliefBoost, exposure, valueAt } from './Positions.js';
 import { DEFENSE_SIM as DS, TAG_UP, GROUND_ADV, WILD_PITCH, IBB } from '../data/constants.js';   // r205 §122.83, r227 §122.106, r228 §122.107
 import { battingOrder, strategyOf, runStyle, hookStyle } from './Strategy.js';   // r169
 import { lateClosePoints } from './ManagerEngine.js';   // §122.64
@@ -515,8 +515,19 @@ function _simulateFullGame(userLineup, oppLineup, userSP, oppSP, players, ctx) {
   const runHalf = (isTop, walkoffRuns = Infinity, resume = null) => {
     const userBats = isTop ? !userBatsBottom : userBatsBottom;
     _userFielding = userBats ? oppIsGM : userIsGM;
-    _fieldDef = (userBats ? oppLineup : userLineup)?.defense || null;   // r165 the fielding side's defense
-    _fielders = _fieldersOf(userBats ? oppLineup : userLineup, players, gs.norms);   // r205 §122.83 who's where, and the gloves
+    const fieldLineup = userBats ? oppLineup : userLineup;
+    const halfKey = `${isTop ? 'TOP' : 'BOT'}_${gs.inning}`;
+    // r276 §122.155 taking the field: a pinch hitter who can't play the position gives way to a glove who can
+    const dsubs = _defensiveChanges(gs, fieldLineup, players, halfKey);
+    if (dsubs.length) {
+      const prev = plays[plays.length - 1];
+      for (const d of dsubs) { d.cumOurScore = prev?.cumOurScore ?? 0; d.cumTheirScore = prev?.cumTheirScore ?? 0; }
+      plays.push(...dsubs);
+    }
+    _fielders = _fieldersOf(fieldLineup, players, gs.norms);   // r205 §122.83 who's where, and the gloves
+    // r165 the fielding side's defense; r276 §122.155 from who is out there now (a substitute counts)
+    _fieldDef = _defenseNow(fieldLineup, _fielders, players);
+    gs.batLineup = userBats ? userLineup : oppLineup;   // r276 (the batting side: its positions and substitutes)
     _runBat = (userBats ? userLineup : oppLineup)?.run || null;         // r169 the batting side's running game
     gs.halfIdx = (gs.inning - 1) * 2 + (isTop ? 0 : 1);
     gs.env = _envFor(gs.wx, gs.halfIdx);
@@ -926,10 +937,8 @@ function _simulateHalfInning(slots, bench, pitcherObj, gs, players, fieldMod, is
     // ── Substitution check ────────────────────────────────────
     const subPlay = gs.exhibition
       ? _plannedSubstitution(slots, slotIdx, batter, players, inning)
-      : _checkBenchSubstitution(
-          slots, bench, slotIdx, batter, players,
-          inning, isSpring, gs.userScore, gs.oppScore, isUserBatting
-        );
+      : _checkBenchSubstitution(gs, slots, bench, slotIdx, batter, players, inning, isSpring,
+          (isUserBatting ? gs.userScore - gs.oppScore : gs.oppScore - gs.userScore) + halfRuns, bases);   // r276 §122.155 every club (the half's runs so far count)
 
     if (subPlay) {
       const prev = plays[plays.length - 1];
@@ -1782,6 +1791,11 @@ export function accumulateBox(plays, players, opts = {}) {
       ensurePit(side, pid);
       continue;
     }
+    // r276 §122.155 a defensive replacement is in the box from the moment he takes the field.
+    if (play.type === 'defensive_sub' && play._in) {
+      ensureHit(play.half === 'TOP' ? home : away, play._in);
+      continue;
+    }
     // §118 the player who took a hurt hitter's place is in the box from that moment.
     if (play.type === 'injury' && play._injury) {
       hurt.add(play._injury.playerId);
@@ -1895,107 +1909,76 @@ function _plannedSubstitution(slots, slotIdx, batter, players, inning) {
 }
 
 /**
- * _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
- *                          inning, isSpring, userScore, oppScore, isUserBatting)
- *
- * Decides whether a bench hitter should pinch hit for the current batter.
- * Mutates slots[slotIdx].id in-place (permanent for rest of game) and
- * marks the bench player as used.
- *
- * Returns a pinch_hit play object if a substitution happens, null otherwise.
- *
- * Rules:
- *   Spring training (inning >= 5):
- *     - Each available bench player gets weighted consideration based on OVR.
- *     - Higher-rated bench players have higher probability of being chosen.
- *     - Probability per slot per inning: 30% base, scaled by relative OVR.
- *     - Ensures most bench hitters get 2-4 PA across a spring game.
- *
- *   Regular season (inning >= 7):
- *     - Only substitute if game is within 2 runs.
- *     - Only substitute if best available bench player OVR > starter OVR by 5+.
- *     - 20% base chance — keeps it situational, not every game.
- *
- *   Never substitutes:
- *     - CPU batters (only user team bench logic applied)
- *     - If no bench players are available (all used or empty bench)
- *     - If already past the point where subs make sense (extra innings)
+ * r276 §122.155 a hitter's bat today, on the OVR scale: what the player is worth as a DH (Positions.valueAt),
+ * less the dip a worn-down bat takes (_effectiveSR). The manager compares bats with it.
  */
-function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
-  inning, isSpring, userScore, oppScore, isUserBatting) {
+function _batToday(p) {
+  if (!p) return 0;
+  const w = p.wear || 0;
+  const dip = w >= WEAR.tired ? Math.min(WEAR.dipMax, WEAR.dip + Math.floor((w - WEAR.tired) / WEAR.dipStep)) : 0;
+  return valueAt(p, 'DH') - dip;
+}
 
-  // Only apply substitution logic to user team
-  if (!isUserBatting) return null;
+/**
+ * _checkBenchSubstitution(gs, slots, bench, slotIdx, batter, players, inning, isSpring, lead, bases)
+ *
+ * r276 §122.155 every club's manager (not ours alone), deciding whether a bench bat hits for the batter due up.
+ * `lead`: the batting side's runs less the other side's. The bench player takes the spot in the order for the
+ * rest of the game (slots[slotIdx], marked `sub`), and in the field the position the starter left
+ * (_fieldersOf; _defensiveChanges brings in a glove when the bat can't play it).
+ *
+ *   Regular season (PINCH_HIT): from the 7th, the batting side from `behind` down to `ahead` up. The best bench
+ *   bat today (_batToday: the bat, less wear) must beat the batter's by `minGain`; then a chance by the moment —
+ *   a runner in scoring position, anyone on, the bases empty — and more from the 9th.
+ *   Spring: from the 5th, a bench player at random (so they all get their at-bats), more likely each inning.
+ *
+ * Never: for a player who is already a substitute, for the catcher unless someone left on the bench can catch,
+ * or with nobody available. Returns the pinch_hit play, or null.
+ */
+function _checkBenchSubstitution(gs, slots, bench, slotIdx, batter, players, inning, isSpring, lead, bases) {
+  const current = players[slots[slotIdx]?.id];
+  if (!current || slots[slotIdx].sub) return null;
+  const avail = (bench || []).filter(b => !b.used && players[b.id] && isAvailable(players[b.id]) && !gs.hurt?.has(b.id));
+  if (!avail.length) return null;
+  // (the catcher: only with a catcher to put behind the plate — the bat itself or one still on the bench;
+  //  and while a pinch hitter who can't catch holds the catcher's spot, the last catcher on the bench stays there)
+  const L = gs.batLineup;
+  const isCatcher = L?.field?.[current.id]?.slot === 'C';
+  const cSpot = L?.field && L.startOrder ? L.startOrder.findIndex(id => L.field[id]?.slot === 'C') : -1;
+  const owed = cSpot >= 0 && L.slots[cSpot]?.sub && !L.slots[cSpot].settled && exposure(players[L.slots[cSpot].id], 'C') > 0;
+  const canCatch = (b) => exposure(players[b.id], 'C') === 0;
+  const fits = (b) => (!isCatcher || canCatch(b) || avail.some(o => o !== b && canCatch(o)))
+                   && !(owed && canCatch(b) && !avail.some(o => o !== b && canCatch(o)));
+  const pool = avail.filter(fits);
+  if (!pool.length) return null;
 
-  // No bench available
-  const availBench = bench.filter(b => !b.used);
-  if (!availBench.length) return null;
-
-  // Don't sub in extra innings — preserve lineup stability
-  if (inning > 9) return null;
-
-  // Don't sub out a player who is already a sub (bench player already in).
-  // r137 §118: the slot says so — every active hitter carries BENCH_HITTERS
-  // (lineupSlots decide who starts), so the group check never let anyone pinch-hit.
-  const currentPlayer = players[slots[slotIdx].id];
-  if (!currentPlayer) return null;
-  if (slots[slotIdx].sub) return null;
-
-  let shouldSub = false;
-  let benchCandidate = null;
-
+  let pick = null;
   if (isSpring) {
-    // Spring training: start subs in inning 5+
-    if (inning < 5) return null;
-
-    // Weight by OVR: higher-rated bench players get higher base probability.
-    // Each bench player contributes a weighted chance.
-    // We pick one bench player (the highest available OVR) and compute their prob.
-    benchCandidate = availBench[0]; // already sorted by OVR desc
-    const benchOvr   = players[benchCandidate.id]?.ovr || 55;
-    const starterOvr = currentPlayer.ovr || 55;
-
-    // Base probability 30% in inning 5, scaling up each inning
-    // +5% per inning beyond 5, +2% if bench player OVR > starter OVR
-    const inningBonus = (inning - 5) * 0.05;
-    const ovrBonus    = benchOvr > starterOvr ? 0.08 : 0;
-    const prob        = Math.min(0.75, 0.30 + inningBonus + ovrBonus);
-    shouldSub         = _roll() < prob;
-
+    const S = PINCH_HIT.spring;
+    if (inning < S.fromInning) return null;
+    pick = pool[Math.floor(_roll() * pool.length)];
+    const prob = Math.min(S.max, S.base + (inning - S.fromInning) * S.perInning + (_batToday(players[pick.id]) > _batToday(current) ? S.better : 0));
+    if (_roll() >= prob) return null;
   } else {
-    // Regular season: inning 7+, close game, bench upgrade required
-    if (inning < 7) return null;
-    const runDiff = Math.abs(userScore - oppScore);
-    if (runDiff > 2) return null;
-
-    benchCandidate = availBench[0];
-    const benchOvr   = players[benchCandidate.id]?.ovr || 55;
-    const starterOvr = currentPlayer.ovr || 55;
-
-    // Only pinch hit if bench player is meaningfully better
-    if (benchOvr <= starterOvr + 4) return null;
-
-    shouldSub = _roll() < 0.20;
+    if (inning < PINCH_HIT.fromInning || lead < -PINCH_HIT.behind || lead > PINCH_HIT.ahead) return null;
+    pick = [...pool].sort((a, b) => _batToday(players[b.id]) - _batToday(players[a.id]))[0];
+    if (_batToday(players[pick.id]) - _batToday(current) < PINCH_HIT.minGain) return null;
+    const C = PINCH_HIT.chance;
+    const prob = (bases?.second || bases?.third ? C.scoring : bases?.first ? C.on : C.empty) + (inning >= 9 ? C.ninthPlus : 0);
+    if (_roll() >= prob) return null;
   }
 
-  if (!shouldSub || !benchCandidate) return null;
-
-  // Execute the substitution — mutate lineup slot in place
-  const starterName = currentPlayer.name || 'Batter';
-  const subPlayer   = players[benchCandidate.id];
-  const subName     = subPlayer?.name || 'Sub';
-
-  slots[slotIdx]    = { id: benchCandidate.id, subbed: false, sub: true };
-  benchCandidate.used = true;
-
+  const sub = players[pick.id];
+  slots[slotIdx] = { id: pick.id, subbed: false, sub: true };
+  pick.used = true;
   // Return a pinch_hit play — displayed in PBP, no stat deltas
   return {
     playIndex:    0,
-    batterId:     benchCandidate.id,
+    batterId:     pick.id,
     pitcherId:    null,
     type:         'pinch_hit',
-    _for:         currentPlayer.id || null,   // r229 §122.108 whom (the Live View's batting order)
-    description:  `${subName} pinch hits for ${starterName}`,
+    _for:         current.id || null,   // r229 §122.108 whom (the Live View's batting order)
+    description:  `${sub?.name || 'Sub'} pinch hits for ${current.name || 'the batter'}`,
     rbi:          0,
     isScoring:    false,
     isBigPlay:    false,
@@ -2005,6 +1988,56 @@ function _checkBenchSubstitution(slots, bench, slotIdx, batter, players,
     _timestamp:   0,
     _statDeltas:  {},
   };
+}
+
+/**
+ * r276 §122.155 _defensiveChanges(gs, lineup, players, halfKey) — as a club takes the field, a pinch hitter
+ * who can't play the position the starter left (out of position there: Positions.exposure) gives way to a
+ * bench player who can (the best glove-and-bat there, Positions.valueAt), if one is left. A catcher's spot
+ * always gets a catcher. Returns the defensive_sub plays (no stat deltas), in the order made.
+ */
+function _defensiveChanges(gs, lineup, players, halfKey) {
+  const out = [];
+  if (gs.exhibition || !lineup?.field || !lineup.slots?.length) return out;
+  const fielders = _fieldersOf(lineup, players, gs.norms);
+  if (!fielders) return out;
+  const atOf = {};
+  for (const [slot, f] of Object.entries(fielders.byPos)) for (const x of (slot === 'OF' ? f : [f])) if (x) atOf[x.id] = x.slot;
+  for (let i = 0; i < lineup.slots.length; i++) {
+    const sl = lineup.slots[i];
+    if (!sl.sub || sl.settled) continue;
+    sl.settled = true;                       // (a club decides once for each substitute)
+    const at = atOf[sl.id];
+    const p = players[sl.id];
+    if (!at || !p || exposure(p, at) === 0) continue;
+    const glove = (lineup.bench || [])
+      .filter(b => !b.used && players[b.id] && isAvailable(players[b.id]) && !gs.hurt?.has(b.id) && exposure(players[b.id], at) === 0)
+      .sort((a, b) => valueAt(players[b.id], at) - valueAt(players[a.id], at))[0];
+    if (!glove) continue;
+    glove.used = true;
+    lineup.slots[i] = { id: glove.id, subbed: false, sub: true, settled: true };
+    const g = players[glove.id];
+    out.push({
+      playIndex: 0, batterId: null, pitcherId: null, type: 'defensive_sub',
+      _for: p.id, _in: glove.id, _at: at,
+      description: `${g.name} takes over ${_AT_WORDS[at] || 'in the field'} for ${p.name}`,
+      rbi: 0, isScoring: false, isBigPlay: false,
+      _halfInning: halfKey, inning: parseInt(halfKey.split('_')[1]) || 1, half: halfKey.startsWith('TOP') ? 'TOP' : 'BOT',
+      outsAfter: 0, _basesAfter: { first: null, second: null, third: null },
+      cumOurScore: 0, cumTheirScore: 0, _timestamp: 0, _statDeltas: {},
+    });
+  }
+  return out;
+}
+
+const _AT_WORDS = { C: 'behind the plate', '1B': 'at first', '2B': 'at second', '3B': 'at third', SS: 'at shortstop', OF: 'in the outfield' };
+
+/** r276 §122.155 the fielding side's defense from who is in the field now (Positions.defenseOf). */
+function _defenseNow(lineup, fielders, players) {
+  if (!fielders || !lineup?.defense) return lineup?.defense || null;   // (an All-Star squad: none)
+  const slots = [];
+  for (const [slot, f] of Object.entries(fielders.byPos)) for (const x of (slot === 'OF' ? f : [f])) if (x) slots.push({ slot: x.slot, playerId: x.id });
+  return defenseOf(slots, players);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2760,6 +2793,7 @@ function _buildLineup(team, players, isCPU) {
     const subs = team.simSubs || {};
     return {
       field:   _fieldMap(lineupSlots.length === 9 ? lineupSlots : [], orderedStarters),   // r205 §122.83
+      startOrder: orderedStarters.map(p => p.id),
       slots:   orderedStarters.map(p => ({ id: p.id, subbed: false,
                                            subIn: subs[p.id]?.inId || null, subInning: subs[p.id]?.inning || null })),
       bench:   (team.simBench || []).filter(ok).map(id => ({ id, used: false })),
@@ -2795,6 +2829,7 @@ function _buildLineup(team, players, isCPU) {
     roles,
     defense: lineupSlots.length === 9 ? defenseOf(lineupSlots, players) : null,   // r165 §122.35 who's out of position
     field: _fieldMap(lineupSlots, orderedStarters),   // r205 §122.83 who plays where
+    startOrder: orderedStarters.map(p => p.id),       // r276 §122.155 whose spot each place in the order is
     run: runStyle(team), hook: hookStyle(team),   // r169 how the club plays (Strategy)
     mgr: lateClosePoints(team),                   // §122.64 the manager's edge in a late, close game
   };
@@ -3084,13 +3119,17 @@ function _fieldersOf(lineup, players, norms) {
     if (!p) continue;
     if (field[id]) { place(p, field[id]); taken.add(id); }
   }
-  for (const id of ids) {   // (in for a starter: the position the starter left)
+  ids.forEach((id, i) => {   // (in for a starter: the position the starter left)
     const p = players[id];
-    if (!p || taken.has(id) || !open.length) continue;
-    // (a DH stays a DH: only someone who took a fielder's spot in the order fields)
-    const at = open.shift();
+    if (!p || taken.has(id) || !open.length) return;
+    // (a DH stays a DH: only someone who took a fielder's spot in the order fields. r276 §122.155 by the
+    //  spot in the order — the DH batting ahead of a substitute never took the substitute's position)
+    const start = lineup.startOrder?.[i];
+    const at = start ? field[start] : open.shift();
+    if (!at) return;
+    if (start) open.splice(open.indexOf(at), 1);
     place(p, at);
-  }
+  });
   return { byPos };
 }
 

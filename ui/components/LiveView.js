@@ -67,6 +67,8 @@ export function liveViewState(game, state) {
     const side = p.half === 'TOP' ? 'away' : 'home';
     if (p.type === 'pinch_hit') swap(side, p._for || byName(side, (p.description || '').split(' pinch hits for ')[1]), p.batterId);
     if (p.type === 'injury' && p._injury?.role === 'hitter') swap(side, p._injury.playerId, p._injury.subId);
+    // r276 §122.155 a defensive replacement: the fielding side's order (the half's batting side's opponent)
+    if (p.type === 'defensive_sub') swap(side === 'away' ? 'home' : 'away', p._for, p._in);
   }
 
   // At bat: the next plate appearance in this half (a pinch hitter announced counts).

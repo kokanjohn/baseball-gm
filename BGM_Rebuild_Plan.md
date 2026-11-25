@@ -15068,3 +15068,52 @@ No fresh team needed.
 - test-starred-ui: no Star on our player's card; the Compose topic is there and sends.
 
 No fresh team needed.
+
+---
+
+## §122.155 — r276: pinch hitting for every club; defensive replacements; the bullpen weighs the season's workload
+
+**Audit (saved season, 91 regular-season and 8 spring games).**
+- Only our club pinch hit. The other side's 9 extra hitters were all injury subs; in spring it was 36 of ours vs 1 of theirs.
+- The choice was by OVR (glove and speed included), and only the single top-OVR bench player was ever considered (5+ OVR better in the regular season).
+- `_fieldersOf` did put a pinch hitter at the position his starter left. But the error rate and catcher exposure (`defenseOf`) were the lineup's from the start, and there was no defensive replacement.
+- A bug: a DH batting ahead of a substitute took the substitute's open position (a DH caught 42 halves in 300 test games).
+- Reliever choice used only the short-term arm state (`armStatus`), never the season's load (`armLoad`).
+
+**Pinch hitting (SimEngine `_checkBenchSubstitution`, every club; `PINCH_HIT` in constants).**
+- How a bat is judged: `_batToday(p)` = `valueAt(p, 'DH')` less the worn-bat dip.
+- Regular season:
+  - from the 7th, with the batting side 3 down to 1 up, counting this half's runs so far;
+  - the best bench bat today must beat the batter by `minGain` 6;
+  - chance: 0.7 with a runner in scoring position, 0.5 with a runner on, 0.25 with the bases empty; +0.15 from the 9th.
+- Spring: both clubs from the 5th; a bench player at random (so they all bat), with the old probabilities.
+- Never:
+  - for a substitute;
+  - for the catcher, unless a catcher remains (the bat itself or one on the bench);
+  - the last bench catcher while a non-catcher holds the catcher's spot.
+- Unchanged: a hurt player still gets a hurt-player sub, and the All-Star Game still uses its planned subs.
+
+**Defensive replacements (`_defensiveChanges`).** As a club takes the field, each unsettled substitute who is out of position at the spot his starter left gives way to the best bench player who plays it cleanly (`valueAt` there).
+- New play type `defensive_sub` (`_for`, `_in`, `_at`; no stats; "X takes over at shortstop for Y").
+- The box score adds the player at once (`accumulateBox`).
+- The Live View swaps him into the fielding side's order. The PBP shows 🔁.
+
+**Defense now.**
+- `_fieldDef` = `_defenseNow`: `defenseOf` of whoever is in the field this half.
+- `_fieldersOf` places a substitute by his spot in the order (lineup `startOrder`). A DH's spot never fields.
+
+**Relievers (`PitchingEngine.chooseReliever`).**
+- Any arm whose `armLoad` is at `WEAR.tired` or more drops behind every other candidate; he pitches only when nobody else can.
+- Low-leverage sharing: longest rest first, then the lighter load.
+
+**Check.** check-pinch-hit (300 regular-season and 40 spring games):
+- both clubs pinch hit (0.55 / 0.46 a game);
+- every regular-season pinch hit is late, close and a better bat;
+- the plate always has a catcher;
+- 160 defensive replacements, each in his own position the next half and in the box;
+- spring: both benches bat (152 / 151);
+- relievers: worn setup man skipped; the fresh arm chosen when everyone else is worn; someone still pitches when all are worn; the lighter load first.
+
+Season, multi-season, sim-plays, ball-placement, coaches, game-sim-weather, pitcher-roles, next-starter, Live View and game-injury UI all pass.
+
+Fresh team: not needed.

@@ -281,9 +281,11 @@ export function chooseReliever({ roles, players, used, atMs, inning, lead }) {
   const { closer, setup, middle, long } = roles;
   const close = lead >= 0 && lead <= 3;
   const highLeverage = close && inning >= 8;
-  // Low-leverage innings are shared out: within a role, the arm who has rested longest goes first.
+  // Low-leverage innings are shared out: within a role, the arm who has rested longest goes first
+  // (r276 §122.155 then the lighter season's workload).
   const daysOff = (id) => (players[id] ? armStatus(players[id], atMs).lastDays ?? 99 : -1);
-  const share = (ids) => [...ids].sort((a, b) => daysOff(b) - daysOff(a));
+  const load = (id) => (players[id] ? armLoad(players[id], atMs) : 0);
+  const share = (ids) => [...ids].filter(Boolean).sort((a, b) => (daysOff(b) - daysOff(a)) || (load(a) - load(b)));
   let order;
   if (inning >= 9 && close)                order = [closer, ...setup, ...middle];
   else if (inning === 8 && close)          order = [...setup, ...middle];
@@ -292,7 +294,11 @@ export function chooseReliever({ roles, players, used, atMs, inning, lead }) {
   else if (inning <= 5)                    order = [...share(long), ...share(middle)];
   else                                     order = [...share(middle), ...share(long), ...[...setup].reverse()];
   const all = [closer, ...setup, ...middle, ...long].filter(Boolean);
-  const candidates = [...order, ...all].filter((id, i, xs) => id && xs.indexOf(id) === i && !used.has(id) && players[id]);
+  const listed = [...order, ...all].filter((id, i, xs) => id && xs.indexOf(id) === i && !used.has(id) && players[id]);
+  // r276 §122.155 a worn arm (the season's workload at Tired or past) drops behind every other, whatever
+  // the role: the manager goes to him only when nobody else is fit to pitch.
+  const worn = (id) => load(id) >= WEAR.tired;
+  const candidates = [...listed.filter(id => !worn(id)), ...listed.filter(worn)];
   const arm = Object.fromEntries(candidates.map(id => [id, armStatus(players[id], atMs)]));
   const status = (id) => arm[id].status;
   // Everyone needs rest: the one who has had the most of it.

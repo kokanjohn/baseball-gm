@@ -378,6 +378,15 @@ export const PITCH_SP_TIRE_PER_STAMINA      = 0.2;
 export const PITCH_RP_TIRE_BASE_BF          = 4;     // reliever: 4 + stamina/12 batters (≈ an inning and a half)
 export const PITCH_RP_TIRE_PER_STAMINA      = 1 / 12;
 export const PITCH_HOOK_EXTRA_BF            = 6;     // past tiring by this many, he's done regardless of innings
+// r276 §122.155 pinch hitting (every club alike). Regular season: from the 7th, with the batting side
+// between `behind` runs down and `ahead` up, the manager sends up his best bench bat (valueAt DH, less a
+// worn bat's dip) when it beats the hitter due up by `minGain`; how often by the moment (`chance`).
+// Spring: from the 5th, every club's bench gets its at-bats (`spring`).
+export const PINCH_HIT = Object.freeze({
+  fromInning: 7, behind: 3, ahead: 1, minGain: 6,
+  chance: Object.freeze({ scoring: 0.7, on: 0.5, empty: 0.25, ninthPlus: 0.15 }),
+  spring: Object.freeze({ fromInning: 5, base: 0.3, perInning: 0.05, better: 0.08, max: 0.75 }),
+});
 export const PITCH_SHELLED_RUNS             = 5;     // a starter who has allowed this many by the 6th is pulled
 export const PITCH_SHELLED_EARLY_RUNS       = 4;     // ... or this many by the 3rd
 export const PITCH_LONG_INNINGS             = Object.freeze({ min: 2, max: 3 });  // a long man's stint

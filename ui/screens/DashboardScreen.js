@@ -1027,7 +1027,7 @@ const _PBP_ICONS = {
   groundout:'▲', flyout:'▲',
   double_play:'▲▲', fielders_choice:'FC', sac_fly:'SF', sac_bunt:'SB',
   error:'E', stolen_base:'SB', caught_stealing:'CS', passed_ball:'PB', wild_pitch:'WP',
-  pitching_change:'🔄', pinch_hit:'🔁', injury:'!',
+  pitching_change:'🔄', pinch_hit:'🔁', defensive_sub:'🔁', injury:'!',
   game_start: '⚾',
   weather_delay:'⏸', weather_resume:'▶', game_suspended:'⏸', game_resumed:'▶',
 };
@@ -1037,7 +1037,7 @@ function _pbpPlayHtml(play) {
   const icon = _PBP_ICONS[play.type] || '·';
   const cls  = play.type === 'hr'     ? 'pbp-play pbp-homer'
              : ['single','double','triple'].includes(play.type) ? 'pbp-play pbp-hit'
-             : play.type === 'pitching_change' || play.type === 'pinch_hit' ? 'pbp-play pbp-pitching'
+             : ['pitching_change', 'pinch_hit', 'defensive_sub'].includes(play.type) ? 'pbp-play pbp-pitching'
              : play.type === 'game_start' ? 'pbp-play pbp-pitching'
              : ['weather_delay', 'weather_resume', 'game_suspended', 'game_resumed'].includes(play.type) ? 'pbp-play pbp-weather'
              : play.type === 'injury' ? 'pbp-play pbp-hurt'   // §118 a player left the game hurt
