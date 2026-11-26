@@ -15549,3 +15549,38 @@ No fresh team needed.
 **Next (decided Nov 25):** fix the five checks already failing at r288 (§122.168), then foundation step 2.
 
 **Session note:** this session couldn't push (its git gateway refused kokanjohn/baseball-gm after the repo was added mid-session). Step 1 (commit "Foundation step 1: the record…") is in the project as `claude/foundation-step1.patch`; the backup tag `r288-stable` and branch `backup/r288` (at 5455636) weren't pushed yet.
+
+---
+
+## §122.170 — r289: the five checks failing at r288 fixed, each at its root (Nov 26)
+
+Foundation step 1 (§122.168) is on main (5147503). The backup branch `backup/r288` is pushed at 5455636; the tag `r288-stable` could not be pushed (this session's git gateway refuses tag pushes, HTTP 403), so the branch is the backup. `KNOWN` in ci-checks.sh is now empty.
+
+**check-teaching** (a TypeError, then two failures it was hiding). The check, not the app:
+- It read the Bench Coach's view a day past the reps; a game that day put Darby on the IL, and `teachRead` rightly declines an injured player (`workable`). It now stops just after the last day of reps (the report comes with it).
+- "A thin spot": the setup (nobody on the bench plays SS) was made before the game that is the staff's look, so the same injury and a call-up undid it. It's made again at the look, and every suggestion except the SS cover is quieted (the comment said so; the code left every cover open, and 3B came first).
+
+**check-roster-advice** (§122.168 named a TypeError; the failure here was the prospect check). The setup quieted the other suggestions in one pass, but one suggestion per player hid Burns's prospect suggestion behind his bat one; once that was quiet, Burns came back as a DH prospect and was dealt first. It now quiets until only the target is left.
+
+**check-ball-placement** (an app fix). A hit taken away that still scores the runner is placed as a sacrifice fly with the flyout's gem (diving catch, at the wall), but `_fieldCall` had no `sac_fly` case, so the words fell back to "Gentile sacrifice fly, RBI". Now: "Ramirez makes a diving catch in center to rob Gentile — a sacrifice fly, RBI". An ordinary sac fly reads as before. (Errors clear the gem, so this was the only gap.)
+
+**check-first-day** (an app fix). Cards whose answer sits their hitter (`rest_active_hitter`, `bench_active_hitter`: "hold them out", "keep them away", a suspension) picked `{active_hitter}` from the hitters' group, which since the lineupSlots model holds bench bats too. The trainer's first-day card named a bench catcher "who wants to play the first game", and holding him out opened no spot. `_cardFit` now picks such a card's hitter from `lineupSlots`.
+
+**check-off-day-rest.** The check, not the app: it looked for a credited league club the night after our next game, when every club had played since and `countGame` had (rightly) cleared the count. It now finds the league clubs with no game on our off day, checks each is credited one day, and that its next game clears the count.
+
+**Two more found by the full run:**
+- **check-league-positions** failed after the card fix changed the run: its "better free agent at SS" was made by raising OVR, but `fitsUs` (r206) weighs `valueAt` at SS as if eligible, and a weak glove plays down there. The rating is now set from that value.
+- **check-player-work** was failing at 5147503 too (not one of the five): it starts at a real now, so each run is a different start, and its subjects came from `ours()`, which includes the IL. 1 in 24 random starts failed. Each subject is now picked when needed from players the staff can take on; the start is printed and `START=<ms>` replays it; 40 random starts pass.
+
+**The record** changes with the card fix only (the sac-fly words leave it unchanged; checked alone). The first difference in each run is that pick: contender-2's trainer card names Santoro (a starter), not Rooney; ember-1's clubhouse-fight card suspends Hudson, not Kilgore. Kept again in the same commit: contender-2 1,527 messages, 737+737 games; ember-1 752 messages, 738 games.
+
+**Checks:** all 96 `check-*.mjs` pass (check-weather-story's speed check failed once with three checks running on two cores; alone 36 ms median, 147 ms 90th). The season harness: 3,828/3,829. The one is "CPU clubs trade with each other": 4 in season 1 on seed 1, against a floor of 5 (7 before). Over seeds 1–10: 8.8 a season before, 7.0 after (6 seeds lower, 2 higher, 2 the same; not significant). Nothing ties which hitter a card names to the trade desk, but the desk shares the run's dice and CPU clubs call us before dealing elsewhere. Open item 12 (r202) judged 4 against 5 "a season's spread, not a fault". **Open, for the user:** lower the floor to 4, or keep it and accept a red season step on seed 1.
+
+**Open items found on the way (not changed):**
+- Roster advice cards quote OVR while the decision is made on `valueAt` at the spot: "Fajardo is only a little better today (71 to 74)" when Burns is 74. The card should quote the values it was decided on.
+- Five other checks start at `clock.real()` (check-diamonds, check-promises, check-injury-decision, check-scouting-director, check-trade-advice): each run is a different start. Each should print it and take `START=`, as check-player-work now does.
+- A trade card reads "Harborview Gulls answers" (a plural club name with a singular verb).
+
+**App:** SimEngine.js (the sac-fly words), CardTokens.js (the hitter a sitting card names). sw.js `tfo-v2-r289`. Fresh team: not needed (CardTokens and SimEngine aren't on the list; a card already in the inbox keeps its player).
+
+**Next:** foundation step 2 (CardEngine split by area, the record must match exactly).
