@@ -15515,3 +15515,37 @@ No fresh team needed.
 - check-teaching: a TypeError reading `maxed` of null (the same as check-roster-advice).
 
 **App:** nothing changed (no cache bump; r289 is the next app release). Fresh team: not needed.
+
+---
+
+## §122.169 — The message plan, as decided with the user (Nov 25; built after the foundation, §122.168)
+
+**Modes** (a Settings choice, saved with the team; Normal by default). The names are kept in one place in the code so they can change later; for now: Important only / Normal / Hardcore.
+- **Important only:** important messages (trades, the owner, injuries, roster, operations, facilities and the grounds crew, emergencies, and anything from what happens in the game world), plus optional ones worth significant money. The staff answer the other optional ones quietly with their usual answer.
+- **Normal, raised:** about 8 on home game days, about 6 on road days, about 4 on off days. Not fixed: each day draws from a range, and now and then a day of any kind comes in well above it, so the count can never be guessed. The winter keeps today's rate.
+- **Hardcore:** 10–12 every day of spring training and the regular season (varied, with surprise heavy days); the offseason and winter drop to the Normal rate.
+- **All modes:** as few "noted / got it" messages as possible; nearly every message asks a decision. Every message sends a notification. Deadlines don't change.
+
+**Never the same message twice.** New messages are built from parts (who asks, the ask, the stakes, amounts, names, places, timing), several versions of each, and a per-save memory of what was sent keeps two from reading alike. The audit flags any two that read alike.
+
+**Memory** (pure engine): the club's history with each outside party (the city's people and groups, each rival club and its GM, partners): what was asked, the answer, what came of it, the moments shared. Never shown as a number; felt through the messages' tone, what they ask and what they offer.
+
+**The city:** a lasting relationship with the mayor's office, the Chamber of Commerce, the council, police and traffic, transit, the visitors bureau, schools. Turning one down is remembered.
+
+**The calendar:** a mix. Fixed yearly events (a fair sharing our parking lot every July, from the user's own ballpark), events new each season, and events that happen once and never again. Every event is a story planned ahead: first contact weeks or months before, planning decisions, the days around it, how it went. Events at the ballpark happen before and during road trips, not only while we're away.
+
+**Rivals and history:** backstories with other clubs, a mix of an invented past (before the save) and history made in play by the GM's decisions (a disputed trade, a brawl, a poached coach, a pennant race, a playoff series). The GM must become aware of them. A rival's history changes how its GM deals with us on trades (harder terms, refusing to call).
+
+**Around the game:** the series scouting report; a player's run of form; news around the league that opens a chance for us; attendance and ticket sales; media requests after big games; then road logistics, clubhouse requests, sponsors, the foundation, the broadcast partner, alumni nights, rehab assignments. **Only players on the League screen** (rarely an international player): no minor-league reports, no unseen league. No fan mail.
+
+**Decisions that change play:** to be seriously considered. The sim stays pure (levers read from its input), a small set of levers with firm limits, season harness runs checking league stats stay in range with them on and off. The exact levers are proposed to the user before that release.
+
+**Completed:** the newest 100 answered messages; older ones disappear from Messages (what stories need is kept in memory). **Box scores:** every game, ours and the league's, all season.
+
+**Order (after the foundation, §122.168 steps 1–6):** groundwork (message tiers, the setting, the audit by mode and kind of day, the repeat flag; Normal plays as today) → Important only → the day plan (Normal up, Hardcore on, existing messages first, to measure the gap) → memory → the city → the calendar and events → rivals and history → around the game (a set per release) → decisions that change play → wording that varies throughout.
+
+**Every release:** the same delivery path, the record check (§122.168), every check, the season harness, and a check that notifications match what arrives. Surgical, careful, nothing existing broken.
+
+**Next (decided Nov 25):** fix the five checks already failing at r288 (§122.168), then foundation step 2.
+
+**Session note:** this session couldn't push (its git gateway refused kokanjohn/baseball-gm after the repo was added mid-session). Step 1 (commit "Foundation step 1: the record…") is in the project as `claude/foundation-step1.patch`; the backup tag `r288-stable` and branch `backup/r288` (at 5455636) weren't pushed yet.
