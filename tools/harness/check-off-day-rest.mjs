@@ -4,7 +4,7 @@
  *     the next game is counted.
  *   - The next game doesn't take it off again: after it, a regular's wear is what it was, less the off day, plus his
  *     start.
- *   - A league club's off day the same (they rest the same way).
+ *   - A league club's off day the same (they rest the same way), seen that day; its next game clears the count.
  */
 import { clock, seedRandom } from './shims.js';
 import * as SM from '../../store/StateManager.js';
@@ -38,6 +38,14 @@ SM.mutate(s => { for (const id of regulars) { s.players[id].wear = 10; s.players
 const offNoon = new Date(before.gameTime); offNoon.setDate(offNoon.getDate() + 1); offNoon.setHours(12, 0, 0, 0);
 const atOff = await (async () => { await run(offNoon.getTime()); return regulars.map(id => S().players[id].wear); })();
 check(`our off day: the regulars rested that day (${[...new Set(atOff)].join(', ')}; from 10)`, atOff.every(w => w === 10 - WEAR.offDay));
+// r289 §122.170 the league clubs off with us, seen that day (by the next one they've played, and countGame has
+// cleared the count: looking then saw a club off only when the schedule happened to leave one idle).
+const offDay = dayOf(offNoon.getTime());
+const playingOff = new Set();
+for (const list of Object.values(S().leagueSchedule?.dayMap || {})) for (const g of list)
+  if (g.status !== 'postponed' && Number.isFinite(g.gameTime) && dayOf(g.gameTime) === offDay) { playingOff.add(g.homeId); playingOff.add(g.awayId); }
+const offClubs = S().leagueTeams.filter(t => t._lastGameAt && !playingOff.has(t.id));
+const offSeen = offClubs.map(t => ({ id: t.id, name: t.name, credited: t._offCredited || 0 }));
 // The next game day's morning: nothing more (a game today isn't an off day).
 const nextMorning = new Date(after.gameTime); nextMorning.setHours(9, 0, 0, 0);
 await run(nextMorning.getTime());
@@ -51,8 +59,11 @@ check(`after the next game: what it was, less the off day, plus the start (${got
   got.length >= 5 && got.every(x => x.add > 0 && x.add <= 1.45));
 
 // A league club's off day: rested the same way, credited once.
-const lt = S().leagueTeams.find(t => t._lastGameAt && t._offCredited > 0);
-check(`a league club rests on its off days too (${lt ? `${lt.name}: ${lt._offCredited} credited` : 'none seen'})`, !!lt);
+check(`a league club rests on its off days too (${offSeen.map(x => `${x.name}: ${x.credited} credited`).join(', ') || 'none off with us'})`,
+  offSeen.length > 0 && offSeen.every(x => x.credited === 1));
+const since = offSeen.map(x => S().leagueTeams.find(t => t.id === x.id)).filter(t => dayOf(t._lastGameAt) > offDay);
+check(`…once: its next game clears the count (${since.length} of ${offSeen.length} played since)`,
+  since.length > 0 && since.every(t => !t._offCredited));
 
 console.log(fail ? `\n${fail} FAILED — ${pass} passed` : `\nALL PASSED — ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
