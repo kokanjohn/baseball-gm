@@ -6,7 +6,7 @@
 # skipped until they're fixed (each is named in the plan, §122.168); take a name off the list once it passes.
 cd "$(dirname "$0")/../.." || exit 1
 OUT=${1:-/tmp/tfo-ci}; JOBS=${2:-3}; mkdir -p "$OUT"; : > "$OUT/ci.txt"
-KNOWN=" check-ball-placement check-first-day check-off-day-rest "
+KNOWN=" check-first-day check-off-day-rest "
 ls tools/harness/check-*.mjs | while read -r f; do
   n=$(basename "$f" .mjs)
   case "$KNOWN" in *" $n "*) echo "$n SKIP" >> "$OUT/ci.txt"; continue ;; esac

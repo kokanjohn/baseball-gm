@@ -3021,6 +3021,13 @@ function _fieldCall(atBat, batter, type) {
         ? (atBat.was === 'double' ? `${fn} runs it down at the wall — ${bn} robbed of extra bases` : `${fn} makes a diving catch ${at} to rob ${bn}`)
         : `${fn} makes a leaping grab ${at} to rob ${bn}`;
       return f.slot === 'OF' ? `${bn} flies out to ${fn} ${at}` : `${bn} pops out to ${fn} ${at}`;
+    case 'sac_fly':
+      // r289 §122.170 a hit taken away that still brings the runner home: the catch in the words, as the ball
+      // saves it (_placeBall gives a sacrifice fly the flyout's gem); an ordinary one keeps the plain call
+      if (atBat.conv === 'save' && atBat.gem) return (f.slot === 'OF'
+        ? (atBat.was === 'double' ? `${fn} runs it down at the wall — ${bn} robbed of extra bases` : `${fn} makes a diving catch ${at} to rob ${bn}`)
+        : `${fn} makes a leaping grab ${at} to rob ${bn}`) + ' — a sacrifice fly';
+      return null;
     case 'double_play': {
       const relay = mid ? [_fielders?.byPos[mid[0]]?.name, _fielders?.byPos[mid[1]]?.name, _fielders?.byPos['1B']?.name] : null;
       return relay && relay.every(Boolean) && new Set(relay).size === 3
