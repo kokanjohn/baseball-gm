@@ -9,7 +9,7 @@ import { startNewGame } from '../../engine/GameEngine.js';
 import { liveUntil } from './drive.mjs';
 import * as CE from '../../engine/CardEngine.js';
 import * as Dev from '../../engine/DevelopmentEngine.js';
-import { coachRead, programRead, bestStart, gamesMissed, skillsOf, focusedDayK, programCostK } from '../../engine/PlayerWork.js';
+import { coachRead, programRead, bestStart, gamesMissed, skillsOf, focusedDayK, programCostK, workable } from '../../engine/PlayerWork.js';
 import { WEAR, PLAYER_WORK } from '../../data/constants.js';
 import { voiceProblems } from './voice-rules.mjs';
 
@@ -22,13 +22,18 @@ const DAY = 86_400_000;
 const GEN = /\b(he|him|his|she|her|hers|himself|herself)\b/i;
 
 seedRandom(31);
-clock.set(clock.real());
+// r289 §122.170 a real now, so each run is a different start; it's printed, and START=<ms> runs that start again.
+clock.set(process.env.START ? +process.env.START : clock.real()); console.log(`START=${clock.get()}`);
 await startNewGame({ archetypeId: 'contender', gmName: 'Test GM', city: 'Testville', nickname: 'Testers',
                      abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: 'east' });
 const S = () => SM.get();
 const P = (id) => S().players[id];
 const isArm = (p) => p.pos === 'SP' || p.pos === 'RP';
 const ours = () => S().userTeam.rosterIds.map(P).filter(Boolean);
+// r289 §122.170 a subject the staff can take on now (not on the IL, not away): picked when it's needed, since the
+// games played between can put anyone on the IL, and the coaches rightly won't read an injured player.
+const able = () => ours().filter(p => workable(S(), p) && !p.isInjured && !p.unavailable);
+const ableHitters = () => able().filter(p => !isArm(p));
 const funds = () => S().userTeam.finances.funds ?? S().userTeam.finances.cash ?? 0;
 
 /** Ask through Compose, let the reply come back, return it (as the GM reads it). */
@@ -47,7 +52,6 @@ const voiceOk = (c) => voiceProblems(c, () => null).filter(([r]) => r !== 'deptS
 
 // ── The hitting coach, focused work (a weak skill) ─────────────
 console.log('The hitting coach: a weak skill takes days away, at a cost');
-const hitters = ours().filter(p => !isArm(p));
 // A regular (a bench player develops more slowly — no reps): make the contact weak, so the call is focused work.
 const weak = S().userTeam.lineupSlots.map(x => P(x.playerId)).find(p => p && !isArm(p));
 SM.mutate(s => { s.players[weak.id].subRatings.contact = 44; });
@@ -79,7 +83,7 @@ check('…and a plan on contact runs, the hitting coach\'s', !!plan && plan.owne
 
 // ── One player at a time ───────────────────────────────────────
 console.log('One player per coach');
-const other = hitters.find(p => p.id !== weak.id && !P(p.id).unavailable);
+const other = ableHitters().find(p => p.id !== weak.id);
 c = ask('hc_work', 'hitting_coach', { playerId: other.id, skill: 'power' });
 console.log(`    “${c?.subject}” — ${c?.body?.replace(/\n+/g, ' ')}`);
 check(`a second hitter while ${weak.name}'s work runs: the coach is busy, no decision`, !!c && /one player at a time/.test(c.body) && !decision(c));
@@ -91,7 +95,7 @@ check(`${weak.name} is back when the days are up`, !P(weak.id).unavailable);
 
 // ── The pitching coach: tweaks (a good skill) ──────────────────
 console.log('The pitching coach: a good skill takes tweaks — no time away, no cost');
-const arm = ours().filter(isArm).sort((a, b) => (b.subRatings.control || 0) - (a.subRatings.control || 0))[0];
+const arm = able().filter(isArm).sort((a, b) => (b.subRatings.control || 0) - (a.subRatings.control || 0))[0];
 SM.mutate(s => { const sr = s.players[arm.id].subRatings; sr.control = 72; sr.stuff = 70; sr.stamina = 66; });
 read = coachRead(S(), arm.id, 'control', clock.get());
 check('control 72 (the best of the three): tweaks, no days, no cost', read.kind === 'tweaks' && read.days === 0 && read.costK === 0);
@@ -105,7 +109,7 @@ check('the room left: a 90 has a quarter of the gain left, a 50 all of it', Dev.
 
 // ── Scouting/Dev's program ─────────────────────────────────────
 console.log('A development program (Scouting/Dev)');
-const prog = hitters.find(p => p.id !== weak.id && !P(p.id).unavailable && P(p.id).subRatings.speed < 80);
+const prog = ableHitters().find(p => p.id !== weak.id && p.subRatings.speed < 80);
 c = ask('sc_program', 'scouting', { playerId: prog.id, skill: 'speed' });
 console.log(`    “${c?.subject}” (${c?.sender}) — ${c?.body?.replace(/\n+/g, ' ')}`);
 const pr = programRead(S(), prog.id, 'speed', clock.get());
@@ -155,7 +159,7 @@ check(`a CPU club's regular at the limit sits the next game (${cpuReg.name})`, P
 
 // ── The physician ──────────────────────────────────────────────
 console.log("The team physician on one player");
-const doc = hitters.find(p => p.id !== weak.id && p.id !== prog.id && !P(p.id).unavailable && !P(p.id).isInjured);
+const doc = ableHitters().find(p => p.id !== weak.id && p.id !== prog.id);
 SM.mutate(s => { const q = s.players[doc.id]; q.condition = null; q.wear = 14; q.straight = 11; q.injuryLog = [{ label: 'Hamstring Strain', severity: 'minor', days: 9, atMs: clock.get() - 20 * DAY }]; });
 c = ask('doc_health', 'physician', { playerId: doc.id });
 console.log(`    “${c?.subject}” (${c?.sender}) — ${c?.body?.replace(/\n+/g, ' ')}`);

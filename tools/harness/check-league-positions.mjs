@@ -74,14 +74,21 @@ const freeAgents = Object.values(S().players).filter(p => p.group === PLAYER_GRO
 const FA = await import('../../engine/FreeAgency.js');
 // (one ownership would pay for at that rating: the card only comes when we could actually sign)
 let better = null;
+// r289 §122.170 not a shortstop, and better at SS by what fitsUs weighs (r206: valueAt there, as if eligible — the
+// bat and the glove as SS weighs them), not by OVR alone: a weak glove plays down at SS.
+const atSS = (x) => Pos.valueAt({ ...x, positions: { ...(x.positions || {}), elig: [...new Set([...(x.positions?.elig || []), 'SS'])] } }, 'SS');
+const bar = Pos.valueAt(ourSS, 'SS') + L.fitGap + 1;
 for (const c of freeAgents.filter(p => p.ovr >= 45 && p.ovr < ourSS.ovr + L.fitGap)) {
-  const was = c.ovr;
-  SM.mutate(s => { s.players[c.id].ovr = ourSS.ovr + L.fitGap + 1; });
+  const was = structuredClone(c);
+  SM.mutate(s => {
+    const p = s.players[c.id];
+    p.positions.elig = (p.positions.elig || []).filter(x => x !== 'SS'); if (p.positions.primary === 'SS') p.positions.primary = '1B';
+    p.ovr = Math.ceil(p.ovr + bar - atSS(p));
+  });
   const room = FA.roomFor(S(), P(c.id)), d = room.candidates.find(x => !x.starter);
   if (!FA.signBlocker(S(), c.id, room.needsDrop ? d?.player.id : null)) { better = c; break; }
-  SM.mutate(s => { s.players[c.id].ovr = was; });
+  SM.mutate(s => { s.players[c.id] = was; });
 }
-SM.mutate(s => { const p = s.players[better.id]; p.positions.elig = (p.positions.elig || []).filter(x => x !== 'SS'); if (p.positions.primary === 'SS') p.positions.primary = '1B'; });
 check(`${better.name} (${P(better.id).ovr}) would start at SS over ${ourSS.name} (${ourSS.ovr})`, fitsUs(S(), P(better.id), 'SS')?.start === true && fitsUs(S(), P(better.id), 'SS').over === ourSS.id);
 const worse = freeAgents.find(p => p.id !== better.id);
 SM.mutate(s => { s.players[worse.id].ovr = Math.min(s.players[worse.id].ovr, ourSS.ovr - 5); });
