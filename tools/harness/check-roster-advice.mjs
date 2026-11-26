@@ -148,7 +148,11 @@ for (const c of advCards().filter(c => !c.resolved)) CE.resolve(c.instanceId, 'n
     s.adviceWatch = {}; s.adviceQuiet = {};
     s.players[kid.id].ovr = s.players[reg.id].ovr - 3;
     s.players[kid.id].dob = `${(s.baseYear || year) + (s.seasonNum || 1) - 1 - 22}-04-01`;
-    for (const a of adviceFor(s, (x) => x.kind === 'prospect' && x.inId === kid.id)) s.adviceQuiet[a.key] = { atMs: clock.get(), gap: a.gap, stamp: adviceStamp(s, a) };   // (all but the prospect one)
+    // (all but the prospect one; r289 §122.170 again until none is left: one suggestion per player, so a
+    //  player's other suggestion only shows once the first is quiet — Burns as a bat, then as a prospect)
+    const keep = (x) => x.kind === 'prospect' && x.inId === kid.id;
+    for (let open; (open = adviceFor(s, (x) => keep(x) || !!s.adviceQuiet[x.key])).length;)
+      for (const a of open) s.adviceQuiet[a.key] = { atMs: clock.get(), gap: a.gap, stamp: adviceStamp(s, a) };
   });
   fresh();
   console.log(`    “${card?.subject}” (${card?.sender}) — ${card?.body}  [${card?.yesLabel} / ${card?.noLabel}]`);

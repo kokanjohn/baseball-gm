@@ -63,7 +63,9 @@ check(`one at a time: asked about ${first.name} meanwhile, the coach is busy ("$
 // ── The days of reps ────────────────────────────────────────────
 console.log('The days of reps');
 const f0 = Pos.familiarity(P(ss.id), '3B');
-await liveUntil(t.startAt + (t.days + 1) * DAY);
+// r289 §122.170 to just after the last day of reps (its report comes with it), not a day beyond: a game in that
+// extra day could hurt the player, and the coach rightly won't read an injured player (PlayerWork.workable).
+await liveUntil(t.steps[t.steps.length - 1].atMs + 3600_000);
 const done = (S().teaching || []).find(x => x.id === t.id);
 const f1 = Pos.familiarity(P(ss.id), '3B');
 const took = done.steps.filter(s => s.took).length;
@@ -74,12 +76,15 @@ console.log(`    “${report?.subject}” (${report?.sender}) — ${report?.body
 check('the coach reports how it went', !!report && report.sender === (coach() || 'Bench Coach') && !GEN.test(report.body));
 check('…and is free again', !activeTeaching(S()));
 const rAgain = teachRead(S(), ss.id, '3B');
+if (!rAgain) { check(`the coach's read after the work (${ss.name} is ${P(ss.id)?.group}: no read)`, false); process.exit(1); }
 if (rAgain.maxed) check('fully practiced: the coach says it\'s games from here', /it's games/.test(ask({ playerId: ss.id, skill: '3B', label: ss.name })?.body || ''));
 else check('not fully practiced yet: more reps can be asked for', !rAgain.busy);
 
 // ── A thin spot ─────────────────────────────────────────────────
 console.log('A thin spot: the staff suggests who to teach');
-SM.mutate(s => {
+// r289 §122.170 the arrangement is made again at the staff's look (after the game below): an injury or a
+// call-up in that game would otherwise undo it.
+const thinAtSS = () => SM.mutate(s => {
   // nobody on the bench plays SS any more
   const seated = new Set(s.userTeam.lineupSlots.map(x => x.playerId));
   for (const id of s.userTeam.rosterIds) {
@@ -91,7 +96,8 @@ SM.mutate(s => {
   }
   s.adviceWatch = {}; s.adviceQuiet = {};
 });
-const cover = adviceFor(S(), (a) => a.kind !== 'cover').find(a => a.kind === 'cover' && a.slot === 'SS');
+thinAtSS();
+let cover = adviceFor(S(), (a) => a.kind !== 'cover').find(a => a.kind === 'cover' && a.slot === 'SS');
 if (process.env.DBG) { const sea = new Set(bench()); console.log('    dbg', adviceFor(S()).map(a => a.key).join(' '), '| bench:', S().userTeam.rosterIds.map(P).filter(p => p && !sea.has(p.id) && !['SP','RP'].includes(p.pos)).map(p => `${p.name}:${Pos.posLabel(p)}:${p.group}:${p.isInjured}:${!!p.unavailable}`).join(' '), 'teach', !!activeTeaching(S())); }
 check(`nobody behind the shortstop: the staff would teach ${cover ? P(cover.inId).name : '—'} (${cover?.difficulty})`, !!cover && !bench().includes(cover.inId));
 // only that suggestion in view
@@ -101,9 +107,11 @@ SM.mutate(s => { s.adviceWatch = {}; s.inbox = s.inbox.filter(c => !['rest_ask',
 const t2 = S().schedule.find(g => !g._committed && !g.cancelled && g.gameTime > clock.get());
 await liveUntil(t2.gameTime + 5 * 3600_000);
 // (only this suggestion in view: everything else quiet, nothing waiting)
+thinAtSS();
+cover = adviceFor(S(), (a) => a.kind !== 'cover').find(a => a.kind === 'cover' && a.slot === 'SS');
 SM.mutate(s => {
   s.adviceWatch = {};
-  s.adviceQuiet = Object.fromEntries(adviceFor(s, (a) => a.kind === 'cover').map(a => [a.key, { atMs: clock.get(), gap: a.gap, stamp: adviceStamp(s, a) }]));
+  s.adviceQuiet = Object.fromEntries(adviceFor(s, (a) => a.kind === 'cover' && a.slot === 'SS').map(a => [a.key, { atMs: clock.get(), gap: a.gap, stamp: adviceStamp(s, a) }]));
   s.inbox = s.inbox.filter(c => !['rest_ask', 'roster_advice', 'lineup_return'].includes(c.cardId));
   s.scheduledCards = (s.scheduledCards || []).filter(c => !['rest_ask', 'roster_advice', 'lineup_return'].includes(c.cardId));
 });
