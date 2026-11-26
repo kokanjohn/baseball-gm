@@ -15477,3 +15477,41 @@ The first tap on Forecast paused about a second: the ten days are worked out per
 - `warmOutlook(state)` works the outlook out ahead (the club and every venue it visits); `ScheduleScreen` calls it when idle after it shows, so a Forecast tap from the Schedule usually fills at once (~75 ms in the test against ~1.1 s cold).
 - test-outlook-ui: a cold open shows ten shimmering tiles; a warm open fills in under 700 ms (timed with performance.now, since the tests pin Date); tiles are measured after the fade settles.
 No fresh team needed.
+
+---
+
+## §122.168 — The foundation overhaul, step 1: the record, and every check in CI (tooling only, no app change)
+
+**The overhaul (decided with the user, Nov 25).** Before the message expansion (modes, the day plan, memory, the city, the calendar, rivals, decisions that change play), the foundation is made firm, one step at a time, each one released and tested alone:
+0. A backup of r288: tag `r288-stable` and branch `backup/r288`.
+1. The record and every check in CI (this section).
+2. CardEngine split by area, all of it: functions moved as they are, never rewritten; CardEngine stays as a thin front with the same exports. The record must match exactly.
+3. One entry point for every message into the inbox or the schedule (today nine places, plus 68 calls to `_deliverAt`). The record must match exactly.
+4. Completed: the newest 100 answered messages kept in the save; older ones drop off the Messages screen, and what stories need goes to a small history store first (once-a-season limits, follow-ups, callbacks, threads and renaming checked first).
+5. The save in parts: the main state, the season's schedules, Completed; only a part that changed is written. Every box score, ours and the league's, stays all season (the user's choice). The look-ahead copy leaves out finished box scores only if nothing in it reads them.
+6. A format for new messages: parts with several versions each, conditions by the club's history with the sender, built into today's message shape.
+7. The message plan.
+
+**Why.** An inventory (72k lines, 186 harness files) found: CardEngine is one 7,571-line, 440 KB file that nearly every message feature has been added to; messages enter the inbox from nine places; nothing trims answered messages (644 after one season, 1.6 MB of a 9 MB save, written whole after every change and copied whole for the look-ahead); the league schedule is 3.4 MB (a full box score for each of ~720 games); CI ran only the season sim, the push round trip and the reference check.
+
+**The record** (`tools/harness/recorder.mjs`, `check-record.mjs`, `records/`):
+- `multi-season.mjs` with `RECORD=file` writes what the run produced. It only reads the state (no mutation, no random draws), so recording doesn't change the run.
+  - Every message: id, card, season, planned and arrival times, deadline, sender, subject (in clear), a hash of everything else it says (preview, body, buttons, choices, outcome lines), and how it ended (answer, pick, when, the impact hash). Messages withdrawn before they arrived are kept too.
+  - At each season's end: every game, ours and the league's (teams, status, score, gate, a hash of the box score), the standings, a hash of every player and of our club.
+- `GM=all`: the harness GM answers every message (yes 45%, no 33%, the rest left to their deadline; a random choice when a message has choices), not only roster and trade messages. The default is unchanged.
+- Two runs, kept in `tools/harness/records/`:
+  - `contender-2`: contender, seed 1, north, two seasons and the winter between, `GM=all` (1,466 messages, 1,477 games).
+  - `ember-1`: ember, seed 2, south, one season, the default GM (769 messages, 737 games).
+- `node tools/harness/check-record.mjs` compares fresh runs with the kept ones and lists the differences (`--update` keeps a new record; only for a change meant to change it, in the same commit, saying what changed). Two runs of the same record are byte-identical; a 0.01 change to one message rate fails it.
+- Runs are in New York time (`TZ=America/New_York`). The checks were written in that time zone, and several time the staff's working day by the local clock: four fail in UTC and pass in New York time.
+
+**CI** (`.github/workflows/harness.yml`): a new step runs `tools/harness/ci-checks.sh` — every `check-*.mjs`, the record check among them, three at a time in New York time; the logs are kept as an artifact. Screen tests (Playwright) stay local.
+
+**Already failing at r288** (found by the baseline run; skipped in CI through `KNOWN` in ci-checks.sh until fixed):
+- check-ball-placement: "no gem saved without the words (1 wrong)".
+- check-first-day: "…and the spot is filled now from the bench (undefined: open)".
+- check-off-day-rest: "a league club rests on its off days too (none seen)".
+- check-roster-advice: a TypeError reading `maxed` of null.
+- check-teaching: a TypeError reading `maxed` of null (the same as check-roster-advice).
+
+**App:** nothing changed (no cache bump; r289 is the next app release). Fresh team: not needed.

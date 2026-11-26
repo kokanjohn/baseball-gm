@@ -28,3 +28,15 @@ jobs:
 
       - name: Static reference check (screens the harness cannot run)
         run: node tools/harness/check-refs.mjs
+
+      # §122.168 every check, the record check among them (a fixed-dice run must produce exactly the kept
+      # record: every message, every game, the standings, every player). Logs are kept as an artifact.
+      - name: Every check, and the record
+        run: bash tools/harness/ci-checks.sh /tmp/tfo-ci 3
+
+      - name: Keep the check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs
+          path: /tmp/tfo-ci

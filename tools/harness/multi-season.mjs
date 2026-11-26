@@ -10,6 +10,8 @@
  * and the league's integrity.
  *
  *   node tools/harness/multi-season.mjs [seasons=3] [seed=1]     ARCH=ember|contender|empire|…
+ *   RECORD=file: write the record of the run (recorder.mjs; check-record.mjs compares it with the kept one).
+ *   GM=all: the GM answers every message (yes, no, a choice, or leaves it), not only roster and trade ones.
  */
 import { clock, seedRandom } from './shims.js';            // MUST be first (installs globals)
 import * as SM from '../../store/StateManager.js';
@@ -26,6 +28,7 @@ import { writeFileSync } from 'node:fs';
 import { voiceProblems, RULE_NAMES } from './voice-rules.mjs';
 import { profile as gmProfile } from '../../engine/GMProfile.js';   // r219 §122.98
 import { runAt, setClock } from '../../engine/Clock.js';
+import * as Rec from './recorder.mjs';   // r289 §122.168 the record (RECORD=file)
 import { GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP, OFFSEASON_DAYS } from '../../data/constants.js';
 
 const SEASONS = parseInt(process.argv[2] || '3', 10);
@@ -42,10 +45,12 @@ const say = (s) => console.log(s);
 // ── A simple GM: answers most cards, leaves some for their deadline ──
 const seen = new Set();
 const tally = {};
+const RECORD = !!process.env.RECORD, GM_ALL = process.env.GM === 'all';
 function gmActs() {
+  if (RECORD) Rec.note(SM.get());
   for (let guard = 0; guard < 60; guard++) {
     const c = getInbox().find(x => !seen.has(x.instanceId) && !(x._seed && x._tradeOffer)
-      && (x.autoResolve === 'roster' || !!x._rosterKey || (!!x._tradeOffer && !x._seed)));
+      && (GM_ALL ? !x.resolved : (x.autoResolve === 'roster' || !!x._rosterKey || (!!x._tradeOffer && !x._seed))));
     if (!c) break;
     seen.add(c.instanceId);
     const r = Math.random();
@@ -55,8 +60,10 @@ function gmActs() {
     if (c.cardId === 'il_return') { ans = r < 0.9 ? 'yes' : 'no'; pick = c._choices?.[r < 0.7 ? 0 : Math.floor(Math.random() * c._choices.length)]?.key ?? null; }
     tally[c.cardId] = tally[c.cardId] || { yes: 0, no: 0, left: 0 };
     tally[c.cardId][ans || 'left']++;
+    if (GM_ALL && ans === 'yes' && !pick && c._choices?.length) pick = c._choices[Math.floor(Math.random() * c._choices.length)].key;
     if (ans) resolveCard(c.instanceId, ans, { pick });
   }
+  if (RECORD) Rec.note(SM.get());
 }
 
 /**
@@ -318,6 +325,7 @@ for (let n = 1; n <= SEASONS; n++) {
   noteMail();
   // (A season that ends in the World Series' last out still needs the league's clock to the summary.)
   for (let g = 0; g < 200 && SM.get().phase !== PHASE.SEASON_SUMMARY && SM.get().phase !== PHASE.OFFSEASON; g++) { clock.advance(3600_000); advanceClock(clock.get()); releaseDueCards(); gmActs(); }
+  if (RECORD) Rec.season(SM.get());
   const prev = snapshot();
   const rec = `${SM.get().userTeam.wins}–${SM.get().userTeam.losses}`;
   if (n === SEASONS) { story.push(`season ${n}: ${rec}; ${games} games`); break; }
@@ -367,6 +375,7 @@ noteMail();
 }
 say(`  the GM's profile (felt, not shown): ${Object.entries(gmProfile(SM.get())).map(([k, v]) => `${k} ${v}`).join(', ')}`);
 say(`  card answers: ${Object.entries(tally).filter(([k]) => /^(os_|fo_|il_return|lineup_return)/.test(k)).map(([k, v]) => `${k} ${v.yes}/${v.no}/${v.left}`).join(', ')}`);
+if (RECORD) { Rec.note(SM.get()); writeFileSync(process.env.RECORD, JSON.stringify(Rec.record({ arch: ARCH, seed: SEED, seasons: SEASONS, gm: GM_ALL ? 'all' : 'roster' }))); say(`record → ${process.env.RECORD}`); }
 // (a saved game at the end, for tools that read a real state: STATE_DUMP=file)
 if (process.env.STATE_DUMP) { const { writeFileSync } = await import('node:fs'); writeFileSync(process.env.STATE_DUMP, JSON.stringify({ state: SM.get(), clockMs: clock.get() })); }
 say(`\n${pass}/${pass + fail} checks passed${fail ? ` — FAILED: ${[...new Set(fails)].join(' | ')}` : ''}`);
