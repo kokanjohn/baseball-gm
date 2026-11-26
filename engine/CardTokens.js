@@ -633,8 +633,15 @@ function _cardFit(cardDef, state) {
   if (d._requiresPositionMatch) {
     out.hitter = (p) => starting.has(p.id) && !!_benchAlternative(state, p, new Set());
   }
+  // r289 §122.170 a card whose answer sits its hitter ("hold them out", "keep them away", a suspension) is about
+  // someone who'd play: a starter (lineupSlots). The group can't tell a starter from a bench bat.
+  if (_SITS_HITTER.has(d.onYes) || _SITS_HITTER.has(d.onNo)) {
+    const also = out.hitter;
+    out.hitter = (p) => starting.has(p.id) && (!also || also(p));
+  }
   return out;
 }
+const _SITS_HITTER = new Set(['rest_active_hitter', 'bench_active_hitter']);
 
 /** §122 our young reserves on one side (25 or younger, healthy, not starting) — where the farm used to be. */
 function _youngReserves(state, pitchers) {
