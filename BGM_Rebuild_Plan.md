@@ -15651,3 +15651,40 @@ These replace the nine places that wrote the arrays themselves (Delivery ×3, Co
 **App:** no behavior change. sw.js precaches Entry.js; `tfo-v2-r291`. Fresh team: not needed.
 
 **Next:** foundation step 4, Completed keeps the newest 100 answered messages, with what stories need going to a small history store first (§122.168).
+
+---
+
+## §122.173 — Foundation step 4, the audit: what reads answered messages (Nov 26; nothing changed yet)
+
+Answered messages stay in `state.inbox` (`resolved: true`) for good. Step 4 keeps the newest 100. This audit finds everything that reads answered messages, so nothing quietly changes when the older ones are gone. 100 answered messages is about four to five weeks of the season: about 3 a day (644 in a season). In the winter it covers most of the offseason. The Completed tab already shows only the newest 100 (`getHistory(100)`), so what the GM sees there doesn't change.
+
+**About 100 reads of the inbox in 31 files.** About 60 are safe:
+- They look only at unanswered messages.
+- Or they find one message by id that's still current (resolve, expire, mark read).
+- Or they look back no more than a day or two: field prep, same-day situations, callbacks and arcs, the weather day, rest and advice gaps of 12 hours, the push schedule, the field note (2 days), the double header and rain start (10 days).
+
+**What needs memory beyond four weeks:**
+1. **Roster-key messages** (`_cardsWithKey`, used by `_deliverAt` and its 68 callers): "this exact message was already sent" and the new message's id (`diceId(…, key, how many before)`). A dropped answer would shrink the count, and an id could repeat. Most keys carry a game or a time, but some span weeks: one lineup nudge per injury episode (`lineup:<id>:<episode>:`), the open-spots and next-starter keys, arc steps, the trade-offer keys.
+2. **Story arcs** (`advanceArcs`): the last step's answer is read from the inbox. If the message is gone, it's recorded as "no", which would quietly flip a story.
+3. **Card families** (`_family`, one of a family a season): checked only in the inbox and the schedule; the card log counts by card, not by family.
+4. **The other GMs' hellos** (`greetedThisSeason`): "answered this club's GM this season".
+5. **The scouting director's introduction** (ComposeReplies): "his first-day message (`fd_scout_market`) ever came".
+6. **The offseason:** coach candidates' names already offered (`_coachCands`), and free agents already offered this winter (`os:fa:` keys).
+7. **What the staff remember in Compose replies** (ComposeFacts `decisions`, ComposeReplies): the grounds crew's decisions over 120 days; desk decisions over 90; messages left unanswered over 45 to 60; family leave over 30.
+
+**Safe as they are, though they look like history:**
+- Once a season: `_oncePerSeason` is also enforced by the card log (`_repeatOk`), so the inbox scan beside it repeats it.
+- Promises copy what they need into `state.promises`.
+- Renaming (`_linkMessages`) works on messages still there; a dropped message needs none.
+- The weather's poor calls read `userTeam.wxCalls`.
+- No message refers to another by a thread id.
+
+**The checks:** 67 harness files read the inbox. Most look at a few days. The season harness (47 reads) and others that count a whole season's messages will need another source (the card log, the record, or the history below).
+
+**Proposed:** when an answered message drops off, it leaves a small stub in a history store (`state.messageHistory`), about a tenth of the message's size:
+- Fields: id, card, roster key, family, season, arrived and answered times, the answer, tag, subject, and the few fields the readers above use (`_gmTeamId`/`_gmSeason`, the Compose topic and its key, coach candidates' names, the target player).
+- The seven readers above read the inbox and the history through one helper.
+- Stubs from before last season are dropped at a new season.
+- Ids keep counting through the history, so no id repeats.
+
+The record should change only where a reader's answer would change. Measure that first: with the history in place, the record should match exactly, because nothing reads a dropped message any differently. Then the trim itself.
