@@ -200,6 +200,7 @@ export function createGameState(config = {}) {
     inbox: [],   // CardInstance[]
     scheduledCards: [],  // CardInstance[] with deliverAtMs — released into inbox when due (§61)
     messageHistory: [],  // r292 §122.174 notes left by answered messages that dropped off (engine/MessageHistory.js)
+    partsUsed: {},       // r294 §122.177 the versions of each message in parts used, by send (engine/MessageParts.js)
 
     // ── Follow-up queue ────────────────────────────────────
     // Cards scheduled to fire at a future game index

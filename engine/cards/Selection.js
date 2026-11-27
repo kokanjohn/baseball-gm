@@ -16,6 +16,7 @@ import { eventRand } from '../Dice.js';
 import { _hand } from './Delivery.js';
 import { _uuid } from './Helpers.js';
 import { _addDropChoices } from './PlayerCards.js';
+import { compose as composeParts } from '../MessageParts.js';   // r294 §122.177
 
 // ─────────────────────────────────────────────────────────────
 // TOKEN RESOLUTION
@@ -154,6 +155,9 @@ export function _selectCards(eligible, context, state, maxCount) {
 // ─────────────────────────────────────────────────────────────
 
 export function _createInstance(cardDef, context, state) {
+  // r294 §122.177 a message in parts is put together first (MessageParts); any other comes back as it is
+  cardDef = composeParts(cardDef, state, clockNow());
+  if (!cardDef) return null;
   const gameIdx   = state.currentGameIndex || 0;
   const ttl       = cardDef._ttl ?? 3;
   const expiresAt = ttl > 0 ? gameIdx + ttl : null;
@@ -273,6 +277,7 @@ export function _createInstance(cardDef, context, state) {
     _amountsK:        amountsK,
     _intlCountry:     values.intl_country || null,
     _raw:             cardDef,
+    ...(cardDef._parts ? { _from: cardDef._from, _parts: cardDef._parts } : {}),   // r294 §122.177 whose history, the versions used
   };
   // §71–73: a card whose action can't happen (nobody to cover, wrong player,
   // no room, no real player to offer) is never delivered — before any new

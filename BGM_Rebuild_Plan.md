@@ -15812,3 +15812,55 @@ The history is read through one function (`historyWith(state, sender)`). For now
 **Proof when built:**
 - Every existing message passes through the new layer untouched, and the record must match exactly.
 - check-message-parts: a sample message sent many times is put together right; the version fitting each history is chosen; every version is used before any repeats; a missing part or unknown condition is caught before delivery; and its message and note carry the sender, so the history counts it.
+
+---
+
+## §122.177 — r294: foundation step 6, messages written in parts (built; the design is §122.176)
+
+**`engine/MessageParts.js`** (pure):
+- `compose(def, state, atMs)` puts a message in parts together into an ordinary message definition:
+  - the text fields may be lists of versions;
+  - `parts` are joined in by `{@name}`;
+  - `_from` and `_parts` (the versions used) are added.
+  - It returns null, warned and not delivered, when a part has no fitting version or a `{@part}` isn't one.
+  - Any other definition comes back as it is.
+- `historyWith(state, from, atMs)` gives `{ times, season, last, yes, no, ignored, mostly, daysSince }`, from the inbox and the notes.
+- `holds(when, history)` checks a version's conditions (`CONDITIONS`: first, last, mostly, times/season/daysSince at least or at most). An unknown one throws.
+- `recordUse(draft, card)` remembers the versions used (`state.partsUsed[id] = { n, [field]: { [version]: send } }`).
+- `partsProblems(def)` names what's wrong: no versions, no text, an unknown condition, a `{@part}` that isn't one, a part joining another, a core part (open, ask, stakes, close) with fewer than 3 versions, no `from`, a staff job that doesn't exist.
+
+**Who:**
+- `staff:<job>`, `owner` and `gm:<teamId>` are a person: the one in the job now, by id. Every message from them counts, since Senders stamps `_senderId`, and someone new starts afresh.
+- Any other key is a party outside the club, by the `_from` on its messages.
+
+**Choosing:**
+- The versions fitting the history. If any of them names a condition, only those.
+- Then the one unused longest, ties by the save's dice (`parts`, id, field, send). So every fitting version is used before any comes back.
+- Note: a part's versions then come round in a fixed order after the first round. Shuffling each round instead (still no repeat within one) is open for the user.
+
+**Wiring:**
+- `_createInstance` composes first; the instance carries `_from` and `_parts` for a message in parts only.
+- Entry's `toInbox` records the versions used when it reaches Messages (one that lapsed unseen, via `expired`, doesn't count).
+- A note keeps `_senderId` and `_from`.
+- Schema: `partsUsed: {}`.
+
+**Checks:**
+- The record matches exactly: every existing message (321 in the pools) goes through `compose` untouched.
+- check-message-parts (new, 17), with a sample message (the Visitors Bureau and the county fair, in the check only):
+  - it's right, and broken ones are named;
+  - one that can't be put together isn't delivered;
+  - put together into an ordinary message carrying its sender;
+  - the first time, after a no, after a run of yeses, after one left to its deadline: each reads as it should;
+  - every fitting version before any repeats (the ask and the subject over 15 sends);
+  - the same state chooses the same, and one that lapsed unseen doesn't count;
+  - a staff member's history is every message from them, and someone new starts afresh;
+  - a note keeps the history as its message did.
+
+**All the checks:**
+- All 101 `check-*.mjs` pass, the season harness 3,829/3,829, check-refs over 163 modules.
+- Screen tests: 53 of 58, the same four failing as at r289.
+- test-push-seen-ui failed once with two running ("Execution context was destroyed": the page reloaded during the test's evaluate, a timing race) and passed twice alone. test-forecast-ui passed this time.
+
+**App:** nothing new appears in play: the format is ready for step 7's messages. sw.js precaches MessageParts.js; `tfo-v2-r294`. Fresh team: not needed.
+
+**Next:** step 7, the message plan (§122.169), starting with its groundwork.

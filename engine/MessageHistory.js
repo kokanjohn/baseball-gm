@@ -25,6 +25,7 @@ export function noteOf(c) {
   pick('_season'); pick('_expiredSeason');
   pick('_rosterKey'); pick('_family'); pick('_targetPlayerId'); pick('_gmTeamId'); pick('_gmSeason');
   pick('_wxDecision'); pick('_wxGameTime'); pick('_keep');
+  pick('_senderId'); pick('_from');   // r294 §122.177 whose history it's in (MessageParts.historyWith)
   if (c.isCompose) {
     n.isCompose = true; pick('_composeTopic'); pick('_sentAtMs');
     if (c._composeArg) n._composeArg = { key: c._composeArg.key ?? null, ...(c._composeArg.season != null ? { season: c._composeArg.season } : {}) };

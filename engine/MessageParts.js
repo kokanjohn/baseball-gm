@@ -1,0 +1,219 @@
+/**
+ * engine/MessageParts.js
+ * r294 §122.177 (foundation step 6) — messages written in parts (the design: §122.176).
+ *
+ * A message in parts is a message definition whose text fields may be lists of versions, with named parts joined
+ * in by `{@name}`:
+ *
+ *   { id: 'vb_parking_fair', from: 'city:visitors_bureau', sender: 'Visitors Bureau', tag: 'COMMUNITY', …,
+ *     parts: {
+ *       open:   ['Hope the homestand is treating you well.', { text: 'Us again.', when: { last: 'no' } }, …],
+ *       ask:    [ … ], stakes: [ … ], close: [ … ],
+ *     },
+ *     subject: ['The fair needs a lot', 'Parking for the fair', …],
+ *     body:    '{@open} {@ask} {@stakes} {@close}',
+ *     yesLabel: ['Share the lot', …], noLabel: [ … ], yesMsg: [ … ], noMsg: [ … ], … }
+ *
+ * A version is a text, or { text, when } — `when` names the history with the sender it fits (CONDITIONS). Each send:
+ *   - the versions that fit the history; if any of those names a condition, only those (the most fitting);
+ *   - of them, the one unused longest (never used first); ties by the save's dice;
+ *   - so every fitting version is used once before any comes back (the user's choice).
+ * The result is an ordinary message definition (`_from`, `_parts` added), which goes on through _createInstance,
+ * the tokens and Entry as any message does. A definition without parts or versions comes back as it was.
+ *
+ * `from`, whose history it is:
+ *   'staff:manager' | 'staff:pitchingCoach' | 'staff:hittingCoach' | 'staff:benchCoach' | 'staff:scoutingDirector'
+ *   | 'owner' | 'gm:<teamId>' — a person: the one in that job now, by id (Senders stamps `_senderId` on every message
+ *   from them, so all their messages count, and someone new in the job starts afresh);
+ *   any other key ('city:visitors_bureau', 'sponsor:…') — a party outside the club, by the key on its messages (`_from`).
+ *
+ * The history (historyWith) is read from the messages that came and how they were answered: the inbox and the
+ * notes (§122.174). The memory step (§122.169) adds what came of them, behind the same function.
+ * The versions used are remembered per save (state.partsUsed), recorded at Entry when a message reaches Messages.
+ *
+ * PURE: no StateManager.
+ */
+import { dice, diceSeed } from './Dice.js';
+import { withHistory } from './MessageHistory.js';
+
+const DAY = 86_400_000;
+
+/** The text fields that may be lists of versions (and may join parts in). */
+export const TEXT_FIELDS = Object.freeze(['subject', 'preview', 'body', 'sender', 'yesLabel', 'noLabel', 'yesMsg', 'noMsg', '_expireMsg']);
+/** The parts every new message has, each with at least MIN_VERSIONS versions (the user's choice). */
+export const CORE_PARTS = Object.freeze(['open', 'ask', 'stakes', 'close']);
+export const MIN_VERSIONS = 3;
+/** What a version's `when` may name. */
+export const CONDITIONS = Object.freeze({
+  first:            'the first message from them (true), or not the first (false)',
+  last:             "how the last one was answered: 'yes', 'no' or 'ignored' (left to its deadline)",
+  mostly:           "'yes' or 'no': two of three answers or more, of at least two",
+  timesAtLeast:     'messages from them before this one, at least',
+  timesAtMost:      '…at most',
+  seasonAtLeast:    'messages from them this season before this one, at least',
+  seasonAtMost:     '…at most',
+  daysSinceAtLeast: 'days since their last message, at least',
+  daysSinceAtMost:  '…at most',
+});
+const STAFF = new Set(['manager', 'pitchingCoach', 'hittingCoach', 'benchCoach', 'scoutingDirector']);
+const PART_REF = /\{@([a-zA-Z_][\w]*)\}/g;
+const HAS_PART_REF = /\{@[a-zA-Z_]\w*\}/;   // (not global: .test keeps no place)
+
+/** Is this a message written in parts (versions, parts or a `from`)? */
+export function isParts(def) {
+  return !!def && (!!def.parts || def.from != null || TEXT_FIELDS.some(f => Array.isArray(def[f])));
+}
+
+/** The person `from` names now (an id), or null for a party outside the club. */
+export function personOf(state, from) {
+  const f = String(from || '');
+  const ut = state?.userTeam;
+  if (f.startsWith('staff:')) { const role = f.slice(6); if (!STAFF.has(role)) return null; const c = ut?.coachingStaff?.[role]; return c && !c.vacant ? c.id || null : null; }
+  if (f === 'owner') return ut?.ownerId || null;
+  if (f.startsWith('gm:')) return (state?.leagueTeams || []).find(t => t.id === f.slice(3))?.gm?.id || null;
+  return null;
+}
+
+const _answer = (c) => {
+  if (!c.resolved) return null;
+  if (c.choice === 'auto' || c.choice === 'skip' || c.choice === 'expired') return 'ignored';
+  if (c.choice === 'no') return 'no';
+  return 'yes';   // yes, or a choice made
+};
+
+/** The club's history with `from` at `atMs`: what came from them, and how it was answered. */
+export function historyWith(state, from, atMs) {
+  const id = personOf(state, from);
+  const season = state?.seasonNum || 1;
+  const theirs = withHistory(state)
+    .filter(c => (c._from === from || (id && c._senderId === id)) && Number.isFinite(c.arrivedAtMs) && c.arrivedAtMs <= atMs)
+    .sort((a, b) => a.arrivedAtMs - b.arrivedAtMs);
+  const answers = theirs.map(_answer).filter(Boolean);
+  const yes = answers.filter(a => a === 'yes').length, no = answers.filter(a => a === 'no').length;
+  const last = theirs[theirs.length - 1] || null;
+  return {
+    times: theirs.length,
+    season: theirs.filter(c => (c._season ?? season) === season).length,
+    last: last ? _answer(last) : null,
+    yes, no, ignored: answers.filter(a => a === 'ignored').length,
+    mostly: yes + no >= 2 ? (yes * 3 >= (yes + no) * 2 ? 'yes' : no * 3 >= (yes + no) * 2 ? 'no' : null) : null,
+    daysSince: last ? (atMs - last.arrivedAtMs) / DAY : null,
+  };
+}
+
+/** Does `when` hold for history `h`? An unknown condition throws (partsProblems finds it first). */
+export function holds(when, h) {
+  for (const [k, v] of Object.entries(when || {})) {
+    switch (k) {
+      case 'first': if ((h.times === 0) !== !!v) return false; break;
+      case 'last': if (h.last !== v) return false; break;
+      case 'mostly': if (h.mostly !== v) return false; break;
+      case 'timesAtLeast': if (h.times < v) return false; break;
+      case 'timesAtMost': if (h.times > v) return false; break;
+      case 'seasonAtLeast': if (h.season < v) return false; break;
+      case 'seasonAtMost': if (h.season > v) return false; break;
+      case 'daysSinceAtLeast': if (h.daysSince != null && h.daysSince < v) return false; break;
+      case 'daysSinceAtMost': if (h.daysSince == null || h.daysSince > v) return false; break;
+      default: throw new Error(`MessageParts: unknown condition '${k}'`);
+    }
+  }
+  return true;
+}
+
+const _versions = (x) => (Array.isArray(x) ? x : [x]).map(v => (typeof v === 'string' ? { text: v } : v));
+
+/** Pick one of `list` (versions) for this history: the most fitting, then the one unused longest, then the dice. */
+function _pick(list, h, used, rand) {
+  const vs = _versions(list).map((v, i) => ({ ...v, i }));
+  const fit = vs.filter(v => holds(v.when, h));
+  if (!fit.length) return null;
+  const named = fit.filter(v => v.when && Object.keys(v.when).length);
+  const pool = named.length ? named : fit;
+  const age = (v) => (used?.[v.i] ?? -1);   // the send it was last used on (-1: never)
+  const oldest = Math.min(...pool.map(age));
+  const ties = pool.filter(v => age(v) === oldest);
+  return ties[Math.floor(rand() * ties.length)];
+}
+
+/**
+ * compose(def, state, atMs) → an ordinary message definition, or null (warned) when it can't be put together
+ * (no version fits a part, or a part it joins in isn't there). A definition not in parts comes back as it is.
+ */
+export function compose(def, state, atMs) {
+  if (!isParts(def)) return def;
+  const h = def.from != null ? historyWith(state, def.from, atMs) : historyWith(state, `msg:${def.id}`, atMs);
+  const memo = state?.partsUsed?.[def.id] || {};
+  const n = memo.n || 0;
+  const picks = {};
+  const choose = (field, list) => {
+    const v = _pick(list, h, memo[field], dice(diceSeed(state), 'parts', def.id, field, n));
+    if (!v) throw new Error(`no version of '${field}' fits`);
+    picks[field] = v.i;
+    return v.text;
+  };
+  try {
+    const parts = {};
+    for (const [name, list] of Object.entries(def.parts || {})) parts[name] = choose(`@${name}`, list);
+    const join = (text, field) => String(text).replace(PART_REF, (_, name) => {
+      if (!(name in parts)) throw new Error(`'${field}' joins in {@${name}}, which isn't a part`);
+      return parts[name];
+    });
+    const out = { ...def };
+    delete out.parts; delete out.from;
+    for (const f of TEXT_FIELDS) {
+      if (def[f] == null) continue;
+      const text = Array.isArray(def[f]) ? choose(f, def[f]) : def[f];
+      out[f] = join(text, f);
+    }
+    out._from = def.from != null ? def.from : null;
+    out._parts = picks;
+    return out;
+  } catch (e) {
+    console.warn(`[MessageParts] '${def.id}' not put together: ${e.message}`);
+    return null;
+  }
+}
+
+/** Remember the versions a message used (inside a mutate; at Entry, when it reaches Messages). */
+export function recordUse(draft, card) {
+  if (!card?._parts || !card.cardId) return;
+  const all = (draft.partsUsed ||= {});
+  const m = (all[card.cardId] ||= { n: 0 });
+  for (const [field, i] of Object.entries(card._parts)) (m[field] ||= {})[i] = m.n;
+  m.n++;
+}
+
+/**
+ * What's wrong with a message in parts (a list; empty when it's right): a field or part with no versions, a version
+ * without text, an unknown condition, a {@part} that isn't one, a core part with fewer than MIN_VERSIONS versions,
+ * or a `from` that names no one.
+ */
+export function partsProblems(def) {
+  const out = [];
+  const id = def?.id || '?';
+  const parts = def?.parts || {};
+  const checkList = (where, list) => {
+    const vs = Array.isArray(list) ? list : [list];
+    if (!vs.length) out.push(`${id}.${where}: no versions`);
+    vs.forEach((v, i) => {
+      const t = typeof v === 'string' ? v : v?.text;
+      if (typeof t !== 'string' || !t.trim()) out.push(`${id}.${where}[${i}]: no text`);
+      for (const k of Object.keys((typeof v === 'object' && v?.when) || {})) if (!(k in CONDITIONS)) out.push(`${id}.${where}[${i}]: unknown condition '${k}'`);
+      for (const [, name] of String(t || '').matchAll(PART_REF)) if (!(name in parts)) out.push(`${id}.${where}[${i}]: {@${name}} isn't a part`);
+    });
+  };
+  for (const [name, list] of Object.entries(parts)) {
+    checkList(`parts.${name}`, list);
+    if (_versions(list).some(v => HAS_PART_REF.test(v?.text || ''))) out.push(`${id}.parts.${name}: a part can't join in another`);
+  }
+  for (const f of TEXT_FIELDS) if (def?.[f] != null) checkList(f, def[f]);
+  for (const name of CORE_PARTS) {
+    const n = Array.isArray(parts[name]) ? parts[name].length : parts[name] != null ? 1 : 0;
+    if (n < MIN_VERSIONS) out.push(`${id}.parts.${name}: ${n} version${n === 1 ? '' : 's'} (at least ${MIN_VERSIONS})`);
+  }
+  const f = def?.from;
+  if (f == null) out.push(`${id}: no \`from\` (whose history it is)`);
+  else if (typeof f !== 'string' || !f.trim()) out.push(`${id}: \`from\` isn't a key`);
+  else if (f.startsWith('staff:') && !STAFF.has(f.slice(6))) out.push(`${id}: \`from\` names no staff job ('${f}')`);
+  return out;
+}
