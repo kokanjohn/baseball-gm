@@ -15870,3 +15870,42 @@ The history is read through one function (`historyWith(state, sender)`). For now
 **App:** nothing new appears in play: the format is ready for step 7's messages. sw.js precaches MessageParts.js; `tfo-v2-r294`. Fresh team: not needed.
 
 **Next:** step 7, the message plan (§122.169), starting with its groundwork.
+
+---
+
+## §122.178 — Step 7 groundwork: the design, decided with the user (Nov 27; not built yet)
+
+**Where it starts** (the audit, contender seed 1 and ember seed 2, two seasons each, r294; Normal today):
+
+| Kind of day | Messages a day now | Normal target (§122.169) |
+|---|---|---|
+| Home game day | 4.4 | ~8 |
+| Road game day | 3.7 | ~6 |
+| Off day | 2.5 | ~4 |
+| Offseason | 2.0 | today's rate |
+
+Hardcore is 10–12 a day.
+
+Of about 2,900 messages:
+- about 1,800 come from the world: the roster clock, trades, injuries. About a third of those are routine staff check-ins: lineup suggestions about 330, roster advice 167, rest asks 141, return nudges 47.
+- 477 are notices with nothing to decide.
+- Money on decisions: half $25K or less, the top 10% $155K or more, at most $460K.
+
+By the plan's definition alone, 78–90% would be important.
+
+**Fixed on the way (r294+, harness only):** multi-season read the inbox at a season's turn, so since r292 the audit (§122.92) and the voice rules (§122.30) saw about 250 of 1,400 messages per run. Every message is now caught as it reaches Messages and as it's trimmed (commit 5a08f62).
+
+**The groundwork (Normal plays exactly as today):**
+1. **Tiers:** every message gets `_tier: 'important' | 'optional'`, decided in one function when it's created.
+   - **Important:**
+     - trades, the owner, injuries and the IL, roster events (open spots, needs, the manager's fills, an IL return), operations, facilities and the grounds crew, the weather, emergencies;
+     - anything set off by what happens in the game world;
+     - **player discipline**, and **money and legal** (finance, revenue, legal): the user's choice;
+     - an optional message worth **$50K or more** (the user's choice: cost, cost on no, or revenue).
+   - **Optional:** the rest, including scouting finds, health and training, culture, marketing, sponsorship, personal, coaching and staff. Also the staff's **routine check-ins** (lineup suggestions, rest asks, roster advice, the nudge when a player returns): the user's choice, so Important only is noticeably lighter. A real event stays important.
+   - A message can name its own tier (`_tier` on its definition).
+2. **The mode:** `settings.messageMode` ('important' | 'normal' | 'hardcore'), saved with the team, 'normal' by default. The names are kept in one place (`MESSAGE_MODES` in constants). **Hidden in Settings until Important only works** (the user's choice); it appears with that release.
+3. **The audit, by mode and kind of day** (`audit-messages.mjs`): each tier a day, the share of notices, what Important only would leave each day, and the targets beside today's numbers.
+4. **The repeat flag:** the audit flags two messages in a season that read alike: 60% or more of their wording the same, by overlapping three-word runs. Existing messages: reported only (some come back by design). New messages written in parts: a failing check.
+
+**Then:** Important only (the staff answer optional messages quietly with their usual answer), then the day plan (§122.169's order).
