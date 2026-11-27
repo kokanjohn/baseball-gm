@@ -29,6 +29,8 @@ import { voiceProblems, RULE_NAMES } from './voice-rules.mjs';
 import { profile as gmProfile } from '../../engine/GMProfile.js';   // r219 §122.98
 import { runAt, setClock } from '../../engine/Clock.js';
 import * as Rec from './recorder.mjs';   // r289 §122.168 the record (RECORD=file)
+import { watchEntry } from '../../engine/cards/Entry.js';        // r295 §122.178 every message as it comes…
+import { watchTrim } from '../../engine/MessageHistory.js';      // …and as it leaves Messages (answered)
 import { GAME_STATUS, PHASE, ROSTER_LIMITS, PLAYER_GROUP, OFFSEASON_DAYS } from '../../data/constants.js';
 
 const SEASONS = parseInt(process.argv[2] || '3', 10);
@@ -318,6 +320,10 @@ const noteMail = () => {
   for (const x of Object.values(st.userTeam?.coachingStaff || {})) if (x?.name && !x.vacant) persons.add(x.name);
   for (const c of st.inbox || []) if (c?.instanceId && c.body && !mail.has(c.instanceId)) mail.set(c.instanceId, { ...c });
 };
+// r295 §122.178 since r292 Messages keeps the newest 100 answered, so reading the inbox at a season's turn missed
+// most of a season: every message is kept as it reaches Messages, and in its answered form as it's trimmed.
+watchEntry((via, where, cards) => { if (where === 'inbox') for (const c of cards) if (c?.instanceId && c.body && !mail.has(c.instanceId)) mail.set(c.instanceId, { ...c }); });
+watchTrim((cards) => { for (const c of cards) if (c?.instanceId && c.body) mail.set(c.instanceId, { ...c }); });
 const auditStart = clock.get();
 logStrength('start');
 for (let n = 1; n <= SEASONS; n++) {
@@ -345,11 +351,15 @@ say(`\n${ARCH} seed ${SEED}, ${SEASONS} seasons`);
 if (process.env.AUDIT) {
   noteMail();
   const st = SM.get();
-  const cards = [...mail.values(), ...(st.inbox || []).filter(c => !mail.has(c.instanceId))].map(c => ({
+  for (const c of st.inbox || []) if (c?.instanceId && c.body) mail.set(c.instanceId, { ...c });   // (as they stand now)
+  const cards = [...mail.values()].map(c => ({
     id: c.instanceId, cardId: c.cardId, at: c.arrivedAtMs, sender: c.sender, subject: c.subject, pool: c._pool || null, seed: !!c._seed,
     compose: !!c.isCompose, emergency: !!c._emergency, firstDay: !!c._firstDay, gm: !!c._gmTeamId,
     decision: !c.autoResolved && !!((c.yesLabel && c.noLabel) || c._choices?.length || c._faRows?.length || c.onYes || c._raw?.onYes),
-    choice: c.choice || null, season: c._season || null }));
+    choice: c.choice || null, season: c._season || null,
+    // r295 §122.178 for the tiers: what it's about, what it's worth, where it came from
+    tag: c.tag || null, cost: c._budgetCost ?? null, costNo: c._budgetCostNo ?? null, revenue: c._revenueK ?? null,
+    roster: !!c._rosterKey, auto: c.autoResolve || null, trade: !!(c._tradeOffer || c._talkId || c._tradeKind), injury: !!(c._injury || /injur/i.test(c.cardId || '')) }));
   writeFileSync(process.env.AUDIT, JSON.stringify({ arch: ARCH, seed: SEED, createdAt: auditStart, schedules: Object.fromEntries(auditSched), cards }));
   say(`audit: ${cards.length} messages → ${process.env.AUDIT}`);
 }
