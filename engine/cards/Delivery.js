@@ -53,13 +53,13 @@ export function checkAndDeliver(context) {
     ...(state.inbox || []).filter(c => !c.resolved),
     ...(state.scheduledCards || []),
   ];
-  if (currentInbox.length >= MAX_INBOX_SIZE) return;
+  if (currentInbox.length >= MAX_INBOX_SIZE) { if (cardDebug.onFull) cardDebug.onFull(); return; }
 
   // 3b. A selling club's cash sale (§85 A): at most one per game day. (Clubs'
   //     calls about our players come from the daily trade desk, §91.)
   const tradeDelivered = _maybeDeliverCashSale(state, context) ? 1 : 0;
   let room = MAX_INBOX_SIZE - currentInbox.length - tradeDelivered;
-  if (room <= 0) return;
+  if (room <= 0) { if (cardDebug.onFull) cardDebug.onFull(); return; }
 
   // 4. The game day's moments (§80): how many cards each one gets today.
   const poolNames = PHASE_POOLS[state.phase] || ['DECISIONS_POOL'];
@@ -80,6 +80,7 @@ export function checkAndDeliver(context) {
   if (byMoment.road && context.nextGame && !context.nextGame.isHome && !context.nextGame.isSpring && !context.nextGame.isPlayoff) {
     want.road = eventRand() < AWAY_DAY.road ? 1 : 0;
   }
+  if (cardDebug.want) cardDebug.want(want, { offDay: !!offDay, nextGame: context.nextGame || null, phase: state.phase });   // (a check's seam: the day plan's measure)
   const delivered = [];
   const taken = new Set();
   // r214 §122.93 the once-a-season stories, paced over the regular season (so the last weeks aren't bare).
@@ -97,7 +98,7 @@ export function checkAndDeliver(context) {
       }
     }
     if (cardDebug.onEligible) cardDebug.onEligible(moment, eligible.map(c => c.id));
-    if (n <= 0) continue;
+    if (n <= 0) { if (cardDebug.onMade) cardDebug.onMade(moment, want[moment], 0, eligible.length); continue; }
     // §122.57 the draw in weighted order: a card that can't be made right now (no free agent fits, nobody to spare) gives
     // its place to the next one, so the moment still gets its card.
     let made = 0;
@@ -114,6 +115,7 @@ export function checkAndDeliver(context) {
       if (instance) { delivered.push({ ...instance, _pool: _fromPool, _moment: moment, ...(moment === 'offday' ? { _offDay: offDay } : {}) }); made++; if (story) pace.credit -= 1; }
       else if (cardDebug.onDropped) cardDebug.onDropped(def.id);
     }
+    if (cardDebug.onMade) cardDebug.onMade(moment, want[moment], made, eligible.length);
   }
   if (pace) StateManager.mutate(s => { s.storyPace = { season: state.seasonNum || 1, credit: pace.credit }; });
 

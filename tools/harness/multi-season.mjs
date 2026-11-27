@@ -315,6 +315,29 @@ await startNewGame({ archetypeId: ARCH, gmName: 'Test GM', city: 'Testville', ni
 await SM.init();
 // r296 §122.180 MODE=important: the season in Important only (the staff answer the optional messages)
 if (process.env.MODE) SM.mutate(s => { s.settings.messageMode = process.env.MODE; });
+// The day plan's measure (§122.181): DAYPLAN=normal|hardcore asks the pools for more each day, the existing
+// messages only, to see how far they reach before they run dry. (Measure only; the game is unchanged without it.)
+const DAYPLAN = process.env.DAYPLAN || null;
+const planStat = { want: {}, made: {}, short: {}, full: 0, days: 0 };
+if (DAYPLAN) {
+  const { cardDebug } = await import('../../engine/CardEngine.js');
+  const EXTRA = { normal: { home: 3.6, road: 2.3, off: 1.5, springHome: 3.5, springRoad: 3.8 },
+                  hardcore: { home: 6.6, road: 7.3, off: 8.5, springHome: 6.5, springRoad: 8.8 } }[DAYPLAN];
+  const draw = (x) => Math.floor(x) + (Math.random() < x % 1 ? 1 : 0);
+  cardDebug.want = (want, { offDay, nextGame, phase }) => {
+    if (phase !== PHASE.REGULAR_SEASON && phase !== PHASE.SPRING_TRAINING && phase !== PHASE.TRADE_DEADLINE) return;
+    planStat.days++;
+    const spring = phase === PHASE.SPRING_TRAINING;
+    const home = !!nextGame?.isHome;
+    want.between += draw(spring ? (home ? EXTRA.springHome : EXTRA.springRoad) : home ? EXTRA.home : EXTRA.road);
+    if (offDay) want.offday += draw(EXTRA.off);
+  };
+  cardDebug.onMade = (m, w, made) => {
+    planStat.want[m] = (planStat.want[m] || 0) + w; planStat.made[m] = (planStat.made[m] || 0) + made;
+    if (made < w) planStat.short[m] = (planStat.short[m] || 0) + 1;
+  };
+  cardDebug.onFull = () => { planStat.full++; };
+}
 const story = [];
 // r158 §122.30 every message over the seasons and winters, and everyone who signed one (staff change).
 const mail = new Map(), persons = new Set();
@@ -374,6 +397,7 @@ if (process.env.AUDIT) {
   say(`audit: ${cards.length} messages → ${process.env.AUDIT}`);
 }
 for (const s of story) say(`  ${s}`);
+if (DAYPLAN) say(`  day plan (${DAYPLAN}): ${planStat.days} deliveries; inbox full ${planStat.full}×; by moment, asked/made (days short): ${Object.keys(planStat.want).map(m => `${m} ${planStat.want[m]}/${planStat.made[m]} (${planStat.short[m] || 0})`).join(', ')}`);
 const st = SM.get();
 say(`  staff now: ${Coach.COACH_ROLES.map(r => `${st.userTeam.coachingStaff[r].name} ${st.userTeam.coachingStaff[r].quality}`).join(', ')}`);
 say(`  books: funds ${Math.round(st.userTeam.finances.funds)}K, price ×${st.userTeam.finances.ticketPrice || 1}, facilities ${JSON.stringify(st.userTeam.facilities || {})}, atmosphere ${st.userTeam.atmosphere}`);

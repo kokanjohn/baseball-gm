@@ -16035,3 +16035,33 @@ Every message already recorded is unchanged, and every season's result is the sa
 **App:** Normal plays as before. Settings has the Messages choice. `tfo-v2-r296`. Fresh team: not needed (an old save is Normal until changed).
 
 **Next:** the day plan (§122.169): Normal raised to about 8, 6 and 4 a day, Hardcore on. Existing messages first, to measure the gap.
+
+---
+
+## §122.181 — The day plan, step 1: the existing messages measured (Nov 27; no change in play)
+
+**How:** a test-only seam in delivery (`cardDebug.want`, `onMade`, `onFull`; null in the game, the record unchanged) lets a run ask the pools for more each day. `DAYPLAN=normal|hardcore` in multi-season asks for each kind of day's gap (§122.179's table) on top of today's draw, existing messages only. Contender seed 1 and ember seed 2, two seasons each, as in the groundwork audit.
+
+**What came back:**
+
+| Kind of day | Today | Asked for Normal | Asked for Hardcore |
+|---|---|---|---|
+| Spring, home | 5.0 | 6.5 | 7.4 |
+| Spring, road | 2.8 | 5.2 | 5.3 |
+| Season, home game | 4.4 | 4.2 | 4.3 |
+| Season, road game | 3.5 | 3.5 | 3.3 |
+| Off day | 2.7 | 2.7 | 3.0 |
+| Stretch run | 3.5 | 3.4 | 3.0 |
+
+- **The pools are already spent.** About 230 pool messages can be drawn; a season uses about 166 different ones (270 sends), and nearly all the rest never fit (the situation, the club, the once-a-season rules). Asked for four times as many, the between-games moment made the same 341 over two seasons.
+- Asking for more only moves them: spring takes them early, and the regular season, the stretch and the postseason end up lighter.
+- **The gap, a season:** Normal needs about 530 more messages (home game days ~300, road ~200, off days ~30); Hardcore about 1,500 more. None of it can come from the existing messages without breaking "never the same message twice".
+- Notices are 17–19% of game-day messages (the plan: nearly every message asks a decision).
+
+**Decided with the user (Nov 27):**
+1. **The machinery and a first new set.** The day plan is built now (counts by kind of day, drawn from a range, now and then a surprise heavy day). The first "around the game" set is brought forward and written in parts so it can recur: the series scouting report, a player's run of form, attendance and ticket sales, media requests after big games. Normal rises partway now and reaches its targets as later releases (memory, the city, the calendar, rivals, the rest of around the game) add messages.
+2. **A short day sends fewer.** No filler and no repeat: when nothing fitting is left, the day comes in under its count.
+3. **The supply spread over the year.** Each kind of message is budgeted across spring, the season and the stretch run, so the late season isn't bare.
+4. **Hardcore stays hidden** until season runs show it reaching 10–12 a day.
+
+**Next:** the design of the machinery and of the first set, to the user before building.

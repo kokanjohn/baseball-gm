@@ -29,7 +29,7 @@ import { withHistory } from '../MessageHistory.js';   // r292 §122.174 answered
 // ─────────────────────────────────────────────────────────────
 
 /** For the checks: called with each moment's eligible card ids as the day is planned. */
-export const cardDebug = { onEligible: null, onDropped: null };
+export const cardDebug = { onEligible: null, onDropped: null, want: null, onMade: null, onFull: null };
 
 
 /** How a card may come back (§122.57). `once`: once a season; else at most `max` a season, `gapDays` apart. */
