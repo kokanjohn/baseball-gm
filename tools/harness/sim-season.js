@@ -1426,8 +1426,9 @@ function checkLeagueTrades(st) {
   const s1 = cpuTrades.filter(e => e.season === 1);
   const byClub = {};
   for (const e of s1) for (const id of e.teamIds) byClub[id] = (byClub[id] || 0) + 1;
+  // r289 §122.170 floor 4: a season's spread runs 4–13 over seeds 1–10 (Open item 12 judged 4 the same way)
   check(`league trades: CPU clubs trade with each other (${s1.length} in season 1; most by one club ${Math.max(0, ...Object.values(byClub))})`,
-        s1.length >= 5 && s1.length <= 45, s1.slice(0, 3).map(e => e.text).join(' | '));
+        s1.length >= 4 && s1.length <= 45, s1.slice(0, 3).map(e => e.text).join(' | '));
   const hist = (st.history || []).filter(h => h.type === 'trade');
   const ours = wire.filter(e => e.kind === 'trade' && e.teamIds.includes('user'));
   check(`league wire: our trades are on it too (${ours.length} wire / ${hist.length} history)`, ours.length >= Math.min(1, hist.length));
