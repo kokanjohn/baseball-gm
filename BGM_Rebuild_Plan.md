@@ -16065,3 +16065,25 @@ Every message already recorded is unchanged, and every season's result is the sa
 4. **Hardcore stays hidden** until season runs show it reaching 10–12 a day.
 
 **Next:** the design of the machinery and of the first set, to the user before building.
+
+---
+
+## §122.182 — The day plan, step 2: the design, decided with the user (Nov 27; not built yet)
+
+**The machinery:**
+- **A count a day**, drawn from a range by kind of day: home game days 7–9, road game days 5–7, off days 3–5 (Normal). The winter and the postseason keep today's rate.
+- **The count is everything** (the user's choice): injuries, trades and the weather count toward it, so a busy day of those gets fewer of the routine ones.
+- **A surprise heavy day** about every two weeks, +3 to +5 (the user's choice).
+- **Filled from what fits**, spread over the waking hours and the moments (before the game, in it, between games). A short day sends fewer (§122.181).
+- **The supply budgeted** for each kind of message across spring, the season and the stretch run (§122.181).
+- Important only as before (the new optional ones are the staff's). Hardcore hidden until it reaches 10–12 (§122.181).
+
+**The first new set** ("around the game", brought forward; in parts, so each can recur without reading alike):
+1. **The series scouting report:** the advance scout before **every series** (the user's choice; about 50 a season).
+2. **A player's run of form:** the hitting or pitching coach on one of ours hot or slumping over the last week.
+3. **Attendance and tickets:** the ticket office after a soft crowd or a strong homestand (a promotion, a group sale, prices).
+4. **Media after big games:** PR after a walk-off, a shutout, a blowout or a milestone (a press conference, a player's availability, a pass).
+
+**Effects** (the user's choice): the existing kinds (money, morale, owner trust, atmosphere, a named player's short-term form) until the "decisions that change play" release.
+
+**Expected:** about 150 more messages a season, about a quarter of Normal's gap; a home game day about 4.4 → 5.3.
