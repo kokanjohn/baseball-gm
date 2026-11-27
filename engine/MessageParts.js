@@ -16,8 +16,10 @@
  *
  * A version is a text, or { text, when } — `when` names the history with the sender it fits (CONDITIONS). Each send:
  *   - the versions that fit the history; if any of those names a condition, only those (the most fitting);
- *   - of them, the one unused longest (never used first); ties by the save's dice;
- *   - so every fitting version is used once before any comes back (the user's choice).
+ *   - of them, one not yet used this round, drawn by the save's dice: shuffled rounds (the user's choice, §122.177):
+ *     every fitting version is used once before any comes back, each piece in its own order each round, so the
+ *     pieces don't fall into step and the whole message doesn't come round again; a new round never opens with the
+ *     version that closed the last.
  * The result is an ordinary message definition (`_from`, `_parts` added), which goes on through _createInstance,
  * the tokens and Entry as any message does. A definition without parts or versions comes back as it was.
  *
@@ -29,7 +31,8 @@
  *
  * The history (historyWith) is read from the messages that came and how they were answered: the inbox and the
  * notes (§122.174). The memory step (§122.169) adds what came of them, behind the same function.
- * The versions used are remembered per save (state.partsUsed), recorded at Entry when a message reaches Messages.
+ * The versions used are remembered per save (state.partsUsed[id] = { n, [field]: { seen: [this round's], last } }),
+ * recorded at Entry when a message reaches Messages.
  *
  * PURE: no StateManager.
  */
@@ -122,17 +125,24 @@ export function holds(when, h) {
 
 const _versions = (x) => (Array.isArray(x) ? x : [x]).map(v => (typeof v === 'string' ? { text: v } : v));
 
-/** Pick one of `list` (versions) for this history: the most fitting, then the one unused longest, then the dice. */
+/**
+ * Pick one of `list` (versions) for this history: the most fitting; of them, one not used this round, by the dice.
+ * → { text, i, fresh } (fresh: it opens a new round), or null when none fits.
+ */
 function _pick(list, h, used, rand) {
   const vs = _versions(list).map((v, i) => ({ ...v, i }));
   const fit = vs.filter(v => holds(v.when, h));
   if (!fit.length) return null;
   const named = fit.filter(v => v.when && Object.keys(v.when).length);
   const pool = named.length ? named : fit;
-  const age = (v) => (used?.[v.i] ?? -1);   // the send it was last used on (-1: never)
-  const oldest = Math.min(...pool.map(age));
-  const ties = pool.filter(v => age(v) === oldest);
-  return ties[Math.floor(rand() * ties.length)];
+  const seen = new Set(used?.seen || []);
+  let fresh = false, open = pool.filter(v => !seen.has(v.i));
+  if (!open.length) {   // the round is done: a new one, not opening with the version that closed the last
+    fresh = true;
+    open = pool.length > 1 ? pool.filter(v => v.i !== used?.last) : pool;
+  }
+  const v = open[Math.floor(rand() * open.length)];
+  return { text: v.text, i: v.i, fresh };
 }
 
 /**
@@ -145,10 +155,12 @@ export function compose(def, state, atMs) {
   const memo = state?.partsUsed?.[def.id] || {};
   const n = memo.n || 0;
   const picks = {};
+  const fresh = [];
   const choose = (field, list) => {
     const v = _pick(list, h, memo[field], dice(diceSeed(state), 'parts', def.id, field, n));
     if (!v) throw new Error(`no version of '${field}' fits`);
     picks[field] = v.i;
+    if (v.fresh) fresh.push(field);
     return v.text;
   };
   try {
@@ -167,6 +179,7 @@ export function compose(def, state, atMs) {
     }
     out._from = def.from != null ? def.from : null;
     out._parts = picks;
+    if (fresh.length) out._partsRound = fresh;   // (the fields a new round opens on)
     return out;
   } catch (e) {
     console.warn(`[MessageParts] '${def.id}' not put together: ${e.message}`);
@@ -179,7 +192,12 @@ export function recordUse(draft, card) {
   if (!card?._parts || !card.cardId) return;
   const all = (draft.partsUsed ||= {});
   const m = (all[card.cardId] ||= { n: 0 });
-  for (const [field, i] of Object.entries(card._parts)) (m[field] ||= {})[i] = m.n;
+  const fresh = new Set(card._partsRound || []);
+  for (const [field, i] of Object.entries(card._parts)) {
+    const f = (m[field] ||= { seen: [], last: null });
+    f.seen = fresh.has(field) ? [i] : [...f.seen, i];
+    f.last = i;
+  }
   m.n++;
 }
 

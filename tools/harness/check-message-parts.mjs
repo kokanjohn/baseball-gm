@@ -8,7 +8,8 @@
  *     together isn't delivered.
  *   - Sent again and again, answered: put together into an ordinary message (no {@part} left), carrying whose history
  *     it is; the first time reads as a first; after a no, as after a no; after a run of yeses, as mostly yes; after
- *     one left to its deadline, as ignored; every fitting version used before any repeats; the same state chooses
+ *     one left to its deadline, as ignored; every fitting version used before any repeats, in shuffled rounds (each
+ *     round its own order, never twice in a row, the whole message never the same twice); the same state chooses
  *     the same; one that lapsed unseen doesn't count as used.
  *   - The history: a staff member's is every message from them (by person: someone new starts afresh); a note keeps
  *     the history as its message did.
@@ -118,6 +119,13 @@ const rounds = [0, 3, 6, 9, 12].map(i => allAsks.slice(i, i + 3)).filter(r => r.
 check(`every fitting version used before any repeats (the ask, by send: ${allAsks.join('')})`, rounds.every(r => new Set(r).size === 3));
 const subjects = sent.map(c => c._parts.subject);
 check(`…the subject too (${subjects.join('')})`, [0, 3, 6, 9, 12].every(i => subjects.length < i + 3 || new Set(subjects.slice(i, i + 3)).size === 3));
+const orders = rounds.map(r => r.join(''));
+check(`…in shuffled rounds: each round its own order (${orders.join(' ')})`, new Set(orders).size > 1);
+const twice = ['@open', '@ask', '@stakes', '@close', 'subject'].filter(f => sent.some((c, i) => i && c._parts[f] === sent[i - 1]._parts[f] && sent[i - 1]._parts[f] !== undefined
+  && !(f === '@open')));   // (the opener follows the history: after a run of the same answer it may stay)
+check(`…never the same version twice in a row (ask, stakes, close, subject)`, twice.length === 0, twice.join(', '));
+const whole = sent.map(c => [c.subject, c.body, c.yesLabel, c.noLabel, c.yesMsg, c.noMsg].join('|'));
+check(`…and the whole message never the same twice (${new Set(whole).size} different in ${whole.length} sends)`, new Set(whole).size === whole.length);
 const usedN = S().partsUsed[FAIR.id].n;
 const a = compose(FAIR, S(), clock.get()), b = compose(FAIR, S(), clock.get());
 check('the same state chooses the same', JSON.stringify(a) === JSON.stringify(b));

@@ -15835,8 +15835,10 @@ The history is read through one function (`historyWith(state, sender)`). For now
 
 **Choosing:**
 - The versions fitting the history. If any of them names a condition, only those.
-- Then the one unused longest, ties by the save's dice (`parts`, id, field, send). So every fitting version is used before any comes back.
-- Note: a part's versions then come round in a fixed order after the first round. Shuffling each round instead (still no repeat within one) is open for the user.
+- Then, decided with the user (Nov 27), **shuffled rounds**: one not yet used this round, drawn by the save's dice (`parts`, id, field, send). So every fitting version is used before any comes back, each part in its own order each round.
+- A new round never opens with the version that closed the last.
+- Memory: `state.partsUsed[id] = { n, [field]: { seen, last } }`; a message opening a new round on a field carries `_partsRound`.
+- Why not the longest unused first (built first): after the first round it is a fixed cycle. Parts with the same number of versions move in step, so the whole message came round again every few sends (11 different in 15 in the check, against 15 in 15 shuffled).
 
 **Wiring:**
 - `_createInstance` composes first; the instance carries `_from` and `_parts` for a message in parts only.
@@ -15846,18 +15848,22 @@ The history is read through one function (`historyWith(state, sender)`). For now
 
 **Checks:**
 - The record matches exactly: every existing message (321 in the pools) goes through `compose` untouched.
-- check-message-parts (new, 17), with a sample message (the Visitors Bureau and the county fair, in the check only):
+- check-message-parts (new, 20), with a sample message (the Visitors Bureau and the county fair, in the check only):
   - it's right, and broken ones are named;
   - one that can't be put together isn't delivered;
   - put together into an ordinary message carrying its sender;
   - the first time, after a no, after a run of yeses, after one left to its deadline: each reads as it should;
-  - every fitting version before any repeats (the ask and the subject over 15 sends);
+  - every fitting version before any repeats (the ask and the subject over 15 sends), in shuffled rounds:
+    - each round its own order;
+    - never the same version twice in a row;
+    - the whole message different every send (15 of 15);
+    - shown to bite: the fixed order fails it;
   - the same state chooses the same, and one that lapsed unseen doesn't count;
   - a staff member's history is every message from them, and someone new starts afresh;
   - a note keeps the history as its message did.
 
 **All the checks:**
-- All 101 `check-*.mjs` pass, the season harness 3,829/3,829, check-refs over 163 modules.
+- All 101 `check-*.mjs` pass, the season harness 3,829/3,829, check-refs over 163 modules (again after the shuffled rounds).
 - Screen tests: 53 of 58, the same four failing as at r289.
 - test-push-seen-ui failed once with two running ("Execution context was destroyed": the page reloaded during the test's evaluate, a timing race) and passed twice alone. test-forecast-ui passed this time.
 
