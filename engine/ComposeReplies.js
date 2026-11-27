@@ -38,6 +38,7 @@ import { starredIds } from './Starred.js';   // r275 §122.154
 import { clubMode, tradeWindow } from './TradeEngine.js';
 import { waiverEndsAt } from './FreeAgency.js';
 import { statusOf } from './PlayerStatus.js';
+import { withHistory } from './MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 // ─────────────────────────────────────────────────────────────
 // SMALL WORDS
@@ -140,7 +141,7 @@ function deskDecisions(f, { tags = [], words = null, days = 90 }) {
 }
 /** Cards on this desk left unanswered (auto / skip), newest first. */
 function deskIgnored(f, { tags = [], words = null, days = 45 }) {
-  return (f.state.inbox || []).filter(c => c.resolved && (c.choice === 'auto' || c.choice === 'skip')
+  return withHistory(f.state).filter(c => c.resolved && (c.choice === 'auto' || c.choice === 'skip')   // r292 §122.174
     && f.atMs - (c.resolvedAtMs || 0) < days * MS_DAY && (c.resolvedAtMs || 0) <= f.atMs
     && (tags.includes(c.tag) || (words && words.test(c.subject || ''))));
 }
@@ -422,7 +423,7 @@ W.mgr_morale = (f, r, who) => {
     const what = who2 ? `the matter with ${who2}` : aboutOf(disc.subject);
     out.push(disc.choice === 'yes' ? `The way you handled ${what} set the right tone. Players noticed.` : `Some of the veterans noticed we let ${what} go. I'd keep an eye on that.`);
   }
-  const leaves = (f.state.inbox || []).filter(c => c.resolved && /leave/i.test(c.cardId || '') && f.atMs - (c.resolvedAtMs || 0) < 30 * MS_DAY);
+  const leaves = withHistory(f.state).filter(c => c.resolved && /leave/i.test(c.cardId || '') && f.atMs - (c.resolvedAtMs || 0) < 30 * MS_DAY);
   if (leaves.length) out.push(`Giving a player time away for family matters went over well with the group.`);
   const sd = f.standing();
   if (f.season === 'regular' && sd) out.push(sd.place === 1 ? `Being in first gives everybody something to protect.` : sd.gb && sd.gb !== '-' && Number(sd.gb) <= 5 ? `We're ${sd.gb} back and everyone knows it. That's motivation.` : '');
@@ -1803,7 +1804,7 @@ export function writeComposeReply(state, { topicId, channelId, atMs, subject = n
   // r238 §122.117 the scouting director's first word to this GM (the GM wrote first): who they are, before the answer.
   // (Their first-day introduction isn't sent once the GM has asked them for the free agents.)
   const first = channelId === 'scouting' && !res.who && who.name
-    && !(state.inbox || []).some(c => c.cardId === 'fd_scout_market')   // (the introduction itself; Scouting's read on a trade isn't one)
+    && !withHistory(state).some(c => c.cardId === 'fd_scout_market')   // (the introduction itself; Scouting's read on a trade isn't one)
     && !(state.composeLog || []).some(x => x.channelId === 'scouting' && x.atMs < atMs);
   const open = by.noOpen ? null : first ? `I run our scouting, and I'm looking forward to working with you. Here's what you asked for.`
     : _open(by.rel, r, res.topic || TOPIC_LABELS[topicId] || 'that');

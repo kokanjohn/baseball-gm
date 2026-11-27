@@ -21,6 +21,7 @@ import { rainTotal, conditionsAt } from './WeatherConditions.js';
 import { armStatus, starterRested, bullpenRoles, dayOf } from './PitchingEngine.js';
 import { computeAge, baseballYear, isAvailable } from './PlayerFactory.js';
 import { developmentStatus } from './DevelopmentEngine.js';
+import { withHistory } from './MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 const REGULAR = new Set([PHASE.REGULAR_SEASON, PHASE.ALL_STAR_BREAK, PHASE.TRADE_DEADLINE]);
 const POST    = new Set([PHASE.PLAYOFF_BRACKET_BUILD, PHASE.WILD_CARD, PHASE.FIRST_ROUND, PHASE.DIVISION_SERIES, PHASE.WORLD_SERIES]);
@@ -216,7 +217,7 @@ export function composeFacts(state, atMs) {
 
   // ── What the GM decided, and what happened ────────────────────
   /** Answered inbox cards (newest first): { cardId, tag, choice, subject, at }. */
-  const decisions = once('decisions', () => (state.inbox || [])
+  const decisions = once('decisions', () => withHistory(state)   // r292 §122.174 with the history
     .filter(c => c.resolved && (c.choice === 'yes' || c.choice === 'no'))
     .map(c => ({ cardId: c.cardId, tag: c.tag, choice: c.choice, subject: c.subject || '', at: c.resolvedAtMs || c.resolvedAt || 0, card: c }))
     .filter(d => d.at <= atMs)

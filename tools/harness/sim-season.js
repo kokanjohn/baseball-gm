@@ -18,6 +18,7 @@ import * as SM from '../../store/StateManager.js';
 import { startNewGame, tick, commitGame, buildCardContext, advanceClock } from '../../engine/GameEngine.js';
 import { getRosterNeeds, auditRosters, rankPickups, signPickup, fillShortRosters } from '../../engine/TransactionEngine.js';
 import { CARD_ACTIONS } from '../../engine/CardActions.js';
+import { watchTrim } from '../../engine/MessageHistory.js';   // r292 §122.174
 import { cardRepeatRule, onRelease, HANDLED_CARD_ACTIONS, releaseDueCards, getPushSchedule, resolve as resolveCard, getHistory, clearHistory, restoreHistory, getInbox } from '../../engine/CardEngine.js';
 import { snapshotMetrics } from '../../ui/formatters.js';
 import { liveSituation, playRuns } from '../../engine/SimEngine.js';
@@ -125,6 +126,10 @@ function namedAudit(st, card, ids, text, where) {
   }
 }
 // r158 every message the season delivers, for the voice rules (§122.30): by instance, as delivered.
+// r292 §122.174 Messages keeps the newest answered messages; the season's tallies count the ones trimmed too (in full)
+const trimmedMail = [];
+watchTrim((cards) => { for (const c of cards) trimmedMail.push({ ...c }); });
+const allMail = (st) => [...trimmedMail, ...(st?.inbox || [])];
 const mailSeen = new Map();
 const noteMail = (list) => { for (const c of list || []) if (c?.instanceId && c.body && !mailSeen.has(c.instanceId)) mailSeen.set(c.instanceId, { ...c }); };
 onRelease((st, due) => {
@@ -736,7 +741,7 @@ async function runOffseasonChecks() {
       const targets = st.leagueTeams.map(t => t.finances?.payrollTarget || 0);
       check('cpu books: owners set next season\'s targets', targets.every(x => x >= 1000));
     }
-    const ownerCards = (st.inbox || []).filter(c => (c.cardId || '').startsWith('owner_'));
+    const ownerCards = allMail(st).filter(c => (c.cardId || '').startsWith('owner_'));
     const by = {}; for (const c of ownerCards) by[c.cardId] = (by[c.cardId] || 0) + 1;
     const dumps = (st.transactions || []).filter(t => t.kind === 'trade' && !(t.offer?.incomingIds || []).length);
     check(`club funds: the owner's season (${JSON.stringify(by)}; ${dumps.length} salary dumps)`, true);
@@ -835,7 +840,7 @@ async function runAllStarChecks() {
   check(`all-star: host named after game ${season.announceAfterGame} (${ALLSTAR_ANNOUNCE_GAME_MIN}–${ALLSTAR_ANNOUNCE_GAME_MAX}); its division is home`,
         !!season.hostId && season.announceAfterGame >= ALLSTAR_ANNOUNCE_GAME_MIN && season.announceAfterGame <= ALLSTAR_ANNOUNCE_GAME_MAX
         && asg.homeId === AllStar.squadIdFor(hostDiv) && asg.awayId !== asg.homeId, `host ${season.hostId} home ${asg.homeId}`);
-  const cards = [...(st.inbox || []), ...(st.scheduledCards || [])];
+  const cards = [...allMail(st), ...(st.scheduledCards || [])];
   if (SEED % 2 === 1) {
     const week = cards.filter(c => (c._rosterKey || '').startsWith('allstar:week:'));
     check('all-star (host): an eligible user club hosts — payoff, announcement, three All-Star week cards',
@@ -843,7 +848,7 @@ async function runAllStarChecks() {
           && cards.some(c => c.cardId === 'as_host') && week.length === 3,
           `host ${season.hostId} count ${a.hostedCount} week ${week.length}`);
     // The host's GM gets a say for a player on the bubble (when there is one).
-    const lobby = (st.inbox || []).filter(c => c.cardId === 'as_lobby');
+    const lobby = allMail(st).filter(c => c.cardId === 'as_lobby');
     check('all-star (host): a lobbying card for a bubble player, and the choice recorded',
           !!season.influence && (!season.influence.playerId
             || (lobby.length === 1 && lobby[0]._targetPlayerId === season.influence.playerId
@@ -1135,9 +1140,9 @@ async function checkNeutralText(st) {
   check(`neutral text: every card written reads gender-neutral (${authored.length} strings)`, badA.length === 0,
         badA.slice(0, 4).map(t => t.slice(0, 90)).join(' | '));
   const fields = ['subject', 'preview', 'body', 'yesLabel', 'noLabel', 'yesMsg', 'noMsg', 'sender'];
-  const sent = (st.inbox || []).flatMap(c => fields.map(f => c[f]).filter(x => typeof x === 'string'));
+  const sent = allMail(st).flatMap(c => fields.map(f => c[f]).filter(x => typeof x === 'string'));
   const badS = sent.filter(t => GENDERED.test(t));
-  check(`neutral text: every card delivered reads gender-neutral (${(st.inbox || []).length} cards)`, badS.length === 0,
+  check(`neutral text: every card delivered reads gender-neutral (${allMail(st).length} cards)`, badS.length === 0,
         badS.slice(0, 4).map(t => t.slice(0, 90)).join(' | '));
 }
 
@@ -1171,7 +1176,7 @@ async function checkCardMoney(st) {
   // version that fits (its _when held when it was chosen).
   {
     const fam = {};
-    for (const c of st.inbox || []) if (c._family && c._season === st.seasonNum) (fam[c._family] = fam[c._family] || []).push(c.cardId);
+    for (const c of allMail(st)) if (c._family && c._season === st.seasonNum) (fam[c._family] = fam[c._family] || []).push(c.cardId);
     const twice = Object.entries(fam).filter(([, ids]) => ids.length > 1);
     check(`card families: one version each a season (${Object.entries(fam).map(([f, ids]) => `${f}:${ids[0].replace(/^mon_/, '')}`).join(' ')})`,
           twice.length === 0, twice.map(([f, ids]) => `${f}=${ids.join('+')}`).join(' '));
@@ -1182,7 +1187,7 @@ async function checkCardMoney(st) {
   // Unanswered cards do what their default choice does: a deal signed by default pays.
   {
     const ledger = st.userTeam.finances.ledger || [];
-    const autoDeals = (st.inbox || []).filter(c => c.choice === 'auto' && c.autoChoice === 'yes' && c._revenueK > 0);
+    const autoDeals = allMail(st).filter(c => c.choice === 'auto' && c.autoChoice === 'yes' && c._revenueK > 0);
     const unpaid = autoDeals.filter(c => !ledger.some(e => e.label === c.subject && e.k === c._revenueK));
     check(`card money: deals that go through by default are paid (${autoDeals.length})`, unpaid.length === 0, unpaid.map(c => c.cardId).join(','));
   }
@@ -1274,29 +1279,29 @@ function checkTalks(st) {
   const talks = Object.entries(st.tradeTalks || {}).map(([id, t]) => ({ id, t: t.talk })).filter(x => x.t);
   // §89: the answer is decided when the offer goes out and reaches us later
   // as a scheduled card (so it can be pushed with the app closed).
-  const cardsFor = (t) => [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._talkId === t.id || c._rosterKey === `talk:off:${t.id}:${t.round}` || c._beatenTalkId === t.id);
+  const cardsFor = (t) => [...allMail(st), ...(st.scheduledCards || [])].filter(c => c._talkId === t.id || c._rosterKey === `talk:off:${t.id}:${t.round}` || c._beatenTalkId === t.id);
   const stuck = talks.filter(x => x.t.replyAtMs < clock.get() - 86_400_000 && !cardsFor(x.t).length);
   check(`trade talks: every offer gets an answer on the clock (${talks.length} talks; ${talks.map(x => x.t.status).join(',')})`, stuck.length === 0, stuck.map(x => x.id).join(','));
-  const beaten = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._beatenTalkId);
+  const beaten = [...allMail(st), ...(st.scheduledCards || [])].filter(c => c._beatenTalkId);
   check(`trade talks: talks closed because another club got the player come with word from Pro Scouting (${beaten.length})`,
         talks.filter(x => x.t.calledOffAtMs && !cardsFor(x.t).length).length === 0);
-  if (process.env.LT_DUMP) for (const x of stuck) console.log('STUCK', x.id, JSON.stringify({ ...x.t, offer: undefined, counter: undefined }), JSON.stringify([...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._talkTeamId === x.id || c._proposingTeamId === x.id || c._ideaTeamId === x.id).map(c => [c.cardId, c._talkId, c.resolved, c.choice, c.subject])));
+  if (process.env.LT_DUMP) for (const x of stuck) console.log('STUCK', x.id, JSON.stringify({ ...x.t, offer: undefined, counter: undefined }), JSON.stringify([...allMail(st), ...(st.scheduledCards || [])].filter(c => c._talkTeamId === x.id || c._proposingTeamId === x.id || c._ideaTeamId === x.id).map(c => [c.cardId, c._talkId, c.resolved, c.choice, c.subject])));
   check('trade talks: the answer is decided when the offer is sent', talks.every(x => !x.t.answer || x.t.answer.atMs === x.t.sentAtMs));
-  const early = talks.filter(x => (st.inbox || []).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.cardId !== 'trade_off' && (c.deliveredAtMs ?? c.deliverAtMs ?? 0) < x.t.replyAtMs - 60_000));
+  const early = talks.filter(x => allMail(st).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.cardId !== 'trade_off' && (c.deliveredAtMs ?? c.deliverAtMs ?? 0) < x.t.replyAtMs - 60_000));
   check('trade talks: no answer reaches us before its reply time', early.length === 0,
         early.map(x => `${x.id} r${x.t.round} reply ${new Date(x.t.replyAtMs).toISOString()} sent ${new Date(x.t.sentAtMs).toISOString()} ${x.t.status}: `
-          + (st.inbox || []).filter(c => c._talkId === x.t.id && c._talkRound === x.t.round).map(c => `${c.cardId}@${new Date(c.deliverAtMs).toISOString()}`).join(' ')).join(' | '));
-  const unsettled = talks.filter(x => x.t.pending && (st.inbox || []).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.resolved));
+          + allMail(st).filter(c => c._talkId === x.t.id && c._talkRound === x.t.round).map(c => `${c.cardId}@${new Date(c.deliverAtMs).toISOString()}`).join(' ')).join(' | '));
+  const unsettled = talks.filter(x => x.t.pending && allMail(st).some(c => c._talkId === x.t.id && c._talkRound === x.t.round && c.resolved));
   check('trade talks: how an offer landed takes effect once its answer is read', unsettled.length === 0, unsettled.map(x => x.id).join(','));
   check('trade talks: no talk goes past the round limit', talks.every(x => (x.t.round || 1) <= 3));
-  const replies = (st.inbox || []).filter(c => /^talk_/.test(c.cardId || ''));
+  const replies = allMail(st).filter(c => /^talk_/.test(c.cardId || ''));
   const kinds = {};
   for (const c of replies) kinds[c.cardId] = (kinds[c.cardId] || 0) + 1;
   check(`trade talks: answers arrive as decisions (${JSON.stringify(kinds)})`, replies.length >= 1 && replies.every(c => c.yesLabel && c.noLabel));
   // A finalized deal is in the franchise history (made) or came back as "the deal is off" (voided).
   const agreed = talks.filter(x => x.t.status === 'done');
   const made = agreed.filter(x => (st.history || []).some(h => h.type === 'trade' && String(h.id).startsWith(`tx-trade-${x.id}-`))
-                              || (st.inbox || []).some(c => c.cardId === 'trade_off' && c._rosterKey?.startsWith('talk:off:')));
+                              || allMail(st).some(c => c.cardId === 'trade_off' && c._rosterKey?.startsWith('talk:off:')));
   const pending = (st.transactions || []).filter(x => x.kind === 'trade' && x.status === 'pending');
   check(`trade talks: every deal we finalized was made or voided (${made.length}/${agreed.length})`, made.length === agreed.length && pending.length === 0,
         agreed.filter(x => !made.includes(x)).map(x => x.id).join(',') + pending.map(x => ` pending ${x.id} ${x.league ? 'league' : ''} eff ${new Date(x.effectiveAt).toISOString()} now ${new Date(clock.get()).toISOString()}`).join(''));
@@ -1434,13 +1439,13 @@ function checkLeagueTrades(st) {
   check(`league wire: our trades are on it too (${ours.length} wire / ${hist.length} history)`, ours.length >= Math.min(1, hist.length));
   check('league wire: every entry has a time, a season and text', wire.every(e => Number.isFinite(e.atMs) && e.season >= 1 && e.text));
   check('league wire: text only, neutral', wire.every(e => !/\b(he|him|his|she|her)\b/i.test(e.text)), wire.filter(e => /\b(he|him|his|she|her)\b/i.test(e.text)).slice(0, 2).map(e => e.text).join(' | '));
-  const cards = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => /^lt_/.test(c.cardId || ''));
+  const cards = [...allMail(st), ...(st.scheduledCards || [])].filter(c => /^lt_/.test(c.cardId || ''));
   const kinds = {};
   for (const c of cards) kinds[(c._rosterKey || '').split(':')[1] || c.cardId] = (kinds[(c._rosterKey || '').split(':')[1] || c.cardId] || 0) + 1;
   check(`league trades: cards that touch us are decisions (${JSON.stringify(kinds)})`,
         cards.filter(c => ['lt_offer', 'lt_scout'].includes(c.cardId)).every(c => c.yesLabel && c.noLabel));
   // §99 "nobody fits" is a decision now: keep watching, or drop it.
-  const all = [...(st.inbox || []), ...(st.scheduledCards || [])];
+  const all = [...allMail(st), ...(st.scheduledCards || [])];
   const watchCards = all.filter(c => ['lt_none', 'lt_beaten', 'fin_called_back'].includes(c.cardId));
   const watches = st.tradeDesk?.watches || [];
   const foundCards = all.filter(c => /:found$/.test(c._rosterKey || ''));
@@ -1456,7 +1461,7 @@ function checkLeagueTrades(st) {
   const reports = Object.entries(st.userTeam.advanceReports || {});
   check(`league trades: advance scouting reports cover a coming series (${reports.length} bought)`, reports.every(([, r]) => r.coversThroughMs > r.boughtAtMs));
   const retired = ['dl3', 'dl4'];
-  check('league trades: the old deadline trade cards are retired (real targets instead)', !(st.inbox || []).some(c => retired.includes(c.cardId)));
+  check('league trades: the old deadline trade cards are retired (real targets instead)', !allMail(st).some(c => retired.includes(c.cardId)));
   if (process.env.LT_DUMP) for (const e of cpuTrades) console.log('  ·', new Date(e.atMs).toISOString().slice(0, 10), e.text);
   checkOffersToUs(st);
   checkMessageVoice(st);
@@ -1629,7 +1634,7 @@ function checkWeatherSeason(st) {
     const byGame = (c) => st.schedule.find(g => timesOf(g).includes(c._wxGameTime));
     const decBad = dec.filter(c => { const g = byGame(c); return !g || !homeTimes.has(c._wxGameTime) || g.isSpring; });   // (§122.71 at our park on that date)
     const dk = dec.map(c => c._rosterKey), decDup = dk.filter((k, i) => dk.indexOf(k) !== i);
-    const now = [...(st.inbox || [])];
+    const now = allMail(st);
     const open = dec.filter(c => !now.find(x => x.instanceId === c.instanceId)?.resolved && (st.schedule.find(g => g.gameTime === c._wxGameTime)?._committed));
     const kinds = {};
     for (const c of dec) { const r = now.find(x => x.instanceId === c.instanceId); const k = `${c._wxDecision}:${r?.choice || '?'}`; kinds[k] = (kinds[k] || 0) + 1; }
@@ -1639,12 +1644,12 @@ function checkWeatherSeason(st) {
     console.log(`  weather calls: ${wxCalls.length} (${wxCalls.filter(c => c.poor).length} poor); owner trust ${st.userTeam.ownerTrust}`);
   }
   // §102.5 the weather's decisions: the manager asked about starters when rain was likely; doubleheaders asked about game two.
-  const wxCards = [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c.tag === 'WEATHER');
+  const wxCards = [...allMail(st), ...(st.scheduledCards || [])].filter(c => c.tag === 'WEATHER');
   const byId = (id) => wxCards.filter(c => c.cardId === id);
   const userDh = all.filter(x => x.user && !x.g.isSpring && x.g.makeup?.how?.endsWith('dh')).length;
   check(`weather cards: the manager asked about the starter ${byId('wx_rain_start').length} times; ${byId('wx_doubleheader').length} doubleheader questions (${userDh} of our makeups were doubleheaders); none left hanging`,
         wxCards.every(c => c.resolved || (c.expiresAtMs ?? Infinity) > clock.get()),
-        wxCards.filter(c => !(c.resolved || (c.expiresAtMs ?? Infinity) > clock.get())).map(c => `${c.cardId} ${c._rosterKey} exp ${new Date(c.expiresAtMs).toISOString()} deliver ${c.deliverAtMs ? new Date(c.deliverAtMs).toISOString() : '-'} inbox ${(st.inbox || []).includes(c)} withdrawn ${!!c.withdrawn}`).join(' | '));   // (how often is in the rates tool; a dry season can ask none)
+        wxCards.filter(c => !(c.resolved || (c.expiresAtMs ?? Infinity) > clock.get())).map(c => `${c.cardId} ${c._rosterKey} exp ${new Date(c.expiresAtMs).toISOString()} deliver ${c.deliverAtMs ? new Date(c.deliverAtMs).toISOString() : '-'} inbox ${allMail(st).includes(c)} withdrawn ${!!c.withdrawn}`).join(' | '));   // (how often is in the rates tool; a dry season can ask none)
   // §110 the weather and the gate: a wet start (rain at the gate, a held start) draws fewer than a dry one.
   {
     const gates = all.filter(x => x.played && !x.g.isSpring && !x.g.isPlayoff && x.g.attendance > 0 && (x.user ? x.g.isHome : true));
@@ -1705,7 +1710,7 @@ function checkOffersToUs(st) {
   const badCounter = gm.counters.filter(c => c.ok && (!c.withdrawn || c.round !== 2));
   check(`offers to us: a counter opens talks at round 2 and replaces their offer (${gm.counters.filter(c => c.ok).length} sent)`,
         badCounter.length === 0, JSON.stringify(badCounter.slice(0, 2)));
-  if (process.env.LT_DUMP) for (const c of [...(st.inbox || []), ...(st.scheduledCards || [])].filter(c => c._tradeKind)) console.log('  ‡', c._tradeKind, c.resolved, c.choice, new Date(c.deliverAtMs || c.arrivedAtMs || 0).toISOString().slice(0, 10), c.subject);
+  if (process.env.LT_DUMP) for (const c of [...allMail(st), ...(st.scheduledCards || [])].filter(c => c._tradeKind)) console.log('  ‡', c._tradeKind, c.resolved, c.choice, new Date(c.deliverAtMs || c.arrivedAtMs || 0).toISOString().slice(0, 10), c.subject);
   if (process.env.LT_DUMP) for (const o of gm.offers) console.log('  ›', o.kind, new Date(o.at).toISOString().slice(0, 10), JSON.stringify(o.opening), o.body);
 }
 
@@ -2192,7 +2197,7 @@ async function main() {
       const pShare = all.filter(x => x.pitcher).length / Math.max(1, all.length);
       // ~130 injuries a season: binomial noise alone is ±4–5 points (1 sd).
       check(`injuries: pitcher share ${(pShare * 100).toFixed(0)}% (MLB-like ~50%, 36–64% allowing for a season's noise)`, pShare >= 0.36 && pShare <= 0.64);
-      const userCards = (st.inbox || []).filter(c => c.cardId === 'injury_act2').length;
+      const userCards = allMail(st).filter(c => c.cardId === 'injury_act2').length;
       check(`injuries: user diagnoses delivered (${userCards})`, userCards > 0);
     }
     const trades = [...txSeen.values()].filter(t => t.kind === 'trade');
@@ -2278,7 +2283,7 @@ async function main() {
   { // r213 §122.91 after-hours emergencies: 2–4 a season, each in the night, each came
     const em = SM.get().emergencies || {};
     const plan = em.plan || [];
-    const cards = [...(SM.get().inbox || []), ...(SM.get().history || [])].filter(c => c._emergency);
+    const cards = [...allMail(SM.get()), ...(SM.get().history || [])].filter(c => c._emergency);
     const night = (ms) => { const h = new Date(ms).getHours() + new Date(ms).getMinutes() / 60; return h >= 23.5 || h <= 4.5; };
     check(`emergencies: ${plan.length} planned, ${plan.filter(x => x.done).length} came (${[...new Set(cards.map(c => c.cardId))].join(', ')}), every one in the night`,
           plan.length >= 2 && plan.length <= 4 && plan.filter(x => x.atMs <= clock.get()).every(x => x.done) && plan.some(x => x.done) && plan.every(x => night(x.atMs)) && (em.situations || []).length === new Set(em.situations || []).size);
@@ -2287,7 +2292,7 @@ async function main() {
   // ── §61: timed delivery ─────────────────────────────────────────────────────
   {
     const st      = SM.get();
-    const arrived = (st.inbox || []).filter(c => Number.isFinite(c.arrivedAtMs));
+    const arrived = allMail(st).filter(c => Number.isFinite(c.arrivedAtMs));
     check(`timed delivery: cards arrive over time (${arrived.length} released)`,
           arrived.length > 20, `${arrived.length}`);
     // Pool cards are planned outside quiet hours. Real-time roster cards (an
@@ -2340,7 +2345,7 @@ async function main() {
 
   // ── §60: inbox content integrity over the whole run ─────────────────────────
   {
-    const inbox = SM.get().inbox || [];
+    const inbox = allMail(SM.get());
     const TOKEN = /\{[a-z0-9_]+\}/i;
     const raw = inbox.filter(c =>
       TOKEN.test(`${c.subject} ${c.preview} ${c.body} ${c.sender} ${c.yesLabel} ${c.noLabel}`));
@@ -2547,16 +2552,16 @@ async function main() {
     const chained = [...gm.chainSeen.values()];
     check(`card chains: follow-up cards are set in motion (${chained.length})`, chained.length >= 1,
           `${[...new Set(chained)].join(',')} — scouting cards seen: ${[...gm.cardIdsSeen].filter(x => /^(sc|intl|indie|s2)/.test(x)).join(',') || 'none'}`);
-    const timedPre = [...(st.inbox || [])].filter(c => c._pool === 'PREGAME_POOL');
+    const timedPre = allMail(st).filter(c => c._pool === 'PREGAME_POOL');
     check(`card timing: pre-game cards arrive before first pitch (${timedPre.length})`,
           timedPre.every(c => !Number.isFinite(c.expiresAtMs) || (c.arrivedAtMs ?? c.deliverAtMs) <= c.expiresAtMs));
     // §80 game-day moments: every moment of a game day gets its cards, the
     // first game day included (no game before it to plan it), spring too.
     const mom = {};
-    for (const c of st.inbox || []) if (c._moment) mom[c._moment] = (mom[c._moment] || 0) + 1;
+    for (const c of allMail(st)) if (c._moment) mom[c._moment] = (mom[c._moment] || 0) + 1;
     check(`card moments: game days bring pre-game, in-game and between-games cards (${JSON.stringify(mom)})`,
           (mom.pregame || 0) >= 20 && (mom.ingame || 0) >= 15 && (mom.between || 0) >= 60);
-    const inGame = (st.inbox || []).filter(c => c._moment === 'ingame');
+    const inGame = allMail(st).filter(c => c._moment === 'ingame');
     check('card moments: in-game cards arrive while the game is on',
           inGame.every(c => (c.arrivedAtMs ?? c.deliverAtMs) <= c.expiresAtMs));
     // §80 first moments: the takeover and Opening Day bring their own card;
@@ -2565,7 +2570,7 @@ async function main() {
     check(`first moments: the takeover and Opening Day each brought a card (${Object.entries(md).map(([k, v]) => `${k}=${v.cardId}`).join(', ')})`,
           !!md['1|takeover'] && !!md['1|opening_day']);
     if ((st.cardPlanKey || '').startsWith('2|')) check('first moments: season 2 opens camp with a card', !!md['2|camp_open']);
-    const springMoments = (st.inbox || []).filter(c => /^(pg30_sp|ig_sp)/.test(c.cardId || ''));
+    const springMoments = allMail(st).filter(c => /^(pg30_sp|ig_sp)/.test(c.cardId || ''));
     check(`card moments: spring game-day cards can arrive (${springMoments.length}: ${[...new Set(springMoments.map(c => c.cardId))].join(',')})`,
           true);
     const plans = st.developmentPlans || [];
@@ -2692,7 +2697,7 @@ async function main() {
     const kinds = {}; for (const p of ours) for (const x of p.log || []) kinds[x.kind] = (kinds[x.kind] || 0) + 1;
     check(`history: our players' time out and work kept (${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join(', ')})`, (kinds.rest || 0) > 0); }
   // r255 §122.134 every decision made this season keeps what it changed (the Completed tab)
-  { const st = SM.get(); const done = (st.inbox || []).filter(c => c.resolved && ['yes', 'no', 'auto'].includes(c.choice) && c.noLabel);
+  { const st = SM.get(); const done = allMail(st).filter(c => c.resolved && ['yes', 'no', 'auto'].includes(c.choice) && c.noLabel);
     const kept = done.filter(c => Array.isArray(c._impact)), rows = kept.reduce((n, c) => n + c._impact.length, 0);
     const odd = kept.flatMap(c => c._impact.filter(r => !r.label || (r.unit !== 'text' && r.unit !== 'pct' && !(Number.isFinite(r.from) && Number.isFinite(r.to) && r.delta === r.to - r.from))).map(r => `${c.cardId}: ${JSON.stringify(r)}`));
     check(`what changed: every decision kept (${kept.length}/${done.length}, ${rows} rows), every row whole`, done.length > 20 && kept.length === done.length && odd.length === 0,
@@ -2725,7 +2730,7 @@ async function main() {
   // a player of ours under contract past this season (check-agent-ask covers the terms and answers).
   {
     const st = SM.get();
-    const asks = (st.inbox || []).filter(c => c.cardId === 'agent_ask');
+    const asks = allMail(st).filter(c => c.cardId === 'agent_ask');
     const ok = asks.length <= 2 && new Set(asks.map(c => c._targetPlayerId)).size === asks.length
       && asks.every(c => c._choices?.length >= 2 && c.noLabel === 'Not now' && c._agentTerms?.salary > 0);
     check(`agent asks after a breakout: ${asks.length}${asks.length ? ` (${asks.map(c => `${st.players[c._targetPlayerId]?.name} → ${c._pick || c.choice || 'open'}`).join(', ')})` : ''}`, ok,

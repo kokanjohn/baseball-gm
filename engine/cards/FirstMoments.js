@@ -5,7 +5,7 @@
  * exported; a declaration another area uses is exported from here. Write to state only through StateManager.
  */
 import * as StateManager from '../../store/StateManager.js';
-import { GAME_REMINDER } from '../../data/constants.js';
+import { GAME_REMINDER, MESSAGE_HISTORY } from '../../data/constants.js';
 import { writeComposeReply } from '../ComposeReplies.js';
 import { MOMENT_CARDS } from '../../data/cards-moments.js';
 import { senderLabel, viewOf, peopleIn } from '../Senders.js';
@@ -20,6 +20,7 @@ import { _afterLanding, _landPromises, _writePromise } from './Promises.js';
 import { list } from './ScoutingTips.js';
 import { _createInstance } from './Selection.js';
 import { toInbox, VIA } from './Entry.js';   // r291 §122.172
+import { trimDue, trimAnswered } from '../MessageHistory.js';   // r292 §122.174
 
 // ─────────────────────────────────────────────────────────────
 // FIRST MOMENTS (§80)
@@ -143,6 +144,8 @@ export function deliverMomentCard(moment, context, game = null, timing = 'soon')
  * @returns {Object[]} the cards released (empty array if none)
  */
 export function releaseDueCards(nowMs = clockNow()) {
+  // r292 §122.174 the newest answered messages kept; older ones leave notes (MessageHistory)
+  if (trimDue(StateManager.get(), MESSAGE_HISTORY)) StateManager.mutate(s => trimAnswered(s, MESSAGE_HISTORY));
   const out = _releaseDue(nowMs);
   if (out.length && !StateManager.isSpeculating()) _released.push(...out);
   const fu = _followUps(nowMs);   // r279 §122.158 (announced like a new message; not counted as one)

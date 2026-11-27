@@ -27,6 +27,7 @@ import { primaryPos, posLabel, eligibleAt, keepNeed, startsAt } from '../Positio
 import { _cardsWithKey, _day, _deliverAt, _hand, _rosterCard } from './Delivery.js';
 import { _dealRef, _deliverIdea, _deliverWatchCard, _ref, _sameRole } from './LeagueTradeCards.js';
 import { _deliverNotice, _managerName, _ourNews } from './RosterCards.js';
+import { withHistory } from '../MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 // ─────────────────────────────────────────────────────────────
 // OFFSEASON CARDS (§70)
@@ -446,7 +447,7 @@ export function deliverCoachHireCard(role, atMs, expiresAtMs) {
   const U = state.offseason?.review?.units || null;
   const info = Coach.ROLE_INFO[role];
   const taken = new Set([...Object.values(staff).map(x => x?.name), state.userTeam.ownerName, ...Managers.managerNames(state),
-    ...[...(state.inbox || []), ...(state.scheduledCards || [])].flatMap(c => (c._coachCands || []).map(x => x.name))].filter(Boolean));
+    ...[...withHistory(state), ...(state.scheduledCards || [])].flatMap(c => (c._coachCands || []).map(x => x.name))].filter(Boolean));   // r292 §122.174 with the history
   const [A, B] = Coach.candidates(state, role, U, { taken });
   const need = Coach.neededSpecialty(role, U, state);
   const who = (x) => `${x.name} ${x.background}: ${_coachRead(role, x)}. The ask: ${formatK(x.salary)} a year for two years.`;
@@ -482,7 +483,7 @@ function _hireCardAfter(role, atMs) {
 /** Free agents worth a look (soft: auto-declined after 3 days). */
 export function deliverFreeAgentCards(atMs, springAt) {
   const state = StateManager.get();
-  const offered = new Set([...(state.inbox || []), ...(state.scheduledCards || [])]
+  const offered = new Set([...withHistory(state), ...(state.scheduledCards || [])]   // r292 §122.174 with the history
     .filter(c => (c._rosterKey || '').startsWith('os:fa:')).map(c => c._targetPlayerId));
   let n = 0;
   for (const t of Offseason.userFreeAgentTargets(state, FA_CARDS_PER_ROUND, offered)) {

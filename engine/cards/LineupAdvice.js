@@ -16,6 +16,7 @@ import { canPlay, stretchOf, pitchRoles } from '../Positions.js';
 import { _cardsWithKey, _deliverAt, _randBetween, _rosterCard } from './Delivery.js';
 import { _benchCoach } from './OffseasonCards.js';
 import { _deliverNotice, _managerName, _slotPlayed, _slotWhere, _whoHasSpot } from './RosterCards.js';
+import { withHistory } from '../MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 // ── §113 Back from an injury, but not back in the lineup ──────────────────
 
@@ -103,7 +104,7 @@ export function _lineupNudges(atMs) {
     const p = state.players[id];
     if (!p?._lostSlot || seated.has(id) || queue.has(id) || !isAvailable(p) || p.group === PLAYER_GROUP.IL) continue;
     const prefix = `lineup:${id}:${_nudgeEpisode(p)}:`;
-    const mine = [...(state.inbox || []), ...(state.scheduledCards || [])].filter(c => (c._rosterKey || '').startsWith(prefix));
+    const mine = [...withHistory(state), ...(state.scheduledCards || [])].filter(c => (c._rosterKey || '').startsWith(prefix));   // r292 §122.174 with the history
     // r279 §122.158 asked once an episode: a reminder is the message's own follow-up (FollowUps), no second ask
     if (mine.length) continue;
     // A little after the news, and well before our next first pitch.

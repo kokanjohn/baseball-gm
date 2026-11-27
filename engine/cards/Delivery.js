@@ -18,6 +18,7 @@ import { ALL_POOLS, MAX_INBOX_SIZE, PHASE_POOLS, POOL_MOMENT } from './Pools.js'
 import { _expireCards } from './Resolution.js';
 import { _createInstance, _selectCards } from './Selection.js';
 import { toSchedule, VIA } from './Entry.js';   // r291 §122.172
+import { withHistory } from '../MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 // ─────────────────────────────────────────────────────────────
 // MAIN DELIVERY LOOP
@@ -173,7 +174,7 @@ export function _rosterCard(state, fields) {
 
 /** Every card (inbox, resolved or not, and scheduled) with this roster key. */
 export function _cardsWithKey(state, key) {
-  return [...(state.inbox || []), ...(state.scheduledCards || [])].filter(c => c._rosterKey === key);
+  return [...withHistory(state), ...(state.scheduledCards || [])].filter(c => c._rosterKey === key);   // r292 §122.174 with the history
 }
 
 

@@ -43,6 +43,7 @@ import { _managerName } from './RosterCards.js';
 import { _createInstance } from './Selection.js';
 import { _offerCanGo, deliverTradeCall, deliverTradeOffer } from './TradeOffers.js';
 import { toInbox, toSchedule, VIA } from './Entry.js';   // r291 §122.172
+import { withHistory, toHistory } from '../MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 // ─────────────────────────────────────────────────────────────
 // COMPOSE CARD DELIVERY (Phase 15 — Section 8.12)
@@ -492,7 +493,7 @@ export function advanceArcs(atMs, context = {}) {
     if (!def || !def.alive(st, arc)) { finish(); continue; }
     const last = arc.step - 1;
     if (last >= 0 && arc.picks?.[last] == null) {
-      const c = [...(st.inbox || []), ...(st.scheduledCards || [])].find(x => x._rosterKey === `arc:${arc.id}:${last}`);
+      const c = [...withHistory(st), ...(st.scheduledCards || [])].find(x => x._rosterKey === `arc:${arc.id}:${last}`);   // r292 §122.174 with the history
       if (c && !c.resolved) continue;   // (still waiting for an answer)
       const pick = !c ? 'no' : !c.noLabel ? 'yes' : c.choice === 'auto' ? (c.autoChoice || 'no') : c.choice === 'skip' ? 'none' : c.choice;
       setArcs(A => { const a = A.active.find(x => x.id === arc.id); if (a) a.picks = { ...(a.picks || {}), [last]: pick }; });
@@ -922,8 +923,9 @@ export function clearHistory(instanceIds) {
   const clearedSet = new Set(cleared);
   StateManager.mutate(s => {
     s.inbox = (s.inbox || [])
-      .map(c => (clearedSet.has(c.instanceId) ? { ...c, _cleared: true } : c))
-      .filter(c => !(c._cleared && (c._expiredSeason ?? season) < season));
+      .map(c => (clearedSet.has(c.instanceId) ? { ...c, _cleared: true } : c));
+    // r292 §122.174 cleared ones from earlier seasons go, leaving notes (MessageHistory), as the trim's do
+    toHistory(s, s.inbox.filter(c => c._cleared && !c._keep && (c._expiredSeason ?? season) < season));
   });
   return cleared;
 }

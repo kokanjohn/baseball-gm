@@ -1768,6 +1768,13 @@ export const CARD_DAY = Object.freeze({
  * still on its way or unanswered in Messages. Scouting's first-day offer of the free agents is the Compose
  * question "Free agents worth a look".
  */
+/**
+ * r292 §122.174 (foundation step 4) Messages keeps the newest `keepAnswered` answered messages; older ones leave a note
+ * in the history (engine/MessageHistory.js), and notes are kept `seasons` seasons (this one and the two before; the
+ * GM's record keeps as many in full). A message marked `_keep` is never trimmed and its note never cleared.
+ */
+export const MESSAGE_HISTORY = Object.freeze({ keepAnswered: 100, seasons: 3 });
+
 export const COMPOSE_OVERLAP = Object.freeze({
   days: 7,
   cards: Object.freeze({ fd_scout_market: 'sc_free_agents', fd_scout_holes: 'sc_free_agents' }),

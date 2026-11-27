@@ -18,6 +18,7 @@ import { ALL_POOLS } from './Pools.js';
 import { _cardActionsHandled } from './ScoutingTips.js';
 import { _ROLE_TOKEN, _profileFits } from './Selection.js';
 import { cardSituation, fitsSituation } from './Situation.js';
+import { withHistory } from '../MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 // ─────────────────────────────────────────────────────────────
 // ELIGIBILITY FILTERING
@@ -162,7 +163,7 @@ export function _filterEligible(pool, context, state, poolName = null) {
 
   // Build set of already-delivered card IDs this season
   const deliveredIds = new Set(
-    [...(state.inbox || []), ...(state.scheduledCards || [])]
+    [...withHistory(state), ...(state.scheduledCards || [])]   // r292 §122.174 with the history
       .filter(c => !c._expiredSeason || c._expiredSeason === state.seasonNum)
       .map(c => c.cardId)
   );
@@ -187,7 +188,7 @@ export function _filterEligible(pool, context, state, poolName = null) {
   const startingIds = new Set((u.lineupSlots || []).map(x => x?.playerId).filter(Boolean));
   const dealtSince = (id, ms) => ms != null && (log[id]?.lastMs ?? -Infinity) >= ms;
   const familiesThisSeason = new Set(
-    [...(state.inbox || []), ...(state.scheduledCards || [])]
+    [...withHistory(state), ...(state.scheduledCards || [])]   // r292 §122.174 with the history
       .filter(c => c._family && (c._season ?? state.seasonNum) === state.seasonNum)
       .map(c => c._family));
 

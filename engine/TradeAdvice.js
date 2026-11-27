@@ -40,6 +40,7 @@ import { scoutEye, scoutLooks } from './CoachEngine.js';
 import * as Finance from './FinanceEngine.js';
 import { computeAge, baseballYear } from './PlayerFactory.js';
 import { coversRole } from './Positions.js';   // r163 §122.35
+import { withHistory } from './MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 /** A player this young the director would ask for as a prospect (not a regular for us yet). */
 export const PROSPECT_AGE = 24;
@@ -86,7 +87,7 @@ export function dealsOnTable(state, atMs) {
 /** r208 §122.86 whether Scouting has been asked about this deal (the question sent, or answered). One answer for
  *  every place the question can be asked: the trade message, the counter screen, Compose. */
 export function scoutingAsked(state, key) {
-  return [...(state.scheduledCards || []), ...(state.inbox || [])]
+  return [...(state.scheduledCards || []), ...withHistory(state)]   // r292 §122.174
     .some(c => c.isCompose && c._composeTopic === 'sc_trade' && c._composeArg?.key === key);
 }
 

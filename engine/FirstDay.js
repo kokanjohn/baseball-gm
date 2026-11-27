@@ -15,6 +15,7 @@ import { awakeSegments } from './CardScheduler.js';
 import { STAFF_NAMES } from '../data/player-names.js';
 import { dice, diceSeed } from './Dice.js';
 import { enroll, leave, namesInUse } from './People.js';   // r281 §122.160, r284 namesInUse
+import { withHistory } from './MessageHistory.js';   // r292 §122.174 answered messages that dropped off
 
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
@@ -168,9 +169,9 @@ export function tradedWith(state) {
 /** Whether we've already reached out to (or answered) a club's GM this season. */
 export function greetedThisSeason(state, teamId) {
   const n = state.seasonNum || 1;
-  const sent = [...(state.scheduledCards || []), ...(state.inbox || [])]
+  const sent = [...(state.scheduledCards || []), ...withHistory(state)]   // r292 §122.174 with the history
     .some(c => c.isCompose && c._composeTopic === 'gm_welcome' && c._composeArg?.key === teamId && (c._composeArg?.season ?? n) === n);
-  const answered = (state.inbox || []).some(c => c._gmTeamId === teamId && c._gmSeason === n && c.resolved);
+  const answered = withHistory(state).some(c => c._gmTeamId === teamId && c._gmSeason === n && c.resolved);   // r292 §122.174 with the history
   return sent || answered;
 }
 

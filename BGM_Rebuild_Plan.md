@@ -15688,3 +15688,47 @@ Answered messages stay in `state.inbox` (`resolved: true`) for good. Step 4 keep
 - Ids keep counting through the history, so no id repeats.
 
 The record should change only where a reader's answer would change. Measure that first: with the history in place, the record should match exactly, because nothing reads a dropped message any differently. Then the trim itself.
+
+---
+
+## §122.174 — r292: foundation step 4, Messages keeps the newest 100 answered; the rest leave notes (Nov 26)
+
+**Decided with the user (Nov 26):**
+- Notes are kept three seasons, not two, to match the GM's record (`gmRecord`: three seasons in full, older ones summed).
+- A message marked `_keep: true` is never trimmed, and its note is never cleared. Nothing marks one yet; the later memory, rivals and history steps (§122.169) mark the messages a story depends on.
+- The user asked whether stories across seasons need old messages. They don't today:
+  - Arcs run two to six weeks and keep their own answers (`s.arcs`).
+  - Callbacks (up to about 14 months later) read the GM's record.
+  - Promises keep their own record, and the card log keeps three seasons.
+
+**What** (`engine/MessageHistory.js`, pure; `MESSAGE_HISTORY = { keepAnswered: 100, seasons: 3 }`):
+- `releaseDueCards` (every tick, so the clock path and the look-ahead alike) trims when it's due: the newest 100 answered messages stay, in Completed's order (when the decision was made).
+- Older ones leave a note in `state.messageHistory`: id, card, tag, subject, the answer, the times, and the fields §122.173's readers use.
+- Notes from three seasons back are cleared at a new season.
+- Clearing Completed now leaves notes too, for the cleared messages of earlier seasons it already removed.
+- `withHistory(state)` (the notes, then the inbox) is what these readers use now:
+  - roster keys (`_cardsWithKey`, so `_deliverAt`'s "already sent" and its id count);
+  - the lineup nudge once an episode;
+  - the arc's last answer;
+  - card families and once a season;
+  - the GMs greeted this season;
+  - the scouting director's introduction;
+  - coach candidates and free agents offered;
+  - Compose's memory of decisions, ignored messages and leave;
+  - Scouting asked about a deal.
+
+**Size** (contender, end of the first season): 654 notes, about 400 bytes each; a message averages 1.6–2.7 KB. The three ids in a note (the message, the player, the player in the roster key) are most of it. Messages holds about 100 answered at a time (about 160 KB, where the save used to keep every answered message). At most three seasons of notes, about 800 KB, against answered messages that grew without end.
+
+**Checks:**
+- The record matches exactly, trimming on. In those runs 654 messages became notes by the winter, and nothing read them differently.
+- Shown to guard it: with one reader left on the inbox alone, both runs differ from the record.
+- check-message-history (new, 16):
+  - the rule (newest 100; `_keep` never trimmed nor counted; notes cleared after three seasons unless kept);
+  - in play (60 games: no more than 100 answered, the kept ones the newest, every id unique, a note about a seventh of a message);
+  - the readers answer the same with every answered message turned into a note (roster keys, GMs greeted, Scouting asked; every field a reader reads is the same on the note).
+
+**Other checks:** all 98 `check-*.mjs` pass. The season harness first failed 7 checks that tally a season's messages from `state.inbox` (CPU offers, card moments, weather decisions, families, trade talks), because older answered ones had become notes. That's test-side; the game is unchanged, and the record matches. `watchTrim(fn)` lets a check see each message as it leaves, in full; sim-season's season tallies count those with the inbox (`allMail`). Its checks of the moment (ghosts, the GM's actions, seeding, renaming) still read the inbox. 3,829/3,829. Screen tests: 53 of 57, the same four as at r289.
+
+**App:** Messages and Completed look the same: Completed already showed the newest 100. sw.js precaches MessageHistory.js; `tfo-v2-r292`. Fresh team: not needed (an old save gets `messageHistory: []` from the schema, and its first tick trims it).
+
+**Next:** foundation step 5, the save in parts (§122.168).
