@@ -2,8 +2,9 @@
  * store/DB.js
  * Thin IndexedDB wrapper. No game logic. No state references.
  *
- * Knows about two stores:
+ * Knows about three stores:
  *   'saveSlots'  — keyed by slotId (String UUID)
+ *   'saveParts'  — r293 §122.175 a save's parts, keyed by string ('<slotId>|…'; store/SaveParts.js names them)
  *   'appMeta'    — keyed by string key, for small app-level persisted values
  *
  * All methods return Promises. Callers (StateManager) handle errors.
@@ -13,8 +14,9 @@
  */
 
 const DB_NAME    = 'BaseballGM';
-const DB_VERSION = 1;
+const DB_VERSION = 2;   // r293 §122.175 v2 adds saveParts
 const STORE_SLOTS = 'saveSlots';
+const STORE_PARTS = 'saveParts';
 const STORE_META  = 'appMeta';
 
 // ─────────────────────────────────────────────────────────────
@@ -44,6 +46,10 @@ function open() {
 
       if (!db.objectStoreNames.contains(STORE_META)) {
         db.createObjectStore(STORE_META);
+      }
+
+      if (!db.objectStoreNames.contains(STORE_PARTS)) {
+        db.createObjectStore(STORE_PARTS);
       }
     };
 
@@ -115,6 +121,58 @@ export function saveSlot(envelope) {
 }
 
 /**
+ * r293 §122.175 saveSlotWithParts(envelope, puts, dels)
+ * Writes the envelope, puts each [key, value] in saveParts and deletes each key there — all in one transaction,
+ * so a save is never half written. The envelope goes through JSON as saveSlot's does; part values are stored as
+ * given (text). Resolves when the transaction is complete.
+ * @param {Object} envelope
+ * @param {Array<[String, *]>} puts
+ * @param {String[]} dels
+ * @returns {Promise<void>}
+ */
+export function saveSlotWithParts(envelope, puts = [], dels = []) {
+  if (!envelope || !envelope.slotId) {
+    return Promise.reject(new Error('DB.saveSlotWithParts: envelope must have a slotId'));
+  }
+  let serialized;
+  try {
+    serialized = JSON.parse(JSON.stringify(envelope));
+  } catch (e) {
+    return Promise.reject(new Error(`DB.saveSlotWithParts: state is not JSON-serializable — ${e.message}`));
+  }
+  return open().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_SLOTS, STORE_PARTS], 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror    = () => reject(tx.error);
+    tx.onabort    = () => reject(tx.error || new Error('DB: transaction aborted'));
+    const parts = tx.objectStore(STORE_PARTS);
+    for (const k of dels) parts.delete(k);
+    for (const [k, v] of puts) parts.put(v, k);
+    tx.objectStore(STORE_SLOTS).put(serialized);
+  }));
+}
+
+/**
+ * r293 §122.175 loadParts(prefix)
+ * Every part whose key starts with prefix, as a Map(key → value).
+ * @param {String} prefix
+ * @returns {Promise<Map<String, *>>}
+ */
+export function loadParts(prefix) {
+  const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`);
+  return open().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PARTS, 'readonly');
+    const store = tx.objectStore(STORE_PARTS);
+    let keys = null, values = null;
+    const done = () => { if (keys && values) resolve(new Map(keys.map((k, i) => [k, values[i]]))); };
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('DB: transaction aborted'));
+    const rk = store.getAllKeys(range); rk.onsuccess = () => { keys = rk.result || []; done(); };
+    const rv = store.getAll(range);     rv.onsuccess = () => { values = rv.result || []; done(); };
+  }));
+}
+
+/**
  * loadSlot(slotId)
  * Returns the save slot envelope for the given slotId, or null if not found.
  * @param {String} slotId
@@ -153,11 +211,15 @@ export function listSlots() {
  * @returns {Promise<void>}
  */
 export function deleteSlot(slotId) {
-  return _tx(STORE_SLOTS, 'readwrite', (store, resolve, reject) => {
-    const req    = store.delete(slotId);
-    req.onsuccess = () => resolve();
-    req.onerror   = () => reject(req.error);
-  });
+  // r293 §122.175 its parts go with it ('<slotId>|…'), in the same transaction
+  return open().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_SLOTS, STORE_PARTS], 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror    = () => reject(tx.error);
+    tx.onabort    = () => reject(tx.error || new Error('DB: transaction aborted'));
+    tx.objectStore(STORE_SLOTS).delete(slotId);
+    tx.objectStore(STORE_PARTS).delete(IDBKeyRange.bound(`${slotId}|`, `${slotId}|\uffff`));
+  }));
 }
 
 /**
@@ -236,4 +298,4 @@ export function close() {
   }
 }
 
-export default { saveSlot, loadSlot, listSlots, deleteSlot, slotExists, getMeta, setMeta, deleteMeta, close };
+export default { saveSlot, saveSlotWithParts, loadParts, loadSlot, listSlots, deleteSlot, slotExists, getMeta, setMeta, deleteMeta, close };

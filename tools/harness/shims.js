@@ -83,18 +83,34 @@ if (typeof globalThis.indexedDB === 'undefined') {
     _succeed(result) { this.result = result; queueMicrotask(() => fire(this, 'onsuccess', { target: this })); }
   }
 
+  // r293 §122.175 key ranges (IDBKeyRange.bound), as the saves' parts use them; globalThis.__idbLog (an array) sees
+  // every put and delete, for check-save-parts
+  class FakeKeyRange {
+    constructor(lower, upper) { this.lower = lower; this.upper = upper; }
+    static bound(lower, upper) { return new FakeKeyRange(lower, upper); }
+    includes(k) { return k >= this.lower && k <= this.upper; }
+  }
+  if (typeof globalThis.IDBKeyRange === 'undefined') globalThis.IDBKeyRange = FakeKeyRange;
+  const inRange = (q) => (k) => (q === undefined || q === null ? true : q instanceof FakeKeyRange ? q.includes(k) : k === q);
+  const sortedKeys = (map, q) => [...map.keys()].filter(inRange(q)).sort();   // (IndexedDB returns keys in order)
+
   class FakeStore {
     constructor(rec) { this.rec = rec; } // rec = { keyPath, map }
     _key(value, key) { return this.rec.keyPath ? value[this.rec.keyPath] : key; }
-    put(value, key)  { const r = new FakeRequest(); this.rec.map.set(this._key(value, key), value); r._succeed(undefined); return r; }
-    get(key)         { const r = new FakeRequest(); r._succeed(this.rec.map.get(key)); return r; }
-    getAll()         { const r = new FakeRequest(); r._succeed([...this.rec.map.values()]); return r; }
-    delete(key)      { const r = new FakeRequest(); this.rec.map.delete(key); r._succeed(undefined); return r; }
+    put(value, key)  { const r = new FakeRequest(); const k = this._key(value, key); globalThis.__idbLog?.push(['put', k]); this.rec.map.set(k, structuredClone(value)); r._succeed(undefined); return r; }
+    get(key)         { const r = new FakeRequest(); r._succeed(structuredClone(this.rec.map.get(key))); return r; }
+    getAll(q)        { const r = new FakeRequest(); r._succeed(sortedKeys(this.rec.map, q).map(k => structuredClone(this.rec.map.get(k)))); return r; }
+    getAllKeys(q)    { const r = new FakeRequest(); r._succeed(sortedKeys(this.rec.map, q)); return r; }
+    delete(q)        { const r = new FakeRequest(); for (const k of sortedKeys(this.rec.map, q)) { globalThis.__idbLog?.push(['del', k]); this.rec.map.delete(k); } r._succeed(undefined); return r; }
     count(key)       { const r = new FakeRequest(); r._succeed(this.rec.map.has(key) ? 1 : 0); return r; }
   }
 
   class FakeTx {
-    constructor(db, names) { this.db = db; this.names = names; this.onerror = null; this.onabort = null; this.error = null; }
+    constructor(db, names) {
+      this.db = db; this.names = names; this.onerror = null; this.onabort = null; this.oncomplete = null; this.error = null;
+      // complete after the requests made now have answered (each answers on a microtask)
+      queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => fire(this, 'oncomplete', { target: this }))));
+    }
     objectStore(name) { return new FakeStore(this.db._stores.get(name)); }
   }
 

@@ -25,6 +25,7 @@ import {
   ensureScoutingDirector,
 } from './schema.js';
 import { SAVE_SLOT_LIMIT_FREE } from '../data/constants.js';
+import { split, join, SAVE_FORMAT, PART_NAMES, partKey, boxKey, slotPrefix } from './SaveParts.js';   // r293 §122.175
 
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -46,6 +47,45 @@ let _inputRev = 0;        // r139 bumped only by changes from outside the world'
 let _world = 0;           // r139 inside world(): the clock, the game, due cards — what a look-ahead replays
 
 const SAVE_DEBOUNCE_MS = 2000; // Auto-save delay after last mutation
+
+// r293 §122.175 the save in parts (store/SaveParts.js): for the active slot, what's already in the database —
+// the last text written of each part, the box scores stored, and each box score's key (so it's hashed once).
+let _memo = null;
+const _memoFor = (slotId) => (_memo?.slotId === slotId ? _memo
+  : (_memo = { slotId, last: {}, written: new Set(), boxKeyOf: new WeakMap() }));
+
+/** Write `state` as slot `slotId`: the main state, each part that changed, new box scores; one transaction. */
+async function _write(slotId, state) {
+  const memo = _memoFor(slotId);
+  const { main, parts, boxRefs, newBoxes } = split(state, memo);
+  const puts = [], dels = [], gone = [];
+  for (const name of PART_NAMES) if (parts[name] !== memo.last[name]) puts.push([partKey(slotId, name), parts[name]]);
+  for (const [k, text] of newBoxes) puts.push([boxKey(slotId, k), text]);
+  for (const k of memo.written) if (!boxRefs.has(k)) { gone.push(k); dels.push(boxKey(slotId, k)); }
+  await DB.saveSlotWithParts({ ...createSlotEnvelope(slotId, main), format: SAVE_FORMAT }, puts, dels);
+  for (const name of PART_NAMES) memo.last[name] = parts[name];
+  for (const k of newBoxes.keys()) memo.written.add(k);
+  for (const k of gone) memo.written.delete(k);
+}
+
+/** Read slot `slotId` back into one state (a save from before parts is the whole state already). */
+async function _read(slotId) {
+  const envelope = await DB.loadSlot(slotId);
+  if (!envelope) return null;
+  _memo = null;
+  const memo = _memoFor(slotId);
+  if (envelope.format !== SAVE_FORMAT) return envelope;   // (written whole; its first save writes it in parts)
+  const prefix = slotPrefix(slotId), parts = {}, boxes = new Map();
+  for (const [k, v] of await DB.loadParts(prefix)) {
+    const rest = k.slice(prefix.length);
+    if (rest.startsWith('part|')) parts[rest.slice(5)] = v;
+    else if (rest.startsWith('box|')) boxes.set(rest.slice(4), v);
+  }
+  const state = join(envelope.state, parts, boxes, memo);
+  for (const name of PART_NAMES) if (parts[name] != null) memo.last[name] = parts[name];
+  memo.written = new Set(boxes.keys());
+  return { ...envelope, state };
+}
 
 // ─────────────────────────────────────────────────────────────
 // INIT
@@ -274,8 +314,7 @@ export async function save() {
 
   _state._savedAt = Date.now();
 
-  const envelope = createSlotEnvelope(_activeSlotId, _state);
-  await DB.saveSlot(envelope);
+  await _write(_activeSlotId, _state);   // r293 §122.175 in parts
 }
 
 /**
@@ -298,7 +337,7 @@ export async function load(slotId) {
     await save();
   }
 
-  const envelope = await DB.loadSlot(slotId);
+  const envelope = await _read(slotId);   // r293 §122.175 the parts joined
   if (!envelope) throw new Error(`StateManager.load: slot '${slotId}' not found`);
 
   let loadedState = envelope.state;
@@ -307,7 +346,7 @@ export async function load(slotId) {
   if (needsMigration(loadedState)) {
     loadedState = migrate(loadedState);
     // Save the migrated state immediately
-    await DB.saveSlot({ ...envelope, state: loadedState });
+    await _write(slotId, loadedState);
   }
 
   // §122.15 one-time repairs that a same-version save needs (saved with the next save).
@@ -366,9 +405,9 @@ export async function createSlot(config = {}) {
 
   const slotId      = _uuid();
   const freshState  = createGameState(config);
-  const envelope    = createSlotEnvelope(slotId, freshState);
 
-  await DB.saveSlot(envelope);
+  _memo = null;
+  await _write(slotId, freshState);   // r293 §122.175 in parts
 
   // Load the new slot as active
   _state        = freshState; _rev++; _inputRev++;
@@ -386,7 +425,8 @@ export async function createSlot(config = {}) {
  * @returns {Promise<void>}
  */
 export async function deleteSlot(slotId) {
-  await DB.deleteSlot(slotId);
+  await DB.deleteSlot(slotId);   // (its parts too)
+  if (_memo?.slotId === slotId) _memo = null;
 
   if (_activeSlotId === slotId) {
     _state        = null; _rev++; _inputRev++;

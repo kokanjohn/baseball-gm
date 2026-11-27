@@ -16,7 +16,7 @@
  *   - If both cache and network fail, serve the offline fallback
  */
 
-const CACHE_VERSION  = 'tfo-v2-r292';
+const CACHE_VERSION  = 'tfo-v2-r293';
 const CACHE_NAME     = `the-front-office-${CACHE_VERSION}`;
 const OFFLINE_URL    = '/baseball-gm/index.html';
 
@@ -52,6 +52,7 @@ const PRECACHE_ASSETS = [
   '/baseball-gm/store/schema.js',
   '/baseball-gm/store/DB.js',
   '/baseball-gm/store/StateManager.js',
+  '/baseball-gm/store/SaveParts.js',   // r293 §122.175 the save in parts
 
   // Engine layer
   '/baseball-gm/engine/PlayerFactory.js',

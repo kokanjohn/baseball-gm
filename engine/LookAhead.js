@@ -196,6 +196,26 @@ function _progressKey() {
  * worker (ui/ForesightWorker.js), or on the page when there is none.
  * @returns {{ game: Object|null, foreseen: { untilMs, messages }, nextGameTime: Number|null }}
  */
+/**
+ * r293 §122.175 lookAheadCopy(state) — what the page sends the look-ahead's worker: the save, less the league's
+ * finished box scores (about 40% of a late-season save). Nothing in a look-ahead reads them: the engine reads
+ * only our own games' box scores (ComposeFacts, the game pushes, the commit), a league game's is read by the
+ * screens alone, and a finished league game is `played`/'final' without it. check-lookahead-copy holds it: the
+ * look-ahead's answer is the same from this copy as from the whole save. Shares everything else (the page's
+ * postMessage copies it); `state` isn't changed.
+ */
+export function lookAheadCopy(state) {
+  const ls = state?.leagueSchedule;
+  if (!ls?.dayMap) return state;
+  const dayMap = {};
+  for (const [d, games] of Object.entries(ls.dayMap)) {
+    dayMap[d] = Array.isArray(games)
+      ? games.map(g => (g && g.boxScore && (g._committed || g.played) && !g.plays ? { ...g, boxScore: null } : g))
+      : games;
+  }
+  return { ...state, leagueSchedule: { ...ls, dayMap } };
+}
+
 export function foresee(nowMs, untilMs, gameHorizonMs) {
   const g = getNextGame();
   const game = g && Number.isFinite(g.gameTime) && g.gameTime - nowMs <= gameHorizonMs ? lookAhead(nowMs) : null;

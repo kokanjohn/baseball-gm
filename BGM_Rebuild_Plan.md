@@ -15732,3 +15732,57 @@ The record should change only where a reader's answer would change. Measure that
 **App:** Messages and Completed look the same: Completed already showed the newest 100. sw.js precaches MessageHistory.js; `tfo-v2-r292`. Fresh team: not needed (an old save gets `messageHistory: []` from the schema, and its first tick trims it).
 
 **Next:** foundation step 5, the save in parts (§122.168).
+
+---
+
+## §122.175 — r293: foundation step 5, the save in parts (Nov 27)
+
+**Before:**
+- Every save (2 s after the last change, so about every tick in play) ran the whole state through JSON and wrote it as one record. That was 6.75 MB late in a season, 4.4 MB of it the schedules, 3.36 MB of those finished box scores.
+- The slot list read every save in full.
+- The look-ahead's worker got the whole save by `postMessage` after every decision.
+
+**Now** (`store/SaveParts.js`, pure; DB version 2 adds a `saveParts` store):
+- **The main state** stays in `saveSlots`, as before, with each part's key left in place (null). The inbox keeps a marker where each answered message was, so joining gives back the same state, key order included. The slot list reads only this.
+- **'schedules':** ours and the league's, each finished box score replaced by a reference. Written as text only when its text changed.
+- **'completed':** the answered messages and the notes (§122.174). Written only when changed.
+- **Each finished box score** on its own record, keyed by a hash of its text. A game's box score never changes once it's over (as §122.81), so it's written once, the first save after its game. A box score nothing refers to any more (last season's) is deleted. Every box score stays all season (the user's choice).
+- **One transaction** writes the main state, the parts that changed, the new box scores and the deletions, so a save is never half written. Deleting a save deletes its parts in the same transaction.
+- **A save from before** (version 1, one record) loads as it was; its next save writes it in parts.
+
+StateManager keeps, for the active slot, the last text of each part, the box scores stored, and each box score's key (so a box score is hashed once). One writer serves the save, a migration and a new slot; loading joins the parts.
+
+**Sizes** (check-save-parts, contender, 60 games): the state 4.9 MB = main 2.4 MB + schedules 0.6 MB + Completed 0.3 MB + 345 box scores.
+- A save with nothing changed but the main state writes the main state alone.
+- A game day adds the schedules part and that day's new box scores.
+- Late in a season a routine save writes about a third of what it did. The main state is now most of a save; players (season logs included) are most of that, and a later step could split them the same way.
+
+**The look-ahead's copy** (`LookAhead.lookAheadCopy`): the page sends the worker the save without the league's finished box scores (1.1 MB at 50 games, about 40% late in a season).
+- Nothing in a look-ahead reads them. The engine reads our own games' box scores (ComposeFacts for Compose replies, the game pushes, the commit). A league game's is read by the screens alone. A finished league game is `played`/'final' without it.
+- Our own finished box scores stay in the copy: Compose replies written inside the look-ahead read them.
+
+**Checks:**
+- check-save-parts (new, 22):
+  - joined back the same, byte for byte (a new club, the first spring game, the tenth game, 60 games), and split leaves the state alone;
+  - saved and loaded the same;
+  - only what changed is written (a save writes only the main state; a game day the schedules part and the new box scores; every box score written once, 345 for 345 games; unreferenced ones deleted, written again when back);
+  - an old save loads, converts and reloads the same;
+  - deleting deletes its parts, and only its;
+  - the slot list reads the main state.
+- check-lookahead-copy (new, 20): at 17 moments (spring, mornings, games under way, nights, an off day), with a Compose question on the bullpen pending each time (its reply is written inside the look-ahead from our box scores):
+  - the worker's answer is the same from the copy as from the whole save;
+  - inside it, every message made (in full, its words included) and the state after are the same.
+  - Shown to bite: a copy without our own box scores fails it.
+- test-save-upgrade-ui (new, Chrome): a version-1 database holding a save written whole. The app opens it (the same club, players, clubs, schedules, Messages and notes), the database becomes version 2, the next save is in parts, and a reload gives back the same.
+- The harness's IndexedDB stand-in now has key ranges, `getAllKeys`, delete by range and transactions that complete, and copies values in and out as a browser does.
+
+**All the checks:**
+- All 100 `check-*.mjs` pass (the two new, and the record: it matches exactly).
+- The season harness 3,829/3,829; check-refs over 162 modules.
+- Screen tests: 53 of 58, with the new upgrade test passing. test-forecast-ui times out with two running and passes alone; the same four fail as at r289.
+
+**App:** no change to play. sw.js precaches SaveParts.js; `tfo-v2-r293`. Fresh team: not needed.
+
+**A note for going back:** a save written by r293 or later is in parts; an app from before r293 would read its main state without the schedules. Going back to an earlier release would need its saves restored or started fresh.
+
+**Next:** foundation step 6, a format for new messages (§122.168).

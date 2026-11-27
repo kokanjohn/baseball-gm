@@ -48,7 +48,7 @@
 import { PUSH_WORKER_URL } from '../data/constants.js';
 import * as StateManager from '../store/StateManager.js';
 import { getPushSchedule } from '../engine/CardEngine.js';
-import { foresee } from '../engine/LookAhead.js';
+import { foresee, lookAheadCopy } from '../engine/LookAhead.js';
 import { getNextGame } from '../engine/GameEngine.js';
 import { seenMoments } from '../engine/CardEngine.js';
 
@@ -282,7 +282,7 @@ function _foreseeSoon() {
     const now = Date.now(), id = ++_workerSeq, inputRev = StateManager.inputRevision();
     _fsJob = { id, inputRev };
     let state;
-    try { state = StateManager.get(); } catch { return; }
+    try { state = lookAheadCopy(StateManager.get()); } catch { return; }   // r293 §122.175 less the league's finished box scores
     w.postMessage({ id, state, nowMs: now, untilMs: now + MESSAGES_AHEAD_MS, gameHorizonMs: GAME_HORIZON_MS, seenMoments: seenMoments() });
     _fsJob.at = now;
   }, SETTLE_MS);
