@@ -15609,3 +15609,45 @@ Foundation step 1 (§122.168) is on main (5147503). The backup branch `backup/r2
 **App:** no behavior change. sw.js precaches the 21 new files; `tfo-v2-r290`. Fresh team: not needed.
 
 **Next:** foundation step 3, one entry point for every message into the inbox or the schedule. The record must match exactly.
+
+---
+
+## §122.172 — r291: foundation step 3, one way in for every message (Nov 26)
+
+**What.** Every message now enters the schedule or the inbox through `engine/cards/Entry.js`:
+- `toSchedule(s, cards, via)`: parked for a time, in delivery order.
+- `toInbox(s, cards, arrivedAt, via, { sort })`: arrives now, stamped with its sender.
+
+Both are called inside a `StateManager.mutate` with the draft. `via` names the way in (`VIA`):
+
+| `via` | Where it comes from |
+|---|---|
+| `deliverAt` | `_deliverAt`, which keeps its 68 callers and now goes through Entry |
+| `moment` | `_scheduleCards`, a pool card with a moment |
+| `between` | `_scheduleCards`, a pool card between games |
+| `compose` | a Compose reply, waiting for its time |
+| `release` | `releaseDueCards` |
+| `expired` | `expire()`, a card that lapsed before release |
+| `seed` | the opening slate |
+| `tradeSeed` | a new club's opening offer |
+| `debug` | `injectCard` |
+
+An unknown `via` throws.
+
+These replace the nine places that wrote the arrays themselves (Delivery ×3, Compose ×3, TradeOffers, Promises, FirstMoments). They add exactly as those did: the same sort, the same sender stamp, and the inbox sort skipped for `expired`, as before. Each place still does its own other work (`_logDealt`, removing a released card from the schedule). Removals and rewrites (withdrawals, retiming, clearing Completed) aren't ways in and are unchanged.
+
+**Why.** The message plan (§122.169) hooks in here: message tiers, the day plan, the audit by mode and kind of day, and the check that notifications match what arrives. `watchEntry(fn)` lets a check see every entry; it keeps nothing in the state.
+
+**check-entry** (new):
+- In the source: nothing but Entry adds to `inbox` or `scheduledCards` (spread, push, unshift, concat, splice-insert) across 160 files.
+- In play: a new club through spring and 40 games, the GM answering about half, plus a Compose reply and a debug inject. After every step, every message in the inbox or the schedule came in through Entry, and all nine ways in were used.
+- Shown to catch a stray: with Entry not reporting one way in, the in-play check fails and names the messages.
+
+**Checks:**
+- The record matches exactly (contender-2 1,527 messages, 737+737 games; ember-1 752 messages, 738 games).
+- All 97 `check-*.mjs` pass (with check-entry); the season harness 3,829/3,829; check-refs over 160 modules.
+- Screen tests: 53 of 57. test-forecast-ui times out with two running and passes alone, as at r290. The same four fail as at r289 (§122.171).
+
+**App:** no behavior change. sw.js precaches Entry.js; `tfo-v2-r291`. Fresh team: not needed.
+
+**Next:** foundation step 4, Completed keeps the newest 100 answered messages, with what stories need going to a small history store first (§122.168).

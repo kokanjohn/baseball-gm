@@ -8,15 +8,14 @@ import * as StateManager from '../../store/StateManager.js';
 import { evaluateTrade, tradeBlockers, evaluateForUser, evaluateForClub, clubBar, rapportOf, rapportGrade, adjustRapport } from '../TradeEngine.js';
 import { formatK } from '../CardTokens.js';
 import * as Finance from '../FinanceEngine.js';
-import { stampSender } from '../Senders.js';
 import * as Negotiation from '../Negotiation.js';
 import * as LeagueTrades from '../LeagueTrades.js';
 import { clockNow } from '../Clock.js';
 import { eventRand } from '../Dice.js';
 import { _tradeSalaryOk } from './Compose.js';
 import { _deliverAt, _rosterCard, _scheduleCards, _withdraw } from './Delivery.js';
-import { _sortInbox } from './Inbox.js';
 import { _deliverNotice } from './RosterCards.js';
+import { toInbox, VIA } from './Entry.js';   // r291 §122.172
 
 const TradeRapportBump = (s, teamId) => adjustRapport(s, teamId, 1);
 
@@ -289,8 +288,7 @@ export function deliverTradeOffer(offer, proposingTeamId, { kind = 'sell', room 
   if (seed) {
     // New-franchise seed: visible immediately, never pushed.
     StateManager.mutate(s => {
-      s.inbox = [...(s.inbox || []), stampSender({ ...instance, arrivedAtMs: when }, s)];
-      _sortInbox(s.inbox);
+      toInbox(s, [instance], () => when, VIA.TRADE_SEED);   // r291 §122.172
     });
     return instance;
   }

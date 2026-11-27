@@ -24,7 +24,6 @@ import { baseballYear, computeAge, isAvailable } from '../PlayerFactory.js';
 import { replyTime } from '../CardScheduler.js';
 import { MOMENT_CARDS } from '../../data/cards-moments.js';
 import { FIRST_DAY_CORE, FIRST_DAY_SECONDARY, GM_HELLOS, NEW_GM_HELLOS, LATER_HELLOS } from '../../data/cards-first-day.js';
-import { stampSender } from '../Senders.js';
 import { pickEmergency, answerBy } from '../Emergencies.js';
 import { storyMoments, buildStep, buildAfter } from '../DeadlineStory.js';
 import * as Stretch from '../StretchStory.js';
@@ -38,11 +37,12 @@ import { _logDealt } from './CardLog.js';
 import { _deliverAt, _rosterCard, _withdraw } from './Delivery.js';
 import { releaseDueCards } from './FirstMoments.js';
 import { _uuid } from './Helpers.js';
-import { _sortComparator, _sortInbox } from './Inbox.js';
+import { _sortComparator } from './Inbox.js';
 import { ALL_POOLS } from './Pools.js';
 import { _managerName } from './RosterCards.js';
 import { _createInstance } from './Selection.js';
 import { _offerCanGo, deliverTradeCall, deliverTradeOffer } from './TradeOffers.js';
+import { toInbox, toSchedule, VIA } from './Entry.js';   // r291 §122.172
 
 // ─────────────────────────────────────────────────────────────
 // COMPOSE CARD DELIVERY (Phase 15 — Section 8.12)
@@ -602,8 +602,7 @@ export function deliverSeedCards(cardIds, context) {
 
   const arrivedAtMs = clockNow();
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), ...instances.map(c => stampSender({ ...c, arrivedAtMs }, s))];
-    _sortInbox(s.inbox);
+    toInbox(s, instances, () => arrivedAtMs, VIA.SEED);   // r291 §122.172
     for (const c of instances) _logDealt(s, { ...c, deliverAtMs: arrivedAtMs });   // §122.60 the opening slate counts too (sp1 came again)
   });
   return instances.length;
@@ -662,8 +661,7 @@ export function deliverCardById(cardId, context = {}) {
   if (!instance) return;
 
   StateManager.mutate(s => {
-    s.inbox = [...(s.inbox || []), stampSender({ ...instance, _debugInjected: true, arrivedAtMs: clockNow() }, s)];
-    _sortInbox(s.inbox);
+    toInbox(s, [{ ...instance, _debugInjected: true }], () => clockNow(), VIA.DEBUG);   // r291 §122.172
   });
   return instance;
 }
@@ -756,7 +754,7 @@ export function deliverComposeCard(topicId, channelId, { topicLabel = '', nowMs 
   if (topicLabel) { instance.subject = `Re: ${topicLabel}`; instance.preview = instance.subject; }
   // Waits with the other scheduled cards; releaseDueCards() puts it in the inbox (and the push worker alerts) on time.
   StateManager.mutate(s => {
-    s.scheduledCards = [...(s.scheduledCards || []), instance].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+    toSchedule(s, [instance], VIA.COMPOSE);   // r291 §122.172
   });
   return instance;
 }

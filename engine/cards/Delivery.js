@@ -17,6 +17,7 @@ import { _uuid } from './Helpers.js';
 import { ALL_POOLS, MAX_INBOX_SIZE, PHASE_POOLS, POOL_MOMENT } from './Pools.js';
 import { _expireCards } from './Resolution.js';
 import { _createInstance, _selectCards } from './Selection.js';
+import { toSchedule, VIA } from './Entry.js';   // r291 §122.172
 
 // ─────────────────────────────────────────────────────────────
 // MAIN DELIVERY LOOP
@@ -189,7 +190,7 @@ export function _deliverAt(instance, atMs) {
   const instanceId = instance._rosterKey ? diceId(dice(diceSeed(state), 'roster-card', instance._rosterKey, same.length)) : instance.instanceId;
   const card = { ...instance, instanceId, deliverAtMs: _morningIfItCanWait(state, instance, atMs) };
   StateManager.mutate(s => {
-    s.scheduledCards = [...(s.scheduledCards || []), card].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+    toSchedule(s, [card], VIA.DELIVER_AT);   // r291 §122.172 the one way in
     _logDealt(s, card);   // §122.57 (a follow-up, a pool card delivered by hand)
   });
   return card;   // (the card as parked — with the id it will have in the inbox)
@@ -336,7 +337,7 @@ export function _scheduleCards(instances, state, game = null) {
   }
   if (timed.length) {
     StateManager.mutate(s => {
-      s.scheduledCards = [...(s.scheduledCards || []), ...timed].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+      toSchedule(s, timed, VIA.MOMENT);   // r291 §122.172
       for (const c of timed) _logDealt(s, c);
     });
   }
@@ -353,8 +354,7 @@ export function _scheduleCards(instances, state, game = null) {
   const scheduled = order.map(({ c }, i) => ({ ...c, deliverAtMs: times[i],
     ...(c._expiresAfterMs ? { expiresAtMs: times[i] + c._expiresAfterMs } : {}) }));
   StateManager.mutate(s => {
-    s.scheduledCards = [...(s.scheduledCards || []), ...scheduled]
-      .sort((a, b) => a.deliverAtMs - b.deliverAtMs);
+    toSchedule(s, scheduled, VIA.BETWEEN);   // r291 §122.172
     for (const c of scheduled) _logDealt(s, c);
   });
 }

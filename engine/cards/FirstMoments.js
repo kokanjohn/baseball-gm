@@ -8,7 +8,7 @@ import * as StateManager from '../../store/StateManager.js';
 import { GAME_REMINDER } from '../../data/constants.js';
 import { writeComposeReply } from '../ComposeReplies.js';
 import { MOMENT_CARDS } from '../../data/cards-moments.js';
-import { stampSender, senderLabel, viewOf, peopleIn } from '../Senders.js';
+import { senderLabel, viewOf, peopleIn } from '../Senders.js';
 import * as Negotiation from '../Negotiation.js';
 import { clockNow } from '../Clock.js';
 import { gamePushes, alertOn, reminderMoot, PUSH_ALERTS } from '../GamePushes.js';
@@ -16,10 +16,10 @@ import { followUpAt, followUpText } from '../FollowUps.js';
 import { eventRand } from '../Dice.js';
 import { rainHolds } from '../FieldCare.js';
 import { _scheduleCards } from './Delivery.js';
-import { _sortInbox } from './Inbox.js';
 import { _afterLanding, _landPromises, _writePromise } from './Promises.js';
 import { list } from './ScoutingTips.js';
 import { _createInstance } from './Selection.js';
+import { toInbox, VIA } from './Entry.js';   // r291 §122.172
 
 // ─────────────────────────────────────────────────────────────
 // FIRST MOMENTS (§80)
@@ -287,8 +287,7 @@ function _releaseDue(nowMs) {
   });
   StateManager.mutate(s => {
     s.scheduledCards = (s.scheduledCards || []).filter(c => !ids.has(c.instanceId));
-    s.inbox = [...(s.inbox || []), ...due.map(c => stampSender({ ...c, arrivedAtMs: c.deliverAtMs }, s))];
-    _sortInbox(s.inbox);
+    toInbox(s, due, c => c.deliverAtMs, VIA.RELEASE);   // r291 §122.172
     if (log.length) s.composeLog = [...(s.composeLog || []), ...log].slice(-COMPOSE_LOG_MAX);
     // §122.15 the players the scouts named to the GM (kept on the player: the log is short).
     for (const e of log) for (const id of e.memo?.playerIds || []) if (s.players[id]) s.players[id]._scoutedAt = e.atMs;

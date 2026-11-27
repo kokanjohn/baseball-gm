@@ -13,7 +13,6 @@ import { exposeRatings } from '../Diamonds.js';
 import * as Development from '../DevelopmentEngine.js';
 import { CARD_ACTIONS } from '../CardActions.js';
 import * as Finance from '../FinanceEngine.js';
-import { stampSender } from '../Senders.js';
 import { buildActivityFeedEntry, pruneActivityFeed } from '../SeasonEngine.js';
 import { clockNow } from '../Clock.js';
 import { dice, diceId, diceSeed, eventRand } from '../Dice.js';
@@ -25,6 +24,7 @@ import { _deliverFollowupDef } from './PlayerCards.js';
 import { _applyRelationships, _applySoftEffects } from './Resolution.js';
 import { deliverInjuryAct2 } from './RosterCards.js';
 import { _applyRosterAction } from './ScoutingTips.js';
+import { toInbox, VIA } from './Entry.js';   // r291 §122.172
 
 /**
  * _maybeChainFollowup(instance, choice, atMs)
@@ -178,7 +178,7 @@ export function expire(instanceId, atMs = clockNow()) {
     if (!sched) return;
     StateManager.mutate(s => {
       s.scheduledCards = (s.scheduledCards || []).filter(c => c.instanceId !== instanceId);
-      s.inbox = [...(s.inbox || []), stampSender({ ...sched, arrivedAtMs: Math.min(sched.deliverAtMs, atMs) }, s)];
+      toInbox(s, [sched], c => Math.min(c.deliverAtMs, atMs), VIA.EXPIRED, { sort: false });   // r291 §122.172 (never sorted here)
     });
     state    = StateManager.get();
     instance = state.inbox.find(c => c.instanceId === instanceId);
