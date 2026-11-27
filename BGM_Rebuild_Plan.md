@@ -15970,3 +15970,68 @@ By the plan's definition alone, 78–90% would be important.
 **App:** nothing changes in play (Normal). sw.js precaches MessageTiers.js; `tfo-v2-r295`. Fresh team: not needed.
 
 **Next:** Important only (§122.169): the mode in Settings, Messages showing the important ones, and the staff answering the optional ones quietly with their usual answer; then the day plan.
+
+---
+
+## §122.180 — r296: Important only
+
+**Decided with the user (Nov 27):**
+- In Important only the staff answer an optional message as it arrives, with the answer it gets at its deadline. There is **no 'left unanswered' penalty** (`autoResolveTax`), and it's **not counted as the GM ignoring it** (the GM record, the hands-on/hands-off profile).
+- The staff's messages are shown **nowhere**: not in Messages, Completed, the badges, the toasts or a push.
+- **Switching** to Important only leaves the messages already waiting with the GM; it applies to what arrives from then on.
+- **Settings** offers Important only and Normal; **Hardcore stays hidden** until the day plan.
+- Also approved: the round-rule bend of §122.179 (one piece may take an earlier version of its round, never its last, only to keep two messages from reading alike).
+
+**How:**
+- `MessageTiers`:
+  - `importantOnly(state)`;
+  - `staffHandles(card)`: a message the staff took, marked at Entry;
+  - `staffWillHandle(state, card)`: one not here yet, from its tier and the mode.
+- **Entry** (`toInbox`): in Important only, an optional message arriving is marked `_staffHandle`, except one lapsing unseen (`expired`) or the debug panel's.
+- **The release** (every tick) has the staff answer what they took: `expire(id, arrivedAt, { staff: true })`. That's the deadline path without `GMP.recordDecision` and without the tax; the card is marked `_staffHandled`, the skip path too. The arrivals announced (the toasts) leave them out.
+- **Shown nowhere:**
+  - `getInbox`, `getHistory` (and so the badges, `inboxCounts`);
+  - the offseason card;
+  - the look-ahead's foreseen messages;
+  - the push schedule: a planned message the staff will take sends no push, and switching re-syncs it.
+- **Memory:**
+  - a message the staff answered becomes a note at once (the trim), never one of Completed's 100;
+  - the note keeps its tier and the marks;
+  - `historyWith` counts the staff's answer as the club's (yes/no), not as ignoring;
+  - Compose's memory of messages left unanswered leaves them out.
+- **Settings:** a Messages section with a row (the mode) that opens to its choices and their words. The names, the words (`MESSAGE_MODE_ABOUT`) and the modes offered (`MESSAGE_MODES_SHOWN`) are in constants alone.
+
+**A season in Important only** (contender seed 3, east, GM answering all): 680 messages, 425 important (in Messages) and 250 optional (all the staff's, all answered by them, none shown).
+
+**The record, fixed** (harness): it looked at Messages only at the GM's turns, so it missed a message that came and went between looks:
+- one the staff answer at once;
+- one withdrawn within the tick it came: in Normal too, 7 in contender-2 (open spots ×4, a trade offer, a CPU offer, a rain start) and 2 in ember-1.
+
+It now notes each message as it reaches Messages (Entry) and as it leaves for the history (the trim). Kept again, all three:
+- **contender-2:** 1,534 messages (was 1,527);
+- **ember-1:** 754 (was 752);
+- **important-1** (new: contender, seed 3, east, one season, `GM=all`, `MODE=important`): 689 messages, 738 games.
+
+Every message already recorded is unchanged, and every season's result is the same: the game didn't change, only what the record sees.
+
+**Checks:**
+- check-important-only (new, 13):
+  - switching leaves a waiting message with the GM;
+  - an optional message arriving in Important only is the staff's, shown nowhere, answered with its deadline answer;
+  - no penalty (morale +0; the same message left in Normal: −3) and not counted as ignoring (GM record 0; Normal 1);
+  - 20 games: every optional one the staff's (56), none in Messages, Completed, the badges or the toasts, every important one in Messages (93), each handled one a note at once;
+  - the look-ahead foresees none of the staff's;
+  - no push for a planned optional message (Normal's push as before);
+  - the history counts the staff's answer, not ignoring.
+- test-message-mode-ui (new, Chrome, 8):
+  - the row reads Normal and opens to Important only and Normal, not Hardcore;
+  - choosing Important only saves it, with its words, and it holds after a reload;
+  - an optional message isn't in Messages, an important one is;
+  - Completed shows the one answered and not the staff's.
+- check-message-tiers (6): the screens write none of the mode's names; Settings offers Important only and Normal.
+- All 103 `check-*.mjs`, the three records among them. The season harness 3,829/3,829; check-refs over 164 modules.
+- Screen tests: 55 of 59, the same four failing as at r289.
+
+**App:** Normal plays as before. Settings has the Messages choice. `tfo-v2-r296`. Fresh team: not needed (an old save is Normal until changed).
+
+**Next:** the day plan (§122.169): Normal raised to about 8, 6 and 4 a day, Hardcore on. Existing messages first, to measure the gap.

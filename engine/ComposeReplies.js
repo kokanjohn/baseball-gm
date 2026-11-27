@@ -141,7 +141,7 @@ function deskDecisions(f, { tags = [], words = null, days = 90 }) {
 }
 /** Cards on this desk left unanswered (auto / skip), newest first. */
 function deskIgnored(f, { tags = [], words = null, days = 45 }) {
-  return withHistory(f.state).filter(c => c.resolved && (c.choice === 'auto' || c.choice === 'skip')   // r292 §122.174
+  return withHistory(f.state).filter(c => c.resolved && !c._staffHandled && (c.choice === 'auto' || c.choice === 'skip')   // r292 §122.174; r296 not the staff's in Important only
     && f.atMs - (c.resolvedAtMs || 0) < days * MS_DAY && (c.resolvedAtMs || 0) <= f.atMs
     && (tags.includes(c.tag) || (words && words.test(c.subject || ''))));
 }

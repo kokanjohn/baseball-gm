@@ -26,6 +26,8 @@ const KEPT = join(HERE, 'records');
 export const RUNS = {
   'contender-2': { args: ['2', '1'], env: { ARCH: 'contender', GM: 'all', REGION: 'north' } },
   'ember-1':     { args: ['1', '2'], env: { ARCH: 'ember', REGION: 'south' } },
+  // r296 §122.180 a season in Important only, the GM answering everything that reaches Messages
+  'important-1': { args: ['1', '3'], env: { ARCH: 'contender', GM: 'all', REGION: 'east', MODE: 'important' } },
 };
 
 const argv = process.argv.slice(2);

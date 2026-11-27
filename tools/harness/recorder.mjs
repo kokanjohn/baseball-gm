@@ -8,7 +8,8 @@
  *   - every game of every season, ours and the league's: the teams, the status, the score, and a hash of the box;
  *   - at each season's end: the standings, a hash of every player and of our club.
  *
- * multi-season.mjs calls note() as it plays and season() at each season's end; RECORD=file writes the record.
+ * multi-season.mjs calls note() as it plays and season() at each season's end, and (r296) arrived() and left() from
+ * Entry and the trim; RECORD=file writes the record.
  * check-record.mjs compares a fresh run with the one kept in tools/harness/records/.
  */
 import { createHash } from 'node:crypto';
@@ -45,6 +46,22 @@ export function note(state) {
     if (!r || r.arrived == null) { r = { ...said(c), ...(r ? { planned: r.planned } : {}) }; messages.set(c.instanceId, r); }
     if (c.resolved && !r.end) r.end = ended(c);
   }
+}
+
+/**
+ * r296 §122.180 a message as it reaches Messages (Entry) and as it leaves for the history (the trim, answered), so none
+ * is missed between looks: one the staff answer at once in Important only, one withdrawn within the tick it came.
+ */
+export function arrived(c) {
+  if (!c?.instanceId) return;
+  const r = messages.get(c.instanceId);
+  if (!r || r.arrived == null) messages.set(c.instanceId, { ...said(c), ...(r ? { planned: r.planned } : {}) });
+}
+export function left(c) {
+  if (!c?.instanceId) return;
+  if (!messages.has(c.instanceId)) messages.set(c.instanceId, said(c));
+  const r = messages.get(c.instanceId);
+  if (c.resolved && !r.end) r.end = ended(c);
 }
 
 /** A season's end: every game, the standings, the players and our club. */

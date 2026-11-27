@@ -80,6 +80,7 @@ export function personOf(state, from) {
 
 const _answer = (c) => {
   if (!c.resolved) return null;
+  if (c._staffHandled) return c.autoChoice === 'no' ? 'no' : 'yes';   // r296 the club's answer, given by the staff (not ignoring)
   if (c.choice === 'auto' || c.choice === 'skip' || c.choice === 'expired') return 'ignored';
   if (c.choice === 'no') return 'no';
   return 'yes';   // yes, or a choice made

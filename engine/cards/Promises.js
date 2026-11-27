@@ -170,7 +170,7 @@ export function _maybeChainFollowup(instance, choice, atMs) {
  * @param {String} instanceId
  * @param {Number} [atMs]
  */
-export function expire(instanceId, atMs = clockNow()) {
+export function expire(instanceId, atMs = clockNow(), { staff = false } = {}) {   // r296 §122.180 staff: Important only's quiet answer
   let state    = StateManager.get();
   let instance = (state.inbox || []).find(c => c.instanceId === instanceId);
   if (!instance) {
@@ -184,8 +184,9 @@ export function expire(instanceId, atMs = clockNow()) {
     instance = state.inbox.find(c => c.instanceId === instanceId);
   }
   if (!instance || instance.resolved) return;
-  // r219 §122.98 a decision left to lapse: the staff decided (the profile notes it).
-  StateManager.mutate(s => { GMP.recordDecision(s, instance, 'auto', atMs); });
+  // r219 §122.98 a decision left to lapse: the staff decided (the profile notes it). r296 not when the GM's setting
+  // gave it to them (Important only): that isn't neglect.
+  if (!staff) StateManager.mutate(s => { GMP.recordDecision(s, instance, 'auto', atMs); });
 
   const before = Impact.snapshot(StateManager.get(), instance, atMs);   // r255 §122.134
   if (instance.autoResolve === 'roster') {
@@ -196,6 +197,7 @@ export function expire(instanceId, atMs = clockNow()) {
         card.choice       = 'auto';
         card.resolvedAt   = s.currentGameIndex || 0;
         card.resolvedAtMs = atMs;
+        if (staff) card._staffHandled = true;
       }
     });
     _applyRosterAction(instance, 'auto', StateManager.get(), { atMs, auto: true });
@@ -208,7 +210,7 @@ export function expire(instanceId, atMs = clockNow()) {
     // Silently dismiss
     StateManager.mutate(s => {
       const card = s.inbox.find(c => c.instanceId === instanceId);
-      if (card) { card.resolved = true; card.choice = 'skip'; card.resolvedAtMs = atMs; }
+      if (card) { card.resolved = true; card.choice = 'skip'; card.resolvedAtMs = atMs; if (staff) card._staffHandled = true; }
       _logChoice(s, instance, 'skip');
     });
     return;
@@ -217,7 +219,7 @@ export function expire(instanceId, atMs = clockNow()) {
   // §78.8 an unanswered card does what its default choice does — the effects
   // and the money of that choice (a deal signed by default pays; an expense
   // absorbed by default is charged) — plus the tax for leaving it.
-  const tax = instance.autoResolveTax || {};
+  const tax = staff ? {} : instance.autoResolveTax || {};   // (r296 no 'left unanswered' penalty for the staff's)
   const def = autoPath === 'yes' ? 'yes' : 'no';
   StateManager.mutate(s => {
     const card = s.inbox.find(c => c.instanceId === instanceId);
@@ -227,6 +229,7 @@ export function expire(instanceId, atMs = clockNow()) {
       card.autoChoice = def;
       card.resolvedAt = s.currentGameIndex || 0;
       card.resolvedAtMs = atMs;
+      if (staff) card._staffHandled = true;
     }
     _logChoice(s, instance, def);   // §122.57 what the unanswered card did
     _applySoftEffects(s, def === 'yes' ? instance.yesEffect : instance.noEffect, def, instance);

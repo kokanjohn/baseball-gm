@@ -48,6 +48,11 @@ const say = (s) => console.log(s);
 const seen = new Set();
 const tally = {};
 const RECORD = !!process.env.RECORD, GM_ALL = process.env.GM === 'all';
+// r296 §122.180 the record sees every message as it comes and as it goes, not only at the GM's looks
+if (RECORD) {
+  watchEntry((via, where, cards) => { if (where === 'inbox') for (const c of cards) Rec.arrived(c); });
+  watchTrim((cards) => { for (const c of cards) Rec.left(c); });
+}
 function gmActs() {
   if (RECORD) Rec.note(SM.get());
   for (let guard = 0; guard < 60; guard++) {
@@ -308,6 +313,8 @@ seedRandom(SEED);
 await startNewGame({ archetypeId: ARCH, gmName: 'Test GM', city: 'Testville', nickname: 'Testers',
                      abbr: 'TST', icon: '🧪', bannerColor: '#3366cc', region: process.env.REGION || 'north' });
 await SM.init();
+// r296 §122.180 MODE=important: the season in Important only (the staff answer the optional messages)
+if (process.env.MODE) SM.mutate(s => { s.settings.messageMode = process.env.MODE; });
 const story = [];
 // r158 §122.30 every message over the seasons and winters, and everyone who signed one (staff change).
 const mail = new Map(), persons = new Set();
@@ -361,7 +368,8 @@ if (process.env.AUDIT) {
     tag: c.tag || null, cost: c._budgetCost ?? null, costNo: c._budgetCostNo ?? null, revenue: c._revenueK ?? null,
     roster: !!c._rosterKey, auto: c.autoResolve || null, trade: !!(c._tradeOffer || c._talkId || c._tradeKind), injury: !!(c._injury || /injur/i.test(c.cardId || '')),
     // r295 §122.178 the tier (stamped at Entry), the words (for the repeat flag), and whether it was written in parts
-    tier: c._tier || null, text: `${c.subject || ''} ${c.body || ''}`, parts: !!c._parts }));
+    tier: c._tier || null, text: `${c.subject || ''} ${c.body || ''}`, parts: !!c._parts,
+    staff: !!c._staffHandle, staffAnswered: !!c._staffHandled, autoChoice: c.autoChoice || null }));   // r296 §122.180
   writeFileSync(process.env.AUDIT, JSON.stringify({ arch: ARCH, seed: SEED, createdAt: auditStart, schedules: Object.fromEntries(auditSched), cards }));
   say(`audit: ${cards.length} messages → ${process.env.AUDIT}`);
 }

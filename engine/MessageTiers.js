@@ -15,7 +15,7 @@
  *
  * PURE: no StateManager.
  */
-import { MESSAGE_TIERS } from '../data/constants.js';
+import { MESSAGE_TIERS, MESSAGE_MODES } from '../data/constants.js';
 
 export const TIERS = Object.freeze({ IMPORTANT: 'important', OPTIONAL: 'optional' });
 const IMPORTANT_TAGS = new Set(MESSAGE_TIERS.importantTags);
@@ -41,3 +41,14 @@ export function tierWhy(c) {
   return [TIERS.OPTIONAL, 'otherwise'];
 }
 export const tierOf = (c) => tierWhy(c)[0];
+
+/**
+ * r296 §122.180 Important only: the staff answer an optional message as it arrives, with the answer it gets at its
+ * deadline (no 'left unanswered' penalty, not counted as ignoring), and it's shown nowhere (the user's choices).
+ *   - staffHandles(card): a message in Messages the staff took (marked at Entry when it arrived in Important only);
+ *     one that was waiting before the switch isn't — it stays the GM's.
+ *   - staffWillHandle(state, card): one not here yet (planned, foreseen) that the staff will take, as things stand.
+ */
+export const importantOnly = (state) => state?.settings?.messageMode === MESSAGE_MODES.IMPORTANT;
+export const staffHandles = (c) => !!c?._staffHandle;
+export const staffWillHandle = (state, c) => !!c && (staffHandles(c) || (importantOnly(state) && (c._tier || tierOf(c)) === TIERS.OPTIONAL));

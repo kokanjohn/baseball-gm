@@ -21,6 +21,8 @@ import { list } from './ScoutingTips.js';
 import { _createInstance } from './Selection.js';
 import { toInbox, VIA } from './Entry.js';   // r291 §122.172
 import { trimDue, trimAnswered } from '../MessageHistory.js';   // r292 §122.174
+import { staffHandles, staffWillHandle } from '../MessageTiers.js';   // r296 §122.180
+import { expire } from './Promises.js';
 
 // ─────────────────────────────────────────────────────────────
 // FIRST MOMENTS (§80)
@@ -147,7 +149,8 @@ export function releaseDueCards(nowMs = clockNow()) {
   // r292 §122.174 the newest answered messages kept; older ones leave notes (MessageHistory)
   if (trimDue(StateManager.get(), MESSAGE_HISTORY)) StateManager.mutate(s => trimAnswered(s, MESSAGE_HISTORY));
   const out = _releaseDue(nowMs);
-  if (out.length && !StateManager.isSpeculating()) _released.push(...out);
+  if (out.length && !StateManager.isSpeculating()) _released.push(...out.filter(c => !staffHandles(c)));   // (r296 not the staff's)
+  _staffAnswer();   // r296 §122.180 Important only: what the staff took, answered
   const fu = _followUps(nowMs);   // r279 §122.158 (announced like a new message; not counted as one)
   if (fu.length && !StateManager.isSpeculating()) _released.push(...fu.map(c => ({ ...c, subject: `Following up: ${c.subject}` })));
   return out;
@@ -180,6 +183,12 @@ function _followUps(nowMs) {
 
 
 const _released = [];
+
+/** r296 §122.180 the optional messages the staff took in Important only (marked at Entry): answered as at their deadline. */
+function _staffAnswer() {
+  const mine = (StateManager.get().inbox || []).filter(c => staffHandles(c) && !c.resolved);
+  for (const c of mine) expire(c.instanceId, c.arrivedAtMs ?? clockNow(), { staff: true });
+}
    // r139 released since the app last looked (never by a look-ahead)
 /** r139 the cards released since the last call — by the app's tick or inside the clock — for the app to announce. */
 export function takeReleased() { return _released.splice(0, _released.length); }
@@ -341,9 +350,9 @@ export function getPushSchedule(state, nowMs = clockNow(), ahead = null, foresee
   // (r283 §122.162 a message not here yet, as it will read: today's names)
   const live = (c) => viewOf({ ...c, _people: c._people || peopleIn(c, state) }, state);
   const planned = (state?.scheduledCards || [])
-    .filter(c => !c._seed && c.deliverAtMs > horizon)
+    .filter(c => !c._seed && c.deliverAtMs > horizon && !staffWillHandle(state, c))   // (r296 §122.180 not one the staff will take)
     .map(c => { const v = live(c); return { instanceId: c.instanceId, sender: senderLabel(v, state), subject: v.subject, at: c.deliverAtMs, expiresAtMs: c.expiresAtMs, urgent: !!c._urgent, kind: _pushKind(c) }; });
-  const coming = (foreseen?.messages || [])
+  const coming = (foreseen?.messages || []).filter(m => !m._staffHandle)
     .map(m => { const v = live(m); return { instanceId: m.instanceId, sender: senderLabel(v, state), subject: v.subject, at: m.arrivedAtMs, expiresAtMs: m.expiresAtMs, urgent: !!m._urgent, kind: _pushKind(m) }; });
   const cards = [...coming, ...planned].filter(c => !arrived.has(c.instanceId) && alertOn(state, c.kind))
     // r213 §122.91 each alert sounds when its message arrives: no quiet hours (the phone's own settings

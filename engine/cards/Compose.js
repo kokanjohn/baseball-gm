@@ -867,7 +867,7 @@ export function inboxCounts() {
 export function getInbox() {
   const state = StateManager.get();
   return (state.inbox || [])
-    .filter(c => !c.resolved)
+    .filter(c => !c.resolved && !c._staffHandle)   // (r296 §122.180 not the staff's, in Important only)
     .sort(_sortComparator);
 }
 
@@ -897,7 +897,7 @@ export function markRead(instanceId, atMs = clockNow()) {
 export function getHistory(limit = 20) {
   const state = StateManager.get();
   return (state.inbox || [])
-    .filter(c => c.resolved && !c._cleared)
+    .filter(c => c.resolved && !c._cleared && !c._staffHandle)   // (r296 the staff's are shown nowhere)
     // newest decision first (§95: by the moment it was made; older saves by game)
     .sort((a, b) => ((b.resolvedAtMs || 0) - (a.resolvedAtMs || 0)) || ((b.resolvedAt || 0) - (a.resolvedAt || 0)))
     .slice(0, limit);

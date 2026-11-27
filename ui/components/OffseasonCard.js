@@ -30,7 +30,7 @@ export function renderOffseasonCard(state, nowMs = Date.now()) {
   const focus = DAY_FOCUS[day] || DAY_FOCUS[0];
   const target = day === 0 ? os.dayStarts[0] : os.springAt;
   const gates = hardGates(state);
-  const cards = [...(state.inbox || []).filter(c => !c.resolved), ...(state.scheduledCards || [])];
+  const cards = [...(state.inbox || []).filter(c => !c.resolved && !c._staffHandle), ...(state.scheduledCards || [])];   // (r296 not the staff's)
   const openContracts = cards.filter(c => c._osGate === 'contracts').length;
   const last = (state.seasonHistory || []).find(h => h.seasonNum === os.seasonNum);
   const u = state.userTeam || {};

@@ -969,6 +969,11 @@ button.staff-card:active{background:var(--surface2);}
 .settings-theme-btn{flex:1;padding:10px 0;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--soft);font-size:13px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;transition:background .15s,border-color .15s;}
 .settings-theme-btn:active{background:var(--surface2);}
 .settings-theme-btn.active{border-color:var(--accent);color:var(--text);background:var(--chip-accent-bg);}
+.settings-mode-options{display:flex;gap:8px;}
+.settings-mode-btn{flex:1;padding:10px 0;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--soft);font-size:13px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;transition:background .15s,border-color .15s;}
+.settings-mode-btn:active{background:var(--surface2);}
+.settings-mode-btn.active{border-color:var(--accent);color:var(--text);background:var(--chip-accent-bg);}
+.settings-mode-about{margin-top:10px;font-size:12px;line-height:1.45;color:var(--soft);}
 .danger-btn{font-size:13px;font-weight:700;color:var(--danger);cursor:pointer;
   padding:6px 14px;border:2px solid var(--danger);border-radius:8px;
   background:transparent;font-family:'DM Sans',sans-serif;transition:background .15s;}
@@ -1247,6 +1252,20 @@ button.staff-card:active{background:var(--surface2);}
         </div>
 
         <!-- ── Notifications ─────────────────────────────── -->
+        <!-- ── Messages (r296 §122.180 the mode; its names and words come from constants) ── -->
+        <div class="settings-section">
+          <div class="settings-section-label">Messages</div>
+          <button class="settings-row" id="settings-mode-row">
+            <span style="flex:1;font-size:14px;font-weight:600;color:var(--text);">Messages</span>
+            <span class="settings-row-value" id="settings-mode-value"></span>
+            <span class="settings-row-chevron">›</span>
+          </button>
+          <div id="settings-mode-panel" class="settings-expand-panel" style="display:none;">
+            <div class="settings-mode-options" id="settings-mode-options"></div>
+            <div class="settings-mode-about" id="settings-mode-about"></div>
+          </div>
+        </div>
+
         <div class="settings-section">
           <div class="settings-section-label">Notifications</div>
           <div class="settings-row" style="cursor:default;">

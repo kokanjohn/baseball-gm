@@ -12,7 +12,7 @@
 import { stampSender } from '../Senders.js';
 import { _sortInbox } from './Inbox.js';
 import { recordUse } from '../MessageParts.js';   // r294 §122.177
-import { tierOf } from '../MessageTiers.js';   // r295 §122.178
+import { tierOf, importantOnly, TIERS } from '../MessageTiers.js';   // r295 §122.178, r296 §122.180
 
 export const VIA = Object.freeze({
   DELIVER_AT:  'deliverAt',     // _deliverAt: a card parked for a moment (roster clock, follow-ups, stories; 68 callers)
@@ -52,6 +52,8 @@ export function toSchedule(s, cards, via) {
  */
 export function toInbox(s, cards, arrivedAt, via, { sort = true } = {}) {
   const arrived = cards.map(c => stampSender({ ...c, arrivedAtMs: arrivedAt(c), _tier: c._tier || tierOf(c) }, s));   // (r295 its tier)
+  // r296 §122.180 Important only: an optional message arriving now is the staff's (answered at the release; shown nowhere)
+  if (importantOnly(s) && via !== VIA.EXPIRED && via !== VIA.DEBUG) for (const c of arrived) if (c._tier === TIERS.OPTIONAL) c._staffHandle = true;
   s.inbox = [...(s.inbox || []), ...arrived];
   if (sort) _sortInbox(s.inbox);
   // r294 §122.177 a message in parts: its versions are used now it reaches Messages (one that lapsed unseen isn't)

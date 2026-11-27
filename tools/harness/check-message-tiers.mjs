@@ -7,7 +7,8 @@
  *     culture, marketing, the staff's routine check-ins — optional; an optional one worth $50K or more — important;
  *     what the GM asked for (a Compose reply, a watched player) — important; a message's own tier wins.
  *   - In play (spring and 30 games): every message in Messages and the schedule carries its tier from Entry.
- *   - The mode: Normal for a new club, the names in one place, and not in Settings yet (it comes with Important only).
+ *   - The mode: Normal for a new club, the names in one place; Settings offers Important only and Normal (r296), not
+ *     Hardcore yet.
  *
  *   node tools/harness/check-message-tiers.mjs
  */
@@ -17,7 +18,7 @@ import path from 'node:path';
 import * as SM from '../../store/StateManager.js';
 import { startNewGame } from '../../engine/GameEngine.js';
 import { tierWhy } from '../../engine/MessageTiers.js';
-import { MESSAGE_MODES, MESSAGE_MODE_NAMES } from '../../data/constants.js';
+import { MESSAGE_MODES, MESSAGE_MODE_NAMES, MESSAGE_MODES_SHOWN } from '../../data/constants.js';
 import { liveUntil } from './drive.mjs';
 
 let pass = 0, fail = 0;
@@ -72,14 +73,16 @@ check(`in play, every message carries its tier from Entry (${all.length}: ${n('i
 const routine = all.filter(c => ['roster_advice', 'rest_ask', 'lineup_return', 'next_starter'].includes(c.cardId));
 check(`…the staff's routine check-ins are optional (${routine.length})`, routine.every(c => c._tier === 'optional'));
 
-// ── The names in one place; not in Settings yet ──
+// ── The names in one place; in Settings (r296): Important only and Normal, not Hardcore yet ──
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
-const ui = ['ui', 'ui/screens', 'ui/components'].flatMap(d => fs.readdirSync(path.join(root, d)).filter(f => f.endsWith('.js')).map(f => fs.readFileSync(path.join(root, d, f), 'utf8'))).join('\n');
+const ui = ['ui', 'ui/screens', 'ui/components'].flatMap(d => fs.readdirSync(path.join(root, d)).filter(f => f.endsWith('.js')).map(f => fs.readFileSync(path.join(root, d, f), 'utf8'))).join('\n')
+  + fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const names = Object.values(MESSAGE_MODE_NAMES);
 // ('Normal' is also the setup screen's difficulty group, so the names only the modes use are looked for)
 const own = [MESSAGE_MODE_NAMES.important, MESSAGE_MODE_NAMES.hardcore];
-check(`the mode's names are kept in one place (${names.join(' / ')}), and it isn't in Settings yet`,
-  !own.some(x => ui.includes(`'${x}'`) || ui.includes(`"${x}"`)) && !/messageMode|MESSAGE_MODE/.test(ui));
+check(`the mode's names are kept in one place (${names.join(' / ')}): the screens write none of them`, !own.some(x => ui.includes(x)));
+check(`…Settings offers ${MESSAGE_MODES_SHOWN.map(m => MESSAGE_MODE_NAMES[m]).join(' and ')}, not Hardcore yet`,
+  JSON.stringify(MESSAGE_MODES_SHOWN) === JSON.stringify(['important', 'normal']) && /MESSAGE_MODES_SHOWN/.test(ui));
 
 console.log(`\n${pass}/${pass + fail} checks passed`);
 process.exit(fail ? 1 : 0);

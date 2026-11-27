@@ -1782,6 +1782,13 @@ export const MESSAGE_HISTORY = Object.freeze({ keepAnswered: 100, seasons: 3 });
  */
 export const MESSAGE_MODES = Object.freeze({ IMPORTANT: 'important', NORMAL: 'normal', HARDCORE: 'hardcore' });
 export const MESSAGE_MODE_NAMES = Object.freeze({ important: 'Important only', normal: 'Normal', hardcore: 'Hardcore' });
+/** r296 §122.180 what Settings says of each, and the ones it offers (Hardcore once the day plan is in). */
+export const MESSAGE_MODE_ABOUT = Object.freeze({
+  important: 'The messages that matter. The staff answer the rest for you.',
+  normal:    'Every message the club sends your way.',
+  hardcore:  'A full desk, every day of the season.',
+});
+export const MESSAGE_MODES_SHOWN = Object.freeze(['important', 'normal']);
 
 /**
  * r295 §122.178 the message tiers (engine/MessageTiers.js), decided with the user. Important: what's in importantTags,

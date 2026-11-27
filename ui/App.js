@@ -27,7 +27,7 @@ import { senderLabel, viewOf } from '../engine/Senders.js';   // r212 §122.90, 
 import * as EventBus  from './EventBus.js';
 import * as StateManager from '../store/StateManager.js';
 import { applyTheme, applyTeamColors, metricBarColor } from './formatters.js';
-import { TICK_INTERVAL_MS, GAME_STATUS } from '../data/constants.js';
+import { TICK_INTERVAL_MS, GAME_STATUS, MESSAGE_MODES, MESSAGE_MODE_NAMES, MESSAGE_MODE_ABOUT, MESSAGE_MODES_SHOWN } from '../data/constants.js';
 import { installSwipeClose } from './components/SwipeClose.js';
 import { inboxCounts } from '../engine/CardEngine.js';   // r267 §122.146 the Messages badge
 
@@ -849,6 +849,17 @@ import { formatMoney, formatPhaseLabel } from './formatters.js';
 let _lastActiveTime = Date.now();
 let _swMessagesWired = false;
 
+/** r296 §122.180 the Messages row and its choices, from the names and words in constants. */
+function _renderMessageMode(mode) {
+  const value = document.getElementById('settings-mode-value');
+  if (value) value.textContent = MESSAGE_MODE_NAMES[mode] || MESSAGE_MODE_NAMES.normal;
+  const opts = document.getElementById('settings-mode-options');
+  if (opts) opts.innerHTML = MESSAGE_MODES_SHOWN.map(m =>
+    `<button class="settings-mode-btn${m === mode ? ' active' : ''}" data-mode="${m}" type="button">${MESSAGE_MODE_NAMES[m]}</button>`).join('');
+  const about = document.getElementById('settings-mode-about');
+  if (about) about.textContent = MESSAGE_MODE_ABOUT[mode] || '';
+}
+
 /**
  * _releaseDueCards({ quiet })
  * Moves scheduled cards whose time has come into the inbox (§61), refreshes
@@ -1282,6 +1293,9 @@ function _refreshSettingsSwatches() {
     themeValue.textContent = { dark: 'Dark', light: 'Light', auto: 'Auto' }[currentTheme] || 'Dark';
   }
 
+  // ── Messages (r296 §122.180 the mode) ─────────────────────
+  _renderMessageMode(state.settings?.messageMode || MESSAGE_MODES.NORMAL);
+
   // ── Sound ─────────────────────────────────────────────────
   const soundToggle = document.getElementById('sound-toggle');
   if (soundToggle) soundToggle.checked = _soundEnabled;
@@ -1475,6 +1489,22 @@ function _initSettingsPickers() {
     const isOpen = colorPanel?.style.display !== 'none';
     if (colorPanel) colorPanel.style.display = isOpen ? 'none' : 'block';
     if (themePanel) themePanel.style.display = 'none';
+  });
+
+  // r296 §122.180 the Messages mode: its row opens the choices
+  const modeRow = document.getElementById('settings-mode-row');
+  const modePanel = document.getElementById('settings-mode-panel');
+  modeRow?.addEventListener('click', () => {
+    const isOpen = modePanel?.style.display !== 'none';
+    if (modePanel) modePanel.style.display = isOpen ? 'none' : 'block';
+  });
+  document.getElementById('settings-mode-options')?.addEventListener('click', (e) => {
+    const mode = e.target.closest('[data-mode]')?.dataset.mode;
+    if (!mode || !MESSAGE_MODES_SHOWN.includes(mode)) return;
+    StateManager.mutate(st => { st.settings.messageMode = mode; });
+    _renderMessageMode(mode);
+    EventBus.emit('settings:messageModeChanged', { mode });
+    _syncPush();   // (the planned messages the staff will take send no push)
   });
 
   themeRow?.addEventListener('click', () => {

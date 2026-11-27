@@ -26,6 +26,7 @@ export function noteOf(c) {
   pick('_rosterKey'); pick('_family'); pick('_targetPlayerId'); pick('_gmTeamId'); pick('_gmSeason');
   pick('_wxDecision'); pick('_wxGameTime'); pick('_keep');
   pick('_senderId'); pick('_from');   // r294 §122.177 whose history it's in (MessageParts.historyWith)
+  pick('_staffHandle'); pick('_staffHandled'); pick('_tier');   // r296 §122.180 the staff's, in Important only; its tier
   if (c.isCompose) {
     n.isCompose = true; pick('_composeTopic'); pick('_sentAtMs');
     if (c._composeArg) n._composeArg = { key: c._composeArg.key ?? null, ...(c._composeArg.season != null ? { season: c._composeArg.season } : {}) };
@@ -71,7 +72,10 @@ export function toHistory(draft, cards) {
 export function trimDue(state, { keepAnswered, seasons }) {
   const cur = state?.seasonNum || 1;
   let answered = 0;
-  for (const c of state?.inbox || []) if (c.resolved && !c._keep && ++answered > keepAnswered) return true;
+  for (const c of state?.inbox || []) {
+    if (c.resolved && c._staffHandle && !c._keep) return true;   // (r296 the staff's go at once)
+    if (c.resolved && !c._keep && ++answered > keepAnswered) return true;
+  }
   return (state?.messageHistory || []).some(n => !n._keep && (n._noteSeason ?? cur) <= cur - seasons);
 }
 
@@ -80,6 +84,9 @@ export function trimDue(state, { keepAnswered, seasons }) {
  * rest leave notes. Notes from `seasons` seasons ago and before are cleared, unless marked `_keep`. Inside a mutate.
  */
 export function trimAnswered(draft, { keepAnswered, seasons }) {
+  // r296 §122.180 what the staff answered in Important only is shown nowhere: a note at once, never one of the newest
+  const staff = (draft.inbox || []).filter(c => c.resolved && c._staffHandle && !c._keep);
+  if (staff.length) toHistory(draft, staff);
   const answered = (draft.inbox || []).filter(c => c.resolved && !c._keep);
   if (answered.length > keepAnswered) toHistory(draft, [...answered].sort(newestFirst).slice(keepAnswered));
   const cur = draft.seasonNum || 1;

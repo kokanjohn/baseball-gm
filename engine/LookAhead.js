@@ -151,7 +151,7 @@ export function lookAheadMessages(nowMs = clockNow(), untilMs = nowMs + 24 * 360
     setClock(untilMs);
     catchUp(untilMs);
     const messages = (StateManager.get().inbox || [])
-      .filter(c => !before.has(c.instanceId) && !c._seed && c.arrivedAtMs > nowMs && c.arrivedAtMs <= untilMs)
+      .filter(c => !before.has(c.instanceId) && !c._seed && !c._staffHandle && c.arrivedAtMs > nowMs && c.arrivedAtMs <= untilMs)   // (r296 not the staff's)
       .map(c => ({ instanceId: c.instanceId, cardId: c.cardId, sender: c.sender || null, subject: c.subject || null,
                    arrivedAtMs: c.arrivedAtMs, expiresAtMs: c.expiresAtMs ?? null, targetId: c._targetPlayerId ?? null,
                    // §122.58 the weather's word: pushed under its own alerts, past quiet hours near game time
