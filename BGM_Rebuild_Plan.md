@@ -15786,3 +15786,29 @@ StateManager keeps, for the active slot, the last text of each part, the box sco
 **A note for going back:** a save written by r293 or later is in parts; an app from before r293 would read its main state without the schedules. Going back to an earlier release would need its saves restored or started fresh.
 
 **Next:** foundation step 6, a format for new messages (§122.168).
+
+---
+
+## §122.176 — Foundation step 6, the format for new messages: the design, decided with the user (Nov 27; not built yet)
+
+**The format.** A new message is written in parts, each with several versions:
+- the opener, the ask, the stakes, the sign-off;
+- the subject, the buttons, and the reply to each answer.
+
+Each time it's sent, one version of each part is chosen and they're joined (`{@part}` in a field). Names, places and amounts still come from today's tokens.
+
+A message in parts is put together first, then becomes an ordinary message definition. It goes through `_createInstance` and everything after as any message does: tokens, feasibility, Entry (§122.172), notifications, answers. Screens and the save don't change.
+
+**Conditions by the club's history with the sender.** A version can name when it applies, from a small fixed set: the first time; the last answer (yes, no, left to its deadline); mostly yes or mostly no; how many times (this season, or ever); how long since the last. An unknown condition is an error the checks catch.
+
+The history is read through one function (`historyWith(state, sender)`). For now it's built from the messages from that sender and how they were answered (the inbox and the notes, §122.174; a message and its note carry the sender's key). The later memory step (§122.169) adds outcomes and shared moments behind the same function.
+
+**Decided by the user:**
+1. **Whose history:** outside parties (the city, sponsors, partners, other clubs' GMs) and the club's own staff, each by a stable key. A manager or trainer can remember being overruled.
+2. **Repeats:** every version that fits is used once before any comes back, the longest unused first; ties broken by the save's dice. A per-save memory of the versions used is written at Entry, when a message really comes in, so one built but never sent doesn't count.
+3. **Variety:** a check fails a new message whose opener, ask, stakes or sign-off has fewer than 3 versions.
+4. **Existing messages:** converted to parts over time, release by release, after the new ones (step 7) are under way. Each conversion changes the record on purpose and says what changed.
+
+**Proof when built:**
+- Every existing message passes through the new layer untouched, and the record must match exactly.
+- check-message-parts: a sample message sent many times is put together right; the version fitting each history is chosen; every version is used before any repeats; a missing part or unknown condition is caught before delivery; and its message and note carry the sender, so the history counts it.
