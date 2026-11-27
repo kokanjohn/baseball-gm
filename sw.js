@@ -16,7 +16,7 @@
  *   - If both cache and network fail, serve the offline fallback
  */
 
-const CACHE_VERSION  = 'tfo-v2-r289';
+const CACHE_VERSION  = 'tfo-v2-r290';
 const CACHE_NAME     = `the-front-office-${CACHE_VERSION}`;
 const OFFLINE_URL    = '/baseball-gm/index.html';
 
@@ -108,6 +108,27 @@ const PRECACHE_ASSETS = [
   '/baseball-gm/engine/TransactionEngine.js',
   '/baseball-gm/engine/PlayoffEngine.js',
   '/baseball-gm/engine/CardEngine.js',
+  '/baseball-gm/engine/cards/AllStarCards.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/CardLog.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Compose.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Delivery.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/FirstMoments.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Helpers.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Inbox.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/LeagueTradeCards.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/LineupAdvice.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/OffseasonCards.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/OwnerCards.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/PlayerCards.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Pools.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Promises.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Resolution.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/RosterCards.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/ScoutingTips.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Selection.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/Situation.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/TradeOffers.js',   // r290 §122.171
+  '/baseball-gm/engine/cards/WeatherCards.js',   // r290 §122.171
   '/baseball-gm/engine/CardActions.js',
   '/baseball-gm/engine/MarketEngine.js',
   '/baseball-gm/engine/Names.js',

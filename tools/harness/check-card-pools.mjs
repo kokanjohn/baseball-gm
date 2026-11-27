@@ -18,8 +18,8 @@ const CE = await import('../../engine/CardEngine.js');
 const results = [];
 const check = (label, ok, detail = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${!ok && detail ? `  — ${detail}` : ''}`); };
 
-// The engine's source: a condition is read if its name appears there.
-const src = ['engine', 'ui', 'ui/screens', 'ui/components'].flatMap(d => {
+// The engine's source: a condition is read if its name appears there (r290 §122.171 CardEngine's code is in engine/cards/).
+const src = ['engine', 'engine/cards', 'ui', 'ui/screens', 'ui/components'].flatMap(d => {
   try { return fs.readdirSync(path.join(root, d)).filter(f => f.endsWith('.js')).map(f => fs.readFileSync(path.join(root, d, f), 'utf8')); } catch { return []; }
 }).join('\n');
 
@@ -42,7 +42,9 @@ for (const [name, v] of Object.entries({ ...P, ...Mn, ...Aw, ...Wi, ...Pf })) {
 const live = all.filter(x => !x.d._retired);
 
 // 1. Every exported pool is dealt from (CardEngine names it).
-const ceSrc = fs.readFileSync(path.join(root, 'engine/CardEngine.js'), 'utf8');
+// r290 §122.171 CardEngine is a front; its code is in engine/cards/
+const ceSrc = ['engine/CardEngine.js', ...fs.readdirSync(path.join(root, 'engine/cards')).filter(f => f.endsWith('.js')).map(f => `engine/cards/${f}`)]
+  .map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
 const unwired = Object.keys(P).filter(n => Array.isArray(P[n]) && n.endsWith('_POOL') && !new RegExp(`\\b${n}\\b`).test(ceSrc));
 check(`every pool is wired into the engine (${Object.keys(P).filter(n => n.endsWith('_POOL')).length} pools)`, unwired.length === 0, unwired.join(', '));
 

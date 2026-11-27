@@ -15584,3 +15584,28 @@ Foundation step 1 (§122.168) is on main (5147503). The backup branch `backup/r2
 **App:** SimEngine.js (the sac-fly words), CardTokens.js (the hitter a sitting card names). sw.js `tfo-v2-r289`. Fresh team: not needed (CardTokens and SimEngine aren't on the list; a card already in the inbox keeps its player).
 
 **Next:** foundation step 2 (CardEngine split by area, the record must match exactly).
+
+---
+
+## §122.171 — r290: foundation step 2, CardEngine split by area (Nov 26)
+
+**What.** `engine/CardEngine.js` (7,571 lines, 440 KB) is now a 68-line front. Its code is in `engine/cards/`, one file per area, every function and constant moved as it was. The only change to moved text is `export ` in front of the 91 private declarations another area uses. CardEngine re-exports exactly its old 105 exports (names and kinds compared against r289), so no importer changed.
+
+**The files** (lines): OffseasonCards 1,089 · Compose 941 · RosterCards 916 · WeatherCards 579 · LineupAdvice 562 · ScoutingTips 528 · LeagueTradeCards 468 · TradeOffers 419 · Delivery 405 · FirstMoments 397 · Selection 308 · CardLog 294 · Promises 281 · Resolution 259 · AllStarCards 223 · PlayerCards 202 · Helpers 83 · Pools 67 · Situation 66 · OwnerCards 57 · Inbox 26.
+- The areas follow CardEngine's own section headers, with three exceptions: `_deliverAt` and its helpers (`_hand`, `_clock`, `_day`, `_randBetween`, `_rosterCard`, `_cardsWithKey`, `_storyPace`, `_morningIfItCanWait`, `_testDeliverAt`, `askedInCompose`, `_withdraw`) sat at the top of the roster section but are the delivery core, so they're in Delivery (step 3 builds on them). The roster section is split in two: RosterCards (injuries, the IL, open spots, needs, the manager filling a spot, the roster sync) and LineupAdvice (back from injury §113, nudges, roster advice, the next starter, rest). `TradeRapportBump`, declared among the imports, is with trade talks, its one user.
+- Each file's header says what it holds. Imports are only what that file uses.
+- The only module state (`_deviceSeen`, `_released`, `_releaseHooks`) stays together in FirstMoments. `cardDebug` is one shared object, re-exported as it is.
+- Load order: one constant is built from another file when it loads (WeatherCards' `STH_CARD_IDS` from Pools' `ALL_POOLS`), and no import cycle runs through it. Every file loads on its own.
+
+**How.** A script parsed CardEngine (the TypeScript parser), gave each top-level declaration an area by line range, carried each with its leading comments, wrote the imports each file needs, and checked that every statement appears verbatim in the new files (0 missing). It isn't kept in the repo; the split is done once.
+
+**Checks:**
+- The record: both runs the same as the kept record (contender-2 1,527 messages, 737+737 games; ember-1 752 messages, 738 games).
+- All 96 `check-*.mjs` pass; the season harness 3,829/3,829 (its sw.js check included); check-refs over 159 modules.
+- check-card-pools read CardEngine's source text for two checks; it now reads `engine/cards/` too.
+- Screen tests (Playwright, dark, two at a time): 53 of 57 pass (test-forecast-ui timed out once with two running and passed twice alone). The four that fail fail the same way at r289, so they were already broken: test-landscape-ui (3 whole player rows sideways; known since §122.145), test-rename-everywhere-ui (a page fetch gets HTML where it expects JSON), test-roster-advice-ui ("…the reply shows"), test-swipe-close-ui (spring starters go 3 and 6 innings, not two). They're open items for after the foundation.
+- The screen tests run in this cloud session too (Playwright and Chrome are installed): serve the parent folder on port 8765 and link Playwright into the global npm root.
+
+**App:** no behavior change. sw.js precaches the 21 new files; `tfo-v2-r290`. Fresh team: not needed.
+
+**Next:** foundation step 3, one entry point for every message into the inbox or the schedule. The record must match exactly.
