@@ -1781,6 +1781,43 @@ export const MESSAGE_HISTORY = Object.freeze({ keepAnswered: 100, seasons: 3 });
  * the next releases (the choice stays hidden in Settings until Important only works).
  */
 export const MESSAGE_MODES = Object.freeze({ IMPORTANT: 'important', NORMAL: 'normal', HARDCORE: 'hardcore' });
+
+/**
+ * r297 §122.183 the day plan (§122.182): the messages a day, everything counted (injuries, trades and the weather too),
+ * drawn from a range by the kind of day; Important only plays the Normal plan (the staff take the optional ones). Now and
+ * then a day comes in heavy (`heavy.chance` a day, `heavy.add` more). Spring and the regular season only: the
+ * postseason and the winter keep their own pace.
+ */
+export const DAY_PLAN = Object.freeze({
+  normal:   Object.freeze({ home: [7, 9], road: [5, 7], off: [3, 5] }),
+  hardcore: Object.freeze({ home: [10, 12], road: [10, 12], off: [10, 12] }),
+  heavy:    Object.freeze({ chance: 1 / 14, add: [3, 5] }),
+});
+
+/**
+ * r297 §122.183 around the game, the first set (§122.182): when each comes and how many a part of the year may take
+ * (spring, the season, the stretch run), so the late season isn't bare.
+ *   scout    the advance scout before every regular-season series
+ *   form     a player of ours on a run over his last `formGames` games (hot hitter: `hotAvg`+ over `minAb`; an arm
+ *            hot under `hotEra` or cold over `coldEra` in `minIp`+); a player again after `formGapDays`, any after `formTeamGapDays`
+ *   crowd    the ticket office after a soft stretch of crowds (`softFill` of capacity over the last `crowdGames`
+ *            home games) or a run of sellouts (`sellouts`); again after `crowdGapDays`
+ *   media    PR after a big game: a walk-off, a shutout, a win in extra innings, a blowout (`blowout` runs); again after
+ *            `mediaGapDays`
+ */
+export const AROUND = Object.freeze({
+  budget: Object.freeze({
+    scout: Object.freeze({ spring: 0, season: 99, stretch: 99 }),
+    form:  Object.freeze({ spring: 2, season: 24, stretch: 8 }),
+    crowd: Object.freeze({ spring: 0, season: 9, stretch: 3 }),
+    media: Object.freeze({ spring: 1, season: 22, stretch: 7 }),
+  }),
+  formGames: 7, minAb: 20, hotAvg: 0.35, minIp: 10, hotEra: 2.0, coldEra: 6.5, formGapDays: 18, formTeamGapDays: 3,
+  crowdGames: 4, softFill: 0.70, sellouts: 3, crowdGapDays: 10,
+  blowout: 7, extras: true, mediaGapDays: 3,
+  scoutCostK: [5, 15],
+});
+
 export const MESSAGE_MODE_NAMES = Object.freeze({ important: 'Important only', normal: 'Normal', hardcore: 'Hardcore' });
 /** r296 §122.180 what Settings says of each, and the ones it offers (Hardcore once the day plan is in). */
 export const MESSAGE_MODE_ABOUT = Object.freeze({

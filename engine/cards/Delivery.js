@@ -19,6 +19,8 @@ import { _expireCards } from './Resolution.js';
 import { _createInstance, _selectCards } from './Selection.js';
 import { toSchedule, VIA } from './Entry.js';   // r291 §122.172
 import { withHistory } from '../MessageHistory.js';   // r292 §122.174 answered messages that dropped off
+import { planRuns, roomOn } from '../DayPlan.js';                                   // r297 §122.183 the day plan
+import { aroundCandidates, noteAround, AROUND_DEFS } from '../AroundGame.js';         // r297 §122.183 around the game
 
 // ─────────────────────────────────────────────────────────────
 // MAIN DELIVERY LOOP
@@ -82,6 +84,26 @@ export function checkAndDeliver(context) {
   }
   if (cardDebug.want) cardDebug.want(want, { offDay: !!offDay, nextGame: context.nextGame || null, phase: state.phase });   // (a check's seam: the day plan's measure)
   const delivered = [];
+  // r297 §122.183 the day plan: the next game's day and the off day before it each have a count (everything counted);
+  // around the game fills from it first (most timely first), then today's draw up to what's left. A short day sends fewer.
+  const plan = _dayPlan(state, context, offDay, nextT);
+  if (plan) {
+    for (const cand of aroundCandidates(state, context, clockNow())) {
+      if (delivered.length >= room) break;
+      const day = (cand.kind === 'media' || cand.kind === 'form' || cand.kind === 'crowd') && plan.off?.room > 0 ? plan.off : plan.game;
+      if (!day || day.room <= 0) continue;
+      const def = AROUND_DEFS[cand.id];
+      const instance = def && _createInstance(def, { ...context, ...(cand.preset ? { _preset: cand.preset } : {}), _facts: cand.facts }, state);
+      if (!instance) { if (cardDebug.onDropped) cardDebug.onDropped(cand.id); continue; }
+      delivered.push({ ...instance, _pool: 'AROUND_POOL', _moment: 'plan', _planDay: day.window, _around: { kind: cand.kind, key: cand.key, also: cand.also || [], segment: cand.segment },
+        ...(cand.kind === 'scout' && Number.isFinite(nextT) ? { _byFirstPitch: nextT } : {}) });
+      day.room--;
+    }
+    const g = plan.game ? plan.game.room : Infinity;
+    let over = (want.pregame + want.ingame + want.between + want.leave + want.road) - g;
+    for (const m of ['between', 'pregame', 'ingame', 'road', 'leave']) { const cut = Math.min(over > 0 ? over : 0, want[m]); want[m] -= cut; over -= cut; }
+    if (plan.off) want.offday = Math.min(want.offday, plan.off.room);
+  }
   const taken = new Set();
   // r214 §122.93 the once-a-season stories, paced over the regular season (so the last weeks aren't bare).
   const pace = _storyPace(state, context);
@@ -197,6 +219,23 @@ export function _deliverAt(instance, atMs) {
     _logDealt(s, card);   // §122.57 (a follow-up, a pool card delivered by hand)
   });
   return card;   // (the card as parked — with the id it will have in the inbox)
+}
+
+
+/**
+ * r297 §122.183 The day plan for what this delivery covers: the next game's day ({ key, target, room, window }) and the
+ * off day before it, if there is one. Null when the plan doesn't run (the postseason, the winter) or there's no next game.
+ */
+function _dayPlan(state, context, offDay, nextT) {
+  const g = context?.nextGame;
+  if (!planRuns(state) || !g || !Number.isFinite(nextT)) return null;
+  const now = clockNow();
+  const day = new Date(nextT); day.setHours(8, 30, 0, 0);
+  const game = { ...roomOn(state, g.isHome ? 'home' : 'road', nextT), window: { startMs: Math.max(day.getTime(), now + 10 * 60_000), endMs: nextT - 45 * 60_000 } };
+  if (game.window.endMs - game.window.startMs < 30 * 60_000) game.room = 0;   // (no time left before first pitch)
+  const offWin = offDay || offDayWindow(state, now, nextT);
+  const off = offWin ? { ...roomOn(state, 'off', offWin.startMs), window: offWin } : null;
+  return { game, off };
 }
 
 
@@ -330,6 +369,14 @@ export function _scheduleCards(instances, state, game = null) {
       const { _offDay, ...card } = c;
       const ttl = c._expiresAfterMs || c._raw?._expiresAfterMs;
       timed.push({ ...card, deliverAtMs: at, ...(ttl ? { expiresAtMs: at + ttl } : {}) });
+    } else if (c._moment === 'plan' && c._planDay) {
+      // r297 §122.183 the day plan's messages: on the day they were counted for, in its working hours (a scouting
+      // report before first pitch, answered by then).
+      const start = Math.max(c._planDay.startMs, nowMs + lead), end = c._planDay.endMs;
+      if (end <= start) continue;
+      const at = start + Math.floor(eventRand() * (end - start));
+      const { _planDay, _byFirstPitch, ...card } = c;
+      timed.push({ ...card, deliverAtMs: at, ...(Number.isFinite(_byFirstPitch) ? { expiresAtMs: _byFirstPitch } : {}) });
     } else if (c._moment === 'ingame' || (!c._moment && c._pool === 'INGAME_POOL')) {
       if (!Number.isFinite(T)) continue;
       const at = Math.max(nowMs + lead, T + (20 + eventRand() * 100) * 60_000);
@@ -342,6 +389,7 @@ export function _scheduleCards(instances, state, game = null) {
     StateManager.mutate(s => {
       toSchedule(s, timed, VIA.MOMENT);   // r291 §122.172
       for (const c of timed) _logDealt(s, c);
+      for (const c of timed) if (c._around) noteAround(s, c._around, nowMs);   // r297 §122.183 (its key, its part of the year)
     });
   }
   instances = loose;

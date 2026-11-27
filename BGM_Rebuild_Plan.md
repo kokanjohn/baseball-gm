@@ -16087,3 +16087,88 @@ Every message already recorded is unchanged, and every season's result is the sa
 **Effects** (the user's choice): the existing kinds (money, morale, owner trust, atmosphere, a named player's short-term form) until the "decisions that change play" release.
 
 **Expected:** about 150 more messages a season, about a quarter of Normal's gap; a home game day about 4.4 → 5.3.
+
+---
+
+## §122.183 — r297: the day plan, and around the game's first set (the design: §122.182)
+
+**The day plan** (`engine/DayPlan.js`, pure; `DAY_PLAN` in constants):
+- `dayTarget(state, kind, day)`: the count, drawn from the kind of day's range by the save's dice on the day itself. The same day always plans the same count.
+  - Normal: home 7–9, road 5–7, off 3–5.
+  - Hardcore: 10–12.
+  - A heavy day one day in fourteen, +3 to +5.
+  - Important only plays Normal's plan.
+- `onDay(state, day)`: everything counts. That means what came that day (answered too) and what's on its way: the staff's in Important only, injuries, trades, the weather.
+- Spring, the regular season and the deadline only. The postseason and the winter keep their pace.
+- **In delivery** (`checkAndDeliver`, after a game):
+  - the next game's day and the off day before it each get their room: their count less what they already have;
+  - around the game fills first, most timely first (the scout's report on the opener's day, a big game's media on the off day if there is one);
+  - today's draw is trimmed to what's left, between first;
+  - a short day sends fewer.
+  - The plan's messages arrive on the day they were counted for: the game's day from 8:30 to 45 minutes before first pitch, or the off day's working hours.
+
+**Around the game, the first set** (`data/cards-around.js`, eight messages in parts; `engine/AroundGame.js`, pure, finds the situation and its facts; `AROUND` in constants):
+- **The advance scout** (`ag_scout`, Scouting) before every regular-season series:
+  - the opponent's record, its hottest bat (last seven games) and arm (last three starts or six outings);
+  - a full video package for $5–15K: yes, morale +1;
+  - answered by the opener's first pitch.
+- **A player on a run** (the hitting or pitching coach):
+  - a starting bat at .350+ over seven games (20+ at-bats): `ag_form_bat`;
+  - an arm under a 2.00 ERA (`ag_form_arm_hot`) or over 6.50 (`ag_form_arm_cold`) over 10+ innings;
+  - yes: extra work, a development gain of 1 for him, morale −1, a little less of his goodwill;
+  - no: morale +1.
+  - The same player again after 18 days, any player after 3. A cold bat stays the manager's slump message.
+- **The crowds** (Ticket Office), after the last four home games, fresh:
+  - averaging 70% of capacity or less: a promotion for six home games (`ag_crowd_soft`);
+  - three sellouts: higher prices for six (`ag_crowd_hot`);
+  - again after 10 days.
+- **A big game** (PR), within 18 hours of it, again after 3 days:
+  - a walk-off, a shutout, an extra-inning win, a win by 7+: the media rounds, atmosphere +2, morale −1 (`ag_media_win`);
+  - a loss by 7+: a press conference, owner trust +1, morale −1 (`ag_media_loss`).
+- **Budgets** (the year spread, §122.181), spring / season / stretch run:
+  - scout 0/99/99;
+  - form 2/24/8;
+  - crowd 0/9/3;
+  - media 1/22/7.
+  - Kept in `s.around` (this season's keys and counts).
+- **In play:**
+  - The set is optional and its money under the line, so in Important only it's the staff's.
+  - Delivery gives a situation's facts through `context._facts` (`_createInstance` merges them into the tokens); the player the message is about through `_preset`, as follow-ups do.
+  - A version that names a history (`when`) takes over when it fits. So the scout's "you passed last time" opens have three versions, and the always-true ones ("another report") were dropped.
+
+**What it gives** (contender seed 1 and ember seed 2, two seasons each, against §122.181's baseline):
+- About 95 more messages a season: scout ~44, form ~25, media ~21, crowd ~5. The proposal's ~150 was high: the form and crowd situations come less often than estimated.
+- Home game day 4.4 → about 5.0, road 3.5 → 3.9, the stretch run 3.5 → 4.0, off days about as before.
+- No message in parts read alike another of its season (the audit; the most alike in the check 28%).
+- **Normal is still short of 7–9 / 5–7 / 3–5.** The later releases fill it; Hardcore stays hidden.
+
+**Fixed on the way:**
+- The first season run showed the new text wasn't gender-neutral. Every message must be (sim-season's rule), so the set was rewritten without he/him/his and "guys", and check-day-plan now holds it to that.
+- Other fixes from the first run:
+  - a sentence opening "the Seagrove Osprey" (now `{opp_club_cap}`);
+  - innings shown as "11 3/3" (now counted in outs);
+  - "a 11.47 ERA" (now "an");
+  - "Reilly (R)'s run" (a pitcher's hand in a possessive);
+  - versions with an always-true history condition, which had taken over every send.
+
+**Checks:**
+- check-day-plan (new, 17):
+  - the set right in parts, in the voice rules and gender-neutral, each optional;
+  - the count in its ranges, the same day the same count, heavy days about one in fourteen, Hardcore 10–12, Important only on Normal's plan, not in the winter or postseason;
+  - everything counts;
+  - 60 games played:
+    - no day drawn past its count;
+    - the set in play, each in parts with every fact filled in, within its budgets;
+    - the scout's report before 18 of 19 series openers, answered by first pitch;
+    - none reading alike (the most alike 28%);
+  - Important only: the set is the staff's.
+- The records changed on purpose (more messages; their answers move morale, form and the gate), kept again:
+  - contender-2: 1,688 messages;
+  - ember-1: 824 messages, 737 games;
+  - important-1: 827 messages, 739 games.
+- All 104 `check-*.mjs` pass. The season harness 3,825/3,825.
+- Screen tests: 60 of 64, the same four failing as since r289 (landscape, rename-everywhere, roster-advice, swipe-close).
+
+**App:** `tfo-v2-r297`. DayPlan.js, AroundGame.js and cards-around.js precached. Fresh team: not needed (an old save starts the plan with its next delivery).
+
+**Next** (§122.169's order): memory (the club's history with each outside party), then the city, the calendar and events, rivals and history, and the rest of around the game. Each adds messages toward Normal's counts, then Hardcore once it reaches 10–12.

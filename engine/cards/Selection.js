@@ -183,6 +183,8 @@ export function _createInstance(cardDef, context, state) {
       amountsK.sign_cost = terms.bonus || terms.salary; values.sign_cost = formatK(amountsK.sign_cost);
     }
   }
+  // r297 §122.183 a situation's own facts (around the game: the opponent's hot bat, a player's last week…)
+  if (context?._facts) { Object.assign(values, context._facts.values || {}); Object.assign(amountsK, context._facts.amountsK || {}); }
   const t = (text) => applyTokens(text || '', values);
   const target = _cardTarget(cardDef, tokenPlayers);
 
