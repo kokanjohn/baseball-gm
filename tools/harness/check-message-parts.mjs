@@ -9,7 +9,8 @@
  *   - Sent again and again, answered: put together into an ordinary message (no {@part} left), carrying whose history
  *     it is; the first time reads as a first; after a no, as after a no; after a run of yeses, as mostly yes; after
  *     one left to its deadline, as ignored; every fitting version used before any repeats, in shuffled rounds (each
- *     round its own order, never twice in a row, the whole message never the same twice); the same state chooses
+ *     round its own order, never twice in a row, the whole message never the same twice, no two reading alike); the
+ *     same state chooses
  *     the same; one that lapsed unseen doesn't count as used.
  *   - The history: a staff member's is every message from them (by person: someone new starts afresh); a note keeps
  *     the history as its message did.
@@ -23,7 +24,7 @@ import { startNewGame } from '../../engine/GameEngine.js';
 import { _createInstance } from '../../engine/cards/Selection.js';
 import { toInbox, VIA } from '../../engine/cards/Entry.js';
 import { ALL_POOLS } from '../../engine/cards/Pools.js';
-import { compose, partsProblems, historyWith, isParts } from '../../engine/MessageParts.js';
+import { compose, partsProblems, historyWith, isParts, wordRuns, alike, READ_ALIKE } from '../../engine/MessageParts.js';
 import { trimAnswered } from '../../engine/MessageHistory.js';
 import { liveUntil } from './drive.mjs';
 
@@ -115,10 +116,25 @@ answer(c6, 'yes');
 const asks = [];
 for (let i = 0; i < 9; i++) { const c = send(); asks.push(c._parts['@ask']); answer(c, i % 2 ? 'yes' : 'no'); }
 const allAsks = [c1, c2, c3, c4, c5, c6].map(c => c._parts['@ask']).concat(asks);
+// the round rule, piece by piece: a version comes back only once every version has had its turn — except on a send
+// where that piece was bent to keep the message from reading alike an earlier one (_partsRelaxed), which is counted
+const roundBroken = (field, n) => {
+  let seen = new Set(); const bad = [];
+  sent.forEach((c, i) => {
+    const v = c._parts[field];
+    if (c._partsRelaxed === field) { seen.add(v); return; }
+    if (seen.size >= n) seen = new Set();
+    if (seen.has(v)) bad.push(i + 1);
+    seen.add(v);
+  });
+  return bad;
+};
+const PIECES = { '@ask': 3, '@stakes': 3, '@close': 3, subject: 3 };
+const roundsBroken = Object.entries(PIECES).flatMap(([f, n]) => roundBroken(f, n).map(i => `${f} at send ${i}`));
+const bent = sent.filter(c => c._partsRelaxed);
+check(`every fitting version used before any repeats (the ask, by send: ${allAsks.join('')}; the subject: ${sent.map(c => c._parts.subject).join('')}), but for a piece bent to keep it from reading alike (${bent.length} of ${sent.length} sends: ${bent.map(c => c._partsRelaxed).join(', ') || 'none'})`,
+  roundsBroken.length === 0 && bent.length <= Math.ceil(sent.length / 5), roundsBroken.join(', '));
 const rounds = [0, 3, 6, 9, 12].map(i => allAsks.slice(i, i + 3)).filter(r => r.length === 3);
-check(`every fitting version used before any repeats (the ask, by send: ${allAsks.join('')})`, rounds.every(r => new Set(r).size === 3));
-const subjects = sent.map(c => c._parts.subject);
-check(`…the subject too (${subjects.join('')})`, [0, 3, 6, 9, 12].every(i => subjects.length < i + 3 || new Set(subjects.slice(i, i + 3)).size === 3));
 const orders = rounds.map(r => r.join(''));
 check(`…in shuffled rounds: each round its own order (${orders.join(' ')})`, new Set(orders).size > 1);
 const twice = ['@open', '@ask', '@stakes', '@close', 'subject'].filter(f => sent.some((c, i) => i && c._parts[f] === sent[i - 1]._parts[f] && sent[i - 1]._parts[f] !== undefined
@@ -126,6 +142,11 @@ const twice = ['@open', '@ask', '@stakes', '@close', 'subject'].filter(f => sent
 check(`…never the same version twice in a row (ask, stakes, close, subject)`, twice.length === 0, twice.join(', '));
 const whole = sent.map(c => [c.subject, c.body, c.yesLabel, c.noLabel, c.yesMsg, c.noMsg].join('|'));
 check(`…and the whole message never the same twice (${new Set(whole).size} different in ${whole.length} sends)`, new Set(whole).size === whole.length);
+// r295 §122.178 the repeat flag: no two sends of a season read alike (the per-save memory keeps them apart)
+const R = sent.map(c => wordRuns(`${c.subject} ${c.body}`));
+let worst = 0, alikePairs = 0;
+for (let i = 0; i < R.length; i++) for (let j = i + 1; j < R.length; j++) { const x = alike(R[i], R[j]); worst = Math.max(worst, x); if (x >= READ_ALIKE) alikePairs++; }
+check(`…and no two sends of the season read alike (${alikePairs} of ${R.length * (R.length - 1) / 2} pairs at ${Math.round(READ_ALIKE * 100)}% or more; the most alike ${Math.round(worst * 100)}%)`, alikePairs === 0);
 const usedN = S().partsUsed[FAIR.id].n;
 const a = compose(FAIR, S(), clock.get()), b = compose(FAIR, S(), clock.get());
 check('the same state chooses the same', JSON.stringify(a) === JSON.stringify(b));

@@ -9,8 +9,14 @@
  * (our game called off that day), off day; the stretch (the last 30 days of the regular season, game days);
  * postseason; offseason. For each: days, messages a day, decisions a day, the share of days with no decision,
  * the longest wait between messages in waking hours, and where the messages come from.
+ *
+ * r295 §122.178 (step 7 groundwork), by tier and mode: important and optional messages a day (the tier stamped at
+ * Entry, MessageTiers), the share that are notices (nothing to decide), what Important only would leave, and the
+ * message plan's targets (§122.169) beside today's. And the repeat flag: two messages of one season that read alike
+ * (READ_ALIKE or more of their three-word runs the same); for messages written in parts, a failing finding.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { READ_ALIKE, wordRuns, alike } from '../../engine/MessageParts.js';
 
 const args = process.argv.slice(2);
 const mdAt = args.indexOf('--md');
@@ -73,7 +79,9 @@ for (const f of files) {
     const g = games.get(k);
     const inSeason = seasons.some(([a, b]) => t >= a - DAY && t <= b + DAY);
     const kind = t - first < 3 * DAY ? 'first3' : g ? g.kind : inSeason ? 'off' : 'offseason';
-    const rec = { msgs: day.length, decs, wait: wait / 3_600_000, senders: day.map(c => c.sender), ids: day.map(c => c.cardId) };
+    const rec = { msgs: day.length, decs, wait: wait / 3_600_000, senders: day.map(c => c.sender), ids: day.map(c => c.cardId),
+      important: day.filter(c => c.tier === 'important').length, optional: day.filter(c => c.tier === 'optional').length,
+      untiered: day.filter(c => !c.tier).length, notices: day.filter(c => !c.decision && !c.compose).length };
     add(kind, rec);
     if (g?.stretch && g.kind !== 'rainout') add('stretch', rec);
     for (const c of day.filter(x => x.decision)) { const cat = catOf(c); (families[kind] ||= {})[cat] = (families[kind][cat] || 0) + 1; if (g?.stretch && g.kind !== 'rainout') (families.stretch ||= {})[cat] = (families.stretch[cat] || 0) + 1; }
@@ -104,6 +112,58 @@ for (const k of ORDER) {
   const r = rows[k]; if (!r?.length) continue;
   lines.push(`| ${LABEL[k]} | ${cats.map(c => ((families[k]?.[c] || 0) / r.length).toFixed(2).replace(/^0\.00$/, '·')).join(' | ')} |`);
 }
+
+// ── r295 §122.178 by tier and mode, and the targets ──
+// The message plan (§122.169): Normal about 8 a home game day, 6 a road game day, 4 an off day (the winter as today);
+// Hardcore 10–12 every day of spring and the season (the offseason at the Normal rate).
+const NORMAL = { first3: null, spring_home: 8, spring_road: 6, home: 8, road: 6, rainout: 8, off: 4, stretch: '6–8', postseason: '6–8', offseason: null };
+const HARD = { spring_home: '10–12', spring_road: '10–12', home: '10–12', road: '10–12', rainout: '10–12', off: '10–12', stretch: '10–12', postseason: 'not set', first3: 'not set' };
+lines.push('');
+lines.push('By tier, and the plan\'s targets (messages a day):');
+lines.push('');
+lines.push('| Kind of day | Now (Normal) | Important | Optional | Notices | Important only would leave | Normal target | Hardcore target |');
+lines.push('|---|---|---|---|---|---|---|---|');
+let untiered = 0;
+for (const k of ORDER) {
+  const r = rows[k]; if (!r?.length) continue;
+  const m = avg(r.map(x => x.msgs)), imp = avg(r.map(x => x.important)), opt = avg(r.map(x => x.optional));
+  const notice = r.reduce((a, x) => a + x.notices, 0) / Math.max(1, r.reduce((a, x) => a + x.msgs, 0));
+  untiered += r.reduce((a, x) => a + x.untiered, 0);
+  lines.push(`| ${LABEL[k]} | ${m.toFixed(1)} | ${imp.toFixed(1)} | ${opt.toFixed(1)} | ${Math.round(notice * 100)}% | ${imp.toFixed(1)} | ${NORMAL[k] ? `~${NORMAL[k]}` : 'as now'} | ${HARD[k] || 'Normal rate'} |`);
+}
+if (untiered) lines.push(`\n(${untiered} messages without a tier: from a run before r295.)`);
+
+// ── r295 §122.178 the repeat flag ──
+const runs = wordRuns;   // (the engine's own measure: MessageParts, r295 §122.178)
+const pairs = [], partsPairs = [];
+let compared = 0;
+for (const f of files) {
+  const A = JSON.parse(readFileSync(f, 'utf8'));
+  const bySeason = {};
+  for (const c of A.cards) if (c.text != null && !c.seed && !c.compose) (bySeason[c.season || 0] ||= []).push({ ...c, runs: runs(c.text) });
+  for (const [season, list] of Object.entries(bySeason)) {
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      compared++;
+      const s2 = alike(list[i].runs, list[j].runs);
+      if (s2 < READ_ALIKE) continue;
+      const p = { file: f.split('/').pop(), season, a: list[i], b: list[j], s: s2 };
+      (list[i].parts || list[j].parts ? partsPairs : pairs).push(p);
+    }
+  }
+}
+const cardOf = (c) => c.cardId || `(${c.sender})`;
+const byCard = {};
+for (const p of pairs) { const k = cardOf(p.a) === cardOf(p.b) ? cardOf(p.a) : `${cardOf(p.a)} ~ ${cardOf(p.b)}`; byCard[k] = (byCard[k] || 0) + 1; }
+lines.push('');
+lines.push(`The repeat flag: two messages of one season reading alike (${Math.round(READ_ALIKE * 100)}% or more of their three-word runs the same), of ${compared.toLocaleString()} pairs compared:`);
+lines.push('');
+lines.push(`- Existing messages (reported): ${pairs.length} pairs; the same message come back: ${pairs.filter(p => cardOf(p.a) === cardOf(p.b)).length}; two different messages: ${pairs.filter(p => cardOf(p.a) !== cardOf(p.b)).length}.`);
+lines.push(`- Messages written in parts (a failing finding): ${partsPairs.length} pairs.`);
+const top = Object.entries(byCard).sort((a, b) => b[1] - a[1]).slice(0, 12);
+if (top.length) { lines.push(''); lines.push('| Message(s) | Pairs |'); lines.push('|---|---|'); for (const [k, n] of top) lines.push(`| ${k} | ${n} |`); }
+for (const p of partsPairs.slice(0, 8)) lines.push(`  PARTS ${p.file} season ${p.season}: ${cardOf(p.a)} ${Math.round(p.s * 100)}%: “${p.a.text.slice(0, 80)}” / “${p.b.text.slice(0, 80)}”`);
+
 const out = lines.join('\n');
 console.log(out);
 if (md) writeFileSync(md, out + '\n');
+process.exitCode = partsPairs.length ? 1 : 0;   // (messages in parts reading alike: a failing finding)

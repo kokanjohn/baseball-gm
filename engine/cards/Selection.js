@@ -277,7 +277,7 @@ export function _createInstance(cardDef, context, state) {
     _amountsK:        amountsK,
     _intlCountry:     values.intl_country || null,
     _raw:             cardDef,
-    ...(cardDef._parts ? { _from: cardDef._from, _parts: cardDef._parts, ...(cardDef._partsRound ? { _partsRound: cardDef._partsRound } : {}) } : {}),   // r294 §122.177 whose history, the versions used
+    ...(cardDef._parts ? { _from: cardDef._from, _parts: cardDef._parts, ...(cardDef._partsRound ? { _partsRound: cardDef._partsRound } : {}), ...(cardDef._partsRelaxed ? { _partsRelaxed: cardDef._partsRelaxed } : {}) } : {}),   // r294 §122.177 whose history, the versions used
   };
   // §71–73: a card whose action can't happen (nobody to cover, wrong player,
   // no room, no real player to offer) is never delivered — before any new

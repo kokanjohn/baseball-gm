@@ -5,12 +5,14 @@
  * Every message comes in here, inside a StateManager.mutate, with the draft state:
  *   - toSchedule: parked for a time (scheduledCards, kept in delivery order); the release puts it in the inbox.
  *   - toInbox: arrives now (stamped with its sender, `arrivedAtMs` from `arrivedAt(card)`).
+ * Each is stamped with its tier (MessageTiers, r295 §122.178) the first time it comes in.
  * `via` says which way it came (VIA). Today they add exactly as the nine places they replace did; this is where
  * the message plan (§122.169: tiers, the day plan, the audit) takes hold. check-entry.mjs holds every path to it.
  */
 import { stampSender } from '../Senders.js';
 import { _sortInbox } from './Inbox.js';
 import { recordUse } from '../MessageParts.js';   // r294 §122.177
+import { tierOf } from '../MessageTiers.js';   // r295 §122.178
 
 export const VIA = Object.freeze({
   DELIVER_AT:  'deliverAt',     // _deliverAt: a card parked for a moment (roster clock, follow-ups, stories; 68 callers)
@@ -38,6 +40,7 @@ function _tell(via, where, cards) {
 
 /** Park `cards` (each with its deliverAtMs) in the schedule, in delivery order. Returns them. */
 export function toSchedule(s, cards, via) {
+  for (const c of cards) if (!c._tier) c._tier = tierOf(c);   // r295 §122.178 its tier, decided once
   s.scheduledCards = [...(s.scheduledCards || []), ...cards].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
   _tell(via, 'schedule', cards);
   return cards;
@@ -48,7 +51,7 @@ export function toSchedule(s, cards, via) {
  * `sort: false` leaves the inbox's order as it is (expire() never sorted). Returns them as they arrived.
  */
 export function toInbox(s, cards, arrivedAt, via, { sort = true } = {}) {
-  const arrived = cards.map(c => stampSender({ ...c, arrivedAtMs: arrivedAt(c) }, s));
+  const arrived = cards.map(c => stampSender({ ...c, arrivedAtMs: arrivedAt(c), _tier: c._tier || tierOf(c) }, s));   // (r295 its tier)
   s.inbox = [...(s.inbox || []), ...arrived];
   if (sort) _sortInbox(s.inbox);
   // r294 §122.177 a message in parts: its versions are used now it reaches Messages (one that lapsed unseen isn't)

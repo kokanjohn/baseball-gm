@@ -359,7 +359,9 @@ if (process.env.AUDIT) {
     choice: c.choice || null, season: c._season || null,
     // r295 §122.178 for the tiers: what it's about, what it's worth, where it came from
     tag: c.tag || null, cost: c._budgetCost ?? null, costNo: c._budgetCostNo ?? null, revenue: c._revenueK ?? null,
-    roster: !!c._rosterKey, auto: c.autoResolve || null, trade: !!(c._tradeOffer || c._talkId || c._tradeKind), injury: !!(c._injury || /injur/i.test(c.cardId || '')) }));
+    roster: !!c._rosterKey, auto: c.autoResolve || null, trade: !!(c._tradeOffer || c._talkId || c._tradeKind), injury: !!(c._injury || /injur/i.test(c.cardId || '')),
+    // r295 §122.178 the tier (stamped at Entry), the words (for the repeat flag), and whether it was written in parts
+    tier: c._tier || null, text: `${c.subject || ''} ${c.body || ''}`, parts: !!c._parts }));
   writeFileSync(process.env.AUDIT, JSON.stringify({ arch: ARCH, seed: SEED, createdAt: auditStart, schedules: Object.fromEntries(auditSched), cards }));
   say(`audit: ${cards.length} messages → ${process.env.AUDIT}`);
 }

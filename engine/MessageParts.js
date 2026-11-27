@@ -31,8 +31,9 @@
  *
  * The history (historyWith) is read from the messages that came and how they were answered: the inbox and the
  * notes (§122.174). The memory step (§122.169) adds what came of them, behind the same function.
- * The versions used are remembered per save (state.partsUsed[id] = { n, [field]: { seen: [this round's], last } }),
- * recorded at Entry when a message reaches Messages.
+ * The versions used are remembered per save (state.partsUsed[id] = { n, [field]: { seen: [this round's], last },
+ * season, sends: [this season's picks] }), recorded at Entry when a message reaches Messages; the sends keep the next
+ * from reading alike an earlier one of the season (READ_ALIKE, r295 §122.178).
  *
  * PURE: no StateManager.
  */
@@ -129,41 +130,74 @@ const _versions = (x) => (Array.isArray(x) ? x : [x]).map(v => (typeof v === 'st
  * Pick one of `list` (versions) for this history: the most fitting; of them, one not used this round, by the dice.
  * → { text, i, fresh } (fresh: it opens a new round), or null when none fits.
  */
-function _pick(list, h, used, rand) {
+function _pick(list, h, used, rand, relax = false) {
   const vs = _versions(list).map((v, i) => ({ ...v, i }));
   const fit = vs.filter(v => holds(v.when, h));
   if (!fit.length) return null;
   const named = fit.filter(v => v.when && Object.keys(v.when).length);
   const pool = named.length ? named : fit;
-  const seen = new Set(used?.seen || []);
-  let fresh = false, open = pool.filter(v => !seen.has(v.i));
+  const seen = new Set(relax ? [] : used?.seen || []);   // (relaxed: any but the last, to keep from reading alike)
+  let fresh = false, open = relax ? (pool.length > 1 ? pool.filter(v => v.i !== used?.last) : pool) : pool.filter(v => !seen.has(v.i));
   if (!open.length) {   // the round is done: a new one, not opening with the version that closed the last
     fresh = true;
     open = pool.length > 1 ? pool.filter(v => v.i !== used?.last) : pool;
   }
   const v = open[Math.floor(rand() * open.length)];
-  return { text: v.text, i: v.i, fresh };
+  return { text: v.text, i: v.i, fresh: fresh && !relax };
+}
+
+/** r295 §122.178 reading alike: the three-word runs of a text, and the share two texts have in common (0–1). */
+export const READ_ALIKE = 0.6;
+export function wordRuns(text) {
+  const w = String(text || '').toLowerCase().replace(/[^a-z0-9$' ]+/g, ' ').split(/\s+/).filter(Boolean);
+  const out = new Set();
+  for (let i = 0; i + 2 < w.length; i++) out.add(`${w[i]} ${w[i + 1]} ${w[i + 2]}`);
+  return out;
+}
+export function alike(a, b) {
+  if (!a.size || !b.size) return 0;
+  let n = 0;
+  const [x, y] = a.size < b.size ? [a, b] : [b, a];
+  for (const r of x) if (y.has(r)) n++;
+  return n / (a.size + b.size - n);
+}
+/** How many draws compose tries for one that doesn't read alike an earlier send of the season. */
+const TRIES = 12;
+/** The sends of a season kept for that (a message in parts comes a few times a season). */
+const SENDS_KEPT = 40;
+
+/** The subject and body a set of picks gives (before the tokens): what reading alike is judged on. */
+function _words(def, picks) {
+  const parts = {};
+  for (const [name, list] of Object.entries(def.parts || {})) { const v = _versions(list)[picks[`@${name}`]]; if (v) parts[name] = v.text; }
+  const field = (f) => { const t = Array.isArray(def[f]) ? _versions(def[f])[picks[f]]?.text : def[f]; return String(t || '').replace(PART_REF, (_, k) => parts[k] ?? ''); };
+  return `${field('subject')} ${field('body')}`;
 }
 
 /**
  * compose(def, state, atMs) → an ordinary message definition, or null (warned) when it can't be put together
  * (no version fits a part, or a part it joins in isn't there). A definition not in parts comes back as it is.
+ * r295 §122.178 the per-save memory keeps two from reading alike (§122.169): of up to TRIES draws (each by the round
+ * rules), the first that reads alike no earlier send of the season (READ_ALIKE). If none can (late in a round every
+ * piece may have one version left), one piece may take a version used earlier in its round (never its last) — the
+ * piece that keeps them apart; failing that, the least alike.
  */
 export function compose(def, state, atMs) {
   if (!isParts(def)) return def;
   const h = def.from != null ? historyWith(state, def.from, atMs) : historyWith(state, `msg:${def.id}`, atMs);
   const memo = state?.partsUsed?.[def.id] || {};
   const n = memo.n || 0;
-  const picks = {};
-  const fresh = [];
-  const choose = (field, list) => {
-    const v = _pick(list, h, memo[field], dice(diceSeed(state), 'parts', def.id, field, n));
-    if (!v) throw new Error(`no version of '${field}' fits`);
-    picks[field] = v.i;
-    if (v.fresh) fresh.push(field);
-    return v.text;
-  };
-  try {
+  const season = state?.seasonNum || 1;
+  const before = (memo.season === season ? memo.sends || [] : []).map(p => wordRuns(_words(def, p)));
+  const draw = (k, relax = null) => {
+    const picks = {}, fresh = [];
+    const choose = (field, list) => {
+      const v = _pick(list, h, memo[field], dice(diceSeed(state), 'parts', def.id, field, n, ...(k ? [k] : []), ...(relax ? ['relax'] : [])), field === relax);
+      if (!v) throw new Error(`no version of '${field}' fits`);
+      picks[field] = v.i;
+      if (v.fresh) fresh.push(field);
+      return v.text;
+    };
     const parts = {};
     for (const [name, list] of Object.entries(def.parts || {})) parts[name] = choose(`@${name}`, list);
     const join = (text, field) => String(text).replace(PART_REF, (_, name) => {
@@ -180,7 +214,26 @@ export function compose(def, state, atMs) {
     out._from = def.from != null ? def.from : null;
     out._parts = picks;
     if (fresh.length) out._partsRound = fresh;   // (the fields a new round opens on)
-    return out;
+    if (relax) out._partsRelaxed = relax;        // (the piece bent to keep it from reading alike)
+    const mine = wordRuns(_words(def, picks));
+    return { out, score: before.reduce((m, r) => Math.max(m, alike(mine, r)), 0) };
+  };
+  try {
+    let best = null;
+    for (let k = 0; k < TRIES; k++) {
+      const d = draw(k);
+      if (!best || d.score < best.score) best = d;
+      if (d.score < READ_ALIKE) return d.out;
+    }
+    // Every draw by the rounds reads alike an earlier send (late in a round, each piece has one version left):
+    // one piece may take a version used earlier in its round (never its last), the one that keeps them apart.
+    const fields = [...Object.keys(def.parts || {}).map(k => `@${k}`), ...TEXT_FIELDS.filter(f => Array.isArray(def[f]))];
+    for (const f of fields) for (let k = 0; k < TRIES; k++) {
+      const d = draw(k, f);
+      if (d.score < best.score) best = d;
+      if (d.score < READ_ALIKE) return d.out;
+    }
+    return best.out;
   } catch (e) {
     console.warn(`[MessageParts] '${def.id}' not put together: ${e.message}`);
     return null;
@@ -198,6 +251,10 @@ export function recordUse(draft, card) {
     f.seen = fresh.has(field) ? [i] : [...f.seen, i];
     f.last = i;
   }
+  // r295 §122.178 this season's sends (their picks), so the next doesn't read alike any of them
+  const season = draft.seasonNum || 1;
+  if (m.season !== season) { m.season = season; m.sends = []; }
+  m.sends = [...m.sends, card._parts].slice(-SENDS_KEPT);
   m.n++;
 }
 

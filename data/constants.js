@@ -1775,6 +1775,31 @@ export const CARD_DAY = Object.freeze({
  */
 export const MESSAGE_HISTORY = Object.freeze({ keepAnswered: 100, seasons: 3 });
 
+/**
+ * r295 §122.178 (step 7 groundwork) the message modes, a setting saved with the team (settings.messageMode). The names
+ * shown are kept here alone, so they can change. Normal plays as it always has; Important only and Hardcore come in
+ * the next releases (the choice stays hidden in Settings until Important only works).
+ */
+export const MESSAGE_MODES = Object.freeze({ IMPORTANT: 'important', NORMAL: 'normal', HARDCORE: 'hardcore' });
+export const MESSAGE_MODE_NAMES = Object.freeze({ important: 'Important only', normal: 'Normal', hardcore: 'Hardcore' });
+
+/**
+ * r295 §122.178 the message tiers (engine/MessageTiers.js), decided with the user. Important: what's in importantTags,
+ * what the GM asked for (askedFor, a Compose reply), an emergency, a trade, an injury, the weather, and an optional
+ * message worth moneyLineK or more. Optional: the rest, including the staff's routine check-ins (routine). A message
+ * may name its own (`_tier` on its definition).
+ */
+export const MESSAGE_TIERS = Object.freeze({
+  importantTags: Object.freeze([
+    'TRADE', 'OWNERSHIP', 'OWNER', 'INJURY', 'IL_RETURN', 'MEDICAL', 'ROSTER', 'LINEUP', 'BULLPEN', 'ROTATION',
+    'SIGNING', 'CONTRACT', 'MANAGER_CONTRACT', 'FREE_AGENT', 'OPERATIONS', 'FACILITIES', 'WEATHER',
+    'DISCIPLINE', 'FINANCE', 'REVENUE', 'LEGAL', 'BUSINESS',   // (the user's choice: player discipline, money and legal)
+  ]),
+  routine: Object.freeze(['roster_advice', 'rest_ask', 'lineup_return', 'next_starter']),   // the staff's routine check-ins
+  askedFor: Object.freeze(['watch_alert']),                                                  // what the GM asked to hear
+  moneyLineK: 50,                                                                             // $50K (the user's choice)
+});
+
 export const COMPOSE_OVERLAP = Object.freeze({
   days: 7,
   cards: Object.freeze({ fd_scout_market: 'sc_free_agents', fd_scout_holes: 'sc_free_agents' }),

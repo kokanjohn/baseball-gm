@@ -15909,3 +15909,64 @@ By the plan's definition alone, 78–90% would be important.
 4. **The repeat flag:** the audit flags two messages in a season that read alike: 60% or more of their wording the same, by overlapping three-word runs. Existing messages: reported only (some come back by design). New messages written in parts: a failing check.
 
 **Then:** Important only (the staff answer optional messages quietly with their usual answer), then the day plan (§122.169's order).
+
+---
+
+## §122.179 — r295: step 7 groundwork, built (the design: §122.178)
+
+**Tiers** (`engine/MessageTiers.js`, pure; `MESSAGE_TIERS` in constants):
+- `tierWhy(card)` gives the tier and why. In order:
+  1. its own `_tier`;
+  2. what the GM asked for (a Compose reply, `watch_alert`): important;
+  3. the routine check-ins (`roster_advice`, `rest_ask`, `lineup_return`, `next_starter`): optional;
+  4. an emergency, a trade, an injury, the weather: important;
+  5. an important tag: important;
+  6. $50K or more (cost, cost on no, or revenue): important;
+  7. otherwise optional.
+- Calls made beyond the user's list:
+  - `next_starter` (the pitching coach suggesting the next start) is a routine check-in like roster advice;
+  - `watch_alert` (a player the GM asked to have watched) and Compose replies are the GM's own asks, so important;
+  - the weather and grounds crew's messages with no card id are important through `_wxGameTime`.
+- Entry stamps `_tier` on every message the first time it comes in. The record doesn't hash it, and Normal doesn't read it.
+
+**The mode:**
+- `settings.messageMode`: 'normal' for a new club; an old save gets it from the schema.
+- `MESSAGE_MODES` and `MESSAGE_MODE_NAMES` live in constants.
+- Not in Settings until Important only works.
+
+**The audit** (`audit-messages.mjs`):
+- New table: by tier and the plan's targets, per kind of day: now, important, optional, notices, what Important only would leave, the Normal and Hardcore targets.
+- multi-season's AUDIT writes each message's tier, its words, and whether it was written in parts.
+- Today (contender seed 1, ember seed 2, two seasons each):
+
+| Kind of day | Now | Important | Optional | Notices | Normal target | Hardcore |
+|---|---|---|---|---|---|---|
+| Spring, home | 4.5 | 3.4 | 1.1 | 1% | ~8 | 10–12 |
+| Spring, road | 2.2 | 1.4 | 0.8 | 8% | ~6 | 10–12 |
+| Season, home game | 4.4 | 3.2 | 1.3 | 17% | ~8 | 10–12 |
+| Season, road game | 3.7 | 2.2 | 1.5 | 16% | ~6 | 10–12 |
+| Off day | 2.5 | 1.3 | 1.2 | 15% | ~4 | 10–12 |
+| Stretch run | 3.8 | 2.6 | 1.3 | 25% | 6–8 | 10–12 |
+| Postseason | 2.4 | 1.8 | 0.6 | 45% | 6–8 | not set |
+| Offseason | 2.0 | 1.1 | 0.9 | 14% | as now | Normal rate |
+
+  Important only would leave about 3.2 a home game day, 2.2 a road game day and 1.3 an off day. The plan doesn't set Hardcore for the postseason.
+
+**The repeat flag** (one measure for the engine and the audit: `MessageParts.READ_ALIKE` 0.6, `wordRuns`, `alike`, the share of three-word runs in common):
+- The audit flags two messages of a season reading alike. Existing messages, reported: 4,350 pairs over the four seasons, every one the same message coming back. The most are `injury_act1` (1,237), `manager_fill` (575), `roster_need` (516), the grounds crew (258), `open_spots` (255), `sit_slump` (183), `field_prep` (156): the first to convert to parts.
+- Messages in parts are a failing finding.
+- **The per-save memory keeps two from reading alike** (§122.169), in `compose`:
+  - of up to 12 draws by the round rules, the first reading alike no earlier send of the season (`partsUsed[id].sends`, the season's picks, 40 kept);
+  - if every draw does (late in a round each piece can have one version left, and pieces with as many versions move in step), one piece may take a version used earlier in its round, never its last, the one that keeps them apart (`_partsRelaxed`);
+  - failing that, the least alike.
+  - So the round rule bends only to keep a message from reading alike an earlier one: once in 15 sends in the check. Before this, 2 of 105 pairs read alike (67%, 84%); now none (the most alike 59%).
+
+**Checks:**
+- check-message-tiers (new, 5): the rules on 26 kinds of message as decided; in play every message carries its tier (and the routine check-ins are optional); the mode is Normal for a new club, its names in one place, not in Settings yet.
+- check-message-parts (21): the round rule holds but for a counted bend (1 of 15), and no two sends of a season read alike.
+- The record matches exactly (Normal plays as before; the tier isn't in what it hashes). All 102 `check-*.mjs` pass, the season harness 3,829/3,829, check-refs over 164 modules.
+- Screen tests: 53 of 58. The same four fail as at r289; test-forecast-ui times out with two running and passes alone.
+
+**App:** nothing changes in play (Normal). sw.js precaches MessageTiers.js; `tfo-v2-r295`. Fresh team: not needed.
+
+**Next:** Important only (§122.169): the mode in Settings, Messages showing the important ones, and the staff answering the optional ones quietly with their usual answer; then the day plan.

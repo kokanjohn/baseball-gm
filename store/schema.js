@@ -312,6 +312,7 @@ export function createGameState(config = {}) {
       // Affects weather behavior, travel fatigue, facilities cards, groundskeeper cards.
       // 'north'|'south'|'east'|'west' — matches REGIONS keys in constants.js
       region:          'north',
+      messageMode:     'normal',  // r295 §122.178 'important'|'normal'|'hardcore' (MESSAGE_MODES); hidden until Important only works
       soundEnabled:    true,
       soundVolume:     0.7,
       hapticEnabled:   true,
