@@ -262,7 +262,7 @@ export const ROAD_POOL = [
    _revenueToken:'event_rev_lg',onYes:'park_event',_outcomes:[['rv6_damage',0.45],['rv6_good',0.4],['rv6_noise',0.15]]},
 
   // rv7: the state high school championship
-  {id:'rv7',autoResolve:'no',_weight:0.85,type:'good',tag:'MARKETING',sender:'Community Relations',avatar:'🏆',
+  {id:'rv7', party:'schools', partyMoment:{ no:'the championship you wouldn\'t host' },  /* r298 §122.185 memory */autoResolve:'no',_weight:0.85,type:'good',tag:'MARKETING',sender:'Community Relations',avatar:'🏆',
    _requiresRoadAhead:3,_parkEvent:true,_oncePerSeason:true,
    subject:"The high school championship, at our ballpark?",
    preview:"The state high school association wants to play its final here…",
@@ -284,7 +284,7 @@ export const ROAD_POOL = [
    _revenueToken:'event_rev_lg',onYes:'park_event',_outcomes:[['rv8_good',0.5],['rv8_wall',0.3],['rv8_overstay',0.2]]},
 
   // rv9: a charity run
-  {id:'rv9',autoResolve:'no',_weight:0.8,type:'good',tag:'MARKETING',sender:'Community Relations',avatar:'🏃',
+  {id:'rv9', party:'charity', partyMoment:{ no:'the charity run you turned away' },  /* r298 §122.185 memory */autoResolve:'no',_weight:0.8,type:'good',tag:'MARKETING',sender:'Community Relations',avatar:'🏃',
    _requiresRoadAhead:3,_parkEvent:true,_oncePerSeason:true,
    subject:"A charity run that finishes at home plate",
    preview:"A local charity wants its 5K to finish inside the ballpark…",
@@ -295,7 +295,7 @@ export const ROAD_POOL = [
    _revenueToken:'event_rev_sm',onYes:'park_event',_outcomes:[['rv9_good',0.8],['rv9_track',0.2]]},
 
   // rv10: the city's fireworks
-  {id:'rv10',autoResolve:'no',_weight:0.8,type:'good',tag:'REVENUE',sender:'Partnerships',avatar:'🎆',
+  {id:'rv10', party:'city', partyMoment:{ yes:'the fireworks show', no:'the fireworks show you passed on' },  /* r298 §122.185 memory */autoResolve:'no',_weight:0.8,type:'good',tag:'REVENUE',sender:'Partnerships',avatar:'🎆',
    _requiresRoadAhead:3,_parkEvent:true,_oncePerSeason:true,
    subject:"The city's fireworks show, at the ballpark",
    preview:"The city wants to hold its fireworks show here…",
@@ -346,10 +346,12 @@ export const AWAY_FOLLOWUPS = [
   news('rv6_good', 'Partnerships', '🎶', 'The festival sold out',
     'The festival sold out both days. Bar sales came in high enough that our share added {event_bonus} on top of the fee, and the promoter is already asking about next summer. The grass held up better than anyone expected.', { _revenueToken: 'event_bonus', yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
   news('rv6_noise', 'Community Relations', '🎶', 'The neighbors and the festival',
-    'The festival went off, but the neighbors were not happy — music until midnight both nights, and the city council heard about it. We\'ll smooth it over; it will take some time.', { yesEffect: { atmo: -2 }, noEffect: { atmo: -2 } }),
+    'The festival went off, but the neighbors were not happy — music until midnight both nights, and the city council heard about it. We\'ll smooth it over; it will take some time.', { yesEffect: { atmo: -2 }, noEffect: { atmo: -2 },
+      party: 'neighbors', partyW: { yes: -1.5, no: -1.5, ignored: -1.5 }, partyMoment: { any: 'the festival noise' } }),   // r298 §122.185 memory
 
   news('rv7_good', 'Community Relations', '🏆', 'A walk-off at our home plate',
-    'The championship game went to extra innings and ended on a walk-off. The winning school sent a signed ball and a team photo taken at our home plate; it\'s hanging in the concourse now.', { yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
+    'The championship game went to extra innings and ended on a walk-off. The winning school sent a signed ball and a team photo taken at our home plate; it\'s hanging in the concourse now.', { yesEffect: { atmo: 2 }, noEffect: { atmo: 2 },
+      party: 'schools', partyW: { yes: 2, no: 2, ignored: 2 }, partyBig: true, partyMoment: { any: 'the state championship at our park' } }),   // r298 §122.185 memory
   repair('rv7_mound', 'The mound after the championship',
     'The championship game left the mound dug out in front of the rubber — their pitchers land in different spots than ours. We can rebuild the landing area this morning for {repair_cost}. Or we pack it and go, and our starter finds out about it in the first inning.',
     'Rebuild the Mound', 'Pack It and Go', { morale: -1 }, 'Rebuilding it now.', 'Packed. We\'ll see how it holds.',
@@ -365,7 +367,8 @@ export const AWAY_FOLLOWUPS = [
     'The film crew ran over by a day, and their trucks were still in the lot this morning. We charged them for the extra day, {event_bonus}, and the lot is clear now.', { _revenueToken: 'event_bonus', yesEffect: { morale: -1 }, noEffect: { morale: -1 } }),
 
   news('rv9_good', 'Community Relations', '🏃', 'The run raised more than they hoped',
-    'The run raised more than the charity hoped, and the pictures of the finish line at home plate are everywhere this morning. The charity wants to make it a yearly thing.', { yesEffect: { atmo: 2 }, noEffect: { atmo: 2 } }),
+    'The run raised more than the charity hoped, and the pictures of the finish line at home plate are everywhere this morning. The charity wants to make it a yearly thing.', { yesEffect: { atmo: 2 }, noEffect: { atmo: 2 },
+      party: 'charity', partyW: { yes: 2, no: 2, ignored: 2 }, partyBig: true, partyMoment: { any: 'the run that finished at home plate' } }),   // r298 §122.185 memory
   repair('rv9_track', 'The warning track after the run',
     'A few thousand runners chewed up the warning track — it\'s loose and rutted in the corners. We can regrade it before batting practice for {repair_cost}. Or we rake it and live with it, and our outfielders will be feeling for the wall.',
     'Regrade the Track', 'Rake It and Play', { morale: -1 }, 'Regrading now.', 'Raked. The outfielders have been warned.',

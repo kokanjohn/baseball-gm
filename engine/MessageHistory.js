@@ -16,6 +16,9 @@
  */
 
 /** The note an answered message leaves (fields read by §122.173's readers, nothing else). */
+// r298 a message's answer, for a big moment (Memory.js reads the same way)
+const _answerOf = (c) => (!c?.resolved || c._staffHandled || c._staffHandle ? null : (c.choice === 'auto' || c.choice === 'skip' || c.choice === 'expired') ? 'ignored' : c.choice === 'no' ? 'no' : 'yes');
+
 export function noteOf(c) {
   // only what the message has: a missing field reads the same as an empty one to every reader
   const n = { _note: true, instanceId: c.instanceId, resolved: true };
@@ -27,6 +30,8 @@ export function noteOf(c) {
   pick('_wxDecision'); pick('_wxGameTime'); pick('_keep');
   pick('_senderId'); pick('_from');   // r294 §122.177 whose history it's in (MessageParts.historyWith)
   pick('_staffHandle'); pick('_staffHandled'); pick('_tier');   // r296 §122.180 the staff's, in Important only; its tier
+  pick('_party'); pick('_partyW'); pick('_partyBig'); pick('_partyMoment');   // r298 §122.185 memory: its party, how answers weigh
+  if (c._party && c._partyBig != null && (c._partyBig === true || c._partyBig === _answerOf(c))) n._keep = true;   // (a big moment, kept always)
   if (c.isCompose) {
     n.isCompose = true; pick('_composeTopic'); pick('_sentAtMs');
     if (c._composeArg) n._composeArg = { key: c._composeArg.key ?? null, ...(c._composeArg.season != null ? { season: c._composeArg.season } : {}) };

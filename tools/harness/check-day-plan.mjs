@@ -106,7 +106,7 @@ const byDay = new Map();
 for (const c of all) if (Number.isFinite(c.arrivedAtMs)) byDay.set(dayKey(c.arrivedAtMs), (byDay.get(dayKey(c.arrivedAtMs)) || 0) + 1);
 // a drawn message never puts a day past its count: the days with drawn messages hold at most the plan's count of them
 for (const [key, nDrawn] of drawnOn) {
-  const g = S().schedule.find(x => dayKey(x.gameTime) === key && !x.isSpring);
+  const g = S().schedule.find(x => dayKey(x.gameTime) === key);   // (spring games too)
   const t = dayTarget(S(), g ? (g.isHome ? 'home' : 'road') : 'off', key).n;
   if (nDrawn > t) over.push(`${key}: ${nDrawn} drawn, plan ${t}`);
 }

@@ -12,6 +12,7 @@
 import { stampSender } from '../Senders.js';
 import { _sortInbox } from './Inbox.js';
 import { recordUse } from '../MessageParts.js';   // r294 §122.177
+import { partyTags } from '../Memory.js';           // r298 §122.185
 import { tierOf, importantOnly, TIERS } from '../MessageTiers.js';   // r295 §122.178, r296 §122.180
 
 export const VIA = Object.freeze({
@@ -41,6 +42,7 @@ function _tell(via, where, cards) {
 /** Park `cards` (each with its deliverAtMs) in the schedule, in delivery order. Returns them. */
 export function toSchedule(s, cards, via) {
   for (const c of cards) if (!c._tier) c._tier = tierOf(c);   // r295 §122.178 its tier, decided once
+  for (const c of cards) { const t = partyTags(c); if (t) Object.assign(c, t); }   // r298 §122.185 its party, if it has one
   s.scheduledCards = [...(s.scheduledCards || []), ...cards].sort((a, b) => a.deliverAtMs - b.deliverAtMs);
   _tell(via, 'schedule', cards);
   return cards;
@@ -51,7 +53,7 @@ export function toSchedule(s, cards, via) {
  * `sort: false` leaves the inbox's order as it is (expire() never sorted). Returns them as they arrived.
  */
 export function toInbox(s, cards, arrivedAt, via, { sort = true } = {}) {
-  const arrived = cards.map(c => stampSender({ ...c, arrivedAtMs: arrivedAt(c), _tier: c._tier || tierOf(c) }, s));   // (r295 its tier)
+  const arrived = cards.map(c => stampSender({ ...c, ...(partyTags(c) || {}), arrivedAtMs: arrivedAt(c), _tier: c._tier || tierOf(c) }, s));   // (r295 its tier; r298 its party)
   // r296 §122.180 Important only: an optional message arriving now is the staff's (answered at the release; shown nowhere)
   if (importantOnly(s) && via !== VIA.EXPIRED && via !== VIA.DEBUG) for (const c of arrived) if (c._tier === TIERS.OPTIONAL) c._staffHandle = true;
   s.inbox = [...(s.inbox || []), ...arrived];

@@ -39,6 +39,7 @@
  */
 import { dice, diceSeed } from './Dice.js';
 import { withHistory } from './MessageHistory.js';
+import { memoryOf } from './Memory.js';   // r298 §122.185
 
 const DAY = 86_400_000;
 
@@ -58,6 +59,10 @@ export const CONDITIONS = Object.freeze({
   seasonAtMost:     '…at most',
   daysSinceAtLeast: 'days since their last message, at least',
   daysSinceAtMost:  '…at most',
+  // r298 §122.185 memory: a message that names its party (`party`) reads the club's standing with it
+  standing:         "the standing with the message's party: 'warm', 'neutral', 'cool' or 'sour' (or a list of them)",
+  recall:           'a moment with the party fits the standing (true), so a version may call back to it ({party_moment})',
+  partyKind:        "the party's kind: 'sponsor', 'community', 'media', 'city', 'club'",
 });
 const STAFF = new Set(['manager', 'pitchingCoach', 'hittingCoach', 'benchCoach', 'scoutingDirector']);
 const PART_REF = /\{@([a-zA-Z_][\w]*)\}/g;
@@ -117,6 +122,9 @@ export function holds(when, h) {
       case 'timesAtMost': if (h.times > v) return false; break;
       case 'seasonAtLeast': if (h.season < v) return false; break;
       case 'seasonAtMost': if (h.season > v) return false; break;
+      case 'standing': if (!(Array.isArray(v) ? v : [v]).includes(h.standing)) return false; break;
+      case 'recall': if (!!h.recall !== !!v) return false; break;
+      case 'partyKind': if (h.partyKind !== v) return false; break;
       case 'daysSinceAtLeast': if (h.daysSince != null && h.daysSince < v) return false; break;
       case 'daysSinceAtMost': if (h.daysSince == null || h.daysSince > v) return false; break;
       default: throw new Error(`MessageParts: unknown condition '${k}'`);
@@ -186,6 +194,7 @@ function _words(def, picks) {
 export function compose(def, state, atMs) {
   if (!isParts(def)) return def;
   const h = def.from != null ? historyWith(state, def.from, atMs) : historyWith(state, `msg:${def.id}`, atMs);
+  if (def.party) Object.assign(h, memoryOf(state, def.party, atMs));   // r298 §122.185 the party's standing
   const memo = state?.partsUsed?.[def.id] || {};
   const n = memo.n || 0;
   const season = state?.seasonNum || 1;

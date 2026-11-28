@@ -8,6 +8,7 @@
  *           manager's slump message, Situations.js)
  *   crowd   a soft stretch of crowds, or a run of sellouts, at our park
  *   media   our last game was a big one: a walk-off, a shutout, a win in extra innings, a blowout either way
+ *   memory  r298 §122.185 a warm party offers a favor, a cool or sour one pulls back (Memory.js)
  *
  *   aroundCandidates(state, context, atMs) → [{ id, kind, key, rank, facts: { values, amountsK }, preset, segment }]
  *     most timely first. `preset` names the player the message is about (the usual role tokens).
@@ -23,6 +24,8 @@ import { AROUND, PHASE, PLAYER_GROUP } from '../data/constants.js';
 import { AROUND_POOL } from '../data/cards-around.js';
 import { sameOpponent } from './Opponents.js';
 import { dice, diceSeed } from './Dice.js';
+import { partiesWithRecord, standingOf, partyName, kindOf } from './Memory.js';   // r298 §122.185
+import { MEMORY } from '../data/parties.js';
 
 const DAY = 86_400_000;
 const isP = (p) => p?.pos === 'SP' || p?.pos === 'RP';
@@ -203,6 +206,34 @@ function mediaCandidate(state, context, atMs, log) {
 }
 
 /**
+ * r298 §122.185 Memory: a warm party offers a favor; a cool or sour one pulls back. The most strongly felt party, not
+ * heard from this way in `MEMORY.partyGapDays`; clubs wait for the rivals release.
+ */
+function memoryCandidate(state, context, atMs, log) {
+  if (log.done.memory != null && atMs - log.done.memory < AROUND.memoryGapDays * DAY) return null;
+  let best = null;
+  for (const party of partiesWithRecord(state)) {
+    const kind = kindOf(party);
+    if (!kind || kind === 'club') continue;
+    const k = `mem:${party}`;
+    if (log.done[k] != null && atMs - log.done[k] < MEMORY.partyGapDays * DAY) continue;
+    const st = standingOf(state, party, atMs);
+    if (st.standing === 'neutral') continue;
+    if (!best || Math.abs(st.score) > Math.abs(best.st.score)) best = { party, kind, st };
+  }
+  if (!best) return null;
+  const warm = best.st.standing === 'warm';
+  const id = `mem_${warm ? 'favor' : 'cold'}_${best.kind}`;
+  const name = partyName(state, best.party);
+  const rand = dice(diceSeed(state), 'around', 'mem', best.party, String(log.done[`mem:${best.party}`] || 0));
+  const range = warm ? AROUND.favorK : AROUND.mendK[best.kind] || [0, 0];
+  const k = range[1] ? Math.max(5, Math.round((range[0] + rand() * (range[1] - range[0])) / 5) * 5) : 0;
+  const values = { party_name: name, party_name_cap: cap(name), ...(best.st.moment ? { party_moment: best.st.moment } : {}), ...(warm ? { favor_amt: kFmt(k) } : { mend_cost: kFmt(k) }) };
+  return { id, kind: 'memory', key: `mem:${best.party}`, also: ['memory'], rank: 4, party: best.party,
+           facts: { values, amountsK: warm ? { favor_amt: k } : { mend_cost: k } }, preset: null };
+}
+
+/**
  * The situations calling for one of the set now, most timely first; each within its part of the year's budget and
  * with none of its kind waiting.
  */
@@ -210,7 +241,7 @@ export function aroundCandidates(state, context = {}, atMs) {
   const log = logOf(state);
   const segment = aroundSegment(state, context);
   const out = [];
-  for (const find of [scoutCandidate, mediaCandidate, formCandidate, crowdCandidate]) {
+  for (const find of [scoutCandidate, mediaCandidate, formCandidate, crowdCandidate, memoryCandidate]) {
     const c = find(state, context, atMs, log);
     if (!c) continue;
     const budget = AROUND.budget[c.kind]?.[segment] ?? 0;

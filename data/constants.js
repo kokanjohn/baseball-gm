@@ -1811,11 +1811,13 @@ export const AROUND = Object.freeze({
     form:  Object.freeze({ spring: 2, season: 24, stretch: 8 }),
     crowd: Object.freeze({ spring: 0, season: 9, stretch: 3 }),
     media: Object.freeze({ spring: 1, season: 22, stretch: 7 }),
+    memory: Object.freeze({ spring: 1, season: 14, stretch: 4 }),   // r298 §122.185 a party's favor, or pulling back
   }),
   formGames: 7, minAb: 20, hotAvg: 0.35, minIp: 10, hotEra: 2.0, coldEra: 6.5, formGapDays: 18, formTeamGapDays: 3,
   crowdGames: 4, softFill: 0.70, sellouts: 3, crowdGapDays: 10,
   blowout: 7, extras: true, mediaGapDays: 3,
   scoutCostK: [5, 15],
+  memoryGapDays: 4, favorK: [15, 45], mendK: { sponsor: [10, 40], community: [5, 15], media: [0, 0], city: [10, 25] },
 });
 
 export const MESSAGE_MODE_NAMES = Object.freeze({ important: 'Important only', normal: 'Normal', hardcore: 'Hardcore' });

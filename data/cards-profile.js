@@ -14,7 +14,7 @@ export const PROFILE_POOL = [
    yesEffect:{},noEffect:{},
    yesMsg:"Noted. We've told the department heads.",noMsg:"Understood. We'll keep tracking it."},
 
-  {id:'pf_community',autoResolve:'no',_weight:1.2,type:'urgent',tag:'MARKETING',sender:'Community Relations',avatar:'🤝',
+  {id:'pf_community', party:'city', partyBig:'no', partyMoment:{ yes:'the gift to the youth fund', no:'the youth fund gift you held back' },  /* r298 §122.185 memory */autoResolve:'no',_weight:1.2,type:'urgent',tag:'MARKETING',sender:'Community Relations',avatar:'🤝',
    _profile:{communityFocused:{max:-0.45}},_minGames:30,_oncePerSeason:true,
    subject:"The city has noticed",
    preview:"We've turned down {community_no} of the city's requests this season…",

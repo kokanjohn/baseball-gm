@@ -92,17 +92,21 @@ export function checkAndDeliver(context) {
       if (delivered.length >= room) break;
       const day = (cand.kind === 'media' || cand.kind === 'form' || cand.kind === 'crowd') && plan.off?.room > 0 ? plan.off : plan.game;
       if (!day || day.room <= 0) continue;
-      const def = AROUND_DEFS[cand.id];
+      const def = AROUND_DEFS[cand.id] && cand.party ? { ...AROUND_DEFS[cand.id], party: cand.party } : AROUND_DEFS[cand.id];   // (r298 the party it's about)
       const instance = def && _createInstance(def, { ...context, ...(cand.preset ? { _preset: cand.preset } : {}), _facts: cand.facts }, state);
       if (!instance) { if (cardDebug.onDropped) cardDebug.onDropped(cand.id); continue; }
       delivered.push({ ...instance, _pool: 'AROUND_POOL', _moment: 'plan', _planDay: day.window, _around: { kind: cand.kind, key: cand.key, also: cand.also || [], segment: cand.segment },
         ...(cand.kind === 'scout' && Number.isFinite(nextT) ? { _byFirstPitch: nextT } : {}) });
       day.room--;
     }
-    const g = plan.game ? plan.game.room : Infinity;
-    let over = (want.pregame + want.ingame + want.between + want.leave + want.road) - g;
-    for (const m of ['between', 'pregame', 'ingame', 'road', 'leave']) { const cut = Math.min(over > 0 ? over : 0, want[m]); want[m] -= cut; over -= cut; }
+    // The game's day takes the pregame, in-game, leave and road messages; the off day its own. Between games goes on
+    // either day, with the room left (r298: placed on the day it was counted for, not anywhere in the window).
+    let over = (want.pregame + want.ingame + want.leave + want.road) - plan.game.room;
+    for (const m of ['pregame', 'ingame', 'road', 'leave']) { const cut = Math.min(over > 0 ? over : 0, want[m]); want[m] -= cut; over -= cut; }
     if (plan.off) want.offday = Math.min(want.offday, plan.off.room);
+    plan.gameLeft = plan.game.room - (want.pregame + want.ingame + want.leave + want.road);
+    plan.offLeft = plan.off ? plan.off.room - want.offday : 0;
+    want.between = Math.max(0, Math.min(want.between, plan.gameLeft + plan.offLeft));
   }
   const taken = new Set();
   // r214 §122.93 the once-a-season stories, paced over the regular season (so the last weeks aren't bare).
@@ -140,6 +144,13 @@ export function checkAndDeliver(context) {
     if (cardDebug.onMade) cardDebug.onMade(moment, want[moment], made, eligible.length);
   }
   if (pace) StateManager.mutate(s => { s.storyPace = { season: state.seasonNum || 1, credit: pace.credit }; });
+  // r298 §122.183 the plan's between-games messages, each on a day it was counted for (the off day or the game's day)
+  if (plan) for (const c of delivered) {
+    if (c._moment !== 'between') continue;
+    const off = plan.offLeft > 0 && (plan.gameLeft <= 0 || eventRand() < plan.offLeft / (plan.offLeft + plan.gameLeft));
+    if (off) { c._planDay = plan.off.window; plan.offLeft--; }
+    else { c._planDay = plan.game.window; plan.gameLeft--; }
+  }
 
   if (delivered.length === 0) return;
 
@@ -369,7 +380,7 @@ export function _scheduleCards(instances, state, game = null) {
       const { _offDay, ...card } = c;
       const ttl = c._expiresAfterMs || c._raw?._expiresAfterMs;
       timed.push({ ...card, deliverAtMs: at, ...(ttl ? { expiresAtMs: at + ttl } : {}) });
-    } else if (c._moment === 'plan' && c._planDay) {
+    } else if (c._planDay) {   // (the plan's: around the game, and r298 between games while the plan runs)
       // r297 §122.183 the day plan's messages: on the day they were counted for, in its working hours (a scouting
       // report before first pitch, answered by then).
       const start = Math.max(c._planDay.startMs, nowMs + lead), end = c._planDay.endMs;

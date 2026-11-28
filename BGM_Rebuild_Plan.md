@@ -16215,3 +16215,80 @@ The city's full cast is its own release; how rivals act on trades is the rivals 
    - revisit with the rivals release (the GM must become aware of a club's history).
 
 **Next:** build memory (r298) on the user's go.
+
+---
+
+## §122.185 — r298: memory (the design: §122.184)
+
+**The cast** (`data/parties.js`):
+- 15 outside parties, each save drawing its own names (the save's dice, the club's city), not stored. The same save always has the same names.
+  - Sponsors and partners: presenting sponsor, bank, brewery, restaurants, apparel, beverage.
+  - Media: broadcaster, radio, paper.
+  - The city: the mayor's office.
+  - Community: schools, university, charity, boosters, neighbors.
+- Each club's GM is a party too (`club:<teamId>`), beside the trade rapport.
+
+**The record** (`engine/Memory.js`, pure):
+- It's the history itself: the messages that involve a party, from the notes kept three seasons.
+- Entry stamps the party (`partyTags`):
+  - from the message's `party`, or a club GM's `_gmTeamId`, or a trade offer's `_proposingTeamId`;
+  - how each answer weighs: `partyAsk` 'offer' is yes +1 / no 0 / left −0.5; 'request' is +1 / −1 / −1.5; or a message's own `partyW`;
+  - a big moment (`partyBig`: true, or the answer that makes one);
+  - the moment's words (`partyMoment`).
+- `noteOf` keeps them, and marks a big moment's note `_keep` (kept always).
+
+**The standing** (`standingOf`):
+- The weighed answers, slights fading to nothing over 730 days and good turns over 1,095 (the user's choice). A big moment never fades.
+- Warm at 1.75+ (two recent yeses), cool at −0.75 or less (one recent no to a request), sour at −2.25 or less.
+- The staff's answers in Important only don't count (no penalty, §122.180).
+- It also gives the latest moment that fits: a good turn for a warm party, a slight for a cool one.
+
+**Felt in the messages:**
+- `MessageParts`: a message naming its `party` reads the standing in `when`:
+  - `standing` (one or a list);
+  - `recall` (a moment fits, for a callback with `{party_moment}`);
+  - `partyKind`.
+- **The memory messages** (`data/cards-around.js`, eight in parts, drawn by the day plan as around the game's `memory` kind):
+  - a warm party offers a favor: a sponsor pays for a community night ($15–45K), a community group a thank-you night, the media a feature, the city covers permit fees;
+  - a cool or sour one pulls back: a sponsor scales back (a make-good, $10–40K), a group criticizes in public (amends, $5–15K), the media turns (a sit-down), the city slows permits (a gesture, $10–25K).
+  - The most strongly felt party first. A party again after 30 days, any memory message after 4.
+  - Budget: spring 1, season 14, stretch run 4. Clubs wait for the rivals release.
+  - Each one is remembered in turn: a favor is an offer, pulling back is a request.
+- **Never shown:** no screen reads the memory (check-memory scans `ui/`).
+
+**The existing messages tagged** (the user's choice; their text unchanged):
+- 27 drawn messages, among them the sponsor deals (m3, fn2, ad2, ad3, fr4, sp_renew, jersey_patch_wear, the pregame and in-game sponsor moments), the broadcaster (fn3, mon_media_losing, ig_broadcast_feed), the city (fn4, pf_community, rv10), the schools (x5, mon_soft_community, rv7), the charity (rv9) and the boosters (fr1, fr3).
+- 3 follow-ups:
+  - the festival's noise with the neighbors (−1.5);
+  - the championship at our park with the schools (+2, big);
+  - the charity run's success (+2, big).
+- pf_community's public refusal (its no) is a big moment.
+- Messages with no clear single party (a one-off brand, "one of our sponsors", a road city's hospital) aren't tagged: about 30 found with a clear party, not the ~50 estimated.
+
+**Fixed on the way:**
+- **The day plan's between-games messages (r297)** were placed anywhere in the window, so one counted for a game's day could land on the off day before it and take that day past its count (check-day-plan caught it once the dice moved).
+  - Between games now goes on a day it was counted for: the off day or the game's day, by the room each has left.
+  - The game's day takes the pregame, in-game, leave and road messages; the off day its own.
+- The two-season audit after it:
+  - home game day 5.5 messages (5.0 at r297), road 4.3 (3.9), stretch run 4.3 (4.0), off day 2.4;
+  - memory messages about 16 a season.
+
+**Checks:**
+- check-memory (new, 26):
+  - the cast named, with the city, the same every time, clubs too;
+  - the tagged messages in the cast, weighed, their moments neutral;
+  - Entry's stamps;
+  - the standing: two yeses warm, a no cool, left twice sour, an offer turned down neutral, slights gone after two years and good turns after three, a big moment kept and never faded, the staff's answers not counted, the right moment recalled;
+  - versions reading the standing;
+  - the most felt party heard from: sour pulls back, warm offers a favor, a sponsor's favor with its money, a month's gap, clubs waiting;
+  - a whole memory message;
+  - no screen reads the memory;
+  - 40 games played: the tagged messages and the GMs' arrive with their party, a record building.
+- check-day-plan: the kind of day read from spring games too.
+- The records kept again (play changed on purpose).
+- All 105 `check-*.mjs`. The season harness 3,825/3,825.
+- Screen tests 60 of 64, the same four as since r289.
+
+**App:** `tfo-v2-r298`. Memory.js and parties.js precached. Fresh team: not needed (an old save's record starts with the messages it already has that carry a party: none before r298, so it builds from now).
+
+**Next** (§122.169's order): the city. A lasting relationship with the mayor's office, the Chamber of Commerce, the council, police and traffic, transit, the visitors bureau and the schools, built on memory. Design choices to the user first.
