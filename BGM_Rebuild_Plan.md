@@ -16292,3 +16292,37 @@ The city's full cast is its own release; how rivals act on trades is the rivals 
 **App:** `tfo-v2-r298`. Memory.js and parties.js precached. Fresh team: not needed (an old save's record starts with the messages it already has that carry a party: none before r298, so it builds from now).
 
 **Next** (§122.169's order): the city. A lasting relationship with the mayor's office, the Chamber of Commerce, the council, police and traffic, transit, the visitors bureau and the schools, built on memory. Design choices to the user first.
+
+---
+
+## §122.186 — The city: the design, decided with the user (Nov 28; not built yet)
+
+**What it is** (§122.169): a lasting relationship with the mayor's office, the Chamber of Commerce, the council, police and traffic, transit, the visitors bureau and the schools. Turning one down is remembered.
+
+**Today:**
+- Memory has the mayor's office and the schools. Their messages are fn4, pf_community, rv10, x5, mon_soft_community, rv7 and rv7_good.
+- Nothing comes from the council, the Chamber, the police, transit or the visitors bureau: mostly new writing.
+
+**The proposal:**
+1. **The city's cast in memory:**
+   - the offices: the mayor's office, the city council, the Chamber of Commerce, the police department, the transit authority, the visitors bureau, the schools;
+   - each with its person, named per save: the mayor, the councilmember for the ballpark's district, the Chamber president, the game-day police commander, and so on.
+2. **Recurring city messages in parts:**
+   - Game days: police overtime for a sellout or a holiday crowd; transit's late trains after night games, the cost shared; a street closed for a weekend series; parking enforcement and the neighborhood.
+   - Civic asks: the councilmember's district event; the Chamber's luncheon; the visitors bureau's tourism push for a big homestand; the schools' reading program.
+   - Civic moments: the budget hearing, the mayor's first pitch, a city celebration.
+3. **On memory:** each answer remembered; each office's standing felt in its tone, its asks and its offers. Memory's favor and pull-back messages gain versions for each office.
+4. **Through the day plan,** budgeted across spring, the season and the stretch run.
+
+**Decided with the user (Nov 28):**
+1. **The people change over time.**
+   - An election every four seasons, and the odd retirement.
+   - The office keeps its memory of the club, but a new face softens it a little: a fresh start, or a friend lost.
+2. **Some lasting effects,** beside the usual ones (money, morale, trust, atmosphere, crowds). A few last and follow the standing: late trains add to night crowds while transit is warm, police overtime costs more while the department is cool.
+3. **How often:**
+   - Normal about one city message a week, about 25 a season;
+   - Hardcore about two a week (the user's own answer);
+   - spread over spring, the season and the stretch run.
+4. **A few in winter:** two or three a month in the offseason (budget hearings, holiday events, planning for next season), so the relationship doesn't go silent.
+
+**Next:** build the city (r299) on the user's go.
