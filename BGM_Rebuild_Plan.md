@@ -16172,3 +16172,46 @@ Every message already recorded is unchanged, and every season's result is the sa
 **App:** `tfo-v2-r297`. DayPlan.js, AroundGame.js and cards-around.js precached. Fresh team: not needed (an old save starts the plan with its next delivery).
 
 **Next** (§122.169's order): memory (the club's history with each outside party), then the city, the calendar and events, rivals and history, and the rest of around the game. Each adds messages toward Normal's counts, then Hardcore once it reaches 10–12.
+
+---
+
+## §122.184 — Memory: the design, decided with the user (Nov 27; not built yet)
+
+**What it is** (§122.169): the club's history with each outside party. That means what was asked, the answer, what came of it, and the moments shared. Never shown as a number.
+
+**Today:**
+- staff have a relationship number;
+- clubs' GMs have trade rapport (a grade);
+- messages in parts know how their sender was last answered (`historyWith`).
+
+Nothing remembers the outside world: most messages about it come through one of our departments, and the party is only named in the text.
+
+**The proposal:**
+1. **A cast per save.** Named outside parties: sponsors and partners, the city, community groups, the media, and each club's GM (beside rapport, not replacing it).
+2. **A record per party:** each exchange (the ask, the answer, what came of it) and the moments shared.
+3. **A standing per party**, from the record: warm, neutral, cool or sour. Internal, never shown.
+4. **Felt in the messages:**
+   - tone (warmer or cooler versions of a part);
+   - what they ask (a warm party asks bigger, a sour one less or hesitantly);
+   - what they offer (a warm party a favor, a sour one a refusal when you need them);
+   - callbacks to a moment ("after last summer's clinic…").
+   - New `when` conditions carry it, the same way as today's history conditions.
+5. **Across seasons,** on the notes already kept, with the keep-forever mark.
+
+The city's full cast is its own release; how rivals act on trades is the rivals release.
+
+**Decided with the user (Nov 27):**
+1. **Named parties now:**
+   - sponsors and partners, the city, community groups, the media, and each club's GM, named per save;
+   - the city release adds its full cast.
+2. **The existing messages tagged now:**
+   - the ~50 drawable messages (of ~320) that involve an outside party are linked to it, so the answers count from the first day;
+   - their text is unchanged.
+3. **A slow fade, big moments kept:**
+   - small slights fade over about two seasons, good turns over about three;
+   - a big moment (a public refusal, a shared success) is never forgotten.
+4. **Only in messages:**
+   - no page and no number; felt through tone, asks and offers;
+   - revisit with the rivals release (the GM must become aware of a club's history).
+
+**Next:** build memory (r298) on the user's go.
